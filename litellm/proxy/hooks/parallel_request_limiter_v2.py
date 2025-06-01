@@ -67,7 +67,7 @@ class _PROXY_MaxParallelRequestsHandler_v2(BaseRoutingStrategy, CustomLogger):
             self,
             dual_cache=internal_usage_cache.dual_cache,
             should_batch_redis_writes=True,
-            default_sync_interval=0.01,
+            default_sync_interval=1,
         )
 
     def print_verbose(self, print_statement):
@@ -120,6 +120,27 @@ class _PROXY_MaxParallelRequestsHandler_v2(BaseRoutingStrategy, CustomLogger):
     def get_key_pattern_to_sync(self) -> Optional[str]:
         return self.prefix + "::"
 
+    def _get_slots_to_check(self, current_slot: int) -> List[str]:
+        slots_to_check = []
+        current_time = datetime.now()
+        for i in range(4):
+            slot_number = (current_slot - i) % 4  # This ensures we wrap around properly
+            minute = current_time.minute
+            hour = current_time.hour
+
+            # If we need to look at previous minute
+            if current_slot - i < 0:
+                if minute == 0:
+                    # If we're at minute 0, go to previous hour
+                    hour = (current_time.hour - 1) % 24
+                    minute = 59
+                else:
+                    minute = current_time.minute - 1
+
+            slot_key = f"{current_time.strftime('%Y-%m-%d')}-{hour:02d}-{minute:02d}-{slot_number}"
+            slots_to_check.append(slot_key)
+        return slots_to_check
+
     async def check_key_in_limits_v2(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -145,25 +166,9 @@ class _PROXY_MaxParallelRequestsHandler_v2(BaseRoutingStrategy, CustomLogger):
         current_slot = (
             current_time.second // 15
         )  # This gives us 0-3 for the current 15s slot
-        slots_to_check = []
+        slots_to_check = self._get_slots_to_check(current_slot)
         slot_cache_keys = []
         # Calculate the last 4 slots, handling minute boundaries
-        for i in range(4):
-            slot_number = (current_slot - i) % 4  # This ensures we wrap around properly
-            minute = current_time.minute
-            hour = current_time.hour
-
-            # If we need to look at previous minute
-            if current_slot - i < 0:
-                if minute == 0:
-                    # If we're at minute 0, go to previous hour
-                    hour = (current_time.hour - 1) % 24
-                    minute = 59
-                else:
-                    minute = current_time.minute - 1
-
-            slot_key = f"{current_time.strftime('%Y-%m-%d')}-{hour:02d}-{minute:02d}-{slot_number}"
-            slots_to_check.append(slot_key)
 
         # For each slot, create keys for all rate limit groups
         for slot_key in slots_to_check:
@@ -183,6 +188,8 @@ class _PROXY_MaxParallelRequestsHandler_v2(BaseRoutingStrategy, CustomLogger):
                     decrement_list.append(
                         (key, -1 if increment_value_by_group[group] == 1 else 0)
                     )
+                else:
+                    self.add_to_in_memory_keys_to_update(key=key)
                 slot_cache_keys.append(key)
 
         if (
