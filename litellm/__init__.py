@@ -133,7 +133,7 @@ langsmith_batch_size: Optional[int] = None
 prometheus_initialize_budget_metrics: Optional[bool] = False
 require_auth_for_metrics_endpoint: Optional[bool] = False
 argilla_batch_size: Optional[int] = None
-datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged payload
+datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged payload.
 gcs_pub_sub_use_v1: Optional[
     bool
 ] = False  # if you want to use v1 gcs pubsub logged payload
@@ -303,7 +303,8 @@ priority_reservation: Optional[Dict[str, float]] = None
 
 
 ######## Networking Settings ########
-use_aiohttp_transport: bool = True
+use_aiohttp_transport: bool = True  # Older variable, aiohttp is now the default. use disable_aiohttp_transport instead.
+disable_aiohttp_transport: bool = False  # Set this to true to use httpx instead
 force_ipv4: bool = False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 module_level_aclient = AsyncHTTPHandler(
     timeout=request_timeout, client_alias="module level aclient"
@@ -1136,3 +1137,6 @@ disable_hf_tokenizer_download: Optional[
     bool
 ] = None  # disable huggingface tokenizer download. Defaults to openai clk100
 global_disable_no_log_param: bool = False
+
+### PASSTHROUGH ###
+from .passthrough import allm_passthrough_route, llm_passthrough_route
