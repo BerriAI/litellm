@@ -6821,19 +6821,21 @@ async def login(request: Request):  # noqa: PLR0915
                 litellm_dashboard_ui += "/ui/"
             import jwt
 
+            returned_ui_token_object = ReturnedUITokenObject(
+                user_id=user_id,
+                key=key,
+                user_email=user_email,
+                user_role=cast(str, user_role),
+                login_method="username_password",
+                premium_user=premium_user,
+                auth_header_name=general_settings.get(
+                    "litellm_key_header_name", "Authorization"
+                ),
+                disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
+            )
+
             jwt_token = jwt.encode(  # type: ignore
-                {
-                    "user_id": user_id,
-                    "key": key,
-                    "user_email": user_email,
-                    "user_role": user_role,
-                    "login_method": "username_password",
-                    "premium_user": premium_user,
-                    "auth_header_name": general_settings.get(
-                        "litellm_key_header_name", "Authorization"
-                    ),
-                    "disabled_non_admin_personal_key_creation": disabled_non_admin_personal_key_creation,
-                },
+                cast(dict, returned_ui_token_object),
                 master_key,
                 algorithm="HS256",
             )
@@ -6869,6 +6871,8 @@ async def onboarding(invite_link: str, request: Request):
     - Pass in user_email if set
     """
     global prisma_client, master_key, general_settings
+    from litellm.types.proxy.ui_sso import ReturnedUITokenObject
+
     if master_key is None:
         raise ProxyException(
             message="Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.  https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
@@ -6951,19 +6955,20 @@ async def onboarding(invite_link: str, request: Request):
         get_disabled_non_admin_personal_key_creation()
     )
 
+    returned_ui_token_object = ReturnedUITokenObject(
+        user_id=user_obj.user_id,
+        key=key,
+        user_email=user_obj.user_email,
+        user_role=user_obj.user_role,
+        login_method="username_password",
+        premium_user=premium_user,
+        auth_header_name=general_settings.get(
+            "litellm_key_header_name", "Authorization"
+        ),
+        disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
+    )
     jwt_token = jwt.encode(  # type: ignore
-        {
-            "user_id": user_obj.user_id,
-            "key": key,
-            "user_email": user_obj.user_email,
-            "user_role": user_obj.user_role,
-            "login_method": "username_password",
-            "premium_user": premium_user,
-            "auth_header_name": general_settings.get(
-                "litellm_key_header_name", "Authorization"
-            ),
-            "disabled_non_admin_personal_key_creation": disabled_non_admin_personal_key_creation,
-        },
+        cast(dict, returned_ui_token_object),
         master_key,
         algorithm="HS256",
     )
