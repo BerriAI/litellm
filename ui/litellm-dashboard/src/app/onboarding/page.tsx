@@ -67,7 +67,7 @@ export default function Onboarding() {
       const user_id = decoded.user_id;
       setUserID(user_id);
     });
-  }, [inviteID]);
+  }, [inviteID, getUiConfigLoading]);
 
   const handleSubmit = (formValues: Record<string, any>) => {
     console.log(

@@ -9,7 +9,8 @@ import { UserInfo } from "./view_users/types";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
 
 const isLocal = process.env.NODE_ENV === "development";
-export let proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+export const defaultProxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+export let proxyBaseUrl = defaultProxyBaseUrl;
 if (isLocal != true) {
   console.log = function() {};
 }
@@ -122,7 +123,7 @@ export function setGlobalLitellmHeaderName(headerName: string = "Authorization")
 export const getUiConfig = async () => {
   console.log("Getting UI config");
   /**Special route to get the proxy base url and server root path */
-  const url = `${proxyBaseUrl}/litellm/.well-known/litellm-ui-config`;
+  const url = defaultProxyBaseUrl ? `${defaultProxyBaseUrl}/litellm/.well-known/litellm-ui-config` : `/litellm/.well-known/litellm-ui-config`;
   const response = await fetch(url);
   const jsonData: LiteLLMWellKnownUiConfig = await response.json();
   /**
