@@ -13,6 +13,7 @@ from litellm.types.utils import ModelResponse, Choices, Usage
 from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 
+from litellm._logging import verbose_logger
 
 class ChatConfig(BaseConfig):
     """
@@ -33,28 +34,28 @@ class ChatConfig(BaseConfig):
         **kwargs,
     ) -> Dict[str, Any]:
         # Ensure proper authentication headers for OpenAI Responses API
-        print(f"Chat provider validate_environment: model={model}, api_key={'***' if api_key else None}, headers_auth={'present' if headers.get('Authorization') else 'missing'}")
+        verbose_logger.debug(f"Chat provider validate_environment: model={model}, api_key={'***' if api_key else None}, headers_auth={'present' if headers.get('Authorization') else 'missing'}")
         
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-            print(f"Chat provider: Set Authorization header from provided api_key")
+            verbose_logger.debug(f"Chat provider: Set Authorization header from provided api_key")
         elif not headers.get("Authorization"):
             # Try to get API key from environment or other sources
             import os
             openai_key = os.getenv("OPENAI_API_KEY")
             if openai_key:
                 headers["Authorization"] = f"Bearer {openai_key}"
-                print(f"Chat provider: Set Authorization header from OPENAI_API_KEY environment variable")
+                verbose_logger.debug(f"Chat provider: Set Authorization header from OPENAI_API_KEY environment variable")
             else:
-                print("Warning: No API key found for chat provider. Set OPENAI_API_KEY or provide api_key in config.")
+                verbose_logger.debug("Warning: No API key found for chat provider. Set OPENAI_API_KEY or provide api_key in config.")
         else:
-            print(f"Chat provider: Using existing Authorization header")
+            verbose_logger.debug(f"Chat provider: Using existing Authorization header")
         
         # Ensure proper content type
         if "Content-Type" not in headers:
             headers["Content-Type"] = "application/json"
             
-        print(f"Chat provider final headers: {list(headers.keys())}")
+        verbose_logger.debug(f"Chat provider final headers: {list(headers.keys())}")
         return headers
 
     def get_complete_url(
@@ -65,7 +66,7 @@ class ChatConfig(BaseConfig):
         # Default to OpenAI if no api_base provided
         if not api_base:
             api_base = "https://api.openai.com/v1"
-            print(f"Warning: No api_base provided for chat provider, defaulting to: {api_base}")
+            verbose_logger.debug(f"Warning: No api_base provided for chat provider, defaulting to: {api_base}")
         
         return api_base.rstrip("/") + "/responses"
 
@@ -144,7 +145,7 @@ class ChatConfig(BaseConfig):
         
         # Get stream parameter from litellm_params if not in optional_params
         stream = optional_params.get("stream") or litellm_params.get("stream", False)
-        print(f"Chat provider: Stream parameter: {stream}")
+        verbose_logger.debug(f"Chat provider: Stream parameter: {stream}")
         
         # Ensure stream is properly set in the request
         if stream:
@@ -154,44 +155,23 @@ class ChatConfig(BaseConfig):
         previous_response_id = optional_params.get("previous_response_id")
         if previous_response_id:
             # Use the existing session handler for responses API
-            try:
-                # This will extend the messages with previous session context
-                session_request = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
-                    model=model,
-                    input=input_items,
-                    responses_api_request=responses_api_request,
-                    custom_llm_provider="openai",
-                    stream=stream,
-                    **litellm_params
-                )
-                
-                # Note: Session handling for async contexts would use:
-                # await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
-                #     previous_response_id=previous_response_id,
-                #     litellm_completion_request=session_request
-                # )
-                
-            except Exception as e:
-                # If session handling fails, continue without it but log the error
-                print(f"Warning: Session handling failed for previous_response_id {previous_response_id}: {e}")
-                import traceback
-                traceback.print_exc()
-        
+            verbose_logger.debug(f"Chat provider: Warning ignoring previous response ID: {previous_response_id}")
+
         # Convert back to responses API format for the actual request
         # Strip chat/ prefix if present for the underlying API call
         api_model = model
         if model.startswith("chat/"):
             api_model = model[5:]  # Remove "chat/" prefix
-            print(f"Chat provider: Stripped chat/ prefix from model: {model} -> {api_model}")
+            verbose_logger.debug(f"Chat provider: Stripped chat/ prefix from model: {model} -> {api_model}")
         else:
-            print(f"Chat provider: Using model as-is: {api_model}")
+            verbose_logger.debug(f"Chat provider: Using model as-is: {api_model}")
         
         request_data = {
             "model": api_model,
             "input": input_items,
         }
         
-        print(f"Chat provider: Final request model={api_model}, input_items={len(input_items)}")
+        verbose_logger.debug(f"Chat provider: Final request model={api_model}, input_items={len(input_items)}")
         
         # Add non-None values from responses_api_request
         for key, value in responses_api_request.items():
@@ -201,8 +181,8 @@ class ChatConfig(BaseConfig):
                 else:
                     request_data[key] = value
         
-        print(f"Chat provider: Final request data keys: {list(request_data.keys())}")
-        print(f"Chat provider: Stream in request: {request_data.get('stream', False)}")
+        verbose_logger.debug(f"Chat provider: Final request data keys: {list(request_data.keys())}")
+        verbose_logger.debug(f"Chat provider: Stream in request: {request_data.get('stream', False)}")
         
         return request_data
 
@@ -224,8 +204,8 @@ class ChatConfig(BaseConfig):
         try:
             resp_json = raw_response.json()
         except Exception as e:
-            print(f"Error parsing JSON response from responses API: {e}")
-            print(f"Raw response text: {raw_response.text}")
+            verbose_logger.debug(f"Error parsing JSON response from responses API: {e}")
+            verbose_logger.debug(f"Raw response text: {raw_response.text}")
             import traceback
             traceback.print_exc()
             raise httpx.HTTPError(f"Invalid JSON from responses API: {raw_response.text}")
@@ -234,8 +214,8 @@ class ChatConfig(BaseConfig):
         responses_api_response = ResponsesAPIResponse.model_validate(raw_response.json())
 
         # Transform the responses API response to chat completion format
-        print(f"Chat provider: Raw response from openai: {resp_json}")
-        print(f"Chat provider: responses_api_request: {responses_api_response}")
+        verbose_logger.debug(f"Chat provider: Raw response from openai: {resp_json}")
+        verbose_logger.debug(f"Chat provider: responses_api_request: {responses_api_response}")
 
         # Inverse‐transform back to the original ModelResponse
         return LiteLLMCompletionResponsesConfig.transform_responses_api_response_to_chat_completion_response(
@@ -249,19 +229,19 @@ class ChatConfig(BaseConfig):
         logging_obj: Any,  # noqa: U100
     ) -> Any:
         # Transform responses API streaming chunk to chat completion format
-        print(f"Chat provider: transform_streaming_response called with chunk: {parsed_chunk}")
+        verbose_logger.debug(f"Chat provider: transform_streaming_response called with chunk: {parsed_chunk}")
         
         if not parsed_chunk:
-            print("Chat provider: Empty parsed_chunk, returning None")
+            verbose_logger.debug("Chat provider: Empty parsed_chunk, returning None")
             return None
         
         if not isinstance(parsed_chunk, dict):
-            print(f"Chat provider: Invalid chunk type {type(parsed_chunk)}, returning as-is")
+            verbose_logger.debug(f"Chat provider: Invalid chunk type {type(parsed_chunk)}, returning as-is")
             return parsed_chunk
             
         # Handle different event types from responses API
         event_type = parsed_chunk.get("type")
-        print(f"Chat provider: Processing event type: {event_type}")
+        verbose_logger.debug(f"Chat provider: Processing event type: {event_type}")
         
         if event_type == "response.created":
             # Initial response creation event
@@ -276,7 +256,7 @@ class ChatConfig(BaseConfig):
                     "finish_reason": None
                 }]
             }
-            print(f"Chat provider: response.created -> {chunk}")
+            verbose_logger.debug(f"Chat provider: response.created -> {chunk}")
             return chunk
         elif event_type == "response.output_item.added":
             # New output item added
@@ -308,10 +288,10 @@ class ChatConfig(BaseConfig):
                         "finish_reason": None
                     }]
                 }
-                print(f"Chat provider: content_part.added -> {chunk}")
+                verbose_logger.debug(f"Chat provider: content_part.added -> {chunk}")
                 return chunk
             else:
-                print(f"Chat provider: content_part.added with non-text type {content_part.get('type')}, skipping")
+                verbose_logger.debug(f"Chat provider: content_part.added with non-text type {content_part.get('type')}, skipping")
                 return None
         elif event_type == "response.content_part.done":
             # Content part completed
@@ -374,7 +354,7 @@ class ChatConfig(BaseConfig):
             return chunk
         
         # For any unhandled event types, create a minimal valid chunk or skip
-        print(f"Chat provider: Unhandled event type '{event_type}', creating empty chunk")
+        verbose_logger.debug(f"Chat provider: Unhandled event type '{event_type}', creating empty chunk")
         
         # Return a minimal valid chunk for unknown events
         return {
@@ -417,53 +397,53 @@ class ChatConfig(BaseConfig):
     
     def _convert_content_to_responses_format(self, content: Union[str, List[Any]]) -> List[Dict[str, Any]]:
         """Convert chat completion content to responses API format"""
-        print(f"Chat provider: Converting content to responses format - input type: {type(content)}")
+        verbose_logger.debug(f"Chat provider: Converting content to responses format - input type: {type(content)}")
         
         if isinstance(content, str):
             result = [{"type": "input_text", "text": content}]
-            print(f"Chat provider: String content -> {result}")
+            verbose_logger.debug(f"Chat provider: String content -> {result}")
             return result
         elif isinstance(content, list):
             result = []
             for i, item in enumerate(content):
-                print(f"Chat provider: Processing content item {i}: {type(item)} = {item}")
+                verbose_logger.debug(f"Chat provider: Processing content item {i}: {type(item)} = {item}")
                 if isinstance(item, str):
                     converted = {"type": "input_text", "text": item}
                     result.append(converted)
-                    print(f"Chat provider:   -> {converted}")
+                    verbose_logger.debug(f"Chat provider:   -> {converted}")
                 elif isinstance(item, dict):
                     # Handle multimodal content
                     original_type = item.get("type")
                     if original_type == "text":
                         converted = {"type": "input_text", "text": item.get("text", "")}
                         result.append(converted)
-                        print(f"Chat provider:   text -> {converted}")
+                        verbose_logger.debug(f"Chat provider:   text -> {converted}")
                     elif original_type == "image_url":
                         # Map to responses API image format
                         converted = {"type": "input_image", "image_url": item.get("image_url", {})}
                         result.append(converted)
-                        print(f"Chat provider:   image_url -> {converted}")
+                        verbose_logger.debug(f"Chat provider:   image_url -> {converted}")
                     else:
                         # Try to map other types to responses API format
                         item_type = original_type or "input_text"
                         if item_type == "image":
                             converted = {"type": "input_image", **item}
                             result.append(converted)
-                            print(f"Chat provider:   image -> {converted}")
+                            verbose_logger.debug(f"Chat provider:   image -> {converted}")
                         elif item_type in ["input_text", "input_image", "output_text", "refusal", "input_file", "computer_screenshot", "summary_text"]:
                             # Already in responses API format
                             result.append(item)
-                            print(f"Chat provider:   passthrough -> {item}")
+                            verbose_logger.debug(f"Chat provider:   passthrough -> {item}")
                         else:
                             # Default to input_text for unknown types
                             converted = {"type": "input_text", "text": str(item.get("text", item))}
                             result.append(converted)
-                            print(f"Chat provider:   unknown({original_type}) -> {converted}")
-            print(f"Chat provider: Final converted content: {result}")
+                            verbose_logger.debug(f"Chat provider:   unknown({original_type}) -> {converted}")
+            verbose_logger.debug(f"Chat provider: Final converted content: {result}")
             return result
         else:
             result = [{"type": "input_text", "text": str(content)}]
-            print(f"Chat provider: Other content type -> {result}")
+            verbose_logger.debug(f"Chat provider: Other content type -> {result}")
             return result
     
     def _convert_tools_to_responses_format(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
