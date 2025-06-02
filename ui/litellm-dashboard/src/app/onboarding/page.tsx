@@ -18,6 +18,7 @@ import {
   getOnboardingCredentials,
   claimOnboardingToken,
   getUiConfig,
+  getProxyBaseUrl
 } from "@/components/networking";
 import { jwtDecode } from "jwt-decode";
 import { Form, Button as Button2, message } from "antd";
@@ -100,7 +101,14 @@ export default function Onboarding() {
       document.cookie = "token=" + jwtToken;
       console.log("redirecting to:", litellm_dashboard_ui);
 
-      window.location.href = litellm_dashboard_ui;
+      const proxyBaseUrl = getProxyBaseUrl();
+      console.log("proxyBaseUrl:", proxyBaseUrl);
+
+      if (proxyBaseUrl) {
+        window.location.href = proxyBaseUrl + litellm_dashboard_ui;
+      } else {
+        window.location.href = litellm_dashboard_ui;
+      }
     });
 
     // redirect to login page
