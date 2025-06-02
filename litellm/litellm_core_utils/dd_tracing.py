@@ -27,10 +27,6 @@ class NullSpan:
     def finish(self):
         pass
 
-    def set_tag(self, key, value):
-        """No-op set_tag method for compatibility with DataDog spans"""
-        pass
-
 
 @contextmanager
 def null_tracer(name, **kwargs):
