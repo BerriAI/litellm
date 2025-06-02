@@ -704,7 +704,7 @@ class LiteLLMCompletionResponsesConfig:
             if isinstance(item, GenericResponseOutputItem):
                 msg = ChatMessage(
                     role=item.role,
-                    content=item.content[0] if item.content else ""
+                    content=item.text if item.text else item.content[0] if item.content else ""
                 )
                 choices.append(Choice(
                     message=msg,
