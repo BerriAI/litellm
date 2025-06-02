@@ -19,6 +19,15 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
+
+:::info
+
+The release candidate is live now.
+
+The production release will be live on Wednesday.
+
+:::
+
 ## Deploy this version
 
 <Tabs>
@@ -43,7 +52,7 @@ pip install litellm==1.72.0
 
 ## Key Highlights
 
-LiteLLM v1.72.0-stable is live now. Here are the key highlights of this release:
+LiteLLM v1.72.0-stable.rc is live now. Here are the key highlights of this release:
 
 - **Vector Store Permissions**: Control Vector Store access at the Key, Team, and Organization level.
 - **Rate Limiting Sliding Window support**: Improved accuracy for Key/Team/User rate limits with request tracking across minutes.
