@@ -740,7 +740,7 @@ origins = ["*"]
 try:
     current_dir = os.path.dirname(os.path.abspath(__file__))
     ui_path = os.path.join(current_dir, "_experimental", "out")
-    app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
+    router.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
     # Iterate through files in the UI directory
     for filename in os.listdir(ui_path):
         if filename.endswith(".html") and filename != "index.html":
@@ -787,20 +787,20 @@ app.add_middleware(
 app.add_middleware(PrometheusAuthMiddleware)
 
 swagger_path = os.path.join(current_dir, "swagger")
-app.mount("/swagger", StaticFiles(directory=swagger_path), name="swagger")
+router.mount("/swagger", StaticFiles(directory=swagger_path), name="swagger")
 
 
-def swagger_monkey_patch(*args, **kwargs):
-    return get_swagger_ui_html(
-        *args,
-        **kwargs,
-        swagger_js_url="/swagger/swagger-ui-bundle.js",
-        swagger_css_url="/swagger/swagger-ui.css",
-        swagger_favicon_url="/swagger/favicon.png",
-    )
+# def swagger_monkey_patch(*args, **kwargs):
+#     return get_swagger_ui_html(
+#         *args,
+#         **kwargs,
+#         swagger_js_url="/swagger/swagger-ui-bundle.js",
+#         swagger_css_url="/swagger/swagger-ui.css",
+#         swagger_favicon_url="/swagger/favicon.png",
+#     )
 
 
-applications.get_swagger_ui_html = swagger_monkey_patch
+# applications.get_swagger_ui_html = swagger_monkey_patch
 
 from typing import Dict
 
