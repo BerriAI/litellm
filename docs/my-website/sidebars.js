@@ -328,6 +328,7 @@ const sidebars = {
           label: "Bedrock",
           items: [
             "providers/bedrock",
+            "providers/bedrock_agents",
             "providers/bedrock_vector_store",
           ]
         },
@@ -379,7 +380,8 @@ const sidebars = {
         "providers/custom_llm_server",
         "providers/petals",
         "providers/snowflake",
-        "providers/featherless_ai"
+        "providers/featherless_ai",
+        "providers/nebius"
       ],
     },
     {
@@ -504,6 +506,7 @@ const sidebars = {
       items: [
         "tutorials/openweb_ui",
         "tutorials/openai_codex",
+        "tutorials/anthropic_file_usage",
         "tutorials/msft_sso",
         "tutorials/prompt_caching",
         "tutorials/tag_management",

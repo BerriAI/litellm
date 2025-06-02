@@ -22,6 +22,7 @@ import { Form, Input, InputNumber, message, Select } from "antd";
 import { KeyEditView } from "./key_edit_view";
 import { RegenerateKeyModal } from "./regenerate_key_modal";
 import { rolesWithWriteAccess } from '../utils/roles';
+import ObjectPermissionsView from "./object_permissions_view";
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -63,6 +64,16 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
 
       const currentKey = formValues.token;
       formValues.key = currentKey;
+
+      // Handle object_permission updates
+      if (formValues.vector_stores !== undefined) {
+        formValues.object_permission = {
+          ...keyData.object_permission,
+          vector_stores: formValues.vector_stores || []
+        };
+        // Remove vector_stores from the top level as it should be in object_permission
+        delete formValues.vector_stores;
+      }
 
       // Convert metadata back to an object if it exists and is a string
       if (formValues.metadata && typeof formValues.metadata === "string") {
@@ -123,7 +134,7 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
   };
 
   return (
-    <div className="p-4">
+    <div className="w-full h-screen p-4">
       <div className="flex justify-between items-center mb-6">
         <div>
           <Button 
@@ -249,12 +260,20 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
                   )}
                 </div>
               </Card>
+
+              <Card>
+                <ObjectPermissionsView 
+                  objectPermission={keyData.object_permission} 
+                  variant="inline"
+                  accessToken={accessToken}
+                />
+              </Card>
             </Grid>
           </TabPanel>
 
           {/* Settings Panel */}
           <TabPanel>
-            <Card>
+            <Card className="overflow-y-auto max-h-[65vh]">
               <div className="flex justify-between items-center mb-4">
                 <Title>Key Settings</Title>
                 {!isEditing && userRole && rolesWithWriteAccess.includes(userRole) && (
@@ -354,6 +373,13 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
                       {JSON.stringify(keyData.metadata, null, 2)}
                     </pre>
                   </div>
+
+                  <ObjectPermissionsView 
+                    objectPermission={keyData.object_permission} 
+                    variant="inline"
+                    className="pt-4 border-t border-gray-200"
+                    accessToken={accessToken}
+                  />
                 </div>
               )}
             </Card>

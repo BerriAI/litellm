@@ -375,3 +375,75 @@ def test_vertex_ai_usage_metadata_response_token_count():
     assert result.prompt_tokens_details.audio_tokens is None
     assert result.prompt_tokens_details.cached_tokens is None
     assert result.completion_tokens_details.text_tokens == 74
+
+
+def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
+    """
+    If budget_tokens is 0, do not set includeThoughts to True
+    """
+    from litellm.types.llms.anthropic import AnthropicThinkingParam
+
+    v = VertexGeminiConfig()
+    thinking_param: AnthropicThinkingParam = {"type": "enabled", "budget_tokens": 0}
+    assert "includeThoughts" not in v._map_thinking_param(thinking_param=thinking_param)
+
+    thinking_param: AnthropicThinkingParam = {"type": "enabled", "budget_tokens": 100}
+    assert v._map_thinking_param(thinking_param=thinking_param) == {
+        "includeThoughts": True,
+        "thinkingBudget": 100,
+    }
+
+def test_vertex_ai_map_tools():
+    v = VertexGeminiConfig()
+    tools = v._map_function(value=[{"code_execution": {}}])
+    assert len(tools) == 1
+    assert tools[0]["code_execution"] == {}
+    print(tools)
+
+    new_tools = v._map_function(value=[{"codeExecution": {}}])
+    assert len(new_tools) == 1
+    print("new_tools", new_tools)
+    assert new_tools[0]["code_execution"] == {}
+    print(new_tools)
+
+    assert tools == new_tools
+
+
+def test_vertex_ai_map_tool_with_anyof():
+    """
+    Related issue: https://github.com/BerriAI/litellm/issues/11164
+
+    Ensure if anyof is present, only the anyof field and its contents are kept - otherwise VertexAI will throw an error - https://github.com/BerriAI/litellm/issues/11164
+    """
+    v = VertexGeminiConfig()
+    value = [
+        {
+            "type": "function",
+            "function": {
+                "name": "git_create_branch",
+                "description": "Creates a new branch from an optional base branch",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "repo_path": {"title": "Repo Path", "type": "string"},
+                        "branch_name": {"title": "Branch Name", "type": "string"},
+                        "base_branch": {
+                            "anyOf": [{"type": "string"}, {"type": "null"}],
+                            "default": None,
+                            "title": "Base Branch",
+                        },
+                    },
+                    "required": ["repo_path", "branch_name"],
+                    "title": "GitCreateBranch",
+                },
+            },
+        }
+    ]
+    tools = v._map_function(value=value)
+
+    assert tools[0]["function_declarations"][0]["parameters"]["properties"][
+        "base_branch"
+    ] == {
+        "anyOf": [{"type": "string", "nullable": True, "title": "Base Branch"}]
+    }, f"Expected only anyOf field and its contents to be kept, but got {tools[0]['function_declarations'][0]['parameters']['properties']['base_branch']}"
+

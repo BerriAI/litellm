@@ -13,7 +13,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import json
 import sys
-from typing import Any, List, Literal, Optional, Tuple, Union
+from typing import Any, AsyncGenerator, List, Literal, Optional, Tuple, Union
 
 from fastapi import HTTPException
 
@@ -30,7 +30,6 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.secret_managers.main import get_secret
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
@@ -40,7 +39,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockRequest,
     BedrockTextContent,
 )
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, ModelResponseStream
 
 GUARDRAIL_NAME = "bedrock"
 
@@ -116,40 +115,22 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         ## CREDENTIALS ##
-        # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
-        aws_secret_access_key = self.optional_params.pop("aws_secret_access_key", None)
-        aws_access_key_id = self.optional_params.pop("aws_access_key_id", None)
-        aws_session_token = self.optional_params.pop("aws_session_token", None)
-        aws_region_name = self.optional_params.pop("aws_region_name", None)
-        aws_role_name = self.optional_params.pop("aws_role_name", None)
-        aws_session_name = self.optional_params.pop("aws_session_name", None)
-        aws_profile_name = self.optional_params.pop("aws_profile_name", None)
-        self.optional_params.pop(
-            "aws_bedrock_runtime_endpoint", None
-        )  # https://bedrock-runtime.{region_name}.amazonaws.com
-        aws_web_identity_token = self.optional_params.pop(
+        aws_secret_access_key = self.optional_params.get("aws_secret_access_key", None)
+        aws_access_key_id = self.optional_params.get("aws_access_key_id", None)
+        aws_session_token = self.optional_params.get("aws_session_token", None)
+        aws_region_name = self.optional_params.get("aws_region_name", None)
+        aws_role_name = self.optional_params.get("aws_role_name", None)
+        aws_session_name = self.optional_params.get("aws_session_name", None)
+        aws_profile_name = self.optional_params.get("aws_profile_name", None)
+        aws_web_identity_token = self.optional_params.get(
             "aws_web_identity_token", None
         )
-        aws_sts_endpoint = self.optional_params.pop("aws_sts_endpoint", None)
+        aws_sts_endpoint = self.optional_params.get("aws_sts_endpoint", None)
 
         ### SET REGION NAME ###
-        if aws_region_name is None:
-            # check env #
-            litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
-
-            if litellm_aws_region_name is not None and isinstance(
-                litellm_aws_region_name, str
-            ):
-                aws_region_name = litellm_aws_region_name
-
-            standard_aws_region_name = get_secret("AWS_REGION", None)
-            if standard_aws_region_name is not None and isinstance(
-                standard_aws_region_name, str
-            ):
-                aws_region_name = standard_aws_region_name
-
-            if aws_region_name is None:
-                aws_region_name = "us-west-2"
+        aws_region_name = self.get_aws_region_name_for_non_llm_api_calls(
+            aws_region_name=aws_region_name,
+        )
 
         credentials: Credentials = self.get_credentials(
             aws_access_key_id=aws_access_key_id,
@@ -474,6 +455,56 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return self._apply_masking_to_messages(
             messages=messages, masked_texts=masked_texts
         )
+
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_data: dict,
+    ) -> AsyncGenerator[ModelResponseStream, None]:
+        """
+        Process streaming response chunks.
+
+        Collect content from the stream and make a bedrock api request to get the guardrail response.
+        """
+        # Import here to avoid circular imports
+        from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
+        from litellm.main import stream_chunk_builder
+        from litellm.types.utils import TextCompletionResponse
+
+        # Collect all chunks to process them together
+        all_chunks: List[ModelResponseStream] = []
+        async for chunk in response:
+            all_chunks.append(chunk)
+
+        assembled_model_response: Optional[
+            Union[ModelResponse, TextCompletionResponse]
+        ] = stream_chunk_builder(
+            chunks=all_chunks,
+        )
+        if isinstance(assembled_model_response, ModelResponse):
+            ####################################################################
+            ########## 1. Make the Bedrock Apply Guardrail API request ##########
+
+            # Bedrock will raise an exception if this violates the guardrail policy
+            ###################################################################
+            await self.make_bedrock_api_request(
+                kwargs=request_data, response=assembled_model_response
+            )
+
+            #########################################################################
+            ########## If guardrail passed, then return the collected chunks ##########
+            #########################################################################
+            mock_response = MockResponseIterator(
+                model_response=assembled_model_response
+            )
+
+            # Return the reconstructed stream
+            async for chunk in mock_response:
+                yield chunk
+        else:
+            for chunk in all_chunks:
+                yield chunk
 
     def _extract_masked_texts_from_response(
         self, bedrock_guardrail_response: BedrockGuardrailResponse

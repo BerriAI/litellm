@@ -659,6 +659,11 @@ class ModelParams(LiteLLMPydanticObjectBase):
         return values
 
 
+class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
+    mcp_servers: Optional[List[str]] = None
+    vector_stores: Optional[List[str]] = None
+
+
 class GenerateRequestBase(LiteLLMPydanticObjectBase):
     """
     Overlapping schema between key and user generate/update requests
@@ -689,6 +694,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     guardrails: Optional[List[str]] = None
     blocked: Optional[bool] = None
     aliases: Optional[dict] = {}
+    object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
 
 class KeyRequestBase(GenerateRequestBase):
@@ -815,6 +821,74 @@ class LiteLLM_ProxyModelTable(LiteLLMPydanticObjectBase):
             except json.JSONDecodeError:
                 pass
         return values
+
+
+# MCP Types
+class SpecialMCPServerName(str, enum.Enum):
+    all_team_servers = "all-team-mcpservers"
+    all_proxy_servers = "all-proxy-mcpservers"
+
+
+class MCPTransport(str, enum.Enum):
+    sse = "sse"
+    http = "http"
+
+
+class MCPSpecVersion(str, enum.Enum):
+    nov_2024 = "2024-11-05"
+    mar_2025 = "2025-03-26"
+
+
+class MCPAuth(str, enum.Enum):
+    none = "none"
+    api_key = "api_key"
+    bearer_token = "bearer_token"
+    basic = "basic"
+
+
+# MCP Literals
+MCPTransportType = Literal[MCPTransport.sse, MCPTransport.http]
+MCPSpecVersionType = Literal[MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025]
+MCPAuthType = Optional[
+    Literal[MCPAuth.none, MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.basic]
+]
+
+
+# MCP Proxy Request Types
+class NewMCPServerRequest(LiteLLMPydanticObjectBase):
+    server_id: Optional[str] = None
+    alias: Optional[str] = None
+    description: Optional[str] = None
+    transport: MCPTransportType = MCPTransport.sse
+    spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
+    auth_type: Optional[MCPAuthType] = None
+    url: str
+
+
+class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
+    server_id: str
+    alias: Optional[str] = None
+    description: Optional[str] = None
+    transport: MCPTransportType = MCPTransport.sse
+    spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
+    auth_type: Optional[MCPAuthType] = None
+    url: str
+
+
+class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
+    """Represents a LiteLLM_MCPServerTable record"""
+
+    server_id: str
+    alias: Optional[str] = None
+    description: Optional[str] = None
+    url: str
+    transport: MCPTransportType
+    spec_version: MCPSpecVersionType
+    auth_type: Optional[MCPAuthType] = None
+    created_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+    updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
 
 
 class NewUserRequest(GenerateRequestBase):
@@ -1042,6 +1116,7 @@ class NewTeamRequest(TeamBase):
     model_aliases: Optional[dict] = None
     tags: Optional[list] = None
     guardrails: Optional[List[str]] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1082,6 +1157,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     tags: Optional[list] = None
     model_aliases: Optional[dict] = None
     guardrails: Optional[List[str]] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
@@ -1174,6 +1250,14 @@ class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
         return values
 
 
+class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
+    """Represents a LiteLLM_ObjectPermissionTable record"""
+
+    object_permission_id: str
+    mcp_servers: Optional[List[str]] = []
+    vector_stores: Optional[List[str]] = []
+
+
 class LiteLLM_TeamTable(TeamBase):
     team_id: str  # type: ignore
     spend: Optional[float] = None
@@ -1182,8 +1266,14 @@ class LiteLLM_TeamTable(TeamBase):
     budget_reset_at: Optional[datetime] = None
     model_id: Optional[int] = None
     litellm_model_table: Optional[LiteLLM_ModelTable] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
     updated_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
+
+    #########################################################
+    # Object Permission - MCP, Vector Stores etc.
+    #########################################################
+    object_permission_id: Optional[str] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1261,6 +1351,11 @@ class NewOrganizationRequest(LiteLLM_BudgetTable):
     models: List = []
     budget_id: Optional[str] = None
     metadata: Optional[dict] = None
+
+    #########################################################
+    # Object Permission - MCP, Vector Stores etc.
+    #########################################################
+    object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
 
 class OrganizationRequest(LiteLLMPydanticObjectBase):
@@ -1543,6 +1638,8 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     created_by: Optional[str] = None
     updated_at: Optional[datetime] = None
     updated_by: Optional[str] = None
+    object_permission_id: Optional[str] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1663,6 +1760,7 @@ class LiteLLM_OrganizationTableUpdate(LiteLLMPydanticObjectBase):
     metadata: Optional[dict] = None
     models: Optional[List[str]] = None
     updated_by: Optional[str] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
 
 
 class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
@@ -1685,6 +1783,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     metadata: Optional[dict] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1713,6 +1812,12 @@ class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
     updated_by: str
     users: Optional[List[LiteLLM_UserTable]] = None
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
+
+    #########################################################
+    # Object Permission - MCP, Vector Stores etc.
+    #########################################################
+    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
+    object_permission_id: Optional[str] = None
 
 
 class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
@@ -2259,6 +2364,21 @@ class ProxyErrorTypes(str, enum.Enum):
     Team member permission error
     """
 
+    key_vector_store_access_denied = "key_vector_store_access_denied"
+    """
+    Key does not have access to the vector store
+    """
+
+    team_vector_store_access_denied = "team_vector_store_access_denied"
+    """
+    Team does not have access to the vector store
+    """
+
+    org_vector_store_access_denied = "org_vector_store_access_denied"
+    """
+    Organization does not have access to the vector store
+    """
+
     @classmethod
     def get_model_access_error_type_for_object(
         cls, object_type: Literal["key", "user", "team", "org"]
@@ -2274,6 +2394,20 @@ class ProxyErrorTypes(str, enum.Enum):
             return cls.user_model_access_denied
         elif object_type == "org":
             return cls.org_model_access_denied
+
+    @classmethod
+    def get_vector_store_access_error_type_for_object(
+        cls, object_type: Literal["key", "team", "org"]
+    ) -> "ProxyErrorTypes":
+        """
+        Get the vector store access error type for object_type
+        """
+        if object_type == "key":
+            return cls.key_vector_store_access_denied
+        elif object_type == "team":
+            return cls.team_vector_store_access_denied
+        elif object_type == "org":
+            return cls.org_vector_store_access_denied
 
 
 DB_CONNECTION_ERROR_TYPES = (

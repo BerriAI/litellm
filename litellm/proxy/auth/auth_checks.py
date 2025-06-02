@@ -32,6 +32,7 @@ from litellm.proxy._types import (
     LiteLLM_EndUserTable,
     Litellm_EntityType,
     LiteLLM_JWTAuth,
+    LiteLLM_ObjectPermissionTable,
     LiteLLM_OrganizationMembershipTable,
     LiteLLM_OrganizationTable,
     LiteLLM_TeamTable,
@@ -94,6 +95,7 @@ async def common_checks(
     8. [OPTIONAL] If guardrails modified - is request allowed to change this
     9. Check if request body is safe
     10. [OPTIONAL] Organization checks - is user_object.organization_id is set, run these checks
+    11. [OPTIONAL] Vector store checks - is the object allowed to access the vector store
     """
     _model: Optional[Union[str, List[str]]] = get_model_from_request(
         request_body, route
@@ -216,6 +218,13 @@ async def common_checks(
         user_obj=user_object,
         request=request,
         request_data=request_body,
+        valid_token=valid_token,
+    )
+
+    # 11. [OPTIONAL] Vector store checks - is the object allowed to access the vector store
+    await vector_store_access_check(
+        request_body=request_body,
+        team_object=team_object,
         valid_token=valid_token,
     )
 
@@ -1576,3 +1585,104 @@ def _is_wildcard_pattern(allowed_model_pattern: str) -> bool:
     Checks if `*` is in the pattern.
     """
     return "*" in allowed_model_pattern
+
+
+async def vector_store_access_check(
+    request_body: dict,
+    team_object: Optional[LiteLLM_TeamTable],
+    valid_token: Optional[UserAPIKeyAuth],
+):
+    """
+    Checks if the object (key, team, org) has access to the vector store.
+
+    Raises ProxyException if the object (key, team, org) cannot access the specific vector store.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    #########################################################
+    # Get the vector store the user is trying to access
+    #########################################################
+    if prisma_client is None:
+        verbose_proxy_logger.debug(
+            "Prisma client not found, skipping vector store access check"
+        )
+        return True
+
+    if litellm.vector_store_registry is None:
+        verbose_proxy_logger.debug(
+            "Vector store registry not found, skipping vector store access check"
+        )
+        return True
+
+    vector_store_ids_to_run = litellm.vector_store_registry.get_vector_store_ids_to_run(
+        non_default_params=request_body, tools=request_body.get("tools", None)
+    )
+    if vector_store_ids_to_run is None:
+        verbose_proxy_logger.debug(
+            "Vector store to run not found, skipping vector store access check"
+        )
+        return True
+
+    #########################################################
+    # Check if the object (key, team, org) has access to the vector store
+    #########################################################
+    # Check if the key can access the vector store
+    if valid_token is not None and valid_token.object_permission_id is not None:
+        key_object_permission = (
+            await prisma_client.db.litellm_objectpermissiontable.find_unique(
+                where={"object_permission_id": valid_token.object_permission_id},
+            )
+        )
+        if key_object_permission is not None:
+            _can_object_call_vector_stores(
+                object_type="key",
+                vector_store_ids_to_run=vector_store_ids_to_run,
+                object_permissions=key_object_permission,
+            )
+
+    # Check if the team can access the vector store
+    if team_object is not None and team_object.object_permission_id is not None:
+        team_object_permission = (
+            await prisma_client.db.litellm_objectpermissiontable.find_unique(
+                where={"object_permission_id": team_object.object_permission_id},
+            )
+        )
+        if team_object_permission is not None:
+            _can_object_call_vector_stores(
+                object_type="team",
+                vector_store_ids_to_run=vector_store_ids_to_run,
+                object_permissions=team_object_permission,
+            )
+    return True
+
+
+def _can_object_call_vector_stores(
+    object_type: Literal["key", "team", "org"],
+    vector_store_ids_to_run: List[str],
+    object_permissions: Optional[LiteLLM_ObjectPermissionTable],
+):
+    """
+    Raises ProxyException if the object (key, team, org) cannot access the specific vector store.
+    """
+    if object_permissions is None:
+        return True
+
+    if object_permissions.vector_stores is None:
+        return True
+
+    # If length is 0, then the object has access to all vector stores.
+    if len(object_permissions.vector_stores) == 0:
+        return True
+
+    for vector_store_id in vector_store_ids_to_run:
+        if vector_store_id not in object_permissions.vector_stores:
+            raise ProxyException(
+                message=f"User not allowed to access vector store. Tried to access {vector_store_id}. Only allowed to access {object_permissions.vector_stores}",
+                type=ProxyErrorTypes.get_vector_store_access_error_type_for_object(
+                    object_type
+                ),
+                param="vector_store",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
+
+    return True

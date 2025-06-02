@@ -26,10 +26,10 @@ test:
 	poetry run pytest tests/
 
 test-unit:
-	poetry run pytest tests/litellm/
+	poetry run pytest tests/test_litellm/
 
 test-integration:
-	poetry run pytest tests/ -k "not litellm"
+	poetry run pytest tests/ -k "not test_litellm"
 
 test-unit-helm:
 	helm unittest -f 'tests/*.yaml' deploy/charts/litellm-helm
