@@ -180,6 +180,7 @@ LITELLM_CHAT_PROVIDERS = [
     "replicate",
     "huggingface",
     "together_ai",
+    "datarobot",
     "openrouter",
     "vertex_ai",
     "vertex_ai_beta",
