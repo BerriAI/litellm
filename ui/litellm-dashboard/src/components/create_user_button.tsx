@@ -350,7 +350,7 @@ const Createuser: React.FC<CreateuserProps> = ({
         <OnboardingModal
           isInvitationLinkModalVisible={isInvitationLinkModalVisible}
           setIsInvitationLinkModalVisible={setIsInvitationLinkModalVisible}
-          baseUrl={baseUrl}
+          baseUrl={baseUrl || ""}
           invitationLinkData={invitationLinkData}
         />
       )}
