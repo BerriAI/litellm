@@ -371,6 +371,7 @@ router_settings:
 | DD_API_KEY | API key for Datadog integration
 | DD_SITE | Site URL for Datadog (e.g., datadoghq.com)
 | DD_SOURCE | Source identifier for Datadog logs
+| DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE | Resource name for Datadog tracing of streaming chunk yields. Default is "streaming.chunk.yield"
 | DD_ENV | Environment identifier for Datadog logs. Only supported for `datadog_llm_observability` callback
 | DD_SERVICE | Service identifier for Datadog logs. Defaults to "litellm-server"
 | DD_VERSION | Version identifier for Datadog logs. Defaults to "unknown"
