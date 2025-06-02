@@ -259,7 +259,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const tableRef = useRef<TableInstance<any>>(null);
 
 const addModelTabRef = useRef<HTMLButtonElement>(null);
-const [isAddModelTabActive, setIsAddModelTabActive] = useState(false);
   const setProviderModelsFn = (provider: Providers) => {
     const _providerModels = getProviderModels(provider, modelMap);
     setProviderModels(_providerModels);
@@ -1059,12 +1058,11 @@ const [isAddModelTabActive, setIsAddModelTabActive] = useState(false);
       ) : (
         <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
         <div className="mb-4">
-          {!isAddModelTabActive && isAdminRole(userRole) && (
+          {isAdminRole(userRole) && (
               <Button
                 className="mx-auto"
                 onClick={() => {
             addModelTabRef.current?.click();
-            setIsAddModelTabActive(true);
           }}
               >
                 + Create New Model
@@ -1073,14 +1071,14 @@ const [isAddModelTabActive, setIsAddModelTabActive] = useState(false);
           </div>
           <TabList className="flex justify-between mt-2 w-full items-center">
             <div className="flex">
-              {all_admin_roles.includes(userRole) ? <Tab onClick={() => setIsAddModelTabActive(false)}>All Models</Tab> : <Tab>Your Models</Tab>}
-              <Tab onClick={() => setIsAddModelTabActive(true)} ref={addModelTabRef}>Add Model</Tab>
-              {all_admin_roles.includes(userRole) && <Tab onClick={() => setIsAddModelTabActive(false)}>LLM Credentials</Tab>}
-              {all_admin_roles.includes(userRole) && <Tab onClick={() => setIsAddModelTabActive(false)}>
+              {all_admin_roles.includes(userRole) ? <Tab>All Models</Tab> : <Tab>Your Models</Tab>}
+              <Tab  ref={addModelTabRef}>Add Model</Tab>
+              {all_admin_roles.includes(userRole) && <Tab>LLM Credentials</Tab>}
+              {all_admin_roles.includes(userRole) && <Tab>
                 <pre>/health Models</pre>
               </Tab>}
-              {all_admin_roles.includes(userRole) && <Tab onClick={() => setIsAddModelTabActive(false)}>Model Analytics</Tab>}
-              {all_admin_roles.includes(userRole) && <Tab onClick={() => setIsAddModelTabActive(false)}>Model Retry Settings</Tab>}
+              {all_admin_roles.includes(userRole) && <Tab>Model Analytics</Tab>}
+              {all_admin_roles.includes(userRole) && <Tab>Model Retry Settings</Tab>}
 
             </div>
 
