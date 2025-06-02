@@ -8,7 +8,7 @@ from litellm.types.proxy.discovery_endpoints.ui_discovery_endpoints import (
 router = APIRouter()
 
 
-@router.get(".well-known/litellm-ui-config", response_model=UiDiscoveryEndpoints)
+@router.get("/.well-known/litellm-ui-config", response_model=UiDiscoveryEndpoints)
 @router.get(
     "/litellm/.well-known/litellm-ui-config", response_model=UiDiscoveryEndpoints
 )  # if mounted at root path
