@@ -6613,12 +6613,9 @@ async def fallback_login(request: Request):
     "/login", include_in_schema=False
 )  # hidden since this is a helper for UI sso login
 async def login(request: Request):  # noqa: PLR0915
-    global premium_user, general_settings
-    try:
-        import multipart
-    except ImportError:
-        subprocess.run(["pip", "install", "python-multipart"])
-    global master_key
+    global premium_user, general_settings, master_key
+    from litellm.types.proxy.ui_sso import ReturnedUITokenObject
+
     if master_key is None:
         raise ProxyException(
             message="Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.  https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
@@ -6746,19 +6743,21 @@ async def login(request: Request):  # noqa: PLR0915
                 user_info
             )
 
+        returned_ui_token_object = ReturnedUITokenObject(
+            user_id=user_id,
+            key=key,
+            user_email=None,
+            user_role=user_role,
+            login_method="username_password",
+            premium_user=premium_user,
+            auth_header_name=general_settings.get(
+                "litellm_key_header_name", "Authorization"
+            ),
+            disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
+        )
+
         jwt_token = jwt.encode(  # type: ignore
-            {
-                "user_id": user_id,
-                "key": key,
-                "user_email": None,
-                "user_role": user_role,  # this is the path without sso - we can assume only admins will use this
-                "login_method": "username_password",
-                "premium_user": premium_user,
-                "auth_header_name": general_settings.get(
-                    "litellm_key_header_name", "Authorization"
-                ),
-                "disabled_non_admin_personal_key_creation": disabled_non_admin_personal_key_creation,
-            },
+            cast(dict, returned_ui_token_object),
             master_key,
             algorithm="HS256",
         )
