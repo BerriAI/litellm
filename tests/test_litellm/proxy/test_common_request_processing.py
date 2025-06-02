@@ -281,3 +281,103 @@ class TestCommonRequestProcessingHelpers:
             'data: {"content": "actual data"}\n\n',
             "data: [DONE]\n\n",
         ]
+
+    async def test_create_streaming_response_all_chunks_have_dd_trace(self):
+        """Test that all stream chunks are wrapped with dd trace at the streaming generator level"""
+        import json
+        from unittest.mock import patch
+
+        # Create a mock tracer
+        mock_tracer = MagicMock()
+        mock_span = MagicMock()
+        mock_tracer.trace.return_value.__enter__.return_value = mock_span
+        mock_tracer.trace.return_value.__exit__.return_value = None
+
+        # Mock generator with multiple chunks
+        async def mock_generator():
+            yield 'data: {"content": "chunk 1"}\n\n'
+            yield 'data: {"content": "chunk 2"}\n\n'
+            yield 'data: {"content": "chunk 3"}\n\n'
+            yield "data: [DONE]\n\n"
+
+        # Patch the tracer in the common_request_processing module
+        with patch("litellm.proxy.common_request_processing.tracer", mock_tracer):
+            response = await create_streaming_response(
+                mock_generator(), "text/event-stream", {}
+            )
+
+            assert response.status_code == 200
+
+            # Consume the stream to trigger the tracer calls
+            content = await self.consume_stream(response)
+
+            # Verify all chunks are present
+            assert len(content) == 4
+            assert content[0] == 'data: {"content": "chunk 1"}\n\n'
+            assert content[1] == 'data: {"content": "chunk 2"}\n\n'
+            assert content[2] == 'data: {"content": "chunk 3"}\n\n'
+            assert content[3] == "data: [DONE]\n\n"
+
+            # Verify that tracer.trace was called for each chunk (4 chunks total)
+            assert mock_tracer.trace.call_count == 4
+
+            # Verify that each call was made with the correct operation name
+            expected_calls = [
+                (("streaming.chunk.yield",), {}),
+                (("streaming.chunk.yield",), {}),
+                (("streaming.chunk.yield",), {}),
+                (("streaming.chunk.yield",), {}),
+            ]
+
+            actual_calls = mock_tracer.trace.call_args_list
+            assert len(actual_calls) == 4
+
+            for i, call in enumerate(actual_calls):
+                args, kwargs = call
+                assert (
+                    args[0] == "streaming.chunk.yield"
+                ), f"Call {i} should have operation name 'streaming.chunk.yield', got {args[0]}"
+
+    async def test_create_streaming_response_dd_trace_with_error_chunk(self):
+        """Test that dd trace is applied even when the first chunk contains an error"""
+        from unittest.mock import patch
+
+        # Create a mock tracer
+        mock_tracer = MagicMock()
+        mock_span = MagicMock()
+        mock_tracer.trace.return_value.__enter__.return_value = mock_span
+        mock_tracer.trace.return_value.__exit__.return_value = None
+
+        # Mock generator with error in first chunk
+        async def mock_generator():
+            yield 'data: {"error": {"code": 400, "message": "bad request"}}\n\n'
+            yield 'data: {"content": "chunk after error"}\n\n'
+            yield "data: [DONE]\n\n"
+
+        # Patch the tracer in the common_request_processing module
+        with patch("litellm.proxy.common_request_processing.tracer", mock_tracer):
+            response = await create_streaming_response(
+                mock_generator(), "text/event-stream", {}
+            )
+
+            # Even with error, status should be set to error code but tracing should still work
+            assert response.status_code == 400
+
+            # Consume the stream to trigger the tracer calls
+            content = await self.consume_stream(response)
+
+            # Verify all chunks are present
+            assert len(content) == 3
+
+            # Verify that tracer.trace was called for each chunk
+            assert mock_tracer.trace.call_count == 3
+
+            # Verify that each call was made with the correct operation name
+            actual_calls = mock_tracer.trace.call_args_list
+            assert len(actual_calls) == 3
+
+            for i, call in enumerate(actual_calls):
+                args, kwargs = call
+                assert (
+                    args[0] == "streaming.chunk.yield"
+                ), f"Call {i} should have operation name 'streaming.chunk.yield', got {args[0]}"
