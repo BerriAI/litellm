@@ -158,7 +158,7 @@ export default function CreateKeyPage() {
 
   useEffect(() => {
     if (redirectToLogin) {
-      window.location.href = (proxyBaseUrl || "") + "/litellm/sso/key/generate"
+      window.location.href = (proxyBaseUrl || "") + "/sso/key/generate"
     }
   }, [redirectToLogin])
 
