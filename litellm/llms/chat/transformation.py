@@ -218,9 +218,12 @@ class ChatConfig(BaseConfig):
         verbose_logger.debug(f"Chat provider: responses_api_request: {responses_api_response}")
 
         # Inverse‐transform back to the original ModelResponse
-        return LiteLLMCompletionResponsesConfig.transform_responses_api_response_to_chat_completion_response(
+        transformed = LiteLLMCompletionResponsesConfig.transform_responses_api_response_to_chat_completion_response(
             responses_api_response=responses_api_response
         )
+
+        verbose_logger.debug(f"Chat provider: transformed {transformed}")
+        return transformed
 
     def transform_streaming_response(
         self,
