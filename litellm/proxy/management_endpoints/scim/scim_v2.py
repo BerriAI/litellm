@@ -32,6 +32,7 @@ from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
 from litellm.proxy.management_endpoints.team_endpoints import new_team
+from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.types.proxy.management_endpoints.scim_v2 import *
 
 scim_router = APIRouter(
@@ -81,13 +82,13 @@ async def get_users(
                 where_conditions["user_email"] = email
 
         # Get users from database
-        users: List[LiteLLM_UserTable] = (
-            await prisma_client.db.litellm_usertable.find_many(
-                where=where_conditions,
-                skip=(startIndex - 1),
-                take=count,
-                order={"created_at": "desc"},
-            )
+        users: List[
+            LiteLLM_UserTable
+        ] = await prisma_client.db.litellm_usertable.find_many(
+            where=where_conditions,
+            skip=(startIndex - 1),
+            take=count,
+            order={"created_at": "desc"},
         )
 
         # Get total count for pagination
@@ -111,9 +112,7 @@ async def get_users(
         )
 
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": f"Error retrieving users: {str(e)}"}
-        )
+        raise handle_exception_on_proxy(e)
 
 
 @scim_router.get(
@@ -147,12 +146,8 @@ async def get_user(
         scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(user)
         return scim_user
 
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": f"Error retrieving user: {str(e)}"}
-        )
+        raise handle_exception_on_proxy(e)
 
 
 @scim_router.post(
@@ -213,13 +208,8 @@ async def create_user(
             user=created_user
         )
         return scim_user
-
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": f"Error creating user: {str(e)}"}
-        )
+        raise handle_exception_on_proxy(e)
 
 
 @scim_router.put(
@@ -241,12 +231,8 @@ async def update_user(
         raise HTTPException(status_code=500, detail={"error": "No database connected"})
     try:
         return None
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": f"Error updating user: {str(e)}"}
-        )
+        raise handle_exception_on_proxy(e)
 
 
 @scim_router.delete(
@@ -299,13 +285,8 @@ async def delete_user(
         await prisma_client.db.litellm_usertable.delete(where={"user_id": user_id})
 
         return Response(status_code=204)
-
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": f"Error deleting user: {str(e)}"}
-        )
+        raise handle_exception_on_proxy(e)
 
 
 @scim_router.patch(
@@ -341,12 +322,8 @@ async def patch_user(
 
         return None
 
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": f"Error patching user: {str(e)}"}
-        )
+        raise handle_exception_on_proxy(e)
 
 
 # Group Endpoints
@@ -431,9 +408,7 @@ async def get_groups(
         )
 
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": f"Error retrieving groups: {str(e)}"}
-        )
+        raise handle_exception_on_proxy(e)
 
 
 @scim_router.get(
@@ -469,12 +444,8 @@ async def get_group(
         )
         return scim_group
 
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": f"Error retrieving group: {str(e)}"}
-        )
+        raise handle_exception_on_proxy(e)
 
 
 @scim_router.post(
@@ -535,12 +506,8 @@ async def create_group(
             created_team
         )
         return scim_group
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": f"Error creating group: {str(e)}"}
-        )
+        raise handle_exception_on_proxy(e)
 
 
 @scim_router.put(
@@ -655,12 +622,8 @@ async def update_group(
             },
         )
 
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": f"Error updating group: {str(e)}"}
-        )
+        raise handle_exception_on_proxy(e)
 
 
 @scim_router.delete(
@@ -709,12 +672,8 @@ async def delete_group(
 
         return Response(status_code=204)
 
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": f"Error deleting group: {str(e)}"}
-        )
+        raise handle_exception_on_proxy(e)
 
 
 @scim_router.patch(
@@ -749,9 +708,5 @@ async def patch_group(
                 detail={"error": f"Group not found with ID: {group_id}"},
             )
         return None
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": f"Error patching group: {str(e)}"}
-        )
+        raise handle_exception_on_proxy(e)
