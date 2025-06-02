@@ -26,7 +26,7 @@ import ChatUI from "@/components/chat_ui";
 import Sidebar from "@/components/leftnav";
 import Usage from "@/components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
-import { proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
+import { proxyBaseUrl, setGlobalLitellmHeaderName, updateProxyBaseUrl } from "@/components/networking";
 import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
 import TransformRequestPanel from "@/components/transform_request";
@@ -213,6 +213,10 @@ export default function CreateKeyPage() {
 
       if (decoded.user_id) {
         setUserID(decoded.user_id);
+      }
+      
+      if (decoded.server_root_path) {
+        updateProxyBaseUrl(decoded.server_root_path);
       }
     }
   }, [token]);

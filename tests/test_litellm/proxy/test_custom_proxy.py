@@ -45,4 +45,4 @@ async def health_check():
 
 if __name__ == "__main__":
     # Run the server on port 8000
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=4000, log_level="info")

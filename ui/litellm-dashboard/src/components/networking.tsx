@@ -9,10 +9,19 @@ import { UserInfo } from "./view_users/types";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
 
 const isLocal = process.env.NODE_ENV === "development";
-export const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+export let proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 if (isLocal != true) {
   console.log = function() {};
 }
+
+export const updateProxyBaseUrl = (serverRootPath: string) => {
+  if (proxyBaseUrl) {
+    // check if proxybase url already ends with server root path, if not add it
+    if (!proxyBaseUrl.endsWith(serverRootPath)) {
+      proxyBaseUrl = `${proxyBaseUrl}${serverRootPath}`;
+    }
+}
+};
 
 const HTTP_REQUEST = {
   GET: "GET",
