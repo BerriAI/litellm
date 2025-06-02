@@ -15,12 +15,8 @@ if (isLocal != true) {
 }
 
 export const updateProxyBaseUrl = (serverRootPath: string) => {
-  if (proxyBaseUrl) {
-    // check if proxybase url already ends with server root path, if not add it
-    if (!proxyBaseUrl.endsWith(serverRootPath)) {
-      proxyBaseUrl = `${proxyBaseUrl}${serverRootPath}`;
-    }
-}
+  proxyBaseUrl = isLocal ? "http://localhost:4000" : window.location.origin
+  proxyBaseUrl += serverRootPath;
 };
 
 const HTTP_REQUEST = {
