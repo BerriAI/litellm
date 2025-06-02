@@ -62,7 +62,7 @@ const Createuser: React.FC<CreateuserProps> = ({
     useState(false);
   const [invitationLinkData, setInvitationLinkData] =
     useState<InvitationLink | null>(null);
-  const baseUrl = getProxyBaseUrl();
+  const [baseUrl, setBaseUrl] = useState<string | null>(null);
   // get all models
   useEffect(() => {
     const fetchData = async () => {
@@ -94,6 +94,8 @@ const Createuser: React.FC<CreateuserProps> = ({
         console.error("Error fetching model data:", error);
       }
     };
+
+    setBaseUrl(getProxyBaseUrl());
 
     fetchData(); // Call the function to fetch model data when the component mounts
   }, []); // Empty dependency array to run only once
