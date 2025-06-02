@@ -356,7 +356,6 @@ async def get_user_info_from_db(
     alternate_user_id: Optional[str] = None,
 ) -> Optional[Union[LiteLLM_UserTable, NewUserResponse]]:
     try:
-
         potential_user_ids = []
         if alternate_user_id is not None:
             potential_user_ids.append(alternate_user_id)
@@ -387,7 +386,7 @@ async def get_user_info_from_db(
             )
             if user_info is not None:
                 break
-                
+
         verbose_proxy_logger.debug(
             f"user_info: {user_info}; litellm.default_internal_user_params: {litellm.default_internal_user_params}"
         )

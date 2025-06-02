@@ -736,11 +736,44 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
 router = APIRouter()
 origins = ["*"]
 
+
 # get current directory
 try:
     current_dir = os.path.dirname(os.path.abspath(__file__))
     ui_path = os.path.join(current_dir, "_experimental", "out")
-    router.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
+    # # Mount the _next directory at the root level
+    app.mount(
+        "/_next",
+        StaticFiles(directory=os.path.join(ui_path, "_next")),
+        name="next_static",
+    )
+    # print(f"mounted _next at {server_root_path}/ui/_next")
+
+    app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
+    # if len(server_root_path) > 0:
+    #     app.mount(f"{server_root_path}/ui", StaticFiles(directory=ui_path, html=True), name="ui")
+    #     print(f"mounted ui at {server_root_path}/ui")
+
+    # # Add middleware to rewrite static asset paths
+    # @app.middleware("http")
+    # async def rewrite_static_paths(request: Request, call_next):
+    #     response = await call_next(request)
+
+    #     print(f"response.headers: {response.headers}, request.url.path: {request.url.path}")
+
+    #     # Only modify HTML responses from the UI
+    #     if request.url.path.startswith(f"{server_root_path}/ui"):
+    #         print(f"rewriting static paths for {request.url.path}")
+    #         content = await response.body()
+    #         # Replace /ui/_next with /litellm/ui/_next
+    #         modified_content = content.replace(b'/ui/_next', f'{server_root_path}/ui/_next'.encode())
+    #         return Response(
+    #             content=modified_content,
+    #             status_code=response.status_code,
+    #             headers=dict(response.headers),
+    #             media_type=response.media_type
+    #         )
+    #     return response
     # Iterate through files in the UI directory
     for filename in os.listdir(ui_path):
         if filename.endswith(".html") and filename != "index.html":
@@ -754,19 +787,19 @@ try:
             dst = os.path.join(folder_path, "index.html")
             os.rename(src, dst)
 
-    if server_root_path != "":
-        verbose_proxy_logger.info(  # noqa
-            f"server_root_path is set, forwarding any /ui requests to {server_root_path}/ui, any /sso/key/generate requests to {server_root_path}/sso/key/generate"
-        )  # noqa
+    # if server_root_path != "":
+    #     verbose_proxy_logger.info(  # noqa
+    #         f"server_root_path is set, forwarding any /ui requests to {server_root_path}/ui, any /sso/key/generate requests to {server_root_path}/sso/key/generate"
+    #     )  # noqa
 
-        @app.middleware("http")
-        async def redirect_ui_middleware(request: Request, call_next):
-            if request.url.path.startswith("/ui"):
-                new_url = str(request.url).replace("/ui", f"{server_root_path}/ui", 1)
-                return RedirectResponse(new_url)
-            elif request.url.path == "/sso/key/generate":
-                return RedirectResponse(f"{server_root_path}/sso/key/generate")
-            return await call_next(request)
+    #     @app.middleware("http")
+    #     async def redirect_ui_middleware(request: Request, call_next):
+    #         if request.url.path.startswith("/ui"):
+    #             new_url = str(request.url).replace("/ui", f"{server_root_path}/ui", 1)
+    #             return RedirectResponse(new_url)
+    #         elif request.url.path == "/sso/key/generate":
+    #             return RedirectResponse(f"{server_root_path}/sso/key/generate")
+    #         return await call_next(request)
 
 except Exception:
     pass
@@ -1472,7 +1505,7 @@ class ProxyConfig:
             litellm.default_in_memory_ttl = cache_params["default_in_memory_ttl"]
 
         if "default_redis_ttl" in cache_params:
-            litellm.default_redis_ttl = cache_params["default_in_redis_ttl"]
+            litellm.default_redis_ttl = cache_params["default_redis_ttl"]
 
         litellm.cache = Cache(**cache_params)
 
@@ -5101,128 +5134,6 @@ async def run_thread(
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "code", getattr(e, "status_code", 500)),
-            )
-
-
-@router.post(
-    "/v1/moderations",
-    dependencies=[Depends(user_api_key_auth)],
-    response_class=ORJSONResponse,
-    tags=["moderations"],
-)
-@router.post(
-    "/moderations",
-    dependencies=[Depends(user_api_key_auth)],
-    response_class=ORJSONResponse,
-    tags=["moderations"],
-)
-async def moderations(
-    request: Request,
-    fastapi_response: Response,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
-    """
-    The moderations endpoint is a tool you can use to check whether content complies with an LLM Providers policies.
-
-    Quick Start
-    ```
-    curl --location 'http://0.0.0.0:4000/moderations' \
-    --header 'Content-Type: application/json' \
-    --header 'Authorization: Bearer sk-1234' \
-    --data '{"input": "Sample text goes here", "model": "text-moderation-stable"}'
-    ```
-    """
-    global proxy_logging_obj
-    data: Dict = {}
-    try:
-        # Use orjson to parse JSON data, orjson speeds up requests significantly
-        body = await request.body()
-        data = orjson.loads(body)
-
-        # Include original request and headers in the data
-        data = await add_litellm_data_to_request(
-            data=data,
-            request=request,
-            general_settings=general_settings,
-            user_api_key_dict=user_api_key_dict,
-            version=version,
-            proxy_config=proxy_config,
-        )
-
-        data["model"] = (
-            general_settings.get("moderation_model", None)  # server default
-            or user_model  # model name passed via cli args
-            or data.get("model")  # default passed in http request
-        )
-        if user_model:
-            data["model"] = user_model
-
-        ### CALL HOOKS ### - modify incoming data / reject request before calling the model
-        data = await proxy_logging_obj.pre_call_hook(
-            user_api_key_dict=user_api_key_dict, data=data, call_type="moderation"
-        )
-
-        time.time()
-
-        ## ROUTE TO CORRECT ENDPOINT ##
-        llm_call = await route_request(
-            data=data,
-            route_type="amoderation",
-            llm_router=llm_router,
-            user_model=user_model,
-        )
-        response = await llm_call
-
-        ### ALERTING ###
-        asyncio.create_task(
-            proxy_logging_obj.update_request_status(
-                litellm_call_id=data.get("litellm_call_id", ""), status="success"
-            )
-        )
-
-        ### RESPONSE HEADERS ###
-        hidden_params = getattr(response, "_hidden_params", {}) or {}
-        model_id = hidden_params.get("model_id", None) or ""
-        cache_key = hidden_params.get("cache_key", None) or ""
-        api_base = hidden_params.get("api_base", None) or ""
-
-        fastapi_response.headers.update(
-            ProxyBaseLLMRequestProcessing.get_custom_headers(
-                user_api_key_dict=user_api_key_dict,
-                model_id=model_id,
-                cache_key=cache_key,
-                api_base=api_base,
-                version=version,
-                model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
-                request_data=data,
-                hidden_params=hidden_params,
-            )
-        )
-
-        return response
-    except Exception as e:
-        await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
-        )
-        verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.moderations(): Exception occured - {}".format(
-                str(e)
-            )
-        )
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "message", str(e)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        else:
-            error_msg = f"{str(e)}"
-            raise ProxyException(
-                message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
             )
 
 

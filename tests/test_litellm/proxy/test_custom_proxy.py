@@ -2,18 +2,21 @@ import os
 import sys
 
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+load_dotenv()
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
 from litellm.proxy.proxy_server import app as litellm_app
+from litellm.proxy.proxy_server import proxy_startup_event
 
 # Create main FastAPI app
-app = FastAPI(title="Custom LiteLLM Server")
+app = FastAPI(title="Custom LiteLLM Server", lifespan=proxy_startup_event)
 
 # Add CORS middleware
 app.add_middleware(

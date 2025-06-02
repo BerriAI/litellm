@@ -325,9 +325,11 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   function gotoLogin() {
     // Clear token cookies using the utility function
     clearTokenCookies();
+
+    console.log("proxyBaseUrl:", proxyBaseUrl);
     
     const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/sso/key/generate`
+      ? `${proxyBaseUrl}/litellm/sso/key/generate`
       : `/sso/key/generate`;
 
     console.log("Full URL:", url);
@@ -354,15 +356,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       if (expTime && currentTime >= expTime) {
         console.log("Token expired, redirecting to login");
         
-        // Clear token cookies
-        clearTokenCookies();
-        
-        const url = proxyBaseUrl
-          ? `${proxyBaseUrl}/sso/key/generate`
-          : `/sso/key/generate`;
-        
-        console.log("Full URL for expired token:", url);
-        window.location.href = url;
+        gotoLogin();
         
         return null;
       }
@@ -371,12 +365,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       // If there's an error decoding the token, consider it invalid
       clearTokenCookies();
       
-      const url = proxyBaseUrl
-        ? `${proxyBaseUrl}/sso/key/generate`
-        : `/sso/key/generate`;
-      
-      console.log("Full URL after token decode error:", url);
-      window.location.href = url;
+      gotoLogin();
       
       return null;
     }
