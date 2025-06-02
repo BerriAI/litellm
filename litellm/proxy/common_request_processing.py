@@ -20,6 +20,7 @@ from fastapi.responses import Response, StreamingResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -143,10 +144,10 @@ async def create_streaming_response(
 
     async def combined_generator() -> AsyncGenerator[str, None]:
         if first_chunk_value is not None:
-            with tracer.trace("streaming.chunk.yield"):
+            with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
                 yield first_chunk_value
         async for chunk in generator:
-            with tracer.trace("streaming.chunk.yield"):
+            with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
                 yield chunk
 
     return StreamingResponse(
