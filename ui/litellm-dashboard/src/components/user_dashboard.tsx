@@ -8,7 +8,8 @@ import {
   Organization,
   organizationListCall,
   DEFAULT_ORGANIZATION,
-  keyInfoCall
+  keyInfoCall,
+  getProxyBaseUrl
 } from "./networking";
 import { fetchTeams } from "./common_components/fetch_teams";
 import { Grid, Col, Card, Text, Title } from "@tremor/react";
@@ -23,12 +24,6 @@ import { Team } from "./key_team_helpers/key_list";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
 import { clearTokenCookies } from "@/utils/cookieUtils";
-const isLocal = process.env.NODE_ENV === "development";
-if (isLocal != true) {
-  console.log = function() {};
-}
-console.log("isLocal:", isLocal);
-const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 
 export interface ProxySettings {
   PROXY_BASE_URL: string | null;
@@ -326,10 +321,12 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     // Clear token cookies using the utility function
     clearTokenCookies();
 
-    console.log("proxyBaseUrl:", proxyBaseUrl);
+    const baseUrl = getProxyBaseUrl();
+
+    console.log("proxyBaseUrl:", baseUrl);
     
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/litellm/sso/key/generate`
+    const url = baseUrl
+      ? `${baseUrl}/sso/key/generate`
       : `/sso/key/generate`;
 
     console.log("Full URL:", url);

@@ -19,6 +19,10 @@ export const updateProxyBaseUrl = (serverRootPath: string) => {
   proxyBaseUrl += serverRootPath;
 };
 
+export const getProxyBaseUrl = () => {
+  return proxyBaseUrl;
+};
+
 const HTTP_REQUEST = {
   GET: "GET",
   POST: "POST",
