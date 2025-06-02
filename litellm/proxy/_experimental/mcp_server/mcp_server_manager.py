@@ -72,8 +72,9 @@ class MCPServerManager:
             mcp_info = MCPInfo(**_mcp_info)
             mcp_info["server_name"] = server_name
             mcp_info["description"] = server_config.get("description", None)
+            server_id = str(uuid.uuid4())
             new_server = MCPServer(
-                server_id=str(uuid.uuid4()),
+                server_id=server_id,
                 name=server_name,
                 url=server_config["url"],
                 # TODO: utility fn the default values
@@ -82,7 +83,6 @@ class MCPServerManager:
                 auth_type=server_config.get("auth_type", None),
                 mcp_info=mcp_info,
             )
-            server_id = str(uuid.uuid4())
             self.config_mcp_servers[server_id] = new_server
         verbose_logger.debug(
             f"Loaded MCP Servers: {json.dumps(self.config_mcp_servers, indent=4, default=str)}"
