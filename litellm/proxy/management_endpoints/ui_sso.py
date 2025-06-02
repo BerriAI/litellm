@@ -59,7 +59,7 @@ from litellm.proxy.management_endpoints.sso_helper_utils import (
 )
 from litellm.proxy.management_endpoints.team_endpoints import new_team, team_member_add
 from litellm.proxy.management_endpoints.types import CustomOpenID
-from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.proxy.utils import PrismaClient, ProxyLogging, get_server_root_path
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
 from litellm.types.proxy.management_endpoints.ui_sso import *
 
@@ -670,6 +670,7 @@ async def auth_callback(request: Request):  # noqa: PLR0915
             "litellm_key_header_name", "Authorization"
         ),
         disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
+        server_root_path=get_server_root_path(),
     )
 
     jwt_token = jwt.encode(  # type: ignore

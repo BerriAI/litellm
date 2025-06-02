@@ -311,6 +311,7 @@ from litellm.proxy.utils import (
     _is_valid_team_configs,
     get_custom_url,
     get_error_message_str,
+    get_server_root_path,
     hash_token,
     update_spend,
 )
@@ -6754,6 +6755,7 @@ async def login(request: Request):  # noqa: PLR0915
                 "litellm_key_header_name", "Authorization"
             ),
             disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
+            server_root_path=get_server_root_path(),
         )
 
         jwt_token = jwt.encode(  # type: ignore
@@ -6832,6 +6834,7 @@ async def login(request: Request):  # noqa: PLR0915
                     "litellm_key_header_name", "Authorization"
                 ),
                 disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
+                server_root_path=get_server_root_path(),
             )
 
             jwt_token = jwt.encode(  # type: ignore
@@ -6966,6 +6969,7 @@ async def onboarding(invite_link: str, request: Request):
             "litellm_key_header_name", "Authorization"
         ),
         disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
+        server_root_path=get_server_root_path(),
     )
     jwt_token = jwt.encode(  # type: ignore
         cast(dict, returned_ui_token_object),
