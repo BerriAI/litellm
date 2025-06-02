@@ -7888,7 +7888,7 @@
         "max_tokens": 2048,
         "max_input_tokens": 2048,
         "output_vector_size": 3072,
-        "input_cost_per_token": 0.00000015,
+        "input_cost_per_token": 1.5e-07,
         "output_cost_per_token": 0,
         "litellm_provider": "vertex_ai-embedding-models",
         "mode": "embedding",
