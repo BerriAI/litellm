@@ -410,7 +410,7 @@ class LiteLLMCompletionResponsesConfig:
                             "type": "file",
                             "file": {}
                         }
-                        keys = ('file_id', 'file_data')
+                        keys = ['file_id', 'file_data']
                         for key in keys:
                             if item.get(key):
                                 new_item["file"][key] = item.get(key)
