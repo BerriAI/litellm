@@ -442,6 +442,7 @@ class LiteLLMRoutes(enum.Enum):
             "/config/yaml",
             "/metrics",
             "/litellm/.well-known/litellm-ui-config",
+            "/.well-known/litellm-ui-config",
         ]
     )
 
