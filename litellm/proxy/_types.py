@@ -441,6 +441,7 @@ class LiteLLMRoutes(enum.Enum):
             "/test",
             "/config/yaml",
             "/metrics",
+            "/litellm/.well-known/litellm-ui-config",
         ]
     )
 
