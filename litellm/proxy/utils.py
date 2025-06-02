@@ -2865,6 +2865,13 @@ def get_custom_url(request_base_url: str) -> str:
     return ui_link
 
 
+def get_proxy_base_url() -> Optional[str]:
+    """
+    Get the proxy base url from the environment variables.
+    """
+    return os.getenv("PROXY_BASE_URL")
+
+
 def get_server_root_path() -> str:
     """
     Get the server root path from the environment variables.

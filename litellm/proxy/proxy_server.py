@@ -203,6 +203,7 @@ from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.discovery_endpoints import ui_discovery_endpoints_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
 from litellm.proxy.guardrails.guardrail_endpoints import router as guardrails_router
@@ -8150,3 +8151,4 @@ app.include_router(budget_management_router)
 app.include_router(model_management_router)
 app.include_router(tag_management_router)
 app.include_router(enterprise_router)
+app.include_router(ui_discovery_endpoints_router)
