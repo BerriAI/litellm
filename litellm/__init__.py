@@ -1078,7 +1078,7 @@ nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
 
 from .llms.featherless_ai.chat.transformation import FeatherlessAIConfig
 from .llms.cerebras.chat import CerebrasConfig
-from .llms.centml.chat import CentmlConfig
+from .llms.centml.chat.transformation import CentmlConfig
 from .llms.sambanova.chat import SambanovaConfig
 from .llms.ai21.chat.transformation import AI21ChatConfig
 from .llms.fireworks_ai.chat.transformation import FireworksAIConfig
