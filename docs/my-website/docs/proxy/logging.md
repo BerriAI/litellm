@@ -1484,12 +1484,21 @@ Expected output on Datadog
 
 Use `ddtrace-run` to enable [Datadog Tracing](https://ddtrace.readthedocs.io/en/stable/installation_quickstart.html) on litellm proxy
 
+**DD Tracer**
 Pass `USE_DDTRACE=true` to the docker run command. When `USE_DDTRACE=true`, the proxy will run `ddtrace-run litellm` as the `ENTRYPOINT` instead of just `litellm`
+
+**DD Profiler**
+
+Pass `USE_DDPROFILER=true` to the docker run command. When `USE_DDPROFILER=true`, the proxy will activate the [Datadog Profiler](https://docs.datadoghq.com/profiler/enabling/python/). This is useful for debugging CPU% and memory usage.
+
+We don't recommend using `USE_DDPROFILER` in production. It is only recommended for debugging CPU% and memory usage.
+
 
 ```bash
 docker run \
     -v $(pwd)/litellm_config.yaml:/app/config.yaml \
     -e USE_DDTRACE=true \
+    -e USE_DDPROFILER=true \
     -p 4000:4000 \
     ghcr.io/berriai/litellm:main-latest \
     --config /app/config.yaml --detailed_debug
