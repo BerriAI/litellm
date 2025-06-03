@@ -71,7 +71,12 @@ from litellm.types.utils import (
     TopLogprob,
     Usage,
 )
-from litellm.utils import CustomStreamWrapper, ModelResponse, is_base64_encoded, supports_reasoning
+from litellm.utils import (
+    CustomStreamWrapper,
+    ModelResponse,
+    is_base64_encoded,
+    supports_reasoning,
+)
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
 from ..common_utils import VertexAIError, _build_vertex_schema
@@ -84,6 +89,7 @@ from .transformation import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.utils import ModelResponseStream
 
     LoggingClass = LiteLLMLoggingObj
 else:
@@ -687,7 +693,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if text_content.startswith("data:audio") and ";base64," in text_content:
                     try:
                         if is_base64_encoded(text_content):
-                            media_type, _ = text_content.split("data:")[1].split(";base64,")
+                            media_type, _ = text_content.split("data:")[1].split(
+                                ";base64,"
+                            )
                             if media_type.startswith("audio/"):
                                 continue
                     except (ValueError, IndexError):
@@ -725,7 +733,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if text_content.startswith("data:audio") and ";base64," in text_content:
                     try:
                         if is_base64_encoded(text_content):
-                            media_type, audio_data = text_content.split("data:")[1].split(";base64,")
+                            media_type, audio_data = text_content.split("data:")[
+                                1
+                            ].split(";base64,")
 
                             if media_type.startswith("audio/"):
                                 expires_at = int(time.time()) + (24 * 60 * 60)
@@ -734,7 +744,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                                 return ChatCompletionAudioResponse(
                                     data=audio_data,
                                     expires_at=expires_at,
-                                    transcript=transcript
+                                    transcript=transcript,
                                 )
                     except (ValueError, IndexError):
                         pass
@@ -748,9 +758,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     transcript = ""  # Gemini doesn't provide transcript
 
                     return ChatCompletionAudioResponse(
-                        data=data,
-                        expires_at=expires_at,
-                        transcript=transcript
+                        data=data, expires_at=expires_at, transcript=transcript
                     )
 
         return None
@@ -1041,12 +1049,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     parts=candidate["content"]["parts"]
                 )
 
-                audio_response = VertexGeminiConfig()._extract_audio_response_from_parts(
-                    parts=candidate["content"]["parts"]
+                audio_response = (
+                    VertexGeminiConfig()._extract_audio_response_from_parts(
+                        parts=candidate["content"]["parts"]
+                    )
                 )
 
                 if audio_response is not None:
-                    cast(Dict[str, Any], chat_completion_message)["audio"] = audio_response
+                    cast(Dict[str, Any], chat_completion_message)[
+                        "audio"
+                    ] = audio_response
                     chat_completion_message["content"] = None  # OpenAI spec
                 elif content is not None:
                     chat_completion_message["content"] = content
@@ -1744,14 +1756,17 @@ class ModelResponseIterator:
         self.logging_obj = logging_obj
         self.is_function_call = check_is_function_call(logging_obj)
 
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+    def chunk_parser(self, chunk: dict) -> "ModelResponseStream":
         try:
+            from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
             processed_chunk = GenerateContentResponseBody(**chunk)  # type: ignore
 
             text = ""
+            reasoning_content = None
             tool_use: Optional[ChatCompletionToolCallChunk] = None
             finish_reason = ""
-            usage: Optional[ChatCompletionUsageBlock] = None
+            usage: Optional[Usage] = None
             _candidates: Optional[List[Candidates]] = processed_chunk.get("candidates")
             gemini_chunk: Optional[Candidates] = None
             if _candidates and len(_candidates) > 0:
@@ -1763,7 +1778,11 @@ class ModelResponseIterator:
                 and "parts" in gemini_chunk["content"]
             ):
                 if "text" in gemini_chunk["content"]["parts"][0]:
-                    text = gemini_chunk["content"]["parts"][0]["text"]
+                    if gemini_chunk["content"]["parts"][0].get("thought"):
+                        reasoning_content = gemini_chunk["content"]["parts"][0]["text"]
+                    else:
+                        text = gemini_chunk["content"]["parts"][0]["text"]
+
                 elif "functionCall" in gemini_chunk["content"]["parts"][0]:
                     function_call = ChatCompletionToolCallFunctionChunk(
                         name=gemini_chunk["content"]["parts"][0]["functionCall"][
@@ -1789,7 +1808,7 @@ class ModelResponseIterator:
                 ## GEMINI SETS FINISHREASON ON EVERY CHUNK!
 
             if "usageMetadata" in processed_chunk:
-                usage = ChatCompletionUsageBlock(
+                usage = Usage(
                     prompt_tokens=processed_chunk["usageMetadata"].get(
                         "promptTokenCount", 0
                     ),
@@ -1799,11 +1818,11 @@ class ModelResponseIterator:
                     total_tokens=processed_chunk["usageMetadata"].get(
                         "totalTokenCount", 0
                     ),
-                    completion_tokens_details={
-                        "reasoning_tokens": processed_chunk["usageMetadata"].get(
+                    completion_tokens_details=CompletionTokensDetailsWrapper(
+                        reasoning_tokens=processed_chunk["usageMetadata"].get(
                             "thoughtsTokenCount", 0
                         )
-                    },
+                    ),
                 )
 
             args: Dict[str, Any] = {
@@ -1824,7 +1843,6 @@ class ModelResponseIterator:
                     )
                 ],
                 usage=usage,
-                index=0,
             )
             return returned_chunk
         except json.JSONDecodeError:
@@ -1855,7 +1873,7 @@ class ModelResponseIterator:
 
     def handle_accumulated_json_chunk(
         self, chunk: str
-    ) -> Optional[ModelResponseStream]:
+    ) -> Optional["ModelResponseStream"]:
         chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
         message = chunk.replace("\n\n", "")
 
@@ -1871,7 +1889,9 @@ class ModelResponseIterator:
             # If it's not valid JSON yet, continue to the next event
             return None
 
-    def _common_chunk_parsing_logic(self, chunk: str) -> Optional[ModelResponseStream]:
+    def _common_chunk_parsing_logic(
+        self, chunk: str
+    ) -> Optional["ModelResponseStream"]:
         try:
             chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
             if len(chunk) > 0:
@@ -1884,6 +1904,7 @@ class ModelResponseIterator:
                     return self.handle_valid_json_chunk(chunk=chunk)
                 elif self.chunk_type == "accumulated_json":
                     return self.handle_accumulated_json_chunk(chunk=chunk)
+
             return None
         except Exception:
             raise
