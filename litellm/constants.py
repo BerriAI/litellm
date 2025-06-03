@@ -296,6 +296,13 @@ OPENAI_TRANSCRIPTION_PARAMS = [
 
 OPENAI_EMBEDDING_PARAMS = ["dimensions", "encoding_format", "user"]
 
+DEFAULT_EMBEDDING_PARAM_VALUES = {
+    **{k: None for k in OPENAI_EMBEDDING_PARAMS},
+    "model": None,
+    "custom_llm_provider": "",
+    "input": None,
+}
+
 DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "functions": None,
     "function_call": None,
