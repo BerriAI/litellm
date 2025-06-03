@@ -2847,7 +2847,16 @@ def is_known_model(model: Optional[str], llm_router: Optional[Router]) -> bool:
     return is_in_list
 
 
-def get_custom_url(request_base_url: str) -> str:
+def join_paths(base_path: str, route: str) -> str:
+    # Remove trailing/leading slashes
+    base_path = base_path.rstrip("/")
+    route = route.lstrip("/")
+
+    # Join with a single slash
+    return f"{base_path}/{route}"
+
+
+def get_custom_url(request_base_url: str, route: Optional[str] = None) -> str:
     """
     Use proxy base url, if set.
 
@@ -2857,6 +2866,8 @@ def get_custom_url(request_base_url: str) -> str:
 
     proxy_base_url = os.getenv("PROXY_BASE_URL")
     server_root_path = os.getenv("SERVER_ROOT_PATH") or ""
+    if route is not None:
+        server_root_path = join_paths(base_path=server_root_path, route=route)
     if proxy_base_url:
         ui_link = str(URL(proxy_base_url).join(server_root_path))
     else:

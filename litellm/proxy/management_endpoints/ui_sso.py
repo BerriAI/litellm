@@ -474,6 +474,7 @@ async def auth_callback(request: Request):  # noqa: PLR0915
         user_api_key_cache,
         user_custom_sso,
     )
+    from litellm.proxy.utils import get_custom_url
     from litellm.types.proxy.ui_sso import ReturnedUITokenObject
 
     if prisma_client is None:
@@ -492,12 +493,11 @@ async def auth_callback(request: Request):  # noqa: PLR0915
             param="master_key",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-    redirect_url = os.getenv("PROXY_BASE_URL", str(request.base_url))
-    if redirect_url.endswith("/"):
-        redirect_url += "sso/callback"
-    else:
-        redirect_url += "/sso/callback"
+    redirect_url = SSOAuthenticationHandler.get_redirect_url_for_sso(
+        request=request, sso_callback_route="sso/callback"
+    )
 
+    verbose_proxy_logger.info(f"Redirecting to {redirect_url}")
     result = None
     if google_client_id is not None:
         result = await GoogleSSOHandler.get_google_callback_response(
@@ -625,7 +625,9 @@ async def auth_callback(request: Request):  # noqa: PLR0915
     key = response["token"]  # type: ignore
     user_id = response["user_id"]  # type: ignore
 
-    litellm_dashboard_ui = "/ui/"
+    litellm_dashboard_ui = get_custom_url(
+        request_base_url=str(request.base_url), route="ui/"
+    )
     user_role = (
         user_defined_values["user_role"]
         or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
@@ -968,7 +970,9 @@ class SSOAuthenticationHandler:
         """
         Get the redirect URL for SSO
         """
-        redirect_url = os.getenv("PROXY_BASE_URL", str(request.base_url))
+        from litellm.proxy.utils import get_custom_url
+
+        redirect_url = get_custom_url(request_base_url=str(request.base_url))
         if redirect_url.endswith("/"):
             redirect_url += sso_callback_route
         else:
