@@ -3999,6 +3999,127 @@ async def embeddings(  # noqa: PLR0915
 
 
 @router.post(
+    "/v1/moderations",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+    tags=["moderations"],
+)
+@router.post(
+    "/moderations",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+    tags=["moderations"],
+)
+async def moderations(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    The moderations endpoint is a tool you can use to check whether content complies with an LLM Providers policies.
+    Quick Start
+    ```
+    curl --location 'http://0.0.0.0:4000/moderations' \
+    --header 'Content-Type: application/json' \
+    --header 'Authorization: Bearer sk-1234' \
+    --data '{"input": "Sample text goes here", "model": "text-moderation-stable"}'
+    ```
+    """
+    global proxy_logging_obj
+    data: Dict = {}
+    try:
+        # Use orjson to parse JSON data, orjson speeds up requests significantly
+        body = await request.body()
+        data = orjson.loads(body)
+
+        # Include original request and headers in the data
+        data = await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
+        )
+
+        data["model"] = (
+            general_settings.get("moderation_model", None)  # server default
+            or user_model  # model name passed via cli args
+            or data.get("model")  # default passed in http request
+        )
+        if user_model:
+            data["model"] = user_model
+
+        ### CALL HOOKS ### - modify incoming data / reject request before calling the model
+        data = await proxy_logging_obj.pre_call_hook(
+            user_api_key_dict=user_api_key_dict, data=data, call_type="moderation"
+        )
+
+        time.time()
+
+        ## ROUTE TO CORRECT ENDPOINT ##
+        llm_call = await route_request(
+            data=data,
+            route_type="amoderation",
+            llm_router=llm_router,
+            user_model=user_model,
+        )
+        response = await llm_call
+
+        ### ALERTING ###
+        asyncio.create_task(
+            proxy_logging_obj.update_request_status(
+                litellm_call_id=data.get("litellm_call_id", ""), status="success"
+            )
+        )
+
+        ### RESPONSE HEADERS ###
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        model_id = hidden_params.get("model_id", None) or ""
+        cache_key = hidden_params.get("cache_key", None) or ""
+        api_base = hidden_params.get("api_base", None) or ""
+
+        fastapi_response.headers.update(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
+                model_id=model_id,
+                cache_key=cache_key,
+                api_base=api_base,
+                version=version,
+                model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+                request_data=data,
+                hidden_params=hidden_params,
+            )
+        )
+
+        return response
+    except Exception as e:
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
+        )
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.moderations(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "message", str(e)),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        else:
+            error_msg = f"{str(e)}"
+            raise ProxyException(
+                message=getattr(e, "message", error_msg),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", 500),
+            )
+
+
+@router.post(
     "/v1/audio/speech",
     dependencies=[Depends(user_api_key_auth)],
     tags=["audio"],
