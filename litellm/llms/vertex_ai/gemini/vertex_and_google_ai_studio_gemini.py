@@ -1853,7 +1853,7 @@ class ModelResponseIterator:
         self.response_iterator = self.streaming_response
         return self
 
-    def handle_valid_json_chunk(self, chunk: str) -> Optional[ModelResponseStream]:
+    def handle_valid_json_chunk(self, chunk: str) -> Optional["ModelResponseStream"]:
         chunk = chunk.strip()
         try:
             json_chunk = json.loads(chunk)
