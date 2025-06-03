@@ -15,7 +15,7 @@ from typing import List, Optional, cast
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.s3 import get_s3_object_key
-from litellm.llms.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
@@ -28,8 +28,8 @@ from .custom_batch_logger import CustomBatchLogger
 
 # Default Flush interval and batch size for s3
 # Flush to s3 every 10 seconds OR every 1K requests in memory
-DEFAULT_S3_FLUSH_INTERVAL_SECONDS = 10
-DEFAULT_S3_BATCH_SIZE = 1000
+DEFAULT_S3_FLUSH_INTERVAL_SECONDS = 1
+DEFAULT_S3_BATCH_SIZE = 10
 
 
 class S3Logger(CustomBatchLogger, BaseAWSLLM):
@@ -153,8 +153,6 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 len(self.log_queue),
                 self.batch_size,
             )
-            if len(self.log_queue) >= self.batch_size:
-                await self.flush_queue()
         except Exception as e:
             verbose_logger.exception(f"s3 Layer Error - {str(e)}")
             pass
@@ -172,11 +170,18 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         try:
-            credentials: Credentials = self.get_credentials(
+            from litellm.litellm_core_utils.asyncify import asyncify
+
+            asyncified_get_credentials = asyncify(self.get_credentials)
+            credentials = await asyncified_get_credentials(
                 aws_access_key_id=self.s3_aws_access_key_id,
                 aws_secret_access_key=self.s3_aws_secret_access_key,
                 aws_session_token=self.s3_aws_session_token,
                 aws_region_name=self.s3_region_name,
+            )
+
+            verbose_logger.debug(
+                f"s3_v2 logger - uploading data to s3 - {batch_logging_element.s3_object_key}"
             )
 
             # Prepare the URL
@@ -231,6 +236,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
         Raises: Does not raise an exception, will only verbose_logger.exception()
         """
+        verbose_logger.debug(f"s3_v2 logger - sending batch of {len(self.log_queue)}")
         if not self.log_queue:
             return
 
@@ -287,7 +293,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_object_download_filename = f"time-{start_time.strftime('%Y-%m-%dT%H-%M-%S-%f')}_{standard_logging_payload['id']}.json"
 
         return s3BatchLoggingElement(
-            payload=standard_logging_payload,
+            payload=dict(standard_logging_payload),
             s3_object_key=s3_object_key,
             s3_object_download_filename=s3_object_download_filename,
         )
@@ -303,6 +309,9 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         try:
+            verbose_logger.debug(
+                f"s3_v2 logger - uploading data to s3 - {batch_logging_element.s3_object_key}"
+            )
             credentials: Credentials = self.get_credentials(
                 aws_access_key_id=self.s3_aws_access_key_id,
                 aws_secret_access_key=self.s3_aws_secret_access_key,
