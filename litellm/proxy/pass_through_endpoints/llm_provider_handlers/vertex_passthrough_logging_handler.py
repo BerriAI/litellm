@@ -190,6 +190,7 @@ class VertexPassthroughLoggingHandler:
         vertex_iterator = VertexModelResponseIterator(
             streaming_response=None,
             sync_stream=False,
+            logging_obj=litellm_logging_obj,
         )
         litellm_custom_stream_wrapper = litellm.CustomStreamWrapper(
             completion_stream=vertex_iterator,

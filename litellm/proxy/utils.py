@@ -2845,3 +2845,38 @@ def is_known_model(model: Optional[str], llm_router: Optional[Router]) -> bool:
         is_in_list = True
 
     return is_in_list
+
+
+def get_custom_url(request_base_url: str) -> str:
+    """
+    Use proxy base url, if set.
+
+    Else, use request base url.
+    """
+    from httpx import URL
+
+    proxy_base_url = os.getenv("PROXY_BASE_URL")
+    server_root_path = os.getenv("SERVER_ROOT_PATH") or ""
+    if proxy_base_url:
+        ui_link = str(URL(proxy_base_url).join(server_root_path))
+    else:
+        ui_link = str(URL(request_base_url).join(server_root_path))
+
+    return ui_link
+
+
+def get_proxy_base_url() -> Optional[str]:
+    """
+    Get the proxy base url from the environment variables.
+    """
+    return os.getenv("PROXY_BASE_URL")
+
+
+def get_server_root_path() -> str:
+    """
+    Get the server root path from the environment variables.
+
+    - If SERVER_ROOT_PATH is set, return it.
+    - Otherwise, default to "/".
+    """
+    return os.getenv("SERVER_ROOT_PATH", "/")

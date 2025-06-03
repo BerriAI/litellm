@@ -286,6 +286,53 @@ def get_api_key(
     return api_key, passed_in_key
 
 
+async def check_api_key_for_custom_headers_or_pass_through_endpoints(
+    request: Request,
+    route: str,
+    pass_through_endpoints: Optional[List[dict]],
+    api_key: str,
+) -> Union[UserAPIKeyAuth, str]:
+    is_mapped_pass_through_route: bool = False
+    for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:  # type: ignore
+        if route.startswith(mapped_route):
+            is_mapped_pass_through_route = True
+    if is_mapped_pass_through_route:
+        if request.headers.get("litellm_user_api_key") is not None:
+            api_key = request.headers.get("litellm_user_api_key") or ""
+    if pass_through_endpoints is not None:
+        for endpoint in pass_through_endpoints:
+            if isinstance(endpoint, dict) and endpoint.get("path", "") == route:
+                ## IF AUTH DISABLED
+                if endpoint.get("auth") is not True:
+                    return UserAPIKeyAuth()
+                ## IF AUTH ENABLED
+                ### IF CUSTOM PARSER REQUIRED
+                if (
+                    endpoint.get("custom_auth_parser") is not None
+                    and endpoint.get("custom_auth_parser") == "langfuse"
+                ):
+                    """
+                    - langfuse returns {'Authorization': 'Basic YW55dGhpbmc6YW55dGhpbmc'}
+                    - check the langfuse public key if it contains the litellm api key
+                    """
+                    import base64
+
+                    api_key = api_key.replace("Basic ", "").strip()
+                    decoded_bytes = base64.b64decode(api_key)
+                    decoded_str = decoded_bytes.decode("utf-8")
+                    api_key = decoded_str.split(":")[0]
+                else:
+                    headers = endpoint.get("headers", None)
+                    if headers is not None:
+                        header_key = headers.get("litellm_user_api_key", "")
+                        if (
+                            isinstance(request.headers, dict)
+                            and request.headers.get(key=header_key) is not None  # type: ignore
+                        ):
+                            api_key = request.headers.get(key=header_key)  # type: ignore
+    return api_key
+
+
 async def _user_api_key_auth_builder(  # noqa: PLR0915
     request: Request,
     api_key: str,
@@ -315,6 +362,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
     start_time = datetime.now()
     route: str = get_request_route(request=request)
     valid_token: Optional[UserAPIKeyAuth] = None
+    custom_auth_api_key: bool = False
 
     try:
         # get the request body
@@ -361,8 +409,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             response = await enterprise_custom_auth(
                 request=request, api_key=api_key, user_custom_auth=user_custom_auth
             )
-            if response is not None:
+            if response is not None and isinstance(response, UserAPIKeyAuth):
                 return UserAPIKeyAuth.model_validate(response)
+            elif response is not None and isinstance(response, str):
+                api_key = response
+                custom_auth_api_key = True
         elif user_custom_auth is not None:
             response = await user_custom_auth(request=request, api_key=api_key)  # type: ignore
             return UserAPIKeyAuth.model_validate(response)
@@ -492,44 +543,17 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
         #### ELSE ####
         ## CHECK PASS-THROUGH ENDPOINTS ##
-        is_mapped_pass_through_route: bool = False
-        for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:  # type: ignore
-            if route.startswith(mapped_route):
-                is_mapped_pass_through_route = True
-        if is_mapped_pass_through_route:
-            if request.headers.get("litellm_user_api_key") is not None:
-                api_key = request.headers.get("litellm_user_api_key") or ""
-        if pass_through_endpoints is not None:
-            for endpoint in pass_through_endpoints:
-                if isinstance(endpoint, dict) and endpoint.get("path", "") == route:
-                    ## IF AUTH DISABLED
-                    if endpoint.get("auth") is not True:
-                        return UserAPIKeyAuth()
-                    ## IF AUTH ENABLED
-                    ### IF CUSTOM PARSER REQUIRED
-                    if (
-                        endpoint.get("custom_auth_parser") is not None
-                        and endpoint.get("custom_auth_parser") == "langfuse"
-                    ):
-                        """
-                        - langfuse returns {'Authorization': 'Basic YW55dGhpbmc6YW55dGhpbmc'}
-                        - check the langfuse public key if it contains the litellm api key
-                        """
-                        import base64
-
-                        api_key = api_key.replace("Basic ", "").strip()
-                        decoded_bytes = base64.b64decode(api_key)
-                        decoded_str = decoded_bytes.decode("utf-8")
-                        api_key = decoded_str.split(":")[0]
-                    else:
-                        headers = endpoint.get("headers", None)
-                        if headers is not None:
-                            header_key = headers.get("litellm_user_api_key", "")
-                            if (
-                                isinstance(request.headers, dict)
-                                and request.headers.get(key=header_key) is not None  # type: ignore
-                            ):
-                                api_key = request.headers.get(key=header_key)  # type: ignore
+        if not custom_auth_api_key:
+            response = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+                request=request,
+                route=route,
+                pass_through_endpoints=pass_through_endpoints,
+                api_key=api_key,
+            )
+            if isinstance(response, str):
+                api_key = response
+            elif isinstance(response, UserAPIKeyAuth):
+                return response
         if master_key is None:
             if isinstance(api_key, str):
                 return UserAPIKeyAuth(

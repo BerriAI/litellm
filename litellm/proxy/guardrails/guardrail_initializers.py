@@ -113,6 +113,7 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
         pii_entities_config=litellm_params.pii_entities_config,
         presidio_analyzer_api_base=litellm_params.presidio_analyzer_api_base,
         presidio_anonymizer_api_base=litellm_params.presidio_anonymizer_api_base,
+        presidio_language=litellm_params.presidio_language,
     )
     litellm.logging_callback_manager.add_litellm_callback(_presidio_callback)
 
@@ -125,6 +126,7 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
             default_on=litellm_params.default_on,
             presidio_analyzer_api_base=litellm_params.presidio_analyzer_api_base,
             presidio_anonymizer_api_base=litellm_params.presidio_anonymizer_api_base,
+            presidio_language=litellm_params.presidio_language,
         )
         litellm.logging_callback_manager.add_litellm_callback(_success_callback)
 

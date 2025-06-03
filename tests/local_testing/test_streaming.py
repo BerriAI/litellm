@@ -712,7 +712,7 @@ async def test_acompletion_claude_2_stream():
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_completion_gemini_stream(sync_mode):
     try:
-        litellm.set_verbose = True
+        litellm._turn_on_debug()
         print("Streaming gemini response")
         function1 = [
             {

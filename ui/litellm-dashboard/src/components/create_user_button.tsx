@@ -18,6 +18,7 @@ import {
   modelAvailableCall,
   invitationCreateCall,
   getProxyUISettings,
+  getProxyBaseUrl,
 } from "./networking";
 import BulkCreateUsers from "./bulk_create_users_button";
 const { Option } = Select;
@@ -61,10 +62,7 @@ const Createuser: React.FC<CreateuserProps> = ({
     useState(false);
   const [invitationLinkData, setInvitationLinkData] =
     useState<InvitationLink | null>(null);
-  const router = useRouter();
-  const isLocal = process.env.NODE_ENV === "development";
-
-  const [baseUrl, setBaseUrl] = useState("http://localhost:4000");
+  const [baseUrl, setBaseUrl] = useState<string | null>(null);
   // get all models
   useEffect(() => {
     const fetchData = async () => {
@@ -97,17 +95,11 @@ const Createuser: React.FC<CreateuserProps> = ({
       }
     };
 
+    setBaseUrl(getProxyBaseUrl());
+
     fetchData(); // Call the function to fetch model data when the component mounts
   }, []); // Empty dependency array to run only once
 
-  useEffect(() => {
-    if (!router) {
-      return;
-    }
-
-    const base = new URL("/", window.location.href);
-    setBaseUrl(base.toString());
-  }, [router]);
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
@@ -360,7 +352,7 @@ const Createuser: React.FC<CreateuserProps> = ({
         <OnboardingModal
           isInvitationLinkModalVisible={isInvitationLinkModalVisible}
           setIsInvitationLinkModalVisible={setIsInvitationLinkModalVisible}
-          baseUrl={baseUrl}
+          baseUrl={baseUrl || ""}
           invitationLinkData={invitationLinkData}
         />
       )}

@@ -1500,3 +1500,13 @@ def test_optional_params_with_additional_drop_params():
     print(f"optional_params: {optional_params}")
     assert "red" not in optional_params
     assert "red" not in optional_params["extra_body"]
+
+def test_azure_ai_cohere_embed_input_type_param():
+    optional_params = get_optional_params_embeddings(
+        model="embed-v-4-0",
+        custom_llm_provider="azure_ai",
+        input_type="text",
+        dimensions=1536
+    )
+    assert optional_params["dimensions"] == 1536
+    assert optional_params["extra_body"]["input_type"] == "text"

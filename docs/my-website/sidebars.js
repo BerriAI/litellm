@@ -102,6 +102,7 @@ const sidebars = {
           items: [
             "proxy/ui",
             "proxy/admin_ui_sso",
+            "proxy/custom_root_ui",
             "proxy/self_serve",
             "proxy/public_teams",
             "tutorials/scim_litellm",

@@ -44,7 +44,6 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParamFunctionChunk,
-    ChatCompletionUsageBlock,
     OpenAIChatCompletionFinishReason,
 )
 from litellm.types.llms.vertex_ai import (
@@ -66,12 +65,16 @@ from litellm.types.utils import (
     ChatCompletionTokenLogprob,
     ChoiceLogprobs,
     CompletionTokensDetailsWrapper,
-    GenericStreamingChunk,
     PromptTokensDetailsWrapper,
     TopLogprob,
     Usage,
 )
-from litellm.utils import CustomStreamWrapper, ModelResponse, is_base64_encoded, supports_reasoning
+from litellm.utils import (
+    CustomStreamWrapper,
+    ModelResponse,
+    is_base64_encoded,
+    supports_reasoning,
+)
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
 from ..common_utils import VertexAIError, _build_vertex_schema
@@ -84,6 +87,7 @@ from .transformation import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.utils import ModelResponseStream
 
     LoggingClass = LiteLLMLoggingObj
 else:
@@ -687,7 +691,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if text_content.startswith("data:audio") and ";base64," in text_content:
                     try:
                         if is_base64_encoded(text_content):
-                            media_type, _ = text_content.split("data:")[1].split(";base64,")
+                            media_type, _ = text_content.split("data:")[1].split(
+                                ";base64,"
+                            )
                             if media_type.startswith("audio/"):
                                 continue
                     except (ValueError, IndexError):
@@ -725,7 +731,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if text_content.startswith("data:audio") and ";base64," in text_content:
                     try:
                         if is_base64_encoded(text_content):
-                            media_type, audio_data = text_content.split("data:")[1].split(";base64,")
+                            media_type, audio_data = text_content.split("data:")[
+                                1
+                            ].split(";base64,")
 
                             if media_type.startswith("audio/"):
                                 expires_at = int(time.time()) + (24 * 60 * 60)
@@ -734,7 +742,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                                 return ChatCompletionAudioResponse(
                                     data=audio_data,
                                     expires_at=expires_at,
-                                    transcript=transcript
+                                    transcript=transcript,
                                 )
                     except (ValueError, IndexError):
                         pass
@@ -748,9 +756,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     transcript = ""  # Gemini doesn't provide transcript
 
                     return ChatCompletionAudioResponse(
-                        data=data,
-                        expires_at=expires_at,
-                        transcript=transcript
+                        data=data, expires_at=expires_at, transcript=transcript
                     )
 
         return None
@@ -1041,12 +1047,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     parts=candidate["content"]["parts"]
                 )
 
-                audio_response = VertexGeminiConfig()._extract_audio_response_from_parts(
-                    parts=candidate["content"]["parts"]
+                audio_response = (
+                    VertexGeminiConfig()._extract_audio_response_from_parts(
+                        parts=candidate["content"]["parts"]
+                    )
                 )
 
                 if audio_response is not None:
-                    cast(Dict[str, Any], chat_completion_message)["audio"] = audio_response
+                    cast(Dict[str, Any], chat_completion_message)[
+                        "audio"
+                    ] = audio_response
                     chat_completion_message["content"] = None  # OpenAI spec
                 elif content is not None:
                     chat_completion_message["content"] = content
@@ -1267,7 +1277,9 @@ async def make_call(
         )
 
     completion_stream = ModelResponseIterator(
-        streaming_response=response.aiter_lines(), sync_stream=False
+        streaming_response=response.aiter_lines(),
+        sync_stream=False,
+        logging_obj=logging_obj,
     )
     # LOGGING
     logging_obj.post_call(
@@ -1305,7 +1317,9 @@ def make_sync_call(
         )
 
     completion_stream = ModelResponseIterator(
-        streaming_response=response.iter_lines(), sync_stream=True
+        streaming_response=response.iter_lines(),
+        sync_stream=True,
+        logging_obj=logging_obj,
     )
 
     # LOGGING
@@ -1726,20 +1740,31 @@ class VertexLLM(VertexBase):
 
 
 class ModelResponseIterator:
-    def __init__(self, streaming_response, sync_stream: bool):
+    def __init__(
+        self, streaming_response, sync_stream: bool, logging_obj: LoggingClass
+    ):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            check_is_function_call,
+        )
+
         self.streaming_response = streaming_response
         self.chunk_type: Literal["valid_json", "accumulated_json"] = "valid_json"
         self.accumulated_json = ""
         self.sent_first_chunk = False
+        self.logging_obj = logging_obj
+        self.is_function_call = check_is_function_call(logging_obj)
 
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+    def chunk_parser(self, chunk: dict) -> "ModelResponseStream":
         try:
+            from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
             processed_chunk = GenerateContentResponseBody(**chunk)  # type: ignore
 
             text = ""
+            reasoning_content = None
             tool_use: Optional[ChatCompletionToolCallChunk] = None
             finish_reason = ""
-            usage: Optional[ChatCompletionUsageBlock] = None
+            usage: Optional[Usage] = None
             _candidates: Optional[List[Candidates]] = processed_chunk.get("candidates")
             gemini_chunk: Optional[Candidates] = None
             if _candidates and len(_candidates) > 0:
@@ -1751,7 +1776,11 @@ class ModelResponseIterator:
                 and "parts" in gemini_chunk["content"]
             ):
                 if "text" in gemini_chunk["content"]["parts"][0]:
-                    text = gemini_chunk["content"]["parts"][0]["text"]
+                    if gemini_chunk["content"]["parts"][0].get("thought"):
+                        reasoning_content = gemini_chunk["content"]["parts"][0]["text"]
+                    else:
+                        text = gemini_chunk["content"]["parts"][0]["text"]
+
                 elif "functionCall" in gemini_chunk["content"]["parts"][0]:
                     function_call = ChatCompletionToolCallFunctionChunk(
                         name=gemini_chunk["content"]["parts"][0]["functionCall"][
@@ -1777,7 +1806,7 @@ class ModelResponseIterator:
                 ## GEMINI SETS FINISHREASON ON EVERY CHUNK!
 
             if "usageMetadata" in processed_chunk:
-                usage = ChatCompletionUsageBlock(
+                usage = Usage(
                     prompt_tokens=processed_chunk["usageMetadata"].get(
                         "promptTokenCount", 0
                     ),
@@ -1787,20 +1816,31 @@ class ModelResponseIterator:
                     total_tokens=processed_chunk["usageMetadata"].get(
                         "totalTokenCount", 0
                     ),
-                    completion_tokens_details={
-                        "reasoning_tokens": processed_chunk["usageMetadata"].get(
+                    completion_tokens_details=CompletionTokensDetailsWrapper(
+                        reasoning_tokens=processed_chunk["usageMetadata"].get(
                             "thoughtsTokenCount", 0
                         )
-                    },
+                    ),
                 )
 
-            returned_chunk = GenericStreamingChunk(
-                text=text,
-                tool_use=tool_use,
-                is_finished=False,
-                finish_reason=finish_reason,
+            args: Dict[str, Any] = {
+                "content": text or None,
+                "reasoning_content": reasoning_content,
+            }
+            if self.is_function_call and tool_use is not None:
+                args["function_call"] = tool_use["function"]
+            elif tool_use is not None:
+                args["tool_calls"] = [tool_use]
+
+            returned_chunk = ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(**args),
+                        finish_reason=finish_reason,
+                    )
+                ],
                 usage=usage,
-                index=0,
             )
             return returned_chunk
         except json.JSONDecodeError:
@@ -1811,7 +1851,7 @@ class ModelResponseIterator:
         self.response_iterator = self.streaming_response
         return self
 
-    def handle_valid_json_chunk(self, chunk: str) -> GenericStreamingChunk:
+    def handle_valid_json_chunk(self, chunk: str) -> Optional["ModelResponseStream"]:
         chunk = chunk.strip()
         try:
             json_chunk = json.loads(chunk)
@@ -1829,7 +1869,9 @@ class ModelResponseIterator:
 
         return self.chunk_parser(chunk=json_chunk)
 
-    def handle_accumulated_json_chunk(self, chunk: str) -> GenericStreamingChunk:
+    def handle_accumulated_json_chunk(
+        self, chunk: str
+    ) -> Optional["ModelResponseStream"]:
         chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
         message = chunk.replace("\n\n", "")
 
@@ -1843,16 +1885,11 @@ class ModelResponseIterator:
             return self.chunk_parser(chunk=_data)
         except json.JSONDecodeError:
             # If it's not valid JSON yet, continue to the next event
-            return GenericStreamingChunk(
-                text="",
-                is_finished=False,
-                finish_reason="",
-                usage=None,
-                index=0,
-                tool_use=None,
-            )
+            return None
 
-    def _common_chunk_parsing_logic(self, chunk: str) -> GenericStreamingChunk:
+    def _common_chunk_parsing_logic(
+        self, chunk: str
+    ) -> Optional["ModelResponseStream"]:
         try:
             chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
             if len(chunk) > 0:
@@ -1866,14 +1903,7 @@ class ModelResponseIterator:
                 elif self.chunk_type == "accumulated_json":
                     return self.handle_accumulated_json_chunk(chunk=chunk)
 
-            return GenericStreamingChunk(
-                text="",
-                is_finished=False,
-                finish_reason="",
-                usage=None,
-                index=0,
-                tool_use=None,
-            )
+            return None
         except Exception:
             raise
 
