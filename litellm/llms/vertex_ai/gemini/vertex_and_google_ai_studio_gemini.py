@@ -1758,7 +1758,7 @@ class ModelResponseIterator:
         self.response_iterator = self.streaming_response
         return self
 
-    def handle_valid_json_chunk(self, chunk: str) -> ModelResponseStream:
+    def handle_valid_json_chunk(self, chunk: str) -> Optional[ModelResponseStream]:
         chunk = chunk.strip()
         try:
             json_chunk = json.loads(chunk)
@@ -1776,7 +1776,9 @@ class ModelResponseIterator:
 
         return self.chunk_parser(chunk=json_chunk)
 
-    def handle_accumulated_json_chunk(self, chunk: str) -> ModelResponseStream:
+    def handle_accumulated_json_chunk(
+        self, chunk: str
+    ) -> Optional[ModelResponseStream]:
         chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
         message = chunk.replace("\n\n", "")
 
@@ -1790,18 +1792,9 @@ class ModelResponseIterator:
             return self.chunk_parser(chunk=_data)
         except json.JSONDecodeError:
             # If it's not valid JSON yet, continue to the next event
-            return ModelResponseStream(
-                choices=[
-                    StreamingChoices(
-                        index=0,
-                        delta=Delta(content=""),
-                        finish_reason="",
-                    )
-                ],
-                usage=None,
-            )
+            return None
 
-    def _common_chunk_parsing_logic(self, chunk: str) -> ModelResponseStream:
+    def _common_chunk_parsing_logic(self, chunk: str) -> Optional[ModelResponseStream]:
         try:
             chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
             if len(chunk) > 0:
@@ -1815,16 +1808,7 @@ class ModelResponseIterator:
                 elif self.chunk_type == "accumulated_json":
                     return self.handle_accumulated_json_chunk(chunk=chunk)
 
-            return ModelResponseStream(
-                choices=[
-                    StreamingChoices(
-                        index=0,
-                        delta=Delta(content=""),
-                        finish_reason="",
-                    )
-                ],
-                usage=None,
-            )
+            return None
         except Exception:
             raise
 
