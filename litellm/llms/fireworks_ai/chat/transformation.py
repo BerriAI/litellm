@@ -25,6 +25,7 @@ from litellm.types.utils import (
     ModelResponse,
     ProviderSpecificModelInfo,
 )
+from litellm.utils import supports_function_calling
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import FireworksAIException
@@ -103,12 +104,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
         ]
         
         # Only add tools and tool_choice for models that support it
-        # Currently only firefunction-v2, mixtral-8x22b-instruct-hf, and llama-v3p1-405b-instruct support tool calling
-        if (
-            "firefunction-v2" in model 
-            or "mixtral-8x22b-instruct-hf" in model
-            or "llama-v3p1-405b-instruct" in model
-        ):
+        if supports_function_calling(model=model, custom_llm_provider="fireworks_ai"):
             supported_params.extend(["tools", "tool_choice"])
         
         return supported_params
