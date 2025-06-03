@@ -1359,6 +1359,7 @@ class CustomStreamWrapper:
             print_verbose(f"self.sent_first_chunk: {self.sent_first_chunk}")
 
             ## CHECK FOR TOOL USE
+
             if "tool_calls" in completion_obj and len(completion_obj["tool_calls"]) > 0:
                 if self.is_function_call is True:  # user passed in 'functions' param
                     completion_obj["function_call"] = completion_obj["tool_calls"][0][
@@ -1633,7 +1634,8 @@ class CustomStreamWrapper:
             if is_async_iterable(self.completion_stream):
                 async for chunk in self.completion_stream:
                     if chunk == "None" or chunk is None:
-                        raise Exception
+                        continue  # skip None chunks
+
                     elif (
                         self.custom_llm_provider == "gemini"
                         and hasattr(chunk, "parts")
@@ -1642,7 +1644,9 @@ class CustomStreamWrapper:
                         continue
                     # chunk_creator() does logging/stream chunk building. We need to let it know its being called in_async_func, so we don't double add chunks.
                     # __anext__ also calls async_success_handler, which does logging
-                    print_verbose(f"PROCESSED ASYNC CHUNK PRE CHUNK CREATOR: {chunk}")
+                    verbose_logger.debug(
+                        f"PROCESSED ASYNC CHUNK PRE CHUNK CREATOR: {chunk}"
+                    )
 
                     processed_chunk: Optional[ModelResponseStream] = self.chunk_creator(
                         chunk=chunk

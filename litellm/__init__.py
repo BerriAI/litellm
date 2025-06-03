@@ -119,6 +119,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "resend_email",
     "smtp_email",
     "deepeval",
+    "s3_v2",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
@@ -216,6 +217,7 @@ use_client: bool = False
 ssl_verify: Union[str, bool] = True
 ssl_certificate: Optional[str] = None
 disable_streaming_logging: bool = False
+disable_token_counter: bool = False
 disable_add_transform_inline_image_block: bool = False
 in_memory_llm_clients_cache: LLMClientCache = LLMClientCache()
 safe_memory_mode: bool = False

@@ -1267,7 +1267,9 @@ async def make_call(
         )
 
     completion_stream = ModelResponseIterator(
-        streaming_response=response.aiter_lines(), sync_stream=False
+        streaming_response=response.aiter_lines(),
+        sync_stream=False,
+        logging_obj=logging_obj,
     )
     # LOGGING
     logging_obj.post_call(
@@ -1305,7 +1307,9 @@ def make_sync_call(
         )
 
     completion_stream = ModelResponseIterator(
-        streaming_response=response.iter_lines(), sync_stream=True
+        streaming_response=response.iter_lines(),
+        sync_stream=True,
+        logging_obj=logging_obj,
     )
 
     # LOGGING
@@ -1726,11 +1730,19 @@ class VertexLLM(VertexBase):
 
 
 class ModelResponseIterator:
-    def __init__(self, streaming_response, sync_stream: bool):
+    def __init__(
+        self, streaming_response, sync_stream: bool, logging_obj: LoggingClass
+    ):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            check_is_function_call,
+        )
+
         self.streaming_response = streaming_response
         self.chunk_type: Literal["valid_json", "accumulated_json"] = "valid_json"
         self.accumulated_json = ""
         self.sent_first_chunk = False
+        self.logging_obj = logging_obj
+        self.is_function_call = check_is_function_call(logging_obj)
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
@@ -1794,11 +1806,23 @@ class ModelResponseIterator:
                     },
                 )
 
-            returned_chunk = GenericStreamingChunk(
-                text=text,
-                tool_use=tool_use,
-                is_finished=False,
-                finish_reason=finish_reason,
+            args: Dict[str, Any] = {
+                "content": text or None,
+                "reasoning_content": reasoning_content,
+            }
+            if self.is_function_call and tool_use is not None:
+                args["function_call"] = tool_use["function"]
+            elif tool_use is not None:
+                args["tool_calls"] = [tool_use]
+
+            returned_chunk = ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(**args),
+                        finish_reason=finish_reason,
+                    )
+                ],
                 usage=usage,
                 index=0,
             )
@@ -1811,7 +1835,7 @@ class ModelResponseIterator:
         self.response_iterator = self.streaming_response
         return self
 
-    def handle_valid_json_chunk(self, chunk: str) -> GenericStreamingChunk:
+    def handle_valid_json_chunk(self, chunk: str) -> Optional[ModelResponseStream]:
         chunk = chunk.strip()
         try:
             json_chunk = json.loads(chunk)
@@ -1829,7 +1853,9 @@ class ModelResponseIterator:
 
         return self.chunk_parser(chunk=json_chunk)
 
-    def handle_accumulated_json_chunk(self, chunk: str) -> GenericStreamingChunk:
+    def handle_accumulated_json_chunk(
+        self, chunk: str
+    ) -> Optional[ModelResponseStream]:
         chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
         message = chunk.replace("\n\n", "")
 
@@ -1843,16 +1869,9 @@ class ModelResponseIterator:
             return self.chunk_parser(chunk=_data)
         except json.JSONDecodeError:
             # If it's not valid JSON yet, continue to the next event
-            return GenericStreamingChunk(
-                text="",
-                is_finished=False,
-                finish_reason="",
-                usage=None,
-                index=0,
-                tool_use=None,
-            )
+            return None
 
-    def _common_chunk_parsing_logic(self, chunk: str) -> GenericStreamingChunk:
+    def _common_chunk_parsing_logic(self, chunk: str) -> Optional[ModelResponseStream]:
         try:
             chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
             if len(chunk) > 0:
@@ -1865,15 +1884,7 @@ class ModelResponseIterator:
                     return self.handle_valid_json_chunk(chunk=chunk)
                 elif self.chunk_type == "accumulated_json":
                     return self.handle_accumulated_json_chunk(chunk=chunk)
-
-            return GenericStreamingChunk(
-                text="",
-                is_finished=False,
-                finish_reason="",
-                usage=None,
-                index=0,
-                tool_use=None,
-            )
+            return None
         except Exception:
             raise
 

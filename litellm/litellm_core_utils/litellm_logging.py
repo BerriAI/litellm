@@ -135,6 +135,7 @@ from ..integrations.opik.opik import OpikLogger
 from ..integrations.prometheus import PrometheusLogger
 from ..integrations.prompt_layer import PromptLayerLogger
 from ..integrations.s3 import S3Logger
+from ..integrations.s3_v2 import S3Logger as S3V2Logger
 from ..integrations.supabase import Supabase
 from ..integrations.traceloop import TraceloopLogger
 from ..integrations.weights_biases import WeightsBiasesLogger
@@ -2699,7 +2700,9 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
                 sentry_sdk_instance.init(
                     dsn=os.environ.get("SENTRY_DSN"),
                     traces_sample_rate=float(sentry_trace_rate),  # type: ignore
-                    sample_rate=float(sentry_sample_rate),
+                    sample_rate=float(
+                        sentry_sample_rate if sentry_sample_rate else 1.0
+                    ),
                 )
                 capture_exception = sentry_sdk_instance.capture_exception
                 add_breadcrumb = sentry_sdk_instance.add_breadcrumb
@@ -2867,6 +2870,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _gcs_bucket_logger = GCSBucketLogger()
             _in_memory_loggers.append(_gcs_bucket_logger)
             return _gcs_bucket_logger  # type: ignore
+        elif logging_integration == "s3_v2":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, S3V2Logger):
+                    return callback  # type: ignore
+
+            _s3_v2_logger = S3V2Logger()
+            _in_memory_loggers.append(_s3_v2_logger)
+            return _s3_v2_logger  # type: ignore
         elif logging_integration == "azure_storage":
             for callback in _in_memory_loggers:
                 if isinstance(callback, AzureBlobStorageLogger):
@@ -2962,7 +2973,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             galileo_logger = GalileoObserve()
             _in_memory_loggers.append(galileo_logger)
             return galileo_logger  # type: ignore
-        
+
         elif logging_integration == "deepeval":
             for callback in _in_memory_loggers:
                 if isinstance(callback, DeepEvalLogger):
@@ -2970,7 +2981,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             deepeval_logger = DeepEvalLogger()
             _in_memory_loggers.append(deepeval_logger)
             return deepeval_logger  # type: ignore
-        
+
         elif logging_integration == "logfire":
             if "LOGFIRE_TOKEN" not in os.environ:
                 raise ValueError("LOGFIRE_TOKEN not found in environment variables")
@@ -3171,6 +3182,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "gcs_bucket":
             for callback in _in_memory_loggers:
                 if isinstance(callback, GCSBucketLogger):
+                    return callback
+        elif logging_integration == "s3_v2":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, S3V2Logger):
                     return callback
         elif logging_integration == "azure_storage":
             for callback in _in_memory_loggers:
