@@ -5071,6 +5071,66 @@
         "supports_tool_choice": true,
         "source": "https://inference-docs.cerebras.ai/support/pricing"
     },
+    "centml/meta-llama/Llama-3.3-70B-Instruct": {
+        "input_cost_per_token": 3.5e-07,
+        "output_cost_per_token": 3.5e-07,
+        "litellm_provider": "centml",
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "centml/meta-llama/Llama-4-Scout-17B-16E-Instruct": {
+        "input_cost_per_token": 1.0e-07,
+        "output_cost_per_token": 1.0e-07,
+        "litellm_provider": "centml",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "centml/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8": {
+        "input_cost_per_token": 2.0e-07,
+        "output_cost_per_token": 2.0e-07,
+        "litellm_provider": "centml",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "centml/deepseek-ai/DeepSeek-R1": {
+        "input_cost_per_token": 2.99e-06,
+        "output_cost_per_token": 2.99e-06,
+        "litellm_provider": "centml"
+    },
+    "centml/deepseek-ai/DeepSeek-R1-0528": {
+        "input_cost_per_token": 2.99e-06,
+        "output_cost_per_token": 2.99e-06,
+        "litellm_provider": "centml"
+    },
+    "centml/deepseek-ai/DeepSeek-V3-0324": {
+        "input_cost_per_token": 4.3e-07,
+        "output_cost_per_token": 1.4e-06,
+        "litellm_provider": "centml"
+    },
+    "centml/microsoft/Phi-4-mini-instruct": {
+        "input_cost_per_token": 1.2e-07,
+        "output_cost_per_token": 1.2e-07,
+        "litellm_provider": "centml"
+    },
+    "centml/Qwen/Qwen2.5-VL-7B-Instruct": {
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 1.5e-07,
+        "litellm_provider": "centml",
+        "supports_vision": true
+    },
+    "centml/meta-llama/Llama-Guard-4-12B": {
+        "input_cost_per_token": 1.0e-08,
+        "output_cost_per_token": 1.0e-08,
+        "litellm_provider": "centml",
+        "supports_vision": true
+    },
+    "centml/Qwen/QwQ-32B": {
+        "input_cost_per_token": 6.5e-07,
+        "output_cost_per_token": 6.5e-07,
+        "litellm_provider": "centml"
+    },
     "friendliai/meta-llama-3.1-8b-instruct": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
