@@ -90,6 +90,40 @@ async def test_strict_input_filtering_02():
         call_type="completion",
     )
 
+@pytest.mark.asyncio
+@pytest.mark.skip(reason="beta feature - local testing is failing")
+async def test_strict_input_filtering_03():
+    """
+    - have a response with a filtered input
+    - call the pre call hook
+    """
+    from litellm.proxy.hooks.azure_content_safety import _PROXY_AzureContentSafety
+
+    azure_content_safety = _PROXY_AzureContentSafety(
+        endpoint=os.getenv("AZURE_CONTENT_SAFETY_ENDPOINT"),
+        api_key=os.getenv("AZURE_CONTENT_SAFETY_API_KEY"),
+        thresholds={"Hate": 2},
+    )
+
+    data = {
+        "messages": [
+            {"role": "system", "content": "You are an helpfull assistant"},
+            {"role": "user", "content": [{"type": "text", "text":"Fuck yourself you stupid bitch"}]},
+        ]
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await azure_content_safety.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=DualCache(),
+            data=data,
+            call_type="completion",
+        )
+
+    assert exc_info.value.detail["source"] == "input"
+    assert exc_info.value.detail["category"] == "Hate"
+    assert exc_info.value.detail["severity"] == 2
+
 
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="beta feature - local testing is failing")
