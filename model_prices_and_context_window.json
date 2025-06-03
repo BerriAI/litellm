@@ -12764,7 +12764,7 @@
         "source": "https://fireworks.ai/pricing",
         "supports_tool_choice": true
     },
-    "accounts/fireworks/models/llama-v3p2-90b-vision-instruct": {
+    "fireworks_ai/accounts/fireworks/models/llama-v3p2-90b-vision-instruct": {
         "max_tokens": 16384,
         "max_input_tokens": 16384,
         "max_output_tokens": 16384,
@@ -12772,7 +12772,7 @@
         "output_cost_per_token": 9e-07,
         "litellm_provider": "fireworks_ai",
         "mode": "chat",
-        "supports_function_calling": true,
+        "supports_tool_choice": true,
         "supports_vision": true,
         "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing"
@@ -12899,9 +12899,9 @@
         "output_cost_per_token": 8e-06,
         "litellm_provider": "fireworks_ai",
         "mode": "chat",
-        "supports_response_schema": false,
         "source": "https://fireworks.ai/pricing",
-        "supports_tool_choice": false
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "fireworks_ai/accounts/fireworks/models/llama-v3p1-405b-instruct": {
         "max_tokens": 16384,
