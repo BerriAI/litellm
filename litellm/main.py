@@ -59,6 +59,7 @@ from litellm.constants import (
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_for_health_check
+from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.health_check_utils import (
     _create_health_check_response,
     _filter_model_params,
@@ -314,6 +315,7 @@ class AsyncCompletions:
         return response
 
 
+@tracer.wrap()
 @client
 async def acompletion(
     model: str,
@@ -810,6 +812,7 @@ def mock_completion(
         raise Exception("Mock completion response failed - {}".format(e))
 
 
+@tracer.wrap()
 @client
 def completion(  # type: ignore # noqa: PLR0915
     model: str,
@@ -2335,6 +2338,26 @@ def completion(  # type: ignore # noqa: PLR0915
                     original_response=response,
                     additional_args={"headers": headers},
                 )
+
+        elif custom_llm_provider == "datarobot":
+            response = base_llm_http_handler.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                timeout=timeout,  # type: ignore
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                encoding=encoding,
+                stream=stream,
+                provider_config=provider_config,
+            )
         elif custom_llm_provider == "openrouter":
             api_base = (
                 api_base

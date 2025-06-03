@@ -156,6 +156,9 @@ REDACTED_BY_LITELM_STRING = "REDACTED_BY_LITELM"
 MAX_LANGFUSE_INITIALIZED_CLIENTS = int(
     os.getenv("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50)
 )
+DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE = os.getenv(
+    "DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE", "streaming.chunk.yield"
+)
 
 ############### LLM Provider Constants ###############
 ### ANTHROPIC CONSTANTS ###
@@ -180,6 +183,7 @@ LITELLM_CHAT_PROVIDERS = [
     "replicate",
     "huggingface",
     "together_ai",
+    "datarobot",
     "openrouter",
     "vertex_ai",
     "vertex_ai_beta",
@@ -587,6 +591,7 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
 
 open_ai_embedding_models: List = ["text-embedding-ada-002"]
 cohere_embedding_models: List = [
+    "embed-v4.0",
     "embed-english-v3.0",
     "embed-english-light-v3.0",
     "embed-multilingual-v3.0",
