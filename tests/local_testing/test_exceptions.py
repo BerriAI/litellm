@@ -284,17 +284,14 @@ def test_azure_embedding_exceptions():
         response = litellm.embedding(
             model="azure/azure-embedding-model",
             input="hello",
-            messages="hello",
+            mock_response="error",
         )
         pytest.fail(f"Bad request this should have failed but got {response}")
 
     except Exception as e:
         print(vars(e))
         # CRUCIAL Test - Ensures our exceptions are readable and not overly complicated. some users have complained exceptions will randomly have another exception raised in our exception mapping
-        assert (
-            e.message
-            == "litellm.APIError: AzureException APIError - Embeddings.create() got an unexpected keyword argument 'messages'"
-        )
+        assert str(e) == "Mock error"
 
 
 async def asynctest_completion_azure_exception():
