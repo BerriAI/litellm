@@ -186,11 +186,24 @@ class FireworksAIConfig(OpenAIGPTConfig):
         """
         Add 'transform=inline' to the url of the image_url
         """
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            filter_value_from_dict,
+            migrate_file_to_image_url,
+        )
+
         disable_add_transform_inline_image_block = cast(
             Optional[bool],
             litellm_params.get("disable_add_transform_inline_image_block")
             or litellm.disable_add_transform_inline_image_block,
         )
+        ## For any 'file' message type with pdf content, move to 'image_url' message type
+        for message in messages:
+            if message["role"] == "user":
+                _message_content = message.get("content")
+                if _message_content is not None and isinstance(_message_content, list):
+                    for idx, content in enumerate(_message_content):
+                        if content["type"] == "file":
+                            _message_content[idx] = migrate_file_to_image_url(content)
         for message in messages:
             if message["role"] == "user":
                 _message_content = message.get("content")
@@ -202,6 +215,8 @@ class FireworksAIConfig(OpenAIGPTConfig):
                                 model=model,
                                 disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
                             )
+            filter_value_from_dict(cast(dict, message), "cache_control")
+
         return messages
 
     def get_provider_info(self, model: str) -> ProviderSpecificModelInfo:

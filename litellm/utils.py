@@ -1697,6 +1697,16 @@ def token_counter(
 
     Kept for backwards compatibility.
     """
+
+    #########################################################
+    # Flag to disable token counter
+    # We've gotten reports of this consuming CPU cycles,
+    # exposing this flag to allow users to disable
+    # it to confirm if this is indeed the issue
+    #########################################################
+    if litellm.disable_token_counter is True:
+        return 0
+
     return token_counter_new(
         model,
         custom_tokenizer,
@@ -1885,6 +1895,22 @@ def supports_tool_choice(model: str, custom_llm_provider: Optional[str] = None) 
     )
 
 
+def _supports_provider_info_factory(
+    model: str, custom_llm_provider: Optional[str], key: str
+) -> Optional[Literal[True]]:
+    """
+    Check if the given model supports a provider specific model info and return a boolean value.
+    """
+
+    provider_info = get_provider_info(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
+
+    if provider_info is not None and provider_info.get(key, False) is True:
+        return True
+    return None
+
+
 def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) -> bool:
     """
     Check if the given model supports function calling and return a boolean value.
@@ -1910,18 +1936,25 @@ def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) 
 
         if model_info.get(key, False) is True:
             return True
+        elif model_info.get(key) is None:  # don't check if 'False' explicitly set
+            supported_by_provider = _supports_provider_info_factory(
+                model, custom_llm_provider, key
+            )
+            if supported_by_provider is not None:
+                return supported_by_provider
+
         return False
     except Exception as e:
         verbose_logger.debug(
             f"Model not found or error in checking {key} support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
         )
 
-        provider_info = get_provider_info(
-            model=model, custom_llm_provider=custom_llm_provider
+        supported_by_provider = _supports_provider_info_factory(
+            model, custom_llm_provider, key
         )
+        if supported_by_provider is not None:
+            return supported_by_provider
 
-        if provider_info is not None and provider_info.get(key, False) is True:
-            return True
         return False
 
 
@@ -3688,13 +3721,22 @@ def add_provider_specific_params_to_optional_params(
                 if k not in openai_params:
                     extra_body[k] = passed_params[k]
             optional_params.setdefault("extra_body", {})
-            optional_params["extra_body"] = {
+            initial_extra_body = {
                 **optional_params["extra_body"],
                 **extra_body,
             }
 
+            if additional_drop_params is not None:
+                processed_extra_body = {
+                    k: v
+                    for k, v in initial_extra_body.items()
+                    if k not in additional_drop_params
+                }
+            else:
+                processed_extra_body = initial_extra_body
+
             optional_params["extra_body"] = _ensure_extra_body_is_safe(
-                extra_body=optional_params["extra_body"]
+                extra_body=processed_extra_body
             )
     else:
         for k in passed_params.keys():
@@ -4495,29 +4537,29 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_response_schema=_model_info.get(
                     "supports_response_schema", None
                 ),
-                supports_vision=_model_info.get("supports_vision", False),
+                supports_vision=_model_info.get("supports_vision", None),
                 supports_function_calling=_model_info.get(
-                    "supports_function_calling", False
+                    "supports_function_calling", None
                 ),
-                supports_tool_choice=_model_info.get("supports_tool_choice", False),
+                supports_tool_choice=_model_info.get("supports_tool_choice", None),
                 supports_assistant_prefill=_model_info.get(
-                    "supports_assistant_prefill", False
+                    "supports_assistant_prefill", None
                 ),
                 supports_prompt_caching=_model_info.get(
-                    "supports_prompt_caching", False
+                    "supports_prompt_caching", None
                 ),
-                supports_audio_input=_model_info.get("supports_audio_input", False),
-                supports_audio_output=_model_info.get("supports_audio_output", False),
-                supports_pdf_input=_model_info.get("supports_pdf_input", False),
+                supports_audio_input=_model_info.get("supports_audio_input", None),
+                supports_audio_output=_model_info.get("supports_audio_output", None),
+                supports_pdf_input=_model_info.get("supports_pdf_input", None),
                 supports_embedding_image_input=_model_info.get(
-                    "supports_embedding_image_input", False
+                    "supports_embedding_image_input", None
                 ),
                 supports_native_streaming=_model_info.get(
                     "supports_native_streaming", None
                 ),
-                supports_web_search=_model_info.get("supports_web_search", False),
-                supports_reasoning=_model_info.get("supports_reasoning", False),
-                supports_computer_use=_model_info.get("supports_computer_use", False),
+                supports_web_search=_model_info.get("supports_web_search", None),
+                supports_reasoning=_model_info.get("supports_reasoning", None),
+                supports_computer_use=_model_info.get("supports_computer_use", None),
                 search_context_cost_per_query=_model_info.get(
                     "search_context_cost_per_query", None
                 ),
@@ -4901,6 +4943,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("OPENROUTER_API_KEY")
+        elif custom_llm_provider == "datarobot":
+            if "DATAROBOT_API_TOKEN" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("DATAROBOT_API_TOKEN")
         elif custom_llm_provider == "vertex_ai":
             if "VERTEXAI_PROJECT" in os.environ and "VERTEXAI_LOCATION" in os.environ:
                 keys_in_environment = True
@@ -5103,6 +5150,12 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("OPENROUTER_API_KEY")
+        ## datarobot
+        elif model in litellm.datarobot_models:
+            if "DATAROBOT_API_TOKEN" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("DATAROBOT_API_TOKEN")
         ## vertex - text + chat models
         elif (
             model in litellm.vertex_chat_models
@@ -6442,6 +6495,8 @@ class ProviderConfigManager:
             return litellm.TogetherAIConfig()
         elif litellm.LlmProviders.OPENROUTER == provider:
             return litellm.OpenrouterConfig()
+        elif litellm.LlmProviders.DATAROBOT == provider:
+            return litellm.DataRobotConfig()
         elif litellm.LlmProviders.GEMINI == provider:
             return litellm.GoogleAIStudioGeminiConfig()
         elif (
@@ -6515,6 +6570,12 @@ class ProviderConfigManager:
 
             if bedrock_route == "converse" or bedrock_route == "converse_like":
                 return litellm.AmazonConverseConfig()
+            elif bedrock_route == "agent":
+                from litellm.llms.bedrock.chat.invoke_agent.transformation import (
+                    AmazonInvokeAgentConfig,
+                )
+
+                return AmazonInvokeAgentConfig()
             elif bedrock_invoke_provider == "amazon":  # amazon titan llms
                 return litellm.AmazonTitanConfig()
             elif bedrock_invoke_provider == "anthropic":
@@ -6602,6 +6663,13 @@ class ProviderConfigManager:
         # This mapping ensures that the correct configuration is returned for BEDROCK.
         elif litellm.LlmProviders.BEDROCK == provider:
             return litellm.AmazonAnthropicClaude3MessagesConfig()
+        elif litellm.LlmProviders.VERTEX_AI == provider:
+            if "claude" in model:
+                from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
+                    VertexAIPartnerModelsAnthropicMessagesConfig,
+                )
+
+                return VertexAIPartnerModelsAnthropicMessagesConfig()
         return None
 
     @staticmethod
@@ -6666,7 +6734,7 @@ class ProviderConfigManager:
             from litellm.llms.ollama.common_utils import OllamaModelInfo
 
             return OllamaModelInfo()
-        elif LlmProviders.VLLM == provider:
+        elif LlmProviders.VLLM == provider or LlmProviders.HOSTED_VLLM == provider:
             from litellm.llms.vllm.common_utils import (
                 VLLMModelInfo,  # experimental approach, to reduce bloat on __init__.py
             )

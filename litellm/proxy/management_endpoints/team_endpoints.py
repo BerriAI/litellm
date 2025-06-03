@@ -70,6 +70,9 @@ from litellm.proxy.management_endpoints.common_utils import (
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
 )
+from litellm.proxy.management_helpers.object_permission_utils import (
+    handle_update_object_permission_common,
+)
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
@@ -663,6 +666,13 @@ async def update_team(
         # set the budget_reset_at in DB
         updated_kv["budget_reset_at"] = reset_at
 
+    # Check object permission
+    if data.object_permission is not None:
+        updated_kv = await handle_update_object_permission(
+            data_json=updated_kv,
+            existing_team_row=existing_team_row,
+        )
+
     # update team metadata fields
     _team_metadata_fields = LiteLLM_ManagementEndpoint_MetadataFields_Premium
     for field in _team_metadata_fields:
@@ -732,6 +742,34 @@ async def update_team(
         )
 
     return {"team_id": team_row.team_id, "data": team_row}
+
+
+async def handle_update_object_permission(
+    data_json: dict, existing_team_row: LiteLLM_TeamTable
+) -> dict:
+    """
+    Handle the update of object permission for a team.
+
+    - IF there's no object_permission_id, then create a new entry in LiteLLM_ObjectPermissionTable
+    - IF there's an object_permission_id, then update the entry in LiteLLM_ObjectPermissionTable
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    # Use the common helper to handle the object permission update
+    object_permission_id = await handle_update_object_permission_common(
+        data_json=data_json,
+        existing_object_permission_id=existing_team_row.object_permission_id,
+        prisma_client=prisma_client,
+    )
+
+    # Add the object_permission_id to data_json if one was created/updated
+    if object_permission_id is not None:
+        data_json["object_permission_id"] = object_permission_id
+        verbose_proxy_logger.debug(
+            f"updated object_permission_id: {object_permission_id}"
+        )
+
+    return data_json
 
 
 def _check_team_member_admin_add(
@@ -1486,7 +1524,8 @@ async def team_info(
             team_info: Optional[
                 BaseModel
             ] = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": team_id}
+                where={"team_id": team_id},
+                include={"object_permission": True},
             )
             if team_info is None:
                 raise Exception

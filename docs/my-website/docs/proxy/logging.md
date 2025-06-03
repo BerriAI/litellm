@@ -1260,7 +1260,7 @@ model_list:
     litellm_params:
       model: gpt-3.5-turbo
 litellm_settings:
-  success_callback: ["s3"]
+  success_callback: ["s3_v2"]
   s3_callback_params:
     s3_bucket_name: logs-bucket-litellm   # AWS Bucket Name for S3
     s3_region_name: us-west-2              # AWS Region Name for S3
@@ -1304,7 +1304,7 @@ You can add the team alias to the object key by setting the `team_alias` in the 
 
 ```yaml
 litellm_settings:
-  callbacks: ["s3"]
+  callbacks: ["s3_v2"]
   enable_preview_features: true
   s3_callback_params:
     s3_bucket_name: logs-bucket-litellm

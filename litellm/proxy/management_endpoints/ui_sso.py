@@ -59,7 +59,7 @@ from litellm.proxy.management_endpoints.sso_helper_utils import (
 )
 from litellm.proxy.management_endpoints.team_endpoints import new_team, team_member_add
 from litellm.proxy.management_endpoints.types import CustomOpenID
-from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.proxy.utils import PrismaClient, ProxyLogging, get_server_root_path
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
 from litellm.types.proxy.management_endpoints.ui_sso import *
 
@@ -356,7 +356,6 @@ async def get_user_info_from_db(
     alternate_user_id: Optional[str] = None,
 ) -> Optional[Union[LiteLLM_UserTable, NewUserResponse]]:
     try:
-
         potential_user_ids = []
         if alternate_user_id is not None:
             potential_user_ids.append(alternate_user_id)
@@ -387,7 +386,7 @@ async def get_user_info_from_db(
             )
             if user_info is not None:
                 break
-                
+
         verbose_proxy_logger.debug(
             f"user_info: {user_info}; litellm.default_internal_user_params: {litellm.default_internal_user_params}"
         )
@@ -452,6 +451,7 @@ async def auth_callback(request: Request):  # noqa: PLR0915
         user_api_key_cache,
         user_custom_sso,
     )
+    from litellm.types.proxy.ui_sso import ReturnedUITokenObject
 
     if prisma_client is None:
         raise HTTPException(
@@ -659,19 +659,22 @@ async def auth_callback(request: Request):  # noqa: PLR0915
             _user_info
         )
 
+    returned_ui_token_object = ReturnedUITokenObject(
+        user_id=cast(str, user_id),
+        key=key,
+        user_email=user_email,
+        user_role=user_role,
+        login_method="sso",
+        premium_user=premium_user,
+        auth_header_name=general_settings.get(
+            "litellm_key_header_name", "Authorization"
+        ),
+        disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
+        server_root_path=get_server_root_path(),
+    )
+
     jwt_token = jwt.encode(  # type: ignore
-        {
-            "user_id": user_id,
-            "key": key,
-            "user_email": user_email,
-            "user_role": user_role,
-            "login_method": "sso",
-            "premium_user": premium_user,
-            "auth_header_name": general_settings.get(
-                "litellm_key_header_name", "Authorization"
-            ),
-            "disabled_non_admin_personal_key_creation": disabled_non_admin_personal_key_creation,
-        },
+        cast(dict, returned_ui_token_object),
         master_key,
         algorithm="HS256",
     )
