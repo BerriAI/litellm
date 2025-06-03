@@ -83,10 +83,9 @@ class FireworksAIConfig(OpenAIGPTConfig):
         return super().get_config()
 
     def get_supported_openai_params(self, model: str):
-        return [
+        # Base parameters supported by all models
+        supported_params = [
             "stream",
-            "tools",
-            "tool_choice",
             "max_completion_tokens",
             "max_tokens",
             "temperature",
@@ -102,6 +101,17 @@ class FireworksAIConfig(OpenAIGPTConfig):
             "prompt_truncate_length",
             "context_length_exceeded_behavior",
         ]
+        
+        # Only add tools and tool_choice for models that support it
+        # Currently only firefunction-v2, mixtral-8x22b-instruct-hf, and llama-v3p1-405b-instruct support tool calling
+        if (
+            "firefunction-v2" in model 
+            or "mixtral-8x22b-instruct-hf" in model
+            or "llama-v3p1-405b-instruct" in model
+        ):
+            supported_params.extend(["tools", "tool_choice"])
+        
+        return supported_params
 
     def map_openai_params(
         self,
