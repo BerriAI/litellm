@@ -81,6 +81,9 @@ async def test_basic_s3_logging(sync_mode, streaming):
 )
 async def test_basic_s3_v2_logging(streaming):
     from blockbuster import BlockBuster
+    from litellm.integrations.s3_v2 import S3Logger
+    s3_v2_logger = S3Logger(s3_flush_interval=1)
+    litellm.callbacks = [s3_v2_logger]
     blockbuster = BlockBuster()
     blockbuster.activate()
 
@@ -97,7 +100,7 @@ async def test_basic_s3_v2_logging(streaming):
     response = await litellm.acompletion(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "This is a test"}],
-        stream=True,
+        stream=streaming,
     )
     if streaming:
         async for chunk in response:
@@ -106,7 +109,7 @@ async def test_basic_s3_v2_logging(streaming):
     else:
         response_id = response.id
 
-    await asyncio.sleep(10)
+    await asyncio.sleep(30)
     print(f"response: {response}")
 
     # stop blockbuster
@@ -116,12 +119,12 @@ async def test_basic_s3_v2_logging(streaming):
 
     print(f"all_s3_keys: {all_s3_keys}")
 
-    # assert that atlest one key has response.id in it
-    # assert any(response_id in key for key in all_s3_keys)
-    # s3 = boto3.client("s3")
-    # # delete all objects
-    # for key in all_s3_keys:
-    #     s3.delete_object(Bucket="load-testing-oct", Key=key)
+    #assert that atlest one key has response.id in it
+    assert any(response_id in key for key in all_s3_keys)
+    s3 = boto3.client("s3")
+    # delete all objects
+    for key in all_s3_keys:
+        s3.delete_object(Bucket="load-testing-oct", Key=key)
 
 
 def list_all_s3_objects(bucket_name):

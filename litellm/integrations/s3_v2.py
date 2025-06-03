@@ -14,7 +14,11 @@ from typing import List, Optional, cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
-from litellm.constants import DEFAULT_S3_BATCH_SIZE, DEFAULT_S3_FLUSH_INTERVAL_SECONDS
+from litellm.constants import (
+    DEFAULT_S3_BATCH_SIZE,
+    DEFAULT_S3_FLUSH_INTERVAL_SECONDS,
+    DEFAULT_S3_MAX_UPLOAD_BATCH_SIZE,
+)
 from litellm.integrations.s3 import get_s3_object_key
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
@@ -313,7 +317,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         if not self.log_queue:
             return
 
-        for payload in self.log_queue:
+        # set a max upperbound of number of objects that can be uploaded to s3 at once
+        for idx, payload in enumerate(self.log_queue):
+            if idx >= DEFAULT_S3_MAX_UPLOAD_BATCH_SIZE:
+                break
             asyncio.create_task(self.async_upload_data_to_s3(payload))
 
     def create_s3_batch_logging_element(
