@@ -12899,7 +12899,7 @@
         "output_cost_per_token": 8e-06,
         "litellm_provider": "fireworks_ai",
         "mode": "chat",
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "source": "https://fireworks.ai/pricing",
         "supports_tool_choice": false
     },
