@@ -19,6 +19,9 @@ from litellm.caching.caching import DualCache
 from litellm.constants import HOURS_IN_A_DAY
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_alert_type
+from litellm.integrations.SlackAlerting.hanging_request_check import (
+    AlertingHangingRequestCheck,
+)
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.exception_mapping_utils import (
     _add_key_name_and_team_to_alert,
@@ -86,6 +89,10 @@ class SlackAlerting(CustomBatchLogger):
         self.default_webhook_url = default_webhook_url
         self.flush_lock = asyncio.Lock()
         self.periodic_started = False
+        self.hanging_request_check = AlertingHangingRequestCheck(
+            alerting_threshold=alerting_threshold,
+            slack_alerting_object=self,
+        )
         super().__init__(**kwargs, flush_lock=self.flush_lock)
 
     def update_values(
@@ -107,10 +114,10 @@ class SlackAlerting(CustomBatchLogger):
             self.alert_types = alert_types
         if alerting_args is not None:
             self.alerting_args = SlackAlertingArgs(**alerting_args)
-            if not self.periodic_started: 
+            if not self.periodic_started:
                 asyncio.create_task(self.periodic_flush())
                 self.periodic_started = True
-                
+
         if alert_to_webhook_url is not None:
             # update the dict
             if self.alert_to_webhook_url is None:
@@ -458,99 +465,12 @@ class SlackAlerting(CustomBatchLogger):
     ):
         if self.alerting is None or self.alert_types is None:
             return
-        model: str = ""
-        if request_data is not None:
-            model = request_data.get("model", "")
-            messages = request_data.get("messages", None)
-            if messages is None:
-                # if messages does not exist fallback to "input"
-                messages = request_data.get("input", None)
+        if type not in self.alert_types:
+            return
 
-            # try casting messages to str and get the first 100 characters, else mark as None
-            try:
-                messages = str(messages)
-                messages = messages[:100]
-            except Exception:
-                messages = ""
-
-            if (
-                litellm.turn_off_message_logging
-                or litellm.redact_messages_in_exceptions
-            ):
-                messages = (
-                    "Message not logged. litellm.redact_messages_in_exceptions=True"
-                )
-            request_info = f"\nRequest Model: `{model}`\nMessages: `{messages}`"
-        else:
-            request_info = ""
-
-        if type == "hanging_request":
-            await asyncio.sleep(
-                self.alerting_threshold
-            )  # Set it to 5 minutes - i'd imagine this might be different for streaming, non-streaming, non-completion (embedding + img) requests
-            alerting_metadata: dict = {}
-            if await self._request_is_completed(request_data=request_data) is True:
-                return
-
-            if request_data is not None:
-                if request_data.get("deployment", None) is not None and isinstance(
-                    request_data["deployment"], dict
-                ):
-                    _api_base = litellm.get_api_base(
-                        model=model,
-                        optional_params=request_data["deployment"].get(
-                            "litellm_params", {}
-                        ),
-                    )
-
-                    if _api_base is None:
-                        _api_base = ""
-
-                    request_info += f"\nAPI Base: {_api_base}"
-                elif request_data.get("metadata", None) is not None and isinstance(
-                    request_data["metadata"], dict
-                ):
-                    # In hanging requests sometime it has not made it to the point where the deployment is passed to the `request_data``
-                    # in that case we fallback to the api base set in the request metadata
-                    _metadata: dict = request_data["metadata"]
-                    _api_base = _metadata.get("api_base", "")
-
-                    request_info = _add_key_name_and_team_to_alert(
-                        request_info=request_info, metadata=_metadata
-                    )
-
-                    if _api_base is None:
-                        _api_base = ""
-
-                    if "alerting_metadata" in _metadata:
-                        alerting_metadata = _metadata["alerting_metadata"]
-                    request_info += f"\nAPI Base: `{_api_base}`"
-                # only alert hanging responses if they have not been marked as success
-                alerting_message = (
-                    f"`Requests are hanging - {self.alerting_threshold}s+ request time`"
-                )
-
-                if "langfuse" in litellm.success_callback:
-                    langfuse_url = await _add_langfuse_trace_id_to_alert(
-                        request_data=request_data,
-                    )
-
-                    if langfuse_url is not None:
-                        request_info += "\n🪢 Langfuse Trace: {}".format(langfuse_url)
-
-                # add deployment latencies to alert
-                _deployment_latency_map = self._get_deployment_latencies_to_alert(
-                    metadata=request_data.get("metadata", {})
-                )
-                if _deployment_latency_map is not None:
-                    request_info += f"\nDeployment Latencies\n{_deployment_latency_map}"
-
-                await self.send_alert(
-                    message=alerting_message + request_info,
-                    level="Medium",
-                    alert_type=AlertType.llm_requests_hanging,
-                    alerting_metadata=alerting_metadata,
-                )
+        await self.hanging_request_check.add_request_to_hanging_request_check(
+            request_data=request_data
+        )
 
     async def failed_tracking_alert(self, error_message: str, failing_model: str):
         """
