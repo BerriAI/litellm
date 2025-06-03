@@ -267,6 +267,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         googleSearch: Optional[dict] = None
         googleSearchRetrieval: Optional[dict] = None
         enterpriseWebSearch: Optional[dict] = None
+        urlContext: Optional[dict] = None
         code_execution: Optional[dict] = None
         # remove 'additionalProperties' from tools
         value = _remove_additional_properties(value)
@@ -330,6 +331,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 googleSearchRetrieval = get_tool_value(tool, "googleSearchRetrieval")
             elif tool_name and tool_name == "enterpriseWebSearch":
                 enterpriseWebSearch = get_tool_value(tool, "enterpriseWebSearch")
+            elif tool_name and tool_name == "urlContext":
+                urlContext = get_tool_value(tool, "urlContext")
             elif openai_function_object is not None:
                 gtool_func_declaration = FunctionDeclaration(
                     name=openai_function_object["name"],
@@ -358,6 +361,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             _tools["enterpriseWebSearch"] = enterpriseWebSearch
         if code_execution is not None:
             _tools["code_execution"] = code_execution
+        if urlContext is not None:
+            _tools["url_context"] = urlContext
         return [_tools]
 
     def _map_response_schema(self, value: dict) -> dict:
@@ -1013,6 +1018,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         )
 
         grounding_metadata: List[dict] = []
+        url_context_metadata: List[dict] = []
         safety_ratings: List = []
         citation_metadata: List = []
         chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
@@ -1032,6 +1038,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             if "citationMetadata" in candidate:
                 citation_metadata.append(candidate["citationMetadata"])
+
+            if "urlContextMetadata" in candidate:
+                # Add URL context metadata to grounding metadata
+                url_context_metadata.append(candidate["urlContextMetadata"])
 
             if "parts" in candidate["content"]:
                 (
@@ -1083,7 +1093,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             model_response.choices.append(choice)
 
-        return grounding_metadata, safety_ratings, citation_metadata
+        return grounding_metadata, url_context_metadata, safety_ratings, citation_metadata
 
     def transform_response(
         self,
@@ -1153,6 +1163,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if _candidates:
                 (
                     grounding_metadata,
+                    url_context_metadata,
                     safety_ratings,
                     citation_metadata,
                 ) = self._process_candidates(
@@ -1167,6 +1178,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             model_response._hidden_params[
                 "vertex_ai_grounding_metadata"
             ] = grounding_metadata
+
+            setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)
+            model_response._hidden_params[
+                "vertex_ai_url_context_metadata"
+            ] = url_context_metadata
 
             setattr(model_response, "vertex_ai_safety_results", safety_ratings)
             model_response._hidden_params[

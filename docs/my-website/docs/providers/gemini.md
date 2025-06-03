@@ -643,6 +643,66 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 </TabItem>
 </Tabs>
 
+### URL Context 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+os.environ["GEMINI_API_KEY"] = ".."
+
+# 👇 ADD URL CONTEXT
+tools = [{"urlContext": {}}]
+
+response = completion(
+    model="gemini/gemini-2.0-flash",
+    messages=[{"role": "user", "content": "Summarize this document: https://ai.google.dev/gemini-api/docs/models"}],
+    tools=tools,
+)
+
+print(response)
+
+# Access URL context metadata
+url_context_metadata = response.model_extra['vertex_ai_url_context_metadata']
+urlMetadata = url_context_metadata[0]['urlMetadata'][0]
+print(f"Retrieved URL: {urlMetadata['retrievedUrl']}")
+print(f"Retrieval Status: {urlMetadata['urlRetrievalStatus']}")
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+```yaml
+model_list:
+  - model_name: gemini-2.0-flash
+    litellm_params:
+      model: gemini/gemini-2.0-flash
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start Proxy
+```bash
+$ litellm --config /path/to/config.yaml
+```
+
+3. Make Request!
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "gemini-2.0-flash",
+    "messages": [{"role": "user", "content": "Summarize this document: https://ai.google.dev/gemini-api/docs/models"}],
+    "tools": [{"urlContext": {}}]
+  }'
+```
+</TabItem>
+</Tabs>
+
 ### Google Search Retrieval
 
 

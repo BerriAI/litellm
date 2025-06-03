@@ -1774,6 +1774,27 @@ def supports_web_search(model: str, custom_llm_provider: Optional[str] = None) -
     )
 
 
+def supports_url_context(model: str, custom_llm_provider: Optional[str] = None) -> bool:
+    """
+    Check if the given model supports URL context and return a boolean value.
+
+    Parameters:
+    model (str): The model name to be checked.
+    custom_llm_provider (str): The provider to be checked.
+
+    Returns:
+    bool: True if the model supports URL context, False otherwise.
+
+    Raises:
+    Exception: If the given model is not found in model_prices_and_context_window.json.
+    """
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_url_context",
+    )
+
+
 def supports_native_streaming(model: str, custom_llm_provider: Optional[str]) -> bool:
     """
     Check if the given model supports native streaming and return a boolean value.
@@ -4558,6 +4579,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                     "supports_native_streaming", None
                 ),
                 supports_web_search=_model_info.get("supports_web_search", None),
+                supports_url_context=_model_info.get("supports_url_context", None),
                 supports_reasoning=_model_info.get("supports_reasoning", None),
                 supports_computer_use=_model_info.get("supports_computer_use", None),
                 search_context_cost_per_query=_model_info.get(
@@ -4632,6 +4654,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             supports_audio_output: Optional[bool]
             supports_pdf_input: Optional[bool]
             supports_web_search: Optional[bool]
+            supports_url_context: Optional[bool]
             supports_reasoning: Optional[bool]
     Raises:
         Exception: If the model is not mapped yet.
