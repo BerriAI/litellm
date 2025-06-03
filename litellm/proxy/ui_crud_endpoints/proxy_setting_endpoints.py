@@ -1,5 +1,5 @@
 #### CRUD ENDPOINTS for UI Settings #####
-from typing import Any, List, Union
+from typing import Any, List, Union, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -8,12 +8,64 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams
+from pydantic import BaseModel, Field
 
 router = APIRouter()
 
 
 class IPAddress(BaseModel):
     ip: str
+
+
+class GoogleSSOConfig(BaseModel):
+    """Configuration for Google SSO provider"""
+    google_client_id: Optional[str] = Field(None, description="Google OAuth Client ID")
+    google_client_secret: Optional[str] = Field(None, description="Google OAuth Client Secret")
+
+
+class MicrosoftSSOConfig(BaseModel):
+    """Configuration for Microsoft SSO provider"""
+    microsoft_client_id: Optional[str] = Field(None, description="Microsoft OAuth Client ID")
+    microsoft_client_secret: Optional[str] = Field(None, description="Microsoft OAuth Client Secret")
+    microsoft_tenant: Optional[str] = Field(None, description="Microsoft Tenant ID")
+
+
+class GenericSSOConfig(BaseModel):
+    """Configuration for Generic SSO provider (including Okta)"""
+    generic_client_id: Optional[str] = Field(None, description="Generic OAuth Client ID")
+    generic_client_secret: Optional[str] = Field(None, description="Generic OAuth Client Secret")
+    generic_authorization_endpoint: Optional[str] = Field(None, description="OAuth Authorization Endpoint URL")
+    generic_token_endpoint: Optional[str] = Field(None, description="OAuth Token Endpoint URL")
+    generic_userinfo_endpoint: Optional[str] = Field(None, description="OAuth UserInfo Endpoint URL")
+    generic_scope: Optional[str] = Field("openid email profile", description="OAuth Scope")
+
+
+class SSOProviderConfig(BaseModel):
+    """Complete SSO provider configuration"""
+    sso_provider: Optional[str] = Field(None, description="SSO Provider type (google, microsoft, generic, okta)")
+    google: Optional[GoogleSSOConfig] = Field(None, description="Google SSO configuration")
+    microsoft: Optional[MicrosoftSSOConfig] = Field(None, description="Microsoft SSO configuration") 
+    generic: Optional[GenericSSOConfig] = Field(None, description="Generic SSO configuration")
+    proxy_base_url: Optional[str] = Field(None, description="Proxy base URL for SSO redirects")
+    user_email: Optional[str] = Field(None, description="Admin user email")
+
+
+class SSOConfigRequest(BaseModel):
+    """Request model for SSO configuration"""
+    sso_provider: str = Field(..., description="SSO Provider type")
+    google_client_id: Optional[str] = None
+    google_client_secret: Optional[str] = None
+    microsoft_client_id: Optional[str] = None
+    microsoft_client_secret: Optional[str] = None
+    microsoft_tenant: Optional[str] = None
+    generic_client_id: Optional[str] = None
+    generic_client_secret: Optional[str] = None
+    generic_authorization_endpoint: Optional[str] = None
+    generic_token_endpoint: Optional[str] = None
+    generic_userinfo_endpoint: Optional[str] = None
+    generic_scope: Optional[str] = "openid email profile"
+    proxy_base_url: str = Field(..., description="Proxy base URL")
+    user_email: str = Field(..., description="Admin user email")
 
 
 @router.get(
@@ -281,3 +333,206 @@ async def update_default_team_settings(settings: DefaultTeamSSOParams):
         in_memory_var=litellm.default_team_params,
         success_message="Default team settings updated successfully",
     )
+
+
+@router.get(
+    "/get/sso_provider_config",
+    tags=["SSO Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_sso_provider_config():
+    """
+    Get current SSO provider configuration including client IDs and endpoints.
+    Returns the current SSO configuration from environment variables and general settings.
+    """
+    import os
+    from litellm.proxy.proxy_server import general_settings
+    
+    # Get SSO configuration from environment variables
+    config = SSOProviderConfig(
+        sso_provider=general_settings.get("sso_provider"),
+        google=GoogleSSOConfig(
+            google_client_id=os.getenv("GOOGLE_CLIENT_ID"),
+            google_client_secret="***" if os.getenv("GOOGLE_CLIENT_SECRET") else None,
+        ),
+        microsoft=MicrosoftSSOConfig(
+            microsoft_client_id=os.getenv("MICROSOFT_CLIENT_ID"),
+            microsoft_client_secret="***" if os.getenv("MICROSOFT_CLIENT_SECRET") else None,
+            microsoft_tenant=os.getenv("MICROSOFT_TENANT"),
+        ),
+        generic=GenericSSOConfig(
+            generic_client_id=os.getenv("GENERIC_CLIENT_ID"),
+            generic_client_secret="***" if os.getenv("GENERIC_CLIENT_SECRET") else None,
+            generic_authorization_endpoint=os.getenv("GENERIC_AUTHORIZATION_ENDPOINT"),
+            generic_token_endpoint=os.getenv("GENERIC_TOKEN_ENDPOINT"),
+            generic_userinfo_endpoint=os.getenv("GENERIC_USERINFO_ENDPOINT"),
+            generic_scope=os.getenv("GENERIC_SCOPE", "openid email profile"),
+        ),
+        proxy_base_url=os.getenv("PROXY_BASE_URL") or general_settings.get("proxy_base_url"),
+        user_email=general_settings.get("admin_user_email"),
+    )
+    
+    return {
+        "config": config.model_dump(),
+        "status": "success"
+    }
+
+
+@router.post(
+    "/update/sso_provider_config",
+    tags=["SSO Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_sso_provider_config(config: SSOConfigRequest):
+    """
+    Update SSO provider configuration. This will update environment variables
+    and general settings based on the selected provider.
+    
+    Note: Some changes may require a server restart to take effect.
+    """
+    import os
+    from litellm.proxy.proxy_server import general_settings, proxy_config
+    
+    try:
+        # Update general settings
+        general_settings["sso_provider"] = config.sso_provider
+        general_settings["proxy_base_url"] = config.proxy_base_url
+        general_settings["admin_user_email"] = config.user_email
+        
+        # Map of environment variables to update based on provider
+        env_updates = {}
+        
+        if config.sso_provider == "google":
+            if config.google_client_id:
+                env_updates["GOOGLE_CLIENT_ID"] = config.google_client_id
+            if config.google_client_secret:
+                env_updates["GOOGLE_CLIENT_SECRET"] = config.google_client_secret
+                
+        elif config.sso_provider == "microsoft":
+            if config.microsoft_client_id:
+                env_updates["MICROSOFT_CLIENT_ID"] = config.microsoft_client_id
+            if config.microsoft_client_secret:
+                env_updates["MICROSOFT_CLIENT_SECRET"] = config.microsoft_client_secret
+            if config.microsoft_tenant:
+                env_updates["MICROSOFT_TENANT"] = config.microsoft_tenant
+                
+        elif config.sso_provider in ["generic", "okta"]:
+            if config.generic_client_id:
+                env_updates["GENERIC_CLIENT_ID"] = config.generic_client_id
+            if config.generic_client_secret:
+                env_updates["GENERIC_CLIENT_SECRET"] = config.generic_client_secret
+            if config.generic_authorization_endpoint:
+                env_updates["GENERIC_AUTHORIZATION_ENDPOINT"] = config.generic_authorization_endpoint
+            if config.generic_token_endpoint:
+                env_updates["GENERIC_TOKEN_ENDPOINT"] = config.generic_token_endpoint
+            if config.generic_userinfo_endpoint:
+                env_updates["GENERIC_USERINFO_ENDPOINT"] = config.generic_userinfo_endpoint
+            if config.generic_scope:
+                env_updates["GENERIC_SCOPE"] = config.generic_scope
+        
+        # Update proxy base URL
+        if config.proxy_base_url:
+            env_updates["PROXY_BASE_URL"] = config.proxy_base_url
+        
+        # Update environment variables in memory
+        for key, value in env_updates.items():
+            os.environ[key] = value
+        
+        # Save configuration to config file
+        proxy_config_data = await proxy_config.get_config()
+        if "general_settings" not in proxy_config_data:
+            proxy_config_data["general_settings"] = {}
+        
+        proxy_config_data["general_settings"]["sso_provider"] = config.sso_provider
+        proxy_config_data["general_settings"]["proxy_base_url"] = config.proxy_base_url
+        proxy_config_data["general_settings"]["admin_user_email"] = config.user_email
+        
+        # Store environment variables in config for persistence
+        if "environment" not in proxy_config_data:
+            proxy_config_data["environment"] = {}
+        
+        for key, value in env_updates.items():
+            proxy_config_data["environment"][key] = value
+        
+        await proxy_config.save_config(new_config=proxy_config_data)
+        
+        return {
+            "message": "SSO provider configuration updated successfully",
+            "status": "success",
+            "provider": config.sso_provider,
+            "note": "Some changes may require a server restart to take full effect"
+        }
+        
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error updating SSO provider config: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update SSO provider configuration: {str(e)}"
+        )
+
+
+@router.delete(
+    "/delete/sso_provider_config",
+    tags=["SSO Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def delete_sso_provider_config():
+    """
+    Delete/reset SSO provider configuration. This will remove SSO environment
+    variables and reset the configuration to defaults.
+    """
+    import os
+    from litellm.proxy.proxy_server import general_settings, proxy_config
+    
+    try:
+        # List of SSO environment variables to remove
+        sso_env_vars = [
+            "GOOGLE_CLIENT_ID",
+            "GOOGLE_CLIENT_SECRET", 
+            "MICROSOFT_CLIENT_ID",
+            "MICROSOFT_CLIENT_SECRET",
+            "MICROSOFT_TENANT",
+            "GENERIC_CLIENT_ID",
+            "GENERIC_CLIENT_SECRET",
+            "GENERIC_AUTHORIZATION_ENDPOINT",
+            "GENERIC_TOKEN_ENDPOINT",
+            "GENERIC_USERINFO_ENDPOINT",
+            "GENERIC_SCOPE",
+        ]
+        
+        # Remove from environment
+        for var in sso_env_vars:
+            if var in os.environ:
+                del os.environ[var]
+        
+        # Reset general settings
+        general_settings.pop("sso_provider", None)
+        general_settings.pop("admin_user_email", None)
+        
+        # Update config file
+        proxy_config_data = await proxy_config.get_config()
+        
+        # Remove from general_settings
+        if "general_settings" in proxy_config_data:
+            proxy_config_data["general_settings"].pop("sso_provider", None)
+            proxy_config_data["general_settings"].pop("admin_user_email", None)
+        
+        # Remove from environment section
+        if "environment" in proxy_config_data:
+            for var in sso_env_vars:
+                proxy_config_data["environment"].pop(var, None)
+        
+        await proxy_config.save_config(new_config=proxy_config_data)
+        
+        return {
+            "message": "SSO provider configuration deleted successfully",
+            "status": "success",
+            "note": "Server restart may be required for changes to take full effect"
+        }
+        
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error deleting SSO provider config: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete SSO provider configuration: {str(e)}"
+        )
