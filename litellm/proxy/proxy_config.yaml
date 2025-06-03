@@ -4,6 +4,5 @@ model_list:
       model: openai/*
 
 
-
-
-
+litellm_settings:
+  disable_token_counter: True
