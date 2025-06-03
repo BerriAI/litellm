@@ -46,6 +46,9 @@ DEFAULT_ASSISTANT_CONTINUE_MESSAGE = ChatCompletionAssistantMessage(
     content="Please continue.", role="assistant"
 )
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LoggingClass
+
 
 def handle_any_messages_to_chat_completion_str_messages_conversion(
     messages: Any,
@@ -618,6 +621,20 @@ def get_file_ids_from_messages(messages: List[AllMessageValues]) -> List[str]:
     return file_ids
 
 
+
+def check_is_function_call(logging_obj: "LoggingClass") -> bool:
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        is_function_call,
+    )
+
+    if hasattr(logging_obj, "optional_params") and isinstance(
+        logging_obj.optional_params, dict
+    ):
+        if is_function_call(logging_obj.optional_params):
+            return True
+
+    return False
+
 def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:
     """
     Filters a value from a dictionary
@@ -669,4 +686,5 @@ def migrate_file_to_image_url(
     if format and isinstance(image_url_object["image_url"], dict):
         image_url_object["image_url"]["format"] = format
     return image_url_object
+
 
