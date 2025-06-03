@@ -1498,6 +1498,7 @@ We don't recommend using `USE_DDPROFILER` in production. It is only recommended 
 docker run \
     -v $(pwd)/litellm_config.yaml:/app/config.yaml \
     -e USE_DDTRACE=true \
+    -e USE_DDPROFILER=true \
     -p 4000:4000 \
     ghcr.io/berriai/litellm:main-latest \
     --config /app/config.yaml --detailed_debug
