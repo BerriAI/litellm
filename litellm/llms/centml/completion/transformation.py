@@ -1,5 +1,5 @@
 """
-Support for CentML's `/v1/completions` endpoint. 
+Support for CentML's `/v1/completions` endpoint.
 
 Calls done in OpenAI/openai.py as CentML is openai-compatible.
 
@@ -20,9 +20,11 @@ from ...openai.completion.utils import _transform_prompt
 
 
 class CentmlTextCompletionConfig(OpenAITextCompletionConfig):
+
     def _transform_prompt(
         self,
-        messages: Union[List[AllMessageValues], List[OpenAITextCompletionUserMessage]],
+        messages: Union[List[AllMessageValues],
+                        List[OpenAITextCompletionUserMessage]],
     ) -> AllPromptValues:
         """
         CentML expects a string prompt.
@@ -30,14 +32,10 @@ class CentmlTextCompletionConfig(OpenAITextCompletionConfig):
         initial_prompt: AllPromptValues = _transform_prompt(messages)
         ## CENTML SPECIFIC VALIDATION ##
         if isinstance(initial_prompt, list) and is_tokens_or_list_of_tokens(
-            value=initial_prompt
-        ):
+                value=initial_prompt):
             raise ValueError("CentML does not support integers as input")
-        if (
-            isinstance(initial_prompt, list)
-            and len(initial_prompt) == 1
-            and isinstance(initial_prompt[0], str)
-        ):
+        if (isinstance(initial_prompt, list) and len(initial_prompt) == 1
+                and isinstance(initial_prompt[0], str)):
             centml_prompt = initial_prompt[0]
         elif isinstance(initial_prompt, list):
             raise ValueError("CentML does not support multiple prompts.")
@@ -49,7 +47,8 @@ class CentmlTextCompletionConfig(OpenAITextCompletionConfig):
     def transform_text_completion_request(
         self,
         model: str,
-        messages: Union[List[AllMessageValues], List[OpenAITextCompletionUserMessage]],
+        messages: Union[List[AllMessageValues],
+                        List[OpenAITextCompletionUserMessage]],
         optional_params: dict,
         headers: dict,
     ) -> dict:
@@ -58,4 +57,4 @@ class CentmlTextCompletionConfig(OpenAITextCompletionConfig):
             "model": model,
             "prompt": prompt,
             **optional_params,
-        } 
+        }
