@@ -1,0 +1,86 @@
+# LiteLLM Proxy Configuration with JWT Authentication
+# This example shows how to configure LiteLLM to authenticate requests using
+# JWT tokens from an external provider (like Flask-Security)
+
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+      api_key: os.environ/OPENAI_API_KEY
+  
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+general_settings:
+  # Enable custom JWT authentication
+  custom_auth: litellm.proxy.custom_jwt_auth.jwt_auth
+  
+  # JWT authentication settings
+  jwt_settings:
+    # Your JWT issuer (the 'iss' claim in the JWT)
+    issuer: "https://your-flask-security-app.com"
+    
+    # The audience for your LiteLLM proxy (the 'aud' claim in the JWT)
+    audience: "litellm-proxy"
+    
+    # URL to fetch JWKS (JSON Web Key Set) for signature verification
+    # This should be your Flask-Security app's JWKS endpoint
+    public_key_url: "https://your-flask-security-app.com/.well-known/jwks.json"
+    
+    # JWT algorithm (typically RS256 for RSA signatures)
+    algorithm: "RS256"
+    
+    # Clock skew allowance in seconds (optional, default: 0)
+    leeway: 30
+    
+    # Map JWT claims to LiteLLM user context
+    user_claim_mappings:
+      user_id: "sub"          # JWT 'sub' claim -> LiteLLM user_id
+      user_email: "email"     # JWT 'email' claim -> LiteLLM user_email
+      user_role: "role"       # JWT 'role' claim -> LiteLLM user_role
+      team_id: "team"         # JWT 'team' claim -> LiteLLM team_id (optional)
+
+  # Optional: Set a master key for admin operations
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+  # Enable database for cost tracking (optional but recommended)
+  database_url: "postgresql://user:pass@localhost/litellm"
+
+litellm_settings:
+  # Enable logging for cost tracking
+  success_callback: ["postgres"]
+  failure_callback: ["postgres"]
+  
+  # Optional: Enable verbose logging for debugging
+  set_verbose: True
+
+# Example Flask-Security JWT Claims:
+# {
+#   "sub": "user123",                    # User ID
+#   "email": "user@example.com",         # User email
+#   "role": "admin",                     # User role (admin, user, viewer, etc.)
+#   "team": "engineering",               # Team/group (optional)
+#   "iss": "https://your-flask-security-app.com",
+#   "aud": "litellm-proxy",
+#   "iat": 1701234567,
+#   "exp": 1701238167
+# }
+
+# Role Mappings:
+# The following external roles are automatically mapped to LiteLLM roles:
+# - "admin" or "proxy_admin" -> PROXY_ADMIN
+# - "user" or "internal_user" -> INTERNAL_USER  
+# - "viewer" or "internal_user_viewer" -> INTERNAL_USER_VIEW_ONLY
+# - "team" -> TEAM
+# - "customer" -> CUSTOMER
+# - Any other role defaults to INTERNAL_USER
+
+# Usage:
+# 1. Start the proxy: litellm --config config_jwt_example.yaml
+# 2. Make requests with JWT token:
+#    curl -X POST "http://localhost:4000/v1/chat/completions" \
+#      -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+#      -H "Content-Type: application/json" \
+#      -d '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello!"}]}' 

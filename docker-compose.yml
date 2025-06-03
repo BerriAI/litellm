@@ -1,4 +1,4 @@
-version: "3.11"
+version: "3.8"
 services:
   litellm:
     build:
@@ -8,10 +8,12 @@ services:
     image: ghcr.io/berriai/litellm:main-stable
     #########################################
     ## Uncomment these lines to start proxy with a config.yaml file ##
-    # volumes:
-    #  - ./config.yaml:/app/config.yaml <<- this is missing in the docker-compose file currently
-    # command:
-    #  - "--config=/app/config.yaml"
+    volumes:
+      - ./config_jwt_example.yaml:/app/config.yaml
+      - ./tests:/app/tests
+      - ./docs:/app/docs
+    command:
+      - "--config=/app/config.yaml"
     ##############################################
     ports:
       - "4000:4000" # Map the container port to the host, change the host port if necessary

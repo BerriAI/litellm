@@ -1,0 +1,154 @@
+# LiteLLM JWT Authentication Implementation Plan
+
+## Overview
+Implement JWT authentication support in LiteLLM open-source by leveraging the existing `user_custom_auth` mechanism. This approach provides a surgical, minimal-effort solution that integrates with external JWT providers (like Flask-Security) while maintaining all of LiteLLM's native logging and cost tracking capabilities.
+
+## Architecture Analysis
+
+Based on repository exploration, the integration point is in `litellm/proxy/auth/user_api_key_auth.py` around lines 416-417:
+```python
+elif user_custom_auth is not None:
+    response = await user_custom_auth(request=request, api_key=api_key)  # type: ignore
+    return UserAPIKeyAuth.model_validate(response)
+```
+
+This mechanism allows us to bypass the enterprise JWT features while still providing full JWT validation and user context extraction.
+
+## Implementation Plan
+
+### ✅ Task 1: Create Custom JWT Authentication Module
+**File**: `litellm/proxy/custom_jwt_auth.py`
+
+- [x] Create JWT validation function that validates tokens against external provider
+- [x] Extract user information from JWT claims (sub, email, roles, etc.)
+- [x] Return UserAPIKeyAuth object with proper user context
+- [x] Handle JWT parsing, signature verification, and claim validation
+- [x] Support configurable JWT issuer, audience, and public key retrieval
+
+### ✅ Task 2: Update Configuration Schema  
+**File**: `litellm/proxy/_types.py`
+
+- [x] ~~Add JWT configuration class to support external provider settings~~ (Not needed - configuration handled in custom module)
+- [x] ~~Define configuration fields for JWT issuer, audience, public key URL~~ (Handled via config.yaml)
+- [x] ~~Add user claim mapping configuration~~ (Implemented in JWTConfig class)
+
+### ✅ Task 3: Modify Proxy Server Configuration Loading
+**File**: `litellm/proxy/proxy_server.py`
+
+- [x] ~~Add JWT configuration loading in the proxy server initialization~~ (Not needed - uses existing custom_auth mechanism)
+- [x] ~~Set up the `user_custom_auth` function to point to our JWT handler~~ (Done via config.yaml)
+- [x] ~~Ensure configuration is properly loaded from config.yaml~~ (Leverages existing system)
+
+### ✅ Task 4: Create Configuration Example
+**File**: `config_jwt_example.yaml`
+
+- [x] Provide clear configuration example showing how to enable JWT auth
+- [x] Document the required settings for external JWT provider integration
+- [x] Show user claim mapping configuration
+
+### ✅ Task 5: Add Dependency Management
+**File**: `requirements.txt` or `pyproject.toml`
+
+- [x] Add required JWT libraries (PyJWT, cryptography) if not already present
+- [x] Ensure compatibility with existing dependencies
+**Note**: All required dependencies (`pyjwt[crypto]==2.9.0`, `cryptography==43.0.1`, `httpx==0.27.0`) are already included in LiteLLM.
+
+### ✅ Task 6: Create Tests
+**Files**: `tests/proxy_unit_tests/test_custom_jwt_auth.py`
+
+- [x] Write unit tests for JWT validation function
+- [x] Test various JWT scenarios (valid, expired, invalid signature, etc.)
+- [x] Test user context extraction and UserAPIKeyAuth object creation
+- [x] Mock external JWT provider responses
+
+### ✅ Task 7: Documentation
+**File**: `docs/jwt_auth_custom.md`
+
+- [x] Create comprehensive documentation for JWT authentication setup
+- [x] Provide step-by-step integration guide with Flask-Security
+- [x] Include troubleshooting section
+- [x] Add example configurations and code snippets
+
+## Technical Implementation Details
+
+### JWT Validation Flow
+1. **Token Extraction**: Extract JWT from `Authorization: Bearer <token>` header
+2. **Token Validation**: Validate signature using public key from external provider
+3. **Claim Extraction**: Extract user information from JWT claims
+4. **User Context Creation**: Map claims to UserAPIKeyAuth object fields
+5. **Cost Tracking**: Leverage native LiteLLM user/team tracking via extracted user_id
+
+### Configuration Structure
+```yaml
+general_settings:
+  custom_auth: custom_jwt_auth.jwt_auth
+  jwt_settings:
+    issuer: "https://your-flask-security-app.com"
+    audience: "litellm-proxy"
+    public_key_url: "https://your-flask-security-app.com/.well-known/jwks.json"
+    user_claim_mappings:
+      user_id: "sub"
+      user_email: "email"
+      user_role: "role"
+      team_id: "team"
+```
+
+### UserAPIKeyAuth Integration
+The custom JWT auth will return a UserAPIKeyAuth object with:
+- `user_id`: Extracted from JWT `sub` claim
+- `user_email`: Extracted from JWT `email` claim  
+- `user_role`: Mapped from JWT role claims to LiteLLM user roles
+- `team_id`: Extracted from JWT team/group claims
+- All other cost tracking and logging features work natively
+
+## Dependencies Required
+- `PyJWT`: JWT token parsing and validation ✅ (already included)
+- `cryptography`: RSA signature verification ✅ (already included)
+- `httpx`: Async HTTP client for fetching public keys ✅ (already included)
+
+## Validation Approach
+1. **JWT Structure Validation**: Ensure token has proper JWT format
+2. **Signature Verification**: Validate token signature using public key
+3. **Claim Validation**: Verify issuer, audience, expiration
+4. **User Context Mapping**: Map JWT claims to LiteLLM user context
+
+## Security Considerations
+- ✅ Signature verification using external provider's public keys
+- ✅ Audience and issuer validation
+- ✅ Token expiration checks
+- ✅ Public key caching with TTL for performance
+- ✅ Proper error handling for invalid tokens
+
+## Benefits of This Approach
+1. **No Enterprise Dependency**: Uses open-source custom auth mechanism
+2. **Full Feature Compatibility**: All LiteLLM features (logging, cost tracking, etc.) work
+3. **External Provider Integration**: Works with any JWT provider (Flask-Security, Auth0, etc.)
+4. **Minimal Code Changes**: Surgical implementation using existing extension points
+5. **Maintainable**: Follows LiteLLM's established patterns and conventions
+
+## Integration with Flask-Security
+Your Flask-Security application continues to:
+- Issue JWTs with user information in claims
+- Provide public keys for signature verification
+- Handle user authentication and authorization
+
+LiteLLM proxy will:
+- Validate JWTs issued by Flask-Security
+- Extract user context for cost tracking and logging
+- Allow/deny requests based on JWT validity
+
+This approach provides a clean separation of concerns while enabling full integration between your authentication system and LiteLLM's proxy capabilities.
+
+## Implementation Status: ✅ COMPLETE
+
+All tasks have been successfully implemented:
+
+1. ✅ **Custom JWT Authentication Module** - Complete with full validation, caching, and error handling
+2. ✅ **Configuration Schema** - Handled via flexible configuration in custom module
+3. ✅ **Proxy Server Integration** - Leverages existing custom auth mechanism  
+4. ✅ **Configuration Example** - Comprehensive example with detailed comments
+5. ✅ **Dependency Management** - All required dependencies already available
+6. ✅ **Test Suite** - Comprehensive unit tests covering all scenarios
+7. ✅ **Documentation** - Complete guide with Flask-Security integration examples
+
+The implementation is ready for use and provides a surgical, minimal-effort solution that integrates seamlessly with LiteLLM's existing architecture while enabling full JWT authentication capabilities. 
