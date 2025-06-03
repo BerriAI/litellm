@@ -28,6 +28,7 @@ class SupportedGuardrailIntegrations(Enum):
     PRESIDIO = "presidio"
     HIDE_SECRETS = "hide-secrets"
     AIM = "aim"
+    PANGEA = "pangea"
 
 
 class Role(Enum):
@@ -233,6 +234,10 @@ class PresidioPresidioConfigModelUserInterface(BaseModel):
         # extra param to let the ui know this is a boolean
         json_schema_extra={"ui_type": GuardrailParamUITypes.BOOL},
     )
+    presidio_language: Optional[str] = Field(
+        default="en",
+        description="Language code for Presidio PII analysis (e.g., 'en', 'de', 'es', 'fr')",
+    )
 
 
 class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
@@ -318,7 +323,6 @@ class LakeraV2GuardrailConfigModel(BaseModel):
         description="Whether to include developer information in the response",
     )
 
-
 class LitellmParams(
     PresidioConfigModel,
     BedrockGuardrailConfigModel,
@@ -365,6 +369,16 @@ class LitellmParams(
         description="Will mask response content if guardrail makes any changes",
     )
 
+    # pangea params
+    pangea_input_recipe: Optional[str] = Field(
+        default=None,
+        description="Recipe for input (LLM request)"
+    )
+
+    pangea_output_recipe: Optional[str] = Field(
+        default=None,
+        description="Recipe for output (LLM response)"
+    )
 
 class Guardrail(TypedDict, total=False):
     guardrail_id: Optional[str]

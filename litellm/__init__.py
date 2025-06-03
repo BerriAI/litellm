@@ -133,7 +133,7 @@ langsmith_batch_size: Optional[int] = None
 prometheus_initialize_budget_metrics: Optional[bool] = False
 require_auth_for_metrics_endpoint: Optional[bool] = False
 argilla_batch_size: Optional[int] = None
-datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged payload
+datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged payload.
 gcs_pub_sub_use_v1: Optional[
     bool
 ] = False  # if you want to use v1 gcs pubsub logged payload
@@ -190,6 +190,7 @@ maritalk_key: Optional[str] = None
 ai21_key: Optional[str] = None
 ollama_key: Optional[str] = None
 openrouter_key: Optional[str] = None
+datarobot_key: Optional[str] = None
 predibase_key: Optional[str] = None
 huggingface_key: Optional[str] = None
 vertex_project: Optional[str] = None
@@ -203,6 +204,7 @@ aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 novita_api_key: Optional[str] = None
 snowflake_key: Optional[str] = None
+nebius_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
@@ -295,12 +297,15 @@ tag_budget_config: Optional[Dict[str, BudgetConfig]] = None
 max_end_user_budget: Optional[float] = None
 disable_end_user_cost_tracking: Optional[bool] = None
 disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
+enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 custom_prometheus_metadata_labels: List[str] = []
 #### REQUEST PRIORITIZATION ####
 priority_reservation: Optional[Dict[str, float]] = None
 
+
 ######## Networking Settings ########
-use_aiohttp_transport: bool = False
+use_aiohttp_transport: bool = True  # Older variable, aiohttp is now the default. use disable_aiohttp_transport instead.
+disable_aiohttp_transport: bool = False  # Set this to true to use httpx instead
 force_ipv4: bool = False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 module_level_aclient = AsyncHTTPHandler(
     timeout=request_timeout, client_alias="module level aclient"
@@ -373,6 +378,8 @@ BEDROCK_CONVERSE_MODELS = [
     "anthropic.claude-v1",
     "anthropic.claude-instant-v1",
     "ai21.jamba-instruct-v1:0",
+    "ai21.jamba-1-5-mini-v1:0",
+    "ai21.jamba-1-5-large-v1:0",
     "meta.llama3-70b-instruct-v1:0",
     "meta.llama3-8b-instruct-v1:0",
     "meta.llama3-1-8b-instruct-v1:0",
@@ -396,6 +403,7 @@ mistral_chat_models: List = []
 text_completion_codestral_models: List = []
 anthropic_models: List = []
 openrouter_models: List = []
+datarobot_models: List = []
 vertex_language_models: List = []
 vertex_vision_models: List = []
 vertex_chat_models: List = []
@@ -444,6 +452,8 @@ assemblyai_models: List = []
 snowflake_models: List = []
 llama_models: List = []
 nscale_models: List = []
+nebius_models: List = []
+nebius_embedding_models: List = []
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -501,6 +511,8 @@ def add_known_models():
             empower_models.append(key)
         elif value.get("litellm_provider") == "openrouter":
             openrouter_models.append(key)
+        elif value.get("litellm_provider") == "datarobot":
+            datarobot_models.append(key)
         elif value.get("litellm_provider") == "vertex_ai-text-models":
             vertex_text_models.append(key)
         elif value.get("litellm_provider") == "vertex_ai-code-text-models":
@@ -601,6 +613,10 @@ def add_known_models():
             sambanova_models.append(key)
         elif value.get("litellm_provider") == "novita":
             novita_models.append(key)
+        elif value.get("litellm_provider") == "nebius-chat-models":
+            nebius_models.append(key)
+        elif value.get("litellm_provider") == "nebius-embedding-models":
+            nebius_embedding_models.append(key)
         elif value.get("litellm_provider") == "assemblyai":
             assemblyai_models.append(key)
         elif value.get("litellm_provider") == "jina_ai":
@@ -647,6 +663,7 @@ model_list = (
     + anthropic_models
     + replicate_models
     + openrouter_models
+    + datarobot_models
     + huggingface_models
     + vertex_chat_models
     + vertex_text_models
@@ -707,6 +724,7 @@ models_by_provider: dict = {
     "together_ai": together_ai_models,
     "baseten": baseten_models,
     "openrouter": openrouter_models,
+    "datarobot": datarobot_models,
     "vertex_ai": vertex_chat_models
     + vertex_text_models
     + vertex_anthropic_models
@@ -744,6 +762,7 @@ models_by_provider: dict = {
     "galadriel": galadriel_models,
     "sambanova": sambanova_models,
     "novita": novita_models,
+    "nebius": nebius_models + nebius_embedding_models,
     "assemblyai": assemblyai_models,
     "jina_ai": jina_ai_models,
     "snowflake": snowflake_models,
@@ -782,6 +801,7 @@ all_embedding_models = (
     + bedrock_embedding_models
     + vertex_embedding_models
     + fireworks_ai_embedding_models
+    + nebius_embedding_models
 )
 
 ####### IMAGE GENERATION MODELS ###################
@@ -855,6 +875,7 @@ from .llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfi
 from .llms.oobabooga.chat.transformation import OobaboogaConfig
 from .llms.maritalk import MaritalkConfig
 from .llms.openrouter.chat.transformation import OpenrouterConfig
+from .llms.datarobot.chat.transformation import DataRobotConfig
 from .llms.anthropic.chat.transformation import AnthropicConfig
 from .llms.anthropic.common_utils import AnthropicModelInfo
 from .llms.groq.stt.transformation import GroqSTTConfig
@@ -919,11 +940,10 @@ from .llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import (
 from .llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
     VertexAIAi21Config,
 )
-
+from .llms.ollama.chat.transformation import OllamaChatConfig
 from .llms.ollama.completion.transformation import OllamaConfig
 from .llms.sagemaker.completion.transformation import SagemakerConfig
 from .llms.sagemaker.chat.transformation import SagemakerChatConfig
-from .llms.ollama_chat import OllamaChatConfig
 from .llms.bedrock.chat.invoke_handler import (
     AmazonCohereChatConfig,
     bedrock_tool_name_mappings,
@@ -1060,6 +1080,7 @@ from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
 from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig
 from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
 from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
+from .llms.nebius.chat.transformation import NebiusConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .exceptions import (
@@ -1123,3 +1144,6 @@ disable_hf_tokenizer_download: Optional[
     bool
 ] = None  # disable huggingface tokenizer download. Defaults to openai clk100
 global_disable_no_log_param: bool = False
+
+### PASSTHROUGH ###
+from .passthrough import allm_passthrough_route, llm_passthrough_route

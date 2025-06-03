@@ -2798,6 +2798,8 @@ def handle_exception_on_proxy(e: Exception) -> ProxyException:
     """
     from fastapi import status
 
+    verbose_proxy_logger.exception(f"Exception: {e}")
+
     if isinstance(e, HTTPException):
         return ProxyException(
             message=getattr(e, "detail", f"error({str(e)})"),
@@ -2828,3 +2830,53 @@ def _premium_user_check():
                 "error": f"This feature is only available for LiteLLM Enterprise users. {CommonProxyErrors.not_premium_user.value}"
             },
         )
+
+
+def is_known_model(model: Optional[str], llm_router: Optional[Router]) -> bool:
+    """
+    Returns True if the model is in the llm_router model names
+    """
+    if model is None or llm_router is None:
+        return False
+    model_names = llm_router.get_model_names()
+
+    is_in_list = False
+    if model in model_names:
+        is_in_list = True
+
+    return is_in_list
+
+
+def get_custom_url(request_base_url: str) -> str:
+    """
+    Use proxy base url, if set.
+
+    Else, use request base url.
+    """
+    from httpx import URL
+
+    proxy_base_url = os.getenv("PROXY_BASE_URL")
+    server_root_path = os.getenv("SERVER_ROOT_PATH") or ""
+    if proxy_base_url:
+        ui_link = str(URL(proxy_base_url).join(server_root_path))
+    else:
+        ui_link = str(URL(request_base_url).join(server_root_path))
+
+    return ui_link
+
+
+def get_proxy_base_url() -> Optional[str]:
+    """
+    Get the proxy base url from the environment variables.
+    """
+    return os.getenv("PROXY_BASE_URL")
+
+
+def get_server_root_path() -> str:
+    """
+    Get the server root path from the environment variables.
+
+    - If SERVER_ROOT_PATH is set, return it.
+    - Otherwise, default to "/".
+    """
+    return os.getenv("SERVER_ROOT_PATH", "/")

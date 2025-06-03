@@ -57,11 +57,18 @@ class AnthropicHostedTools(TypedDict, total=False):  # for bash_tool and text_ed
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
+class AnthropicCodeExecutionTool(TypedDict, total=False):
+    type: Required[str]
+    name: Required[Literal["code_execution"]]
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+
+
 AllAnthropicToolsValues = Union[
     AnthropicComputerTool,
     AnthropicHostedTools,
     AnthropicMessagesTool,
     AnthropicWebSearchTool,
+    AnthropicCodeExecutionTool,
 ]
 
 
@@ -107,9 +114,22 @@ class AnthropicContentParamSource(TypedDict):
     data: str
 
 
+class AnthropicContentParamSourceFileId(TypedDict):
+    type: Literal["file"]
+    file_id: str
+
+
+class AnthropicMessagesContainerUploadParam(TypedDict, total=False):
+    type: Required[Literal["container_upload"]]
+    file_id: str
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+
+
 class AnthropicMessagesImageParam(TypedDict, total=False):
     type: Required[Literal["image"]]
-    source: Required[AnthropicContentParamSource]
+    source: Required[
+        Union[AnthropicContentParamSource, AnthropicContentParamSourceFileId]
+    ]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
@@ -119,7 +139,9 @@ class CitationsObject(TypedDict):
 
 class AnthropicMessagesDocumentParam(TypedDict, total=False):
     type: Required[Literal["document"]]
-    source: Required[AnthropicContentParamSource]
+    source: Required[
+        Union[AnthropicContentParamSource, AnthropicContentParamSourceFileId]
+    ]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
     title: str
     context: str
@@ -149,6 +171,7 @@ AnthropicMessagesUserMessageValues = Union[
     AnthropicMessagesImageParam,
     AnthropicMessagesToolResultParam,
     AnthropicMessagesDocumentParam,
+    AnthropicMessagesContainerUploadParam,
 ]
 
 

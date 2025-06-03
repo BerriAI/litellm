@@ -7,6 +7,9 @@ from typing import Dict, List, Optional, Union
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    get_file_ids_from_messages,
+)
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -41,6 +44,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                         return True
 
         return False
+
+    def is_file_id_used(self, messages: List[AllMessageValues]) -> bool:
+        """
+        Return if {"source": {"type": "file", "file_id": ..}} in message content block
+        """
+        file_ids = get_file_ids_from_messages(messages)
+        return len(file_ids) > 0
 
     def is_computer_tool_used(
         self, tools: Optional[List[AllAnthropicToolsValues]]
@@ -82,6 +92,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         computer_tool_used: bool = False,
         prompt_caching_set: bool = False,
         pdf_used: bool = False,
+        file_id_used: bool = False,
         is_vertex_request: bool = False,
         user_anthropic_beta_headers: Optional[List[str]] = None,
     ) -> dict:
@@ -90,8 +101,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             betas.add("prompt-caching-2024-07-31")
         if computer_tool_used:
             betas.add("computer-use-2024-10-22")
-        if pdf_used:
-            betas.add("pdfs-2024-09-25")
+        # if pdf_used:
+        #     betas.add("pdfs-2024-09-25")
+        if file_id_used:
+            betas.add("files-api-2025-04-14")
+            betas.add("code-execution-2025-05-22")
         headers = {
             "anthropic-version": anthropic_version or "2023-06-01",
             "x-api-key": api_key,
@@ -131,6 +145,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         prompt_caching_set = self.is_cache_control_set(messages=messages)
         computer_tool_used = self.is_computer_tool_used(tools=tools)
         pdf_used = self.is_pdf_used(messages=messages)
+        file_id_used = self.is_file_id_used(messages=messages)
         user_anthropic_beta_headers = self._get_user_anthropic_beta_headers(
             anthropic_beta_header=headers.get("anthropic-beta")
         )
@@ -139,6 +154,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             prompt_caching_set=prompt_caching_set,
             pdf_used=pdf_used,
             api_key=api_key,
+            file_id_used=file_id_used,
             is_vertex_request=optional_params.get("is_vertex_request", False),
             user_anthropic_beta_headers=user_anthropic_beta_headers,
         )

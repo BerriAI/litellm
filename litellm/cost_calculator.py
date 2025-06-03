@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    CostCalculatorUtils,
     _generic_cost_per_character,
     generic_cost_per_token,
     select_cost_metric_for_model,
@@ -73,7 +74,6 @@ from litellm.types.utils import (
     LlmProviders,
     LlmProvidersSet,
     ModelInfo,
-    PassthroughCallTypes,
     StandardBuiltInToolsParams,
     Usage,
 )
@@ -746,12 +746,7 @@ def completion_cost(  # noqa: PLR0915
                                 str(e)
                             )
                         )
-                if (
-                    call_type == CallTypes.image_generation.value
-                    or call_type == CallTypes.aimage_generation.value
-                    or call_type
-                    == PassthroughCallTypes.passthrough_image_generation.value
-                ):
+                if CostCalculatorUtils._call_type_has_image_response(call_type):
                     ### IMAGE GENERATION COST CALCULATION ###
                     if custom_llm_provider == "vertex_ai":
                         if isinstance(completion_response, ImageResponse):
@@ -1114,9 +1109,13 @@ def default_image_cost_calculator(
 
     # Build model names for cost lookup
     base_model_name = f"{size_str}/{model}"
-    if custom_llm_provider and model.startswith(custom_llm_provider):
+    model_name_without_custom_llm_provider: Optional[str] = None
+    if custom_llm_provider and model.startswith(f"{custom_llm_provider}/"):
+        model_name_without_custom_llm_provider = model.replace(
+            f"{custom_llm_provider}/", ""
+        )
         base_model_name = (
-            f"{custom_llm_provider}/{size_str}/{model.replace(custom_llm_provider, '')}"
+            f"{custom_llm_provider}/{size_str}/{model_name_without_custom_llm_provider}"
         )
     model_name_with_quality = (
         f"{quality}/{base_model_name}" if quality else base_model_name
@@ -1138,17 +1137,18 @@ def default_image_cost_calculator(
 
     # Try model with quality first, fall back to base model name
     cost_info: Optional[dict] = None
-    models_to_check = [
+    models_to_check: List[Optional[str]] = [
         model_name_with_quality,
         base_model_name,
         model_name_with_v2_quality,
         model_with_quality_without_provider,
         model_without_provider,
         model,
+        model_name_without_custom_llm_provider,
     ]
-    for model in models_to_check:
-        if model in litellm.model_cost:
-            cost_info = litellm.model_cost[model]
+    for _model in models_to_check:
+        if _model is not None and _model in litellm.model_cost:
+            cost_info = litellm.model_cost[_model]
             break
     if cost_info is None:
         raise Exception(
@@ -1353,9 +1353,9 @@ def handle_realtime_stream_cost_calculation(
     potential_model_names = []
     for result in results:
         if result["type"] == "session.created":
-            received_model = cast(OpenAIRealtimeStreamSessionEvents, result)["session"][
-                "model"
-            ]
+            received_model = cast(OpenAIRealtimeStreamSessionEvents, result)[
+                "session"
+            ].get("model", None)
             potential_model_names.append(received_model)
 
     potential_model_names.append(litellm_model_name)
@@ -1364,6 +1364,8 @@ def handle_realtime_stream_cost_calculation(
 
     for model_name in potential_model_names:
         try:
+            if model_name is None:
+                continue
             _input_cost_per_token, _output_cost_per_token = generic_cost_per_token(
                 model=model_name,
                 usage=combined_usage_object,

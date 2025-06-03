@@ -774,6 +774,9 @@ class Router:
         self.aimage_edit = self.factory_function(
             litellm.aimage_edit, call_type="aimage_edit"
         )
+        self.allm_passthrough_route = self.factory_function(
+            litellm.allm_passthrough_route, call_type="allm_passthrough_route"
+        )
 
     def validate_fallbacks(self, fallback_param: Optional[List]):
         """
@@ -857,6 +860,7 @@ class Router:
                 model=model,
                 messages=messages,
                 specific_deployment=kwargs.pop("specific_deployment", None),
+                request_kwargs=kwargs,
             )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
@@ -3197,6 +3201,7 @@ class Router:
             "aretrieve_fine_tuning_job",
             "alist_files",
             "aimage_edit",
+            "allm_passthrough_route",
         ] = "assistants",
     ):
         """
@@ -3251,6 +3256,7 @@ class Router:
                 "aretrieve_fine_tuning_job",
                 "alist_files",
                 "aimage_edit",
+                "allm_passthrough_route",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,

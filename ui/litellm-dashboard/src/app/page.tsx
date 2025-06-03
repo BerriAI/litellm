@@ -26,13 +26,13 @@ import ChatUI from "@/components/chat_ui";
 import Sidebar from "@/components/leftnav";
 import Usage from "@/components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
-import { proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
+import { getUiConfig, proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
 import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
 import TransformRequestPanel from "@/components/transform_request";
 import { fetchUserModels } from "@/components/create_key_button";
 import { fetchTeams } from "@/components/common_components/fetch_teams";
-import MCPToolsViewer from "@/components/mcp_tools";
+import { MCPToolsViewer, MCPServers } from "@/components/mcp_tools";
 import TagManagement from "@/components/tag_management";
 import VectorStoreManagement from "@/components/vector_store_management";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
@@ -149,8 +149,11 @@ export default function CreateKeyPage() {
 
   useEffect(() => {
     const token = getCookie("token");
-    setToken(token);
-    setAuthLoading(false);
+    getUiConfig().then((data) => { // get the information for constructing the proxy base url, and then set the token and auth loading
+      console.log("ui config in page.tsx:", data);
+      setToken(token);
+      setAuthLoading(false);
+    });
   }, []);
 
   useEffect(() => {
@@ -164,6 +167,7 @@ export default function CreateKeyPage() {
       return;
     }
 
+ 
     const decoded = jwtDecode(token) as { [key: string]: any };
     if (decoded) {
       // cast decoded to dictionary
@@ -214,8 +218,12 @@ export default function CreateKeyPage() {
       if (decoded.user_id) {
         setUserID(decoded.user_id);
       }
+
     }
+
+    
   }, [token]);
+
   
   useEffect(() => {
     if (accessToken && userID && userRole) {
@@ -327,6 +335,7 @@ export default function CreateKeyPage() {
                   userID={userID}
                   userRole={userRole}
                   organizations={organizations}
+                  premiumUser={premiumUser}
                 />
               ) : page == "organizations" ? (
                 <Organizations
@@ -362,7 +371,7 @@ export default function CreateKeyPage() {
                 <GuardrailsPanel accessToken={accessToken} userRole={userRole} />
               ): page == "transform-request" ? (
                 <TransformRequestPanel accessToken={accessToken} />
-              ): page == "general-settings" ? (
+              ) : page == "general-settings" ? (
                 <GeneralSettings
                   userID={userID}
                   userRole={userRole}
@@ -396,10 +405,10 @@ export default function CreateKeyPage() {
                   userRole={userRole}
                   token={token}
                   accessToken={accessToken}
-                  allTeams={teams as Team[] ?? []}
+                  allTeams={(teams as Team[]) ?? []}
                 />
-              ) : page == "mcp-tools" ? (
-                <MCPToolsViewer
+              ) : page == "mcp-servers" ? (
+                <MCPServers
                   accessToken={accessToken}
                   userRole={userRole}
                   userID={userID}
@@ -421,10 +430,9 @@ export default function CreateKeyPage() {
                   userID={userID}
                   userRole={userRole}
                   accessToken={accessToken}
-                  teams={teams as Team[] ?? []}
+                  teams={(teams as Team[]) ?? []}
                 />
-              ) : 
-              (
+              ) : (
                 <Usage
                   userID={userID}
                   userRole={userRole}

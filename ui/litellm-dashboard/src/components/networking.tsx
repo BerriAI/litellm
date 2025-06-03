@@ -9,10 +9,43 @@ import { UserInfo } from "./view_users/types";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
 
 const isLocal = process.env.NODE_ENV === "development";
-export const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+export const defaultProxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+const defaultServerRootPath = "/";
+export let serverRootPath = defaultServerRootPath;
+export let proxyBaseUrl = defaultProxyBaseUrl;
 if (isLocal != true) {
   console.log = function() {};
 }
+
+const updateProxyBaseUrl = (serverRootPath: string, receivedProxyBaseUrl: string | null = null) => {
+  /**
+   * Special function for updating the proxy base url. Should only be called by getUiConfig.
+   */
+  const defaultProxyBaseUrl = isLocal ? "http://localhost:4000" : window.location.origin;
+  let initialProxyBaseUrl = receivedProxyBaseUrl || defaultProxyBaseUrl;
+  console.log("proxyBaseUrl:", proxyBaseUrl);
+  console.log("serverRootPath:", serverRootPath);
+  if (serverRootPath.length > 0 && !initialProxyBaseUrl.endsWith(serverRootPath) && serverRootPath != "/") {
+    initialProxyBaseUrl += serverRootPath;
+    proxyBaseUrl = initialProxyBaseUrl;
+  }
+  console.log("Updated proxyBaseUrl:", proxyBaseUrl);
+};
+
+const updateServerRootPath = (receivedServerRootPath: string) => {
+  serverRootPath = receivedServerRootPath;
+};
+
+export const getProxyBaseUrl = () => {
+  return proxyBaseUrl;
+};
+
+const HTTP_REQUEST = {
+  GET: "GET",
+  POST: "POST",
+  PUT: "PUT",
+  DELETE: "DELETE",
+};
 
 export const DEFAULT_ORGANIZATION = "default_organization";
 
@@ -39,6 +72,11 @@ export interface Organization {
   teams: any[] | null;
   users: any[] | null;
   members: any[] | null;
+  object_permission?: {
+    object_permission_id: string;
+    mcp_servers: string[];
+    vector_stores: string[];
+  };
 }
 
 export interface CredentialItem {
@@ -51,17 +89,17 @@ export interface CredentialItem {
   };
 }
 
+export interface LiteLLMWellKnownUiConfig {
+  server_root_path: string;
+  proxy_base_url: string | null;
+}
+
 export interface CredentialsResponse {
   credentials: CredentialItem[];
 }
 
-
-const baseUrl = "/"; // Assuming the base URL is the root
-
-
 let lastErrorTime = 0;
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const handleError = async (errorData: string) => {
   const currentTime = Date.now();
@@ -69,9 +107,8 @@ const handleError = async (errorData: string) => {
     if (errorData.includes("Authentication Error - Expired Key")) {
       message.info("UI Session Expired. Logging out.");
       lastErrorTime = currentTime;
-      await sleep(3000); // 5 second sleep
       document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-      window.location.href = baseUrl;
+      window.location.href = window.location.pathname;
     }
     lastErrorTime = currentTime;
   } else {
@@ -87,6 +124,20 @@ let globalLitellmHeaderName: string  = "Authorization";
 export function setGlobalLitellmHeaderName(headerName: string = "Authorization") {
   console.log(`setGlobalLitellmHeaderName: ${headerName}`);
   globalLitellmHeaderName = headerName;
+}
+
+export const getUiConfig = async () => {
+  console.log("Getting UI config");
+  /**Special route to get the proxy base url and server root path */
+  const url = defaultProxyBaseUrl ? `${defaultProxyBaseUrl}/litellm/.well-known/litellm-ui-config` : `/litellm/.well-known/litellm-ui-config`;
+  const response = await fetch(url);
+  const jsonData: LiteLLMWellKnownUiConfig = await response.json();
+  /**
+   * Update the proxy base url and server root path
+   */
+  console.log("jsonData in getUiConfig:", jsonData);
+  updateProxyBaseUrl(jsonData.server_root_path, jsonData.proxy_base_url);
+  return jsonData;
 }
 
 export const getOpenAPISchema = async () => {
@@ -4270,6 +4321,8 @@ export const getProxyUISettings = async (
    * Get all the models user has access to
    */
   try {
+    console.log("Getting proxy UI settings");
+    console.log("proxyBaseUrl in getProxyUISettings:", proxyBaseUrl);
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/sso/get/ui_settings`
       : `/sso/get/ui_settings`;
@@ -4458,13 +4511,106 @@ export const updateInternalUserSettings = async (accessToken: string, settings: 
   }
 };
 
+export const fetchMCPServers = async (accessToken: string) => {
+  try {
+    // Construct base URL
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
 
-export const listMCPTools = async (accessToken: string) => {
+    console.log("Fetching MCP servers from:", url);
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Fetched MCP servers:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch MCP servers:", error);
+    throw error;
+  }
+};
+
+export const createMCPServer = async (
+  accessToken: string,
+  formValues: Record<string, any> // Assuming formValues is an object
+) => {
+  try {
+    console.log("Form Values in createMCPServer:", formValues); // Log the form values before making the API call
+    
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
+    
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...formValues, // Include formValues in the request body
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      console.error("Error response from the server:", errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("API Response:", data);
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const deleteMCPServer = async (
+  accessToken: String,
+  serverId: String
+) => {
+  try {
+    const url =
+      (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/server/${serverId}`;
+    console.log("in deleteMCPServer:", serverId);
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.DELETE,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+  } catch (error) {
+    console.error("Failed to delete key:", error);
+    throw error;
+  }
+};
+
+export const listMCPTools = async (accessToken: string, serverId: string) => {
   try {
     // Construct base URL
     let url = proxyBaseUrl 
-      ? `${proxyBaseUrl}/mcp/tools/list`
-      : `/mcp/tools/list`;
+      ? `${proxyBaseUrl}/mcp/tools/list?server_id=${serverId}`
+      : `/mcp/tools/list?server_id=${serverId}`;
 
     console.log("Fetching MCP tools from:", url);
     
