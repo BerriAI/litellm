@@ -72,6 +72,7 @@ from litellm.constants import (
     MAX_RETRY_DELAY,
     MAX_TOKEN_TRIMMING_ATTEMPTS,
     MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
+    OPENAI_EMBEDDING_PARAMS,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -2431,6 +2432,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
 
     provider_config: Optional[BaseEmbeddingConfig] = None
 
+    optional_params = {}
     if (
         custom_llm_provider is not None
         and custom_llm_provider in LlmProviders._member_map_.values()
@@ -2479,8 +2481,6 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             model=model,
             drop_params=drop_params if drop_params is not None else False,
         )
-        final_params = {**optional_params, **kwargs}
-        return final_params
     elif custom_llm_provider == "databricks":
         supported_params = get_supported_openai_params(
             model=model or "",
@@ -2491,8 +2491,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         optional_params = litellm.DatabricksEmbeddingConfig().map_openai_params(
             non_default_params=non_default_params, optional_params={}
         )
-        final_params = {**optional_params, **kwargs}
-        return final_params
+
     elif custom_llm_provider == "nvidia_nim":
         supported_params = get_supported_openai_params(
             model=model or "",
@@ -2503,7 +2502,6 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         optional_params = litellm.nvidiaNimEmbeddingConfig.map_openai_params(
             non_default_params=non_default_params, optional_params={}, kwargs=kwargs
         )
-        return optional_params
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "gemini":
         supported_params = get_supported_openai_params(
             model=model,
@@ -2517,8 +2515,6 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         ) = litellm.VertexAITextEmbeddingConfig().map_openai_params(
             non_default_params=non_default_params, optional_params={}, kwargs=kwargs
         )
-        final_params = {**optional_params, **kwargs}
-        return final_params
     elif custom_llm_provider == "lm_studio":
         supported_params = (
             litellm.LmStudioEmbeddingConfig().get_supported_openai_params()
@@ -2527,8 +2523,6 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         optional_params = litellm.LmStudioEmbeddingConfig().map_openai_params(
             non_default_params=non_default_params, optional_params={}
         )
-        final_params = {**optional_params, **kwargs}
-        return final_params
     elif custom_llm_provider == "bedrock":
         # if dimensions is in non_default_params -> pass it for model=bedrock/amazon.titan-embed-text-v2
         if "amazon.titan-embed-text-v1" in model:
@@ -2550,8 +2544,6 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         optional_params = object.map_openai_params(
             non_default_params=non_default_params, optional_params={}
         )
-        final_params = {**optional_params, **kwargs}
-        return final_params
     elif custom_llm_provider == "mistral":
         supported_params = get_supported_openai_params(
             model=model,
@@ -2562,8 +2554,6 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         optional_params = litellm.MistralEmbeddingConfig().map_openai_params(
             non_default_params=non_default_params, optional_params={}
         )
-        final_params = {**optional_params, **kwargs}
-        return final_params
     elif custom_llm_provider == "jina_ai":
         supported_params = get_supported_openai_params(
             model=model,
@@ -2574,8 +2564,6 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         optional_params = litellm.JinaAIEmbeddingConfig().map_openai_params(
             non_default_params=non_default_params, optional_params={}
         )
-        final_params = {**optional_params, **kwargs}
-        return final_params
     elif custom_llm_provider == "voyage":
         supported_params = get_supported_openai_params(
             model=model,
@@ -2589,8 +2577,6 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             model=model,
             drop_params=drop_params if drop_params is not None else False,
         )
-        final_params = {**optional_params, **kwargs}
-        return final_params
     elif custom_llm_provider == "infinity":
         supported_params = get_supported_openai_params(
             model=model,
@@ -2604,8 +2590,6 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             model=model,
             drop_params=drop_params if drop_params is not None else False,
         )
-        final_params = {**optional_params, **kwargs}
-        return final_params
     elif custom_llm_provider == "fireworks_ai":
         supported_params = get_supported_openai_params(
             model=model,
@@ -2616,8 +2600,6 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         optional_params = litellm.FireworksAIEmbeddingConfig().map_openai_params(
             non_default_params=non_default_params, optional_params={}, model=model
         )
-        final_params = {**optional_params, **kwargs}
-        return final_params
 
     elif (
         custom_llm_provider != "openai"
@@ -2636,8 +2618,18 @@ def get_optional_params_embeddings(  # noqa: PLR0915
                     status_code=500,
                     message=f"Setting {non_default_params} is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
                 )
+        else:
+            optional_params = non_default_params
+    else:
+        optional_params = non_default_params
 
-    final_params = {**non_default_params, **kwargs}
+    final_params = add_provider_specific_params_to_optional_params(
+        optional_params=optional_params,
+        passed_params=passed_params,
+        custom_llm_provider=custom_llm_provider,
+        openai_params=OPENAI_EMBEDDING_PARAMS,
+        additional_drop_params=kwargs.get("additional_drop_params", None),
+    )
 
     return final_params
 

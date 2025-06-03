@@ -294,6 +294,8 @@ OPENAI_TRANSCRIPTION_PARAMS = [
     "timestamp_granularities",
 ]
 
+OPENAI_EMBEDDING_PARAMS = ["dimensions", "encoding_format", "user"]
+
 DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "functions": None,
     "function_call": None,
