@@ -750,6 +750,11 @@ try:
         StaticFiles(directory=os.path.join(ui_path, "_next")),
         name="next_static",
     )
+    app.mount(
+        "/litellm/_next",
+        StaticFiles(directory=os.path.join(ui_path, "_next")),
+        name="next_static",
+    )
     # print(f"mounted _next at {server_root_path}/ui/_next")
 
     app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
