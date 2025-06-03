@@ -2,6 +2,7 @@ import openai from "openai";
 import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { message } from "antd";
 import { TokenUsage } from "../ResponseMetrics";
+import { getProxyBaseUrl } from "@/components/networking";
 
 export async function makeOpenAIChatCompletionRequest(
     chatHistory: { role: string; content: string }[],
@@ -23,10 +24,7 @@ export async function makeOpenAIChatCompletionRequest(
       console.log = function () {};
     }
     console.log("isLocal:", isLocal);
-    const proxyBaseUrl = isLocal
-      ? "http://localhost:4000"
-      : window.location.origin;
-      
+    const proxyBaseUrl = getProxyBaseUrl()
     // Prepare headers with tags and trace ID
     const headers: Record<string, string> = {};
     if (tags && tags.length > 0) {
