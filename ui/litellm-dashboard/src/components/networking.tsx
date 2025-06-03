@@ -9,10 +9,36 @@ import { UserInfo } from "./view_users/types";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
 
 const isLocal = process.env.NODE_ENV === "development";
-export const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+export const defaultProxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+const defaultServerRootPath = "/";
+export let serverRootPath = defaultServerRootPath;
+export let proxyBaseUrl = defaultProxyBaseUrl;
 if (isLocal != true) {
   console.log = function() {};
 }
+
+const updateProxyBaseUrl = (serverRootPath: string, receivedProxyBaseUrl: string | null = null) => {
+  /**
+   * Special function for updating the proxy base url. Should only be called by getUiConfig.
+   */
+  const defaultProxyBaseUrl = isLocal ? "http://localhost:4000" : window.location.origin;
+  let initialProxyBaseUrl = receivedProxyBaseUrl || defaultProxyBaseUrl;
+  console.log("proxyBaseUrl:", proxyBaseUrl);
+  console.log("serverRootPath:", serverRootPath);
+  if (serverRootPath.length > 0 && !initialProxyBaseUrl.endsWith(serverRootPath) && serverRootPath != "/") {
+    initialProxyBaseUrl += serverRootPath;
+    proxyBaseUrl = initialProxyBaseUrl;
+  }
+  console.log("Updated proxyBaseUrl:", proxyBaseUrl);
+};
+
+const updateServerRootPath = (receivedServerRootPath: string) => {
+  serverRootPath = receivedServerRootPath;
+};
+
+export const getProxyBaseUrl = () => {
+  return proxyBaseUrl;
+};
 
 const HTTP_REQUEST = {
   GET: "GET",
@@ -63,6 +89,11 @@ export interface CredentialItem {
   };
 }
 
+export interface LiteLLMWellKnownUiConfig {
+  server_root_path: string;
+  proxy_base_url: string | null;
+}
+
 export interface CredentialsResponse {
   credentials: CredentialItem[];
 }
@@ -93,6 +124,20 @@ let globalLitellmHeaderName: string  = "Authorization";
 export function setGlobalLitellmHeaderName(headerName: string = "Authorization") {
   console.log(`setGlobalLitellmHeaderName: ${headerName}`);
   globalLitellmHeaderName = headerName;
+}
+
+export const getUiConfig = async () => {
+  console.log("Getting UI config");
+  /**Special route to get the proxy base url and server root path */
+  const url = defaultProxyBaseUrl ? `${defaultProxyBaseUrl}/litellm/.well-known/litellm-ui-config` : `/litellm/.well-known/litellm-ui-config`;
+  const response = await fetch(url);
+  const jsonData: LiteLLMWellKnownUiConfig = await response.json();
+  /**
+   * Update the proxy base url and server root path
+   */
+  console.log("jsonData in getUiConfig:", jsonData);
+  updateProxyBaseUrl(jsonData.server_root_path, jsonData.proxy_base_url);
+  return jsonData;
 }
 
 export const getOpenAPISchema = async () => {
@@ -4276,6 +4321,8 @@ export const getProxyUISettings = async (
    * Get all the models user has access to
    */
   try {
+    console.log("Getting proxy UI settings");
+    console.log("proxyBaseUrl in getProxyUISettings:", proxyBaseUrl);
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/sso/get/ui_settings`
       : `/sso/get/ui_settings`;
