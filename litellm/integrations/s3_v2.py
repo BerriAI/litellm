@@ -1,10 +1,9 @@
 """
 s3 Bucket Logging Integration
 
-async_log_success_event: Processes the event, stores it in memory for 10 seconds or until MAX_BATCH_SIZE and then flushes to s3 
+async_log_success_event: Processes the event, stores it in memory for DEFAULT_S3_FLUSH_INTERVAL_SECONDS seconds or until DEFAULT_S3_BATCH_SIZE and then flushes to s3 
 
 NOTE 1: S3 does not provide a BATCH PUT API endpoint, so we create tasks to upload each element individually
-NOTE 2: We create a httpx client with a concurrent limit of 1 to upload to s3. Files should get uploaded BUT they should not impact latency of LLM calling logic
 """
 
 import asyncio
@@ -33,7 +32,6 @@ from .custom_batch_logger import CustomBatchLogger
 
 
 class S3Logger(CustomBatchLogger, BaseAWSLLM):
-    # Class variables or attributes
     def __init__(
         self,
         s3_bucket_name: Optional[str] = None,

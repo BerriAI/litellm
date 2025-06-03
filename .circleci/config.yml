@@ -1158,6 +1158,7 @@ jobs:
             pip install "google-cloud-aiplatform==1.43.0"
             pip install "mlflow==2.17.2"
             pip install "anthropic==0.52.0"
+            pip install "blockbuster==1.5.24"
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
       - run:
