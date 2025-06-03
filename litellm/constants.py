@@ -215,6 +215,7 @@ LITELLM_CHAT_PROVIDERS = [
     "groq",
     "nvidia_nim",
     "cerebras",
+    "centml",
     "ai21_chat",
     "volcengine",
     "codestral",
@@ -378,6 +379,7 @@ openai_compatible_providers: List = [
     "groq",
     "nvidia_nim",
     "cerebras",
+    "centml",
     "sambanova",
     "ai21_chat",
     "ai21",
@@ -552,6 +554,19 @@ together_ai_models: List = [
     "upstage/SOLAR-0-70b-16bit",
     "WizardLM/WizardLM-70B-V1.0",
 ]  # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
+
+centml_models: List = [
+    "meta-llama/Llama-3.3-70B-Instruct",                    # JSON ✓, Tool-Calling ✓
+    "meta-llama/Llama-4-Scout-17B-16E-Instruct",            # JSON ✓, Tool-Calling ✓
+    "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",    # JSON ✓, Tool-Calling ✓ — multimodal ✓ (vision)
+    "deepseek-ai/DeepSeek-R1",                              # JSON ✓
+    "deepseek-ai/DeepSeek-R1-0528",                         # JSON ✓
+    "deepseek-ai/DeepSeek-V3-0324",                         # JSON ✓
+    "microsoft/Phi-4-mini-instruct",                        # JSON ✓
+    "Qwen/Qwen2.5-VL-7B-Instruct",                          # JSON ✓ — multimodal ✓ (vision)
+    "meta-llama/Llama-Guard-4-12B",                         # multimodal ✓ (vision)
+    "Qwen/QwQ-32B",
+]
 
 
 baseten_models: List = [

@@ -466,6 +466,7 @@ azure_models: List = []
 azure_text_models: List = []
 anyscale_models: List = []
 cerebras_models: List = []
+centml_models: List = []
 galadriel_models: List = []
 sambanova_models: List = []
 novita_models: List = []
@@ -629,6 +630,8 @@ def add_known_models():
             anyscale_models.append(key)
         elif value.get("litellm_provider") == "cerebras":
             cerebras_models.append(key)
+        elif value.get("litellm_provider") == "centml":
+            centml_models.append(key)
         elif value.get("litellm_provider") == "galadriel":
             galadriel_models.append(key)
         elif value.get("litellm_provider") == "sambanova":
@@ -720,6 +723,7 @@ model_list = (
     + azure_models
     + anyscale_models
     + cerebras_models
+    + centml_models
     + galadriel_models
     + sambanova_models
     + azure_text_models
@@ -784,6 +788,7 @@ models_by_provider: dict = {
     "azure_text": azure_text_models,
     "anyscale": anyscale_models,
     "cerebras": cerebras_models,
+    "centml": centml_models,
     "galadriel": galadriel_models,
     "sambanova": sambanova_models,
     "novita": novita_models,
@@ -1073,6 +1078,7 @@ nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
 
 from .llms.featherless_ai.chat.transformation import FeatherlessAIConfig
 from .llms.cerebras.chat import CerebrasConfig
+from .llms.centml.chat import CentmlConfig
 from .llms.sambanova.chat import SambanovaConfig
 from .llms.ai21.chat.transformation import AI21ChatConfig
 from .llms.fireworks_ai.chat.transformation import FireworksAIConfig
