@@ -1634,7 +1634,8 @@ class CustomStreamWrapper:
             if is_async_iterable(self.completion_stream):
                 async for chunk in self.completion_stream:
                     if chunk == "None" or chunk is None:
-                        raise Exception
+                        continue  # skip None chunks
+
                     elif (
                         self.custom_llm_provider == "gemini"
                         and hasattr(chunk, "parts")
