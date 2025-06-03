@@ -107,10 +107,10 @@ class SlackAlerting(CustomBatchLogger):
             self.alert_types = alert_types
         if alerting_args is not None:
             self.alerting_args = SlackAlertingArgs(**alerting_args)
-            if not self.periodic_started: 
+            if not self.periodic_started:
                 asyncio.create_task(self.periodic_flush())
                 self.periodic_started = True
-                
+
         if alert_to_webhook_url is not None:
             # update the dict
             if self.alert_to_webhook_url is None:
@@ -888,9 +888,9 @@ class SlackAlerting(CustomBatchLogger):
         ### UNIQUE CACHE KEY ###
         cache_key = provider + region_name
 
-        outage_value: Optional[ProviderRegionOutageModel] = (
-            await self.internal_usage_cache.async_get_cache(key=cache_key)
-        )
+        outage_value: Optional[
+            ProviderRegionOutageModel
+        ] = await self.internal_usage_cache.async_get_cache(key=cache_key)
 
         if (
             getattr(exception, "status_code", None) is None
@@ -1471,9 +1471,9 @@ Model Info:
             self.alert_to_webhook_url is not None
             and alert_type in self.alert_to_webhook_url
         ):
-            slack_webhook_url: Optional[Union[str, List[str]]] = (
-                self.alert_to_webhook_url[alert_type]
-            )
+            slack_webhook_url: Optional[
+                Union[str, List[str]]
+            ] = self.alert_to_webhook_url[alert_type]
         elif self.default_webhook_url is not None:
             slack_webhook_url = self.default_webhook_url
         else:
@@ -1887,4 +1887,7 @@ Model Info:
             )
             if status is not None and (status == "success" or status == "fail"):
                 return True
-        return False
+            return False
+
+        # success or failure
+        return True
