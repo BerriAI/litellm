@@ -1,7 +1,8 @@
 model_list:
-  - model_name: anthropic/*
+  - model_name: openai/*
     litellm_params:
-      model: anthropic/*
-  
-general_settings:
-  store_prompts_in_spend_logs: true
+      model: openai/*
+
+
+litellm_settings:
+  disable_token_counter: True
