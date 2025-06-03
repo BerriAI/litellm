@@ -122,8 +122,8 @@ class _PROXY_AzureContentSafety(
                 for m in data["messages"]:
                     if "content" in m and isinstance(m["content"], str):
                         await self.test_violation(content=m["content"], source="input")
-                    elif "content" in m and isinstance(m["content"], list) and len(m["content"]) > 0:
-                        await self.test_violation(content=m.get("content")[0].get("text"), source="input")
+                    #elif "content" in m and isinstance(m["content"], list) and len(m["content"]) > 0:
+                    #    await self.test_violation(content=m.get("content")[0].get("text"), source="input")
 
         except HTTPException as e:
             raise e
