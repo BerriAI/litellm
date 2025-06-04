@@ -37,8 +37,6 @@ os.environ["CLARIFAI_PAT"] = "YOUR_CLARIFAI_PAT"  # CLARIFAI_PAT
 import os
 from litellm import completion
 
-os.environ["CLARIFAI_PAT"] = "YOUR_CLARIFAI_PAT"
-
 response = completion(
     model="openai/https://clarifai.com/openai/chat-completion/models/o4-mini",
     api_base="https://api.clarifai.com/v2/ext/openai/v1",
