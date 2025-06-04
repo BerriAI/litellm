@@ -31,6 +31,68 @@ class MicrosoftServicePrincipalTeam(TypedDict, total=False):
     principalId: Optional[str]
 
 
+class SSOConfig(LiteLLMPydanticObjectBase):
+    """
+    Configuration for SSO environment variables and settings
+    """
+
+    # Google SSO
+    google_client_id: Optional[str] = Field(
+        default=None,
+        description="Google OAuth Client ID for SSO authentication",
+    )
+    google_client_secret: Optional[str] = Field(
+        default=None,
+        description="Google OAuth Client Secret for SSO authentication",
+    )
+    
+    # Microsoft SSO
+    microsoft_client_id: Optional[str] = Field(
+        default=None,
+        description="Microsoft OAuth Client ID for SSO authentication",
+    )
+    microsoft_client_secret: Optional[str] = Field(
+        default=None,
+        description="Microsoft OAuth Client Secret for SSO authentication",
+    )
+    microsoft_tenant: Optional[str] = Field(
+        default=None,
+        description="Microsoft Azure Tenant ID for SSO authentication",
+    )
+    
+    # Generic/Okta SSO
+    generic_client_id: Optional[str] = Field(
+        default=None,
+        description="Generic OAuth Client ID for SSO authentication (used for Okta and other providers)",
+    )
+    generic_client_secret: Optional[str] = Field(
+        default=None,
+        description="Generic OAuth Client Secret for SSO authentication",
+    )
+    generic_authorization_endpoint: Optional[str] = Field(
+        default=None,
+        description="Authorization endpoint URL for generic OAuth provider",
+    )
+    generic_token_endpoint: Optional[str] = Field(
+        default=None,
+        description="Token endpoint URL for generic OAuth provider",
+    )
+    generic_userinfo_endpoint: Optional[str] = Field(
+        default=None,
+        description="User info endpoint URL for generic OAuth provider",
+    )
+    
+    # Common settings
+    proxy_base_url: Optional[str] = Field(
+        default=None,
+        description="Base URL of the proxy server for SSO redirects",
+    )
+    user_email: Optional[str] = Field(
+        default=None,
+        description="Email of the proxy admin user",
+    )
+
+
 class DefaultTeamSSOParams(LiteLLMPydanticObjectBase):
     """
     Default parameters to apply when a new team is automatically created by LiteLLM via SSO Groups

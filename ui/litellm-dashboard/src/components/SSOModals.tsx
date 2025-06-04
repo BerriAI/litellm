@@ -1,6 +1,7 @@
-import React from "react";
-import { Modal, Form, Input, Button as Button2, Select } from "antd";
+import React, { useEffect } from "react";
+import { Modal, Form, Input, Button as Button2, Select, message } from "antd";
 import { Text, TextInput } from "@tremor/react";
+import { getSSOSettings, updateSSOSettings } from "./networking";
 
 interface SSOModalsProps {
   isAddSSOModalVisible: boolean;
@@ -11,6 +12,7 @@ interface SSOModalsProps {
   handleInstructionsOk: () => void;
   handleInstructionsCancel: () => void;
   form: any; // Replace with proper Form type if available
+  accessToken: string | null;
 }
 
 const ssoProviderLogoMap: Record<string, string> = {
@@ -97,7 +99,80 @@ const SSOModals: React.FC<SSOModalsProps> = ({
   handleInstructionsOk,
   handleInstructionsCancel,
   form,
+  accessToken,
 }) => {
+  // Load existing SSO settings when modal opens
+  useEffect(() => {
+    const loadSSOSettings = async () => {
+      if (isAddSSOModalVisible && accessToken) {
+        try {
+          const ssoData = await getSSOSettings(accessToken);
+          console.log("Raw SSO data received:", ssoData); // Debug log
+          if (ssoData && ssoData.values) {
+            console.log("SSO values:", ssoData.values); // Debug log
+            console.log("user_email from API:", ssoData.values.user_email); // Debug log
+            
+            // Determine which SSO provider is configured
+            let selectedProvider = null;
+            if (ssoData.values.google_client_id) {
+              selectedProvider = 'google';
+            } else if (ssoData.values.microsoft_client_id) {
+              selectedProvider = 'microsoft';
+            } else if (ssoData.values.generic_client_id) {
+              // Check if it looks like Okta based on endpoints
+              if (ssoData.values.generic_authorization_endpoint?.includes('okta') ||
+                  ssoData.values.generic_authorization_endpoint?.includes('auth0')) {
+                selectedProvider = 'okta';
+              } else {
+                selectedProvider = 'generic';
+              }
+            }
+
+            // Set form values with existing data
+            const formValues = {
+              sso_provider: selectedProvider,
+              proxy_base_url: ssoData.values.proxy_base_url,
+              user_email: ssoData.values.user_email,
+              ...ssoData.values,
+            };
+
+            console.log("Setting form values:", formValues); // Debug log
+            
+            // Clear form first, then set values with a small delay to ensure proper initialization
+            form.resetFields();
+            setTimeout(() => {
+              form.setFieldsValue(formValues);
+              console.log("Form values set, current form values:", form.getFieldsValue()); // Debug log
+            }, 100);
+          }
+        } catch (error) {
+          console.error("Failed to load SSO settings:", error);
+        }
+      }
+    };
+
+    loadSSOSettings();
+  }, [isAddSSOModalVisible, accessToken, form]);
+
+  // Enhanced form submission handler
+  const handleFormSubmit = async (formValues: Record<string, any>) => {
+    if (!accessToken) {
+      message.error("No access token available");
+      return;
+    }
+
+    try {
+      // Save SSO settings using the new API
+      await updateSSOSettings(accessToken, formValues);
+      
+      // Continue with the original flow (show instructions)
+      handleShowInstructions(formValues);
+    } catch (error) {
+      console.error("Failed to save SSO settings:", error);
+      message.error("Failed to save SSO settings");
+    }
+  };
+
   // Helper function to render provider fields
   const renderProviderFields = (provider: string) => {
     const config = ssoProviderConfigs[provider];
@@ -131,7 +206,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
       >
         <Form
           form={form}
-          onFinish={handleShowInstructions}
+          onFinish={handleFormSubmit}
           labelCol={{ span: 8 }}
           wrapperCol={{ span: 16 }}
           labelAlign="left"
