@@ -378,6 +378,104 @@ async def get_sso_provider_config():
     }
 
 
+async def _update_general_settings(config: SSOConfigRequest, general_settings: dict):
+    """Update general settings with SSO configuration."""
+    general_settings["sso_provider"] = config.sso_provider
+    general_settings["proxy_base_url"] = config.proxy_base_url
+    general_settings["admin_user_email"] = config.user_email
+
+
+async def _get_env_updates_for_google(config: SSOConfigRequest, existing_env: dict) -> dict:
+    """Get environment variable updates for Google SSO provider."""
+    env_updates = {}
+    if config.google_client_id:
+        env_updates["GOOGLE_CLIENT_ID"] = config.google_client_id
+    if config.google_client_secret:
+        env_updates["GOOGLE_CLIENT_SECRET"] = config.google_client_secret
+    elif "GOOGLE_CLIENT_SECRET" in existing_env:
+        env_updates["GOOGLE_CLIENT_SECRET"] = existing_env["GOOGLE_CLIENT_SECRET"]
+    return env_updates
+
+
+async def _get_env_updates_for_microsoft(config: SSOConfigRequest, existing_env: dict) -> dict:
+    """Get environment variable updates for Microsoft SSO provider."""
+    env_updates = {}
+    if config.microsoft_client_id:
+        env_updates["MICROSOFT_CLIENT_ID"] = config.microsoft_client_id
+    if config.microsoft_client_secret:
+        env_updates["MICROSOFT_CLIENT_SECRET"] = config.microsoft_client_secret
+    elif "MICROSOFT_CLIENT_SECRET" in existing_env:
+        env_updates["MICROSOFT_CLIENT_SECRET"] = existing_env["MICROSOFT_CLIENT_SECRET"]
+    if config.microsoft_tenant:
+        env_updates["MICROSOFT_TENANT"] = config.microsoft_tenant
+    return env_updates
+
+
+async def _get_env_updates_for_generic(config: SSOConfigRequest, existing_env: dict) -> dict:
+    """Get environment variable updates for Generic/Okta SSO provider."""
+    env_updates = {}
+    if config.generic_client_id:
+        env_updates["GENERIC_CLIENT_ID"] = config.generic_client_id
+    if config.generic_client_secret:
+        env_updates["GENERIC_CLIENT_SECRET"] = config.generic_client_secret
+    elif "GENERIC_CLIENT_SECRET" in existing_env:
+        env_updates["GENERIC_CLIENT_SECRET"] = existing_env["GENERIC_CLIENT_SECRET"]
+    if config.generic_authorization_endpoint:
+        env_updates["GENERIC_AUTHORIZATION_ENDPOINT"] = config.generic_authorization_endpoint
+    if config.generic_token_endpoint:
+        env_updates["GENERIC_TOKEN_ENDPOINT"] = config.generic_token_endpoint
+    if config.generic_userinfo_endpoint:
+        env_updates["GENERIC_USERINFO_ENDPOINT"] = config.generic_userinfo_endpoint
+    if config.generic_scope:
+        env_updates["GENERIC_SCOPE"] = config.generic_scope
+    return env_updates
+
+
+async def _get_sso_env_updates(config: SSOConfigRequest, existing_env: dict) -> dict:
+    """Get environment variable updates based on SSO provider type."""
+    env_updates = {}
+    
+    if config.sso_provider == "google":
+        env_updates.update(await _get_env_updates_for_google(config, existing_env))
+    elif config.sso_provider == "microsoft":
+        env_updates.update(await _get_env_updates_for_microsoft(config, existing_env))
+    elif config.sso_provider in ["generic", "okta"]:
+        env_updates.update(await _get_env_updates_for_generic(config, existing_env))
+    
+    # Update proxy base URL
+    if config.proxy_base_url:
+        env_updates["PROXY_BASE_URL"] = config.proxy_base_url
+    
+    return env_updates
+
+
+async def _update_environment_variables(env_updates: dict):
+    """Update environment variables in memory."""
+    import os
+    for key, value in env_updates.items():
+        os.environ[key] = value
+
+
+async def _save_sso_config_to_file(config: SSOConfigRequest, env_updates: dict, proxy_config):
+    """Save SSO configuration to config file."""
+    proxy_config_data = await proxy_config.get_config()
+    if "general_settings" not in proxy_config_data:
+        proxy_config_data["general_settings"] = {}
+    
+    proxy_config_data["general_settings"]["sso_provider"] = config.sso_provider
+    proxy_config_data["general_settings"]["proxy_base_url"] = config.proxy_base_url
+    proxy_config_data["general_settings"]["admin_user_email"] = config.user_email
+    
+    # Store environment variables in config for persistence
+    if "environment_variables" not in proxy_config_data:
+        proxy_config_data["environment_variables"] = {}
+    
+    for key, value in env_updates.items():
+        proxy_config_data["environment_variables"][key] = value
+    
+    await proxy_config.save_config(new_config=proxy_config_data)
+
+
 @router.post(
     "/update/sso_provider_config",
     tags=["SSO Settings"],
@@ -390,84 +488,24 @@ async def update_sso_provider_config(config: SSOConfigRequest):
     
     Note: Some changes may require a server restart to take effect.
     """
-    import os
     from litellm.proxy.proxy_server import general_settings, proxy_config
     
     try:
         # Update general settings
-        general_settings["sso_provider"] = config.sso_provider
-        general_settings["proxy_base_url"] = config.proxy_base_url
-        general_settings["admin_user_email"] = config.user_email
-        
-        # Map of environment variables to update based on provider
-        env_updates = {}
+        await _update_general_settings(config, general_settings)
         
         # Get existing configuration to preserve secrets that weren't updated
         existing_config = await proxy_config.get_config()
         existing_env = existing_config.get("environment_variables", {})
         
-        if config.sso_provider == "google":
-            if config.google_client_id:
-                env_updates["GOOGLE_CLIENT_ID"] = config.google_client_id
-            if config.google_client_secret:
-                env_updates["GOOGLE_CLIENT_SECRET"] = config.google_client_secret
-            elif "GOOGLE_CLIENT_SECRET" in existing_env:
-                # Preserve existing secret if not provided
-                env_updates["GOOGLE_CLIENT_SECRET"] = existing_env["GOOGLE_CLIENT_SECRET"]
-                
-        elif config.sso_provider == "microsoft":
-            if config.microsoft_client_id:
-                env_updates["MICROSOFT_CLIENT_ID"] = config.microsoft_client_id
-            if config.microsoft_client_secret:
-                env_updates["MICROSOFT_CLIENT_SECRET"] = config.microsoft_client_secret
-            elif "MICROSOFT_CLIENT_SECRET" in existing_env:
-                # Preserve existing secret if not provided
-                env_updates["MICROSOFT_CLIENT_SECRET"] = existing_env["MICROSOFT_CLIENT_SECRET"]
-            if config.microsoft_tenant:
-                env_updates["MICROSOFT_TENANT"] = config.microsoft_tenant
-                
-        elif config.sso_provider in ["generic", "okta"]:
-            if config.generic_client_id:
-                env_updates["GENERIC_CLIENT_ID"] = config.generic_client_id
-            if config.generic_client_secret:
-                env_updates["GENERIC_CLIENT_SECRET"] = config.generic_client_secret
-            elif "GENERIC_CLIENT_SECRET" in existing_env:
-                # Preserve existing secret if not provided
-                env_updates["GENERIC_CLIENT_SECRET"] = existing_env["GENERIC_CLIENT_SECRET"]
-            if config.generic_authorization_endpoint:
-                env_updates["GENERIC_AUTHORIZATION_ENDPOINT"] = config.generic_authorization_endpoint
-            if config.generic_token_endpoint:
-                env_updates["GENERIC_TOKEN_ENDPOINT"] = config.generic_token_endpoint
-            if config.generic_userinfo_endpoint:
-                env_updates["GENERIC_USERINFO_ENDPOINT"] = config.generic_userinfo_endpoint
-            if config.generic_scope:
-                env_updates["GENERIC_SCOPE"] = config.generic_scope
-        
-        # Update proxy base URL
-        if config.proxy_base_url:
-            env_updates["PROXY_BASE_URL"] = config.proxy_base_url
+        # Get environment variable updates based on provider
+        env_updates = await _get_sso_env_updates(config, existing_env)
         
         # Update environment variables in memory
-        for key, value in env_updates.items():
-            os.environ[key] = value
+        await _update_environment_variables(env_updates)
         
         # Save configuration to config file
-        proxy_config_data = await proxy_config.get_config()
-        if "general_settings" not in proxy_config_data:
-            proxy_config_data["general_settings"] = {}
-        
-        proxy_config_data["general_settings"]["sso_provider"] = config.sso_provider
-        proxy_config_data["general_settings"]["proxy_base_url"] = config.proxy_base_url
-        proxy_config_data["general_settings"]["admin_user_email"] = config.user_email
-        
-        # Store environment variables in config for persistence
-        if "environment_variables" not in proxy_config_data:
-            proxy_config_data["environment_variables"] = {}
-        
-        for key, value in env_updates.items():
-            proxy_config_data["environment_variables"][key] = value
-        
-        await proxy_config.save_config(new_config=proxy_config_data)
+        await _save_sso_config_to_file(config, env_updates, proxy_config)
         
         return {
             "message": "SSO provider configuration updated successfully",
