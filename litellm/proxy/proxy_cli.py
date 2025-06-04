@@ -15,11 +15,7 @@ import urllib.parse
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from rich.text import Text
 from rich.progress import Progress, SpinnerColumn, TextColumn
-from rich.prompt import Confirm
-from rich import print as rprint
-from rich.tree import Tree
 from rich.align import Align
 
 if TYPE_CHECKING:
@@ -219,6 +215,15 @@ class ProxyInitializationHelpers:
                 )
                 progress.update(task3, completed=True)
                 console.print("[green]✅ Legacy completion test passed![/green]")
+                
+                # Display response in a nice format
+                if completion_response.choices and completion_response.choices[0].text:
+                    legacy_response_panel = Panel(
+                        completion_response.choices[0].text or "No content",
+                        title="[bold green]Legacy Response[/bold green]",
+                        border_style="green"
+                    )
+                    console.print(legacy_response_panel)
                 
             except Exception as e:
                 progress.update(task3, completed=True)
