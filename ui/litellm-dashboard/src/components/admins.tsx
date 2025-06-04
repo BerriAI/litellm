@@ -193,7 +193,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   const handleShowInstructions = (formValues: Record<string, any>) => {
-    console.log("Form submitted with values:", formValues);
     setIsAddSSOModalVisible(false);
     setIsInstructionsModalVisible(true);
   };
