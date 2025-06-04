@@ -534,12 +534,22 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
           <TabPanel>
             <Card>
               <Title level={4}> ✨ Security Settings</Title>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem', marginLeft: '0.5rem' }}>
                 <div>
-                  <Button onClick={() => premiumUser === true ? setIsAddSSOModalVisible(true) : message.error("Only premium users can add SSO")}>Add SSO</Button>
+                  <Button 
+                    style={{ width: '150px' }}
+                    onClick={() => premiumUser === true ? setIsAddSSOModalVisible(true) : message.error("Only premium users can add SSO")}
+                  >
+                    Add SSO
+                  </Button>
                 </div>
                 <div>
-                  <Button onClick={handleShowAllowedIPs}>Allowed IPs</Button>
+                  <Button 
+                    style={{ width: '150px' }}
+                    onClick={handleShowAllowedIPs}
+                  >
+                    Allowed IPs
+                  </Button>
                 </div>
               </div>
             </Card>
