@@ -7,30 +7,22 @@ Notes:
 - Do not store large objects (eg. messages in memory) that can increase RAM usage
 """
 
+import asyncio
 from typing import TYPE_CHECKING, Any, Optional
 
-from pydantic import BaseModel
-
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.proxy.utils import ProxyLogging
+from litellm.types.integrations.slack_alerting import (
+    HANGING_ALERT_BUFFER_TIME_SECONDS,
+    MAX_OLDEST_HANGING_REQUESTS_TO_CHECK,
+    HangingRequestData,
+)
 
 if TYPE_CHECKING:
     from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 else:
     SlackAlerting = Any
-
-
-class HangingRequestData(BaseModel):
-    request_id: str
-    model: str
-    api_base: Optional[str] = None
-    key_alias: Optional[str] = None
-    team_alias: Optional[str] = None
-    alerting_metadata: Optional[dict] = None
-
-
-HANGING_ALERT_BUFFER_TIME_SECONDS = 60
 
 
 class AlertingHangingRequestCheck:
@@ -40,14 +32,15 @@ class AlertingHangingRequestCheck:
 
     def __init__(
         self,
-        alerting_threshold: float,
         slack_alerting_object: SlackAlerting,
     ):
-        self.alerting_threshold = alerting_threshold
-        self.hanging_request_cache = InMemoryCache(
-            default_ttl=int(alerting_threshold + HANGING_ALERT_BUFFER_TIME_SECONDS),
-        )
         self.slack_alerting_object = slack_alerting_object
+        self.hanging_request_cache = InMemoryCache(
+            default_ttl=int(
+                self.slack_alerting_object.alerting_threshold
+                + HANGING_ALERT_BUFFER_TIME_SECONDS
+            ),
+        )
 
     async def add_request_to_hanging_request_check(
         self,
@@ -82,56 +75,82 @@ class AlertingHangingRequestCheck:
         await self.hanging_request_cache.async_set_cache(
             key=hanging_request_data.request_id,
             value=hanging_request_data,
-            ttl=int(self.alerting_threshold + HANGING_ALERT_BUFFER_TIME_SECONDS),
+            ttl=int(
+                self.slack_alerting_object.alerting_threshold
+                + HANGING_ALERT_BUFFER_TIME_SECONDS
+            ),
         )
         return
 
-    async def check_for_hanging_requests(
-        self,
-        proxy_logging_object: ProxyLogging,
-    ):
+    async def send_alerts_for_hanging_requests(self):
         """
-        Background task that checks all request ids in self.hanging_request_cache to check if they have completed
+        Send alerts for hanging requests
         """
+        from litellm.proxy.proxy_server import proxy_logging_obj
 
         #########################################################
         # Find all requests that have been hanging for more than the alerting threshold
         # Get the last 50 oldest items in the cache and check if they have completed
         #########################################################
         # check if request_id is in internal usage cache
-        if proxy_logging_object.internal_usage_cache is None:
+        if proxy_logging_obj.internal_usage_cache is None:
             return
 
         hanging_requests = await self.hanging_request_cache.async_get_oldest_n_keys(
-            n=100,
+            n=MAX_OLDEST_HANGING_REQUESTS_TO_CHECK,
         )
 
         for request_id in hanging_requests:
-            request_data: Optional[HangingRequestData] = (
+            hanging_request_data: Optional[HangingRequestData] = (
                 await self.hanging_request_cache.async_get_cache(
                     key=request_id,
                 )
             )
 
-            if request_data is None:
+            if hanging_request_data is None:
                 continue
 
             request_status = (
-                await proxy_logging_object.internal_usage_cache.async_get_cache(
-                    key="request_status:{}".format(request_data.request_id),
+                await proxy_logging_obj.internal_usage_cache.async_get_cache(
+                    key="request_status:{}".format(hanging_request_data.request_id),
                     litellm_parent_otel_span=None,
+                    local_only=True,
                 )
             )
-
             # this means the request status was either success or fail
             # and is not hanging
             if request_status is not None:
+                # clear this request from hanging request cache since the request was either success or failed
+                self.hanging_request_cache._remove_key(
+                    key=request_id,
+                )
                 continue
-        pass
+
+            ################
+            # Send the Alert on Slack
+            ################
+            await self.send_hanging_request_alert(
+                hanging_request_data=hanging_request_data
+            )
+
+        return
+
+    async def check_for_hanging_requests(
+        self,
+    ):
+        """
+        Background task that checks all request ids in self.hanging_request_cache to check if they have completed
+
+        Runs every alerting_threshold/2 seconds to check for hanging requests
+        """
+        while True:
+            verbose_proxy_logger.debug("Checking for hanging requests....")
+            await self.send_alerts_for_hanging_requests()
+            await asyncio.sleep(self.slack_alerting_object.alerting_threshold / 2)
 
     async def send_hanging_request_alert(
         self,
-        request_data: HangingRequestData,
+        hanging_request_data: HangingRequestData,
     ):
         """
         Send a hanging request alert
@@ -142,18 +161,15 @@ class AlertingHangingRequestCheck:
         # Send the Alert on Slack
         ################
         request_info = f"""
-        Request Model: `{request_data.model}`\n 
-        API Base: `{request_data.api_base}`\n
-        Key Alias: `{request_data.key_alias}`\n
-        Team Alias: `{request_data.team_alias}`\n
+        Request Model: `{hanging_request_data.model}`\n 
+        API Base: `{hanging_request_data.api_base}`\n
+        Key Alias: `{hanging_request_data.key_alias}`\n
+        Team Alias: `{hanging_request_data.team_alias}`\n
         """
-        alerting_message = (
-            f"`Requests are hanging - {self.alerting_threshold}s+ request time`"
-        )
+        alerting_message = f"`Requests are hanging - {self.slack_alerting_object.alerting_threshold}s+ request time`"
         await self.slack_alerting_object.send_alert(
             message=alerting_message + request_info,
             level="Medium",
             alert_type=AlertType.llm_requests_hanging,
-            alerting_metadata=request_data.alerting_metadata or {},
+            alerting_metadata=hanging_request_data.alerting_metadata or {},
         )
-        pass
