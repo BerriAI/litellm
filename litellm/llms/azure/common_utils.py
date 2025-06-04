@@ -158,13 +158,27 @@ def get_azure_ad_token_from_username_password(
     return token_provider
 
 
-def get_azure_ad_token_from_oidc(azure_ad_token: str):
-    azure_client_id = os.getenv("AZURE_CLIENT_ID", None)
-    azure_tenant_id = os.getenv("AZURE_TENANT_ID", None)
+def get_azure_ad_token_from_oidc(
+    azure_ad_token: str,
+    azure_client_id: Optional[str],
+    azure_tenant_id: Optional[str],
+) -> str:
+    """
+    Get Azure AD token from OIDC token
+
+    Args:
+        azure_ad_token: str
+        azure_client_id: Optional[str]
+        azure_tenant_id: Optional[str]
+
+    Returns:
+        `azure_ad_token_access_token` - str
+    """
     azure_authority_host = os.getenv(
         "AZURE_AUTHORITY_HOST", "https://login.microsoftonline.com"
     )
-
+    azure_client_id = azure_client_id or os.getenv("AZURE_CLIENT_ID")
+    azure_tenant_id = azure_tenant_id or os.getenv("AZURE_TENANT_ID")
     if azure_client_id is None or azure_tenant_id is None:
         raise AzureOpenAIError(
             status_code=422,
@@ -258,6 +272,7 @@ class BaseAzureLLM(BaseOpenAILLM):
     ) -> Optional[Union[AzureOpenAI, AsyncAzureOpenAI]]:
         openai_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None
         client_initialization_params: dict = locals()
+        client_initialization_params["is_async"] = _is_async
         if client is None:
             cached_client = self.get_cached_openai_client(
                 client_initialization_params=client_initialization_params,
@@ -306,7 +321,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         api_version: Optional[str],
         is_async: bool,
     ) -> dict:
-        azure_ad_token_provider: Optional[Callable[[], str]] = None
+        azure_ad_token_provider = litellm_params.get("azure_ad_token_provider")
         # If we have api_key, then we have higher priority
         azure_ad_token = litellm_params.get("azure_ad_token")
         tenant_id = litellm_params.get("tenant_id", os.getenv("AZURE_TENANT_ID"))
@@ -322,7 +337,11 @@ class BaseAzureLLM(BaseOpenAILLM):
         )
         max_retries = litellm_params.get("max_retries")
         timeout = litellm_params.get("timeout")
-        if not api_key and tenant_id and client_id and client_secret:
+        if (
+            not api_key
+            and azure_ad_token_provider is None
+            and tenant_id and client_id and client_secret
+        ):
             verbose_logger.debug(
                 "Using Azure AD Token Provider from Entra ID for Azure Auth"
             )
@@ -331,7 +350,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 client_id=client_id,
                 client_secret=client_secret,
             )
-        if azure_username and azure_password and client_id:
+        if azure_ad_token_provider is None and azure_username and azure_password and client_id:
             verbose_logger.debug("Using Azure Username and Password for Azure Auth")
             azure_ad_token_provider = get_azure_ad_token_from_username_password(
                 azure_username=azure_username,
@@ -341,7 +360,11 @@ class BaseAzureLLM(BaseOpenAILLM):
 
         if azure_ad_token is not None and azure_ad_token.startswith("oidc/"):
             verbose_logger.debug("Using Azure OIDC Token for Azure Auth")
-            azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
+            azure_ad_token = get_azure_ad_token_from_oidc(
+                azure_ad_token=azure_ad_token,
+                azure_client_id=client_id,
+                azure_tenant_id=tenant_id,
+            )
         elif (
             not api_key
             and azure_ad_token_provider is None
@@ -402,6 +425,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         api_version: str,
         max_retries: int,
         timeout: Union[float, httpx.Timeout],
+        litellm_params: dict,
         api_key: Optional[str],
         azure_ad_token: Optional[str],
         azure_ad_token_provider: Optional[Callable[[], str]],
@@ -409,6 +433,8 @@ class BaseAzureLLM(BaseOpenAILLM):
         client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None,
     ) -> Union[AzureOpenAI, AsyncAzureOpenAI]:
         ## build base url - assume api base includes resource name
+        tenant_id = litellm_params.get("tenant_id", os.getenv("AZURE_TENANT_ID"))
+        client_id = litellm_params.get("client_id", os.getenv("AZURE_CLIENT_ID"))
         if client is None:
             if not api_base.endswith("/"):
                 api_base += "/"
@@ -425,7 +451,11 @@ class BaseAzureLLM(BaseOpenAILLM):
                 azure_client_params["api_key"] = api_key
             elif azure_ad_token is not None:
                 if azure_ad_token.startswith("oidc/"):
-                    azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
+                    azure_ad_token = get_azure_ad_token_from_oidc(
+                        azure_ad_token=azure_ad_token,
+                        azure_client_id=client_id,
+                        azure_tenant_id=tenant_id,
+                    )
 
                 azure_client_params["azure_ad_token"] = azure_ad_token
             if azure_ad_token_provider is not None:

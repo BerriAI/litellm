@@ -1,5 +1,5 @@
 import json
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import orjson
 from fastapi import Request, UploadFile, status
@@ -185,3 +185,39 @@ def check_file_size_under_limit(
             )
 
     return True
+
+
+async def get_form_data(request: Request) -> Dict[str, Any]:
+    """
+    Read form data from request
+
+    Handles when OpenAI SDKs pass form keys as `timestamp_granularities[]="word"` instead of `timestamp_granularities=["word", "sentence"]`
+    """
+    form = await request.form()
+    form_data = dict(form)
+    parsed_form_data: dict[str, Any] = {}
+    for key, value in form_data.items():
+        # OpenAI SDKs pass form keys as `timestamp_granularities[]="word"` instead of `timestamp_granularities=["word", "sentence"]`
+        if key.endswith("[]"):
+            clean_key = key[:-2]
+            parsed_form_data.setdefault(clean_key, []).append(value)
+        else:
+            parsed_form_data[key] = value
+    return parsed_form_data
+
+
+async def get_request_body(request: Request) -> Dict[str, Any]:
+    """
+    Read the request body and parse it as JSON.
+    """
+    if request.headers.get("content-type") == "application/json":
+        return await _read_request_body(request)
+    elif (
+        request.headers.get("content-type") == "multipart/form-data"
+        or request.headers.get("content-type") == "application/x-www-form-urlencoded"
+    ):
+        return await get_form_data(request)
+    else:
+        raise ValueError(
+            f"Unsupported content type: {request.headers.get('content-type')}"
+        )

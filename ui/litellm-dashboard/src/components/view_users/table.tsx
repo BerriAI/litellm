@@ -31,6 +31,7 @@ interface UserDataTableProps {
   };
   accessToken: string | null;
   userRole: string | null;
+  possibleUIRoles: Record<string, Record<string, string>> | null;
 }
 
 export function UserDataTable({
@@ -41,6 +42,7 @@ export function UserDataTable({
   currentSort,
   accessToken,
   userRole,
+  possibleUIRoles,
 }: UserDataTableProps) {
   const [sorting, setSorting] = React.useState<SortingState>([
     { 
@@ -95,6 +97,7 @@ export function UserDataTable({
         onClose={handleCloseUserInfo}
         accessToken={accessToken}
         userRole={userRole}
+        possibleUIRoles={possibleUIRoles}
       />
     );
   }

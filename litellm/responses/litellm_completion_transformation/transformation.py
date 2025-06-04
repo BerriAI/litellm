@@ -5,13 +5,21 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 from typing import Any, Dict, List, Optional, Union
 
 from openai.types.responses.tool_param import FunctionToolParam
+from typing_extensions import TypedDict
 
+from litellm._logging import verbose_logger
+
+try:
+    from litellm_enterprise.enterprise_callbacks.session_handler import (
+        _ENTERPRISE_ResponsesSessionHandler,
+    )
+except Exception as e:
+    verbose_logger.debug(
+        f"[Non-Blocking] Unable to import _ENTERPRISE_ResponsesSessionHandler - LiteLLM Enterprise Feature - {str(e)}"
+    )
+    _ENTERPRISE_ResponsesSessionHandler = None
 from litellm.caching import InMemoryCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.responses.litellm_completion_transformation.session_handler import (
-    ResponsesAPISessionElement,
-    SessionHandler,
-)
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionResponseMessage,
@@ -48,7 +56,21 @@ from litellm.types.utils import (
 
 ########### Initialize Classes used for Responses API  ###########
 TOOL_CALLS_CACHE = InMemoryCache()
-RESPONSES_API_SESSION_HANDLER = SessionHandler()
+
+
+class ChatCompletionSession(TypedDict, total=False):
+    messages: List[
+        Union[
+            AllMessageValues,
+            GenericChatCompletionMessage,
+            ChatCompletionMessageToolCall,
+            ChatCompletionResponseMessage,
+            Message,
+        ]
+    ]
+    litellm_session_id: Optional[str]
+
+
 ########### End of Initialize Classes used for Responses API  ###########
 
 
@@ -90,7 +112,6 @@ class LiteLLMCompletionResponsesConfig:
             "messages": LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input,
                 responses_api_request=responses_api_request,
-                previous_response_id=responses_api_request.get("previous_response_id"),
             ),
             "model": model,
             "tool_choice": responses_api_request.get("tool_choice"),
@@ -131,14 +152,14 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def transform_responses_api_input_to_messages(
         input: Union[str, ResponseInputParam],
-        responses_api_request: ResponsesAPIOptionalRequestParams,
-        previous_response_id: Optional[str] = None,
+        responses_api_request: Union[ResponsesAPIOptionalRequestParams, dict],
     ) -> List[
         Union[
             AllMessageValues,
             GenericChatCompletionMessage,
             ChatCompletionMessageToolCall,
             ChatCompletionResponseMessage,
+            Message,
         ]
     ]:
         """
@@ -150,6 +171,7 @@ class LiteLLMCompletionResponsesConfig:
                 GenericChatCompletionMessage,
                 ChatCompletionMessageToolCall,
                 ChatCompletionResponseMessage,
+                Message,
             ]
         ] = []
         if responses_api_request.get("instructions"):
@@ -159,24 +181,6 @@ class LiteLLMCompletionResponsesConfig:
                 )
             )
 
-        if previous_response_id:
-            previous_response_pairs = (
-                RESPONSES_API_SESSION_HANDLER.get_chain_of_previous_input_output_pairs(
-                    previous_response_id=previous_response_id
-                )
-            )
-            if previous_response_pairs:
-                for previous_response_pair in previous_response_pairs:
-                    chat_completion_input_messages = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
-                        input=previous_response_pair[0],
-                    )
-                    chat_completion_output_messages = LiteLLMCompletionResponsesConfig._transform_responses_api_outputs_to_chat_completion_messages(
-                        responses_api_output=previous_response_pair[1],
-                    )
-
-                    messages.extend(chat_completion_input_messages)
-                    messages.extend(chat_completion_output_messages)
-
         messages.extend(
             LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
                 input=input,
@@ -184,6 +188,30 @@ class LiteLLMCompletionResponsesConfig:
         )
 
         return messages
+
+    @staticmethod
+    async def async_responses_api_session_handler(
+        previous_response_id: str,
+        litellm_completion_request: dict,
+    ) -> dict:
+        """
+        Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
+        """
+        if _ENTERPRISE_ResponsesSessionHandler is not None:
+            chat_completion_session = ChatCompletionSession(
+                messages=[], litellm_session_id=None
+            )
+            if previous_response_id:
+                chat_completion_session = await _ENTERPRISE_ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+                    previous_response_id=previous_response_id
+                )
+            _messages = litellm_completion_request.get("messages") or []
+            session_messages = chat_completion_session.get("messages") or []
+            litellm_completion_request["messages"] = session_messages + _messages
+            litellm_completion_request[
+                "litellm_trace_id"
+            ] = chat_completion_session.get("litellm_session_id")
+        return litellm_completion_request
 
     @staticmethod
     def _transform_response_input_param_to_chat_completion_message(
@@ -426,8 +454,8 @@ class LiteLLMCompletionResponsesConfig:
                     function=ChatCompletionToolParamFunctionChunk(
                         name=tool["name"],
                         description=tool.get("description") or "",
-                        parameters=tool.get("parameters", {}),
-                        strict=tool.get("strict", False),
+                        parameters=dict(tool.get("parameters", {}) or {}),
+                        strict=tool.get("strict", False) or False,
                     ),
                 )
             )
@@ -471,11 +499,13 @@ class LiteLLMCompletionResponsesConfig:
     def transform_chat_completion_response_to_responses_api_response(
         request_input: Union[str, ResponseInputParam],
         responses_api_request: ResponsesAPIOptionalRequestParams,
-        chat_completion_response: ModelResponse,
+        chat_completion_response: Union[ModelResponse, dict],
     ) -> ResponsesAPIResponse:
         """
         Transform a Chat Completion response into a Responses API response
         """
+        if isinstance(chat_completion_response, dict):
+            chat_completion_response = ModelResponse(**chat_completion_response)
         responses_api_response: ResponsesAPIResponse = ResponsesAPIResponse(
             id=chat_completion_response.id,
             created_at=chat_completion_response.created,
@@ -512,16 +542,6 @@ class LiteLLMCompletionResponsesConfig:
                 chat_completion_response=chat_completion_response
             ),
             user=getattr(chat_completion_response, "user", None),
-        )
-
-        RESPONSES_API_SESSION_HANDLER.add_completed_response_to_cache(
-            response_id=responses_api_response.id,
-            session_element=ResponsesAPISessionElement(
-                input=request_input,
-                output=responses_api_response,
-                response_id=responses_api_response.id,
-                previous_response_id=responses_api_request.get("previous_response_id"),
-            ),
         )
         return responses_api_response
 
@@ -648,9 +668,12 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def _transform_chat_completion_usage_to_responses_usage(
-        chat_completion_response: ModelResponse,
+        chat_completion_response: Union[ModelResponse, Usage],
     ) -> ResponseAPIUsage:
-        usage: Optional[Usage] = getattr(chat_completion_response, "usage", None)
+        if isinstance(chat_completion_response, ModelResponse):
+            usage: Optional[Usage] = getattr(chat_completion_response, "usage", None)
+        else:
+            usage = chat_completion_response
         if usage is None:
             return ResponseAPIUsage(
                 input_tokens=0,

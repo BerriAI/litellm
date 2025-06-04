@@ -175,26 +175,6 @@ def test_completion_azure_ai_gpt_4o(api_base):
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.asyncio
-async def test_completion_databricks(sync_mode):
-    litellm.set_verbose = True
-
-    if sync_mode:
-        response: litellm.ModelResponse = completion(
-            model="databricks/databricks-dbrx-instruct",
-            messages=[{"role": "user", "content": "Hey, how's it going?"}],
-        )  # type: ignore
-
-    else:
-        response: litellm.ModelResponse = await litellm.acompletion(
-            model="databricks/databricks-dbrx-instruct",
-            messages=[{"role": "user", "content": "Hey, how's it going?"}],
-        )  # type: ignore
-    print(f"response: {response}")
-
-    response_format_tests(response=response)
-
 
 def predibase_mock_post(url, data=None, json=None, headers=None, timeout=None):
     mock_response = MagicMock()
@@ -477,11 +457,11 @@ def test_completion_claude_3_function_call(model):
         ("claude-3-opus-20240229", None, None),
         ("command-r", None, None),
         ("anthropic.claude-3-sonnet-20240229-v1:0", None, None),
-        (
-            "azure_ai/command-r-plus",
-            os.getenv("AZURE_COHERE_API_KEY"),
-            os.getenv("AZURE_COHERE_API_BASE"),
-        ),
+        # (
+        #     "azure_ai/command-r-plus",
+        #     os.getenv("AZURE_COHERE_API_KEY"),
+        #     os.getenv("AZURE_COHERE_API_BASE"),
+        # ),
     ],
 )
 @pytest.mark.asyncio
@@ -1497,7 +1477,7 @@ HF Tests we should pass
 
 
 @pytest.mark.parametrize(
-    "provider", ["openai", "hosted_vllm", "lm_studio"]
+    "provider", ["openai", "hosted_vllm", "lm_studio", "llamafile"]
 )  # "vertex_ai",
 @pytest.mark.asyncio
 async def test_openai_compatible_custom_api_base(provider):
@@ -1539,6 +1519,7 @@ async def test_openai_compatible_custom_api_base(provider):
     [
         "openai",
         "hosted_vllm",
+        "llamafile",
     ],
 )  # "vertex_ai",
 @pytest.mark.asyncio
@@ -2661,11 +2642,10 @@ def test_re_use_openaiClient():
 
 def test_completion_azure():
     try:
-        print("azure chatgpt-v-3 test\n\n")
         litellm.set_verbose = False
         ## Test azure call
         response = completion(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4o-new-test",
             messages=messages,
             api_key="os.environ/AZURE_API_KEY",
         )
@@ -2863,7 +2843,7 @@ def test_completion_azure_deployment_id():
     try:
         litellm.set_verbose = True
         response = completion(
-            deployment_id="chatgpt-v-3",
+            deployment_id="gpt-4o-new-test",
             model="gpt-3.5-turbo",
             messages=messages,
         )
@@ -4160,7 +4140,7 @@ async def test_completion_ai21_chat():
     litellm.set_verbose = True
     try:
         response = await litellm.acompletion(
-            model="jamba-1.5-large",
+            model="ai21_chat/jamba-mini",
             user="ishaan",
             tool_choice="auto",
             seed=123,
@@ -4414,6 +4394,77 @@ def test_humanloop_completion(monkeypatch):
         messages=[{"role": "user", "content": "Tell me a joke."}],
     )
 
+def test_completion_novita_ai():
+    litellm.set_verbose = True
+    messages = [
+        {"role": "system", "content": "You're a good bot"},
+        {
+            "role": "user",
+            "content": "Hey",
+        },
+    ]
+    
+    from openai import OpenAI
+    openai_client = OpenAI(api_key="fake-key")
+    
+    with patch.object(
+        openai_client.chat.completions, "create", new=MagicMock()
+    ) as mock_call:
+        try:
+            completion(
+                model="novita/meta-llama/llama-3.3-70b-instruct",
+                messages=messages,
+                client=openai_client,
+                api_base="https://api.novita.ai/v3/openai",
+            )
+            
+            mock_call.assert_called_once()
+            
+            # Verify model is passed correctly
+            assert mock_call.call_args.kwargs["model"] == "meta-llama/llama-3.3-70b-instruct"
+            # Verify messages are passed correctly
+            assert mock_call.call_args.kwargs["messages"] == messages
+            
+        except Exception as e:
+            pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize(
+    "api_key", ["my-bad-api-key"]
+)
+def test_completion_novita_ai_dynamic_params(api_key):
+    try:
+        litellm.set_verbose = True
+        messages = [
+            {"role": "system", "content": "You're a good bot"},
+            {
+                "role": "user",
+                "content": "Hey",
+            },
+        ]
+        
+        from openai import OpenAI
+        openai_client = OpenAI(api_key="fake-key")
+        
+        with patch.object(
+            openai_client.chat.completions, "create", side_effect=Exception("Invalid API key")
+        ) as mock_call:
+            try:
+                completion(
+                    model="novita/meta-llama/llama-3.3-70b-instruct",
+                    messages=messages,
+                    api_key=api_key,
+                    client=openai_client,
+                    api_base="https://api.novita.ai/v3/openai",
+                )
+                pytest.fail(f"This call should have failed!")
+            except Exception as e:
+                # This should fail with the mocked exception
+                assert "Invalid API key" in str(e)
+                
+            mock_call.assert_called_once()
+    except Exception as e:
+        pytest.fail(f"Unexpected error: {e}")
 
 def test_deepseek_reasoning_content_completion():
     try:

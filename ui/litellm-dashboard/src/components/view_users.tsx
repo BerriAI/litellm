@@ -1,58 +1,36 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
-  Card,
-  Title,
-  Subtitle,
-  Table,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-  TableCell,
-  TableBody,
   Tab,
-  Text,
   TabGroup,
   TabList,
   TabPanels,
-  Metric,
-  Grid,
   TabPanel,
   Select,
   SelectItem,
-  Dialog,
-  DialogPanel,
-  Icon,
-  TextInput,
-  NumberInput,
 } from "@tremor/react";
 
 import { message } from "antd";
-import { Modal } from "antd";
 
 import {
   userInfoCall,
   userUpdateUserCall,
   getPossibleUserRoles,
   userListCall,
+  UserListResponse,
 } from "./networking";
-import { Badge, BadgeDelta, Button } from "@tremor/react";
-import RequestAccess from "./request_model_access";
+import { Button } from "@tremor/react";
 import CreateUser from "./create_user_button";
 import EditUserModal from "./edit_user";
-import Paragraph from "antd/es/skeleton/Paragraph";
-import {
-  PencilAltIcon,
-  InformationCircleIcon,
-  TrashIcon,
-} from "@heroicons/react/outline";
 
 import { userDeleteCall } from "./networking";
 import { columns } from "./view_users/columns";
 import { UserDataTable } from "./view_users/table";
 import { UserInfo } from "./view_users/types";
-import BulkCreateUsers from "./bulk_create_users_button";
 import SSOSettings from "./SSOSettings";
 import debounce from "lodash/debounce";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { updateExistingKeys } from "@/utils/dataUtils";
+import { useDebouncedState } from '@tanstack/react-pacer/debouncer'
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -62,22 +40,6 @@ interface ViewUserDashboardProps {
   userID: string | null;
   teams: any[] | null;
   setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
-}
-
-interface UserListResponse {
-  users: any[] | null;
-  total: number;
-  page: number;
-  page_size: number;
-  total_pages: number;
-}
-
-interface CreateuserProps {
-  userID: string;
-  accessToken: string;
-  teams: any[];
-  possibleUIRoles: Record<string, Record<string, string>>;
-  onUserCreated: () => Promise<void>;
 }
 
 interface FilterState {
@@ -93,150 +55,76 @@ interface FilterState {
   sort_order: 'asc' | 'desc';
 }
 
-const isLocal = process.env.NODE_ENV === "development";
-const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
-if (isLocal != true) {
-  console.log = function() {};
+
+const DEFAULT_PAGE_SIZE = 25;
+
+const initialFilters: FilterState = {
+  email: "",
+  user_id: "",
+  user_role: "",
+  sso_user_id: "",
+  team: "",
+  model: "",
+  min_spend: null,
+  max_spend: null,
+  sort_by: "created_at",
+  sort_order: "desc"
 }
 
 const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   accessToken,
   token,
-  keys,
   userRole,
   userID,
   teams,
-  setKeys,
 }) => {
-  const [userListResponse, setUserListResponse] = useState<UserListResponse | null>(null);
-  const [endUsers, setEndUsers] = useState<null | any[]>(null);
+  const queryClient = useQueryClient();
   const [currentPage, setCurrentPage] = useState(1);
-  const [openDialogId, setOpenDialogId] = React.useState<null | number>(null);
-  const [selectedItem, setSelectedItem] = useState<null | any>(null);
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [selectedUser, setSelectedUser] = useState<UserInfo | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [userToDelete, setUserToDelete] = useState<string | null>(null);
-  const [possibleUIRoles, setPossibleUIRoles] = useState<
-    Record<string, Record<string, string>>
-  >({});
-  const defaultPageSize = 25;
-  const [searchTerm, setSearchTerm] = useState("");
   const [activeTab, setActiveTab] = useState("users");
-  const [filters, setFilters] = useState<FilterState>({
-    email: "",
-    user_id: "",
-    user_role: "",
-    sso_user_id: "",
-    team: "",
-    model: "",
-    min_spend: null,
-    max_spend: null,
-    sort_by: "created_at",
-    sort_order: "desc"
-  });
+  const [filters, setFilters] = useState<FilterState>(initialFilters);
+  const [debouncedFilters, setDebouncedFilters, debouncer] = useDebouncedState(filters, { wait: 300 })
   const [showFilters, setShowFilters] = useState(false);
-  const [showColumnDropdown, setShowColumnDropdown] = useState(false);
-  const [selectedFilter, setSelectedFilter] = useState("Email");
-  const filtersRef = useRef(null);
-  const lastSearchTimestamp = useRef(0);
-
-  // check if window is not undefined
-  if (typeof window !== "undefined") {
-    window.addEventListener("beforeunload", function () {
-      // Clear session storage
-      sessionStorage.clear();
-    });
-  }
-
   const handleDelete = (userId: string) => {
     setUserToDelete(userId);
     setIsDeleteModalOpen(true);
   };
 
-  const handleFilterChange = (key: keyof FilterState, value: string | number | null) => {
-    const newFilters = { ...filters, [key]: value };
-    setFilters(newFilters);
-    console.log("called from handleFilterChange - newFilters:", JSON.stringify(newFilters));
-    debouncedSearch(newFilters);
+  useEffect(() => {
+    return () => {
+      debouncer.cancel()
+    }
+  }, [debouncer])
+
+  const updateFilters = (update: Partial<FilterState>) => {
+    setFilters((previousFilters) => {
+      const newFilters = {...previousFilters, ...update };
+      setDebouncedFilters(newFilters);
+      return newFilters;
+    })
   };
 
   const handleSortChange = (sortBy: string, sortOrder: 'asc' | 'desc') => {
-    const newFilters = {
-      ...filters,
-      sort_by: sortBy,
-      sort_order: sortOrder
-    };
-    setFilters(newFilters);
-    debouncedSearch(newFilters);
+    updateFilters({ sort_by: sortBy, sort_order: sortOrder });
   };
 
-  // Create a debounced version of the search function
-  const debouncedSearch = useCallback(
-    debounce(async (filters: FilterState) => {
-      if (!accessToken || !token || !userRole || !userID) {
-        return;
-      }
-
-      const currentTimestamp = Date.now();
-      lastSearchTimestamp.current = currentTimestamp;
-
-      try {
-        // Make the API call using userListCall with all filter parameters
-        const data = await userListCall(
-          accessToken,
-          filters.user_id ? [filters.user_id] : null,
-          1, // Reset to first page when searching
-          defaultPageSize,
-          filters.email || null,
-          filters.user_role || null,
-          filters.team || null,
-          filters.sso_user_id || null,
-          filters.sort_by,
-          filters.sort_order
-        );
-        
-        // Only update state if this is the most recent search
-        if (currentTimestamp === lastSearchTimestamp.current) {
-          if (data) {
-            setUserListResponse(data);
-            console.log("called from debouncedSearch filters:", JSON.stringify(filters));
-            console.log("called from debouncedSearch data:", JSON.stringify(data));
-          }
-        }
-      } catch (error) {
-        console.error("Error searching users:", error);
-      }
-    }, 300),
-    [accessToken, token, userRole, userID]
-  );
-
-  // Cleanup the debounced function on component unmount
-  useEffect(() => {
-    return () => {
-      debouncedSearch.cancel();
-    };
-  }, [debouncedSearch]);
-
-  const handleSearch = (value: string) => {
-    setSearchTerm(value);
-    if (value === "") {
-      refreshUserData(); // Reset to original data when search is cleared
-    } else {
-      debouncedSearch(filters);
-    }
-  };
 
   const confirmDelete = async () => {
     if (userToDelete && accessToken) {
       try {
         await userDeleteCall(accessToken, [userToDelete]);
-        message.success("User deleted successfully");
+
         // Update the user list after deletion
-        if (userListResponse) {
-          const updatedUserData = userListResponse.users?.filter(user => user.user_id !== userToDelete);
-          setUserListResponse({ ...userListResponse, users: updatedUserData || [] });
-        }
+        queryClient.setQueriesData<UserListResponse>({ queryKey: ['userList'] }, (previousData) => {
+          if (previousData === undefined) return previousData;
+          const updatedUsers = previousData.users.filter(user => user.user_id !== userToDelete);
+          return { ...previousData, users: updatedUsers };
+        })
+        
+        message.success("User deleted successfully");
       } catch (error) {
         console.error("Error deleting user:", error);
         message.error("Failed to delete user");
@@ -264,141 +152,68 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     }
 
     try {
-      await userUpdateUserCall(accessToken, editedUser, null);
+      const response = await userUpdateUserCall(accessToken, editedUser, null);
+      queryClient.setQueriesData<UserListResponse>({ queryKey: ['userList'] }, (previousData) => {
+        if (previousData === undefined) return previousData;
+        const updatedUsers = previousData.users.map(user => {
+          if (user.user_id === response.data.user_id) {
+            return updateExistingKeys(user, response.data);
+          }
+          return user;
+        });
+        
+        return { ...previousData, users: updatedUsers };
+      })
+
       message.success(`User ${editedUser.user_id} updated successfully`);
     } catch (error) {
       console.error("There was an error updating the user", error);
-    }
-    if (userListResponse) {
-      const updatedUserData = userListResponse.users?.map((user) =>
-        user.user_id === editedUser.user_id ? editedUser : user
-      );
-      setUserListResponse({ ...userListResponse, users: updatedUserData || [] });
     }
     setSelectedUser(null);
     setEditModalVisible(false);
     // Close the modal
   };
 
-  const refreshUserData = async () => {
-    console.log("called from refreshUserData");
-    if (!accessToken || !token || !userRole || !userID) {
-      return;
-    }
-    
-    try {
-      const userDataResponse = await userInfoCall(
-        accessToken,
-        null,
-        userRole,
-        true,
-        currentPage,
-        defaultPageSize
-      );
-      
-      // Update session storage with new data
-      sessionStorage.setItem(
-        `userList_${currentPage}`,
-        JSON.stringify(userDataResponse)
-      );
-      console.log("called from refreshUserData");
-      setUserListResponse(userDataResponse);
-    } catch (error) {
-      console.error("Error refreshing user data:", error);
-    }
-  };
-
   const handlePageChange = async (newPage: number) => {
-    if (!accessToken || !token || !userRole || !userID) {
-      return;
-    }
-    
-    try {
-      const userDataResponse = await userListCall(
-        accessToken,
-        filters.user_id ? [filters.user_id] : null,
-        newPage,
-        defaultPageSize,
-        filters.email || null,
-        filters.user_role || null,
-        filters.team || null,
-        filters.sso_user_id || null,
-        filters.sort_by,
-        filters.sort_order
-      );
-      
-      // Update session storage with new data
-      sessionStorage.setItem(
-        `userList_${newPage}`,
-        JSON.stringify(userDataResponse)
-      );
-      
-      setUserListResponse(userDataResponse);
-      setCurrentPage(newPage);
-    } catch (error) {
-      console.error("Error changing page:", error);
-    }
+    setCurrentPage(newPage);
   };
 
-  useEffect(() => {
-    if (!accessToken || !token || !userRole || !userID) {
-      return;
-    }
-    const fetchData = async () => {
-      try {
-        // Check session storage first
-        const cachedUserData = sessionStorage.getItem(`userList_${currentPage}`);
-        if (cachedUserData) {
-          const parsedData = JSON.parse(cachedUserData);
-          setUserListResponse(parsedData);
-          console.log("called from useEffect");
-        } else {
-          // Fetch from API using userListCall with current filters
-          const userDataResponse = await userListCall(
-            accessToken,
-            filters.user_id ? [filters.user_id] : null,
-            currentPage,
-            defaultPageSize,
-            filters.email || null,
-            filters.user_role || null,
-            filters.team || null,
-            filters.sso_user_id || null,
-            filters.sort_by,
-            filters.sort_order
-          );
+  const userListQuery = useQuery({
+    queryKey: ['userList', { debouncedFilter: debouncedFilters, currentPage }],
+    queryFn: async () => {
+      if (!accessToken) throw new Error('Access token required');
 
-          // Store in session storage
-          sessionStorage.setItem(
-            `userList_${currentPage}`,
-            JSON.stringify(userDataResponse)
-          );
+      return await userListCall(
+        accessToken,
+        debouncedFilters.user_id ? [debouncedFilters.user_id] : null,
+        currentPage,
+        DEFAULT_PAGE_SIZE,
+        debouncedFilters.email || null,
+        debouncedFilters.user_role || null,
+        debouncedFilters.team || null,
+        debouncedFilters.sso_user_id || null,
+        debouncedFilters.sort_by,
+        debouncedFilters.sort_order
+      );
+    },
+    enabled: Boolean(accessToken && token && userRole && userID),
+    placeholderData: (previousData) => previousData
+  });
+  const userListResponse = userListQuery.data
 
-          setUserListResponse(userDataResponse);
-          console.log("called from useEffect 2");
-        }
+  const userRolesQuery = useQuery<Record<string, Record<string, string>>>({
+    queryKey: ['userRoles'],
+    initialData: () => ({}),
+    queryFn: async () => {
+      if (!accessToken) throw new Error('Access token required');
+      return await getPossibleUserRoles(accessToken);
+    },
+    enabled: Boolean(accessToken && token && userRole && userID),
+  });
+  const possibleUIRoles = userRolesQuery.data
 
-        // Fetch roles if not cached
-        const cachedRoles = sessionStorage.getItem('possibleUserRoles');
-        if (cachedRoles) {
-          setPossibleUIRoles(JSON.parse(cachedRoles));
-        } else {
-          const availableUserRoles = await getPossibleUserRoles(accessToken);
-          sessionStorage.setItem('possibleUserRoles', JSON.stringify(availableUserRoles));
-          setPossibleUIRoles(availableUserRoles);
-        }
-      } catch (error) {
-        console.error("There was an error fetching the model data", error);
-      }
-    };
-
-    if (accessToken && token && userRole && userID) {
-      fetchData();
-    }
-
-  }, [accessToken, token, userRole, userID]);
-
-  if (!userListResponse) {
-    return <div>Loading...</div>;
+  if (userListQuery.isLoading) {
+    return <div>Loading...</div>
   }
 
   if (!accessToken || !token || !userRole || !userID) {
@@ -448,7 +263,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                         placeholder="Search by email..."
                         className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                         value={filters.email}
-                        onChange={(e) => handleFilterChange('email', e.target.value)}
+                        onChange={(e) => updateFilters({ email: e.target.value })}
                       />
                       <svg
                         className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500"
@@ -493,18 +308,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                     <button
                       className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
                       onClick={() => {
-                        setFilters({
-                          email: "",
-                          user_id: "",
-                          user_role: "",
-                          team: "",
-                          sso_user_id: "",
-                          model: "",
-                          min_spend: null,
-                          max_spend: null,
-                          sort_by: "created_at",
-                          sort_order: "desc"
-                        });
+                        updateFilters(initialFilters);
                       }}
                     >
                       <svg
@@ -534,7 +338,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                           placeholder="Filter by User ID"
                           className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                           value={filters.user_id}
-                          onChange={(e) => handleFilterChange('user_id', e.target.value)}
+                          onChange={(e) => updateFilters({ user_id : e.target.value })}
                         />
                         <svg
                           className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500"
@@ -555,7 +359,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                       <div className="w-64">
                         <Select
                           value={filters.user_role}
-                          onValueChange={(value) => handleFilterChange('user_role', value)}
+                          onValueChange={(value) => updateFilters({ user_role: value })}
                           placeholder="Select Role"
                         >
                           {Object.entries(possibleUIRoles).map(([key, value]) => (
@@ -570,7 +374,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                       <div className="w-64">
                         <Select
                           value={filters.team}
-                          onValueChange={(value) => handleFilterChange('team', value)}
+                          onValueChange={(value) => updateFilters({ team: value })}
                           placeholder="Select Team"
                         >
                           {teams?.map((team) => (
@@ -588,7 +392,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                           placeholder="Filter by SSO ID"
                           className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                           value={filters.sso_user_id}
-                          onChange={(e) => handleFilterChange('sso_user_id', e.target.value)}
+                          onChange={(e) => updateFilters({ sso_user_id : e.target.value })}
                         />
                       </div>
                     </div>
@@ -641,9 +445,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
               </div>
 
               <UserDataTable
-                data={userListResponse?.users || []}
+                data={userListQuery.data?.users || []}
                 columns={tableColumns}
-                isLoading={!userListResponse}
+                isLoading={userListQuery.isLoading}
                 accessToken={accessToken}
                 userRole={userRole}
                 onSortChange={handleSortChange}
@@ -651,6 +455,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                   sortBy: filters.sort_by,
                   sortOrder: filters.sort_order
                 }}
+                possibleUIRoles={possibleUIRoles}
               />
             </div>
           </TabPanel>

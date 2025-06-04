@@ -4,7 +4,7 @@ import TabItem from '@theme/TabItem';
 
 # Adding LLM Credentials
 
-You can add LLM provider credentials on the UI. Once you add credentials you can re-use them when adding new models
+You can add LLM provider credentials on the UI. Once you add credentials you can reuse them when adding new models
 
 ## Add a credential + model
 

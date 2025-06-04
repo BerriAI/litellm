@@ -95,6 +95,35 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     #########################################################
     ########## DELETE RESPONSE API TRANSFORMATION ##############
     #########################################################
+    def _construct_url_for_response_id_in_path(
+        self, api_base: str, response_id: str
+    ) -> str:
+        """
+        Constructs a URL for the API request with the response_id in the path.
+        """
+        from urllib.parse import urlparse, urlunparse
+
+        # Parse the URL to separate its components
+        parsed_url = urlparse(api_base)
+
+        # Insert the response_id at the end of the path component
+        # Remove trailing slash if present to avoid double slashes
+        path = parsed_url.path.rstrip("/")
+        new_path = f"{path}/{response_id}"
+
+        # Reconstruct the URL with all original components but with the modified path
+        constructed_url = urlunparse(
+            (
+                parsed_url.scheme,  # http, https
+                parsed_url.netloc,  # domain name, port
+                new_path,  # path with response_id added
+                parsed_url.params,  # parameters
+                parsed_url.query,  # query string
+                parsed_url.fragment,  # fragment
+            )
+        )
+        return constructed_url
+
     def transform_delete_response_api_request(
         self,
         response_id: str,
@@ -111,28 +140,33 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         This function handles URLs with query parameters by inserting the response_id
         at the correct location (before any query parameters).
         """
-        from urllib.parse import urlparse, urlunparse
-
-        # Parse the URL to separate its components
-        parsed_url = urlparse(api_base)
-
-        # Insert the response_id at the end of the path component
-        # Remove trailing slash if present to avoid double slashes
-        path = parsed_url.path.rstrip("/")
-        new_path = f"{path}/{response_id}"
-
-        # Reconstruct the URL with all original components but with the modified path
-        delete_url = urlunparse(
-            (
-                parsed_url.scheme,  # http, https
-                parsed_url.netloc,  # domain name, port
-                new_path,  # path with response_id added
-                parsed_url.params,  # parameters
-                parsed_url.query,  # query string
-                parsed_url.fragment,  # fragment
-            )
+        delete_url = self._construct_url_for_response_id_in_path(
+            api_base=api_base, response_id=response_id
         )
 
         data: Dict = {}
         verbose_logger.debug(f"delete response url={delete_url}")
         return delete_url, data
+
+    #########################################################
+    ########## GET RESPONSE API TRANSFORMATION ###############
+    #########################################################
+    def transform_get_response_api_request(
+        self,
+        response_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform the get response API request into a URL and data
+
+        OpenAI API expects the following request
+        - GET /v1/responses/{response_id}
+        """
+        get_url = self._construct_url_for_response_id_in_path(
+            api_base=api_base, response_id=response_id
+        )
+        data: Dict = {}
+        verbose_logger.debug(f"get response url={get_url}")
+        return get_url, data

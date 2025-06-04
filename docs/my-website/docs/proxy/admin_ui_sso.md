@@ -186,6 +186,10 @@ Set a Proxy Admin when SSO is enabled. Once SSO is enabled, the `user_id` for us
 export PROXY_ADMIN_ID="116544810872468347480"
 ```
 
+This will update the user role in the `LiteLLM_UserTable` to `proxy_admin`. 
+
+If you plan to change this ID, please update the user role via API `/user/update` or UI (Internal Users page). 
+
 #### Step 3: See all proxy keys
 
 <Image img={require('../../img/litellm_ui_admin.png')} />
@@ -243,12 +247,12 @@ We allow you to pass a local image or a an http/https url of your image
 
 Set `UI_LOGO_PATH` on your env. We recommend using a hosted image, it's a lot easier to set up and configure / debug
 
-Exaple setting Hosted image
+Example setting Hosted image
 ```shell
 UI_LOGO_PATH="https://litellm-logo-aws-marketplace.s3.us-west-2.amazonaws.com/berriai-logo-github.png"
 ```
 
-Exaple setting a local image (on your container)
+Example setting a local image (on your container)
 ```shell
 UI_LOGO_PATH="ui_images/logo.jpg"
 ```

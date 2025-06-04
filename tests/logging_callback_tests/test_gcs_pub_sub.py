@@ -31,6 +31,7 @@ verbose_logger.setLevel(logging.DEBUG)
 
 ignored_keys = [
     "request_id",
+    "session_id",
     "startTime",
     "endTime",
     "completionStartTime",
@@ -170,7 +171,7 @@ def assert_gcs_pubsub_request_matches_expected_standard_logging_payload(
         "response_time",
         "completion_tokens",
         "prompt_tokens",
-        "total_tokens",
+        "total_tokens"
     ]
 
     for field in FIELDS_EXISTENCE_CHECKS:

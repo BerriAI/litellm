@@ -84,9 +84,15 @@ def _get_vertex_url(
         endpoint = "generateContent"
         if stream is True:
             endpoint = "streamGenerateContent"
-            url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}?alt=sse"
+            if vertex_location == "global":
+                url = f"https://aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/global/publishers/google/models/{model}:{endpoint}?alt=sse"
+            else:
+                url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}?alt=sse"
         else:
-            url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+            if vertex_location == "global":
+                url = f"https://aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/global/publishers/google/models/{model}:{endpoint}"
+            else:
+                url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
 
         # if model is only numeric chars then it's a fine tuned gemini model
         # model = 4965075652664360960
@@ -192,6 +198,9 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     #     * https://stackoverflow.com/a/58841311
     #     * https://github.com/pydantic/pydantic/discussions/4872
     convert_anyof_null_to_nullable(parameters)
+
+    # Handle empty items objects
+    process_items(parameters)
     add_object_type(parameters)
     # Postprocessing
     # Filter out fields that don't exist in Schema
@@ -199,7 +208,56 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
 
     if add_property_ordering:
         set_schema_property_ordering(parameters)
+
     return parameters
+
+
+def _filter_anyof_fields(schema_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    When anyof is present, only keep the anyof field and its contents - otherwise VertexAI will throw an error - https://github.com/BerriAI/litellm/issues/11164
+    Filter out other fields in the same dict.
+
+    E.g. {"anyOf": [{"type": "string"}, {"type": "null"}], "default": "test"} -> {"anyOf": [{"type": "string"}, {"type": "null"}]}
+
+    Case 2: If additional metadata is present, try to keep it
+    E.g. {"anyOf": [{"type": "string"}, {"type": "null"}], "default": "test", "title": "test"} -> {"anyOf": [{"type": "string", "title": "test"}, {"type": "null", "title": "test"}]}
+    """
+    title = schema_dict.get("title", None)
+    description = schema_dict.get("description", None)
+
+    if isinstance(schema_dict, dict) and schema_dict.get("anyOf"):
+        any_of = schema_dict["anyOf"]
+        if (
+            (title or description)
+            and isinstance(any_of, list)
+            and all(isinstance(item, dict) for item in any_of)
+        ):
+            for item in any_of:
+                if title:
+                    item["title"] = title
+                if description:
+                    item["description"] = description
+            return {"anyOf": any_of}
+        else:
+            return schema_dict
+    return schema_dict
+
+
+def process_items(schema, depth=0):
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(
+            f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
+        )
+    if isinstance(schema, dict):
+        if "items" in schema and schema["items"] == {}:
+            schema["items"] = {"type": "object"}
+        for key, value in schema.items():
+            if isinstance(value, dict):
+                process_items(value, depth + 1)
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict):
+                        process_items(item, depth + 1)
 
 
 def set_schema_property_ordering(
@@ -250,6 +308,7 @@ def filter_schema_fields(
         return schema_dict
 
     result = {}
+    schema_dict = _filter_anyof_fields(schema_dict)
     for key, value in schema_dict.items():
         if key not in valid_fields:
             continue
@@ -285,6 +344,9 @@ def convert_anyof_null_to_nullable(schema, depth=0):
                 # remove null type
                 anyof.remove(atype)
                 contains_null = True
+            elif "type" not in atype and len(atype) == 0:
+                # Handle empty object case
+                atype["type"] = "object"
 
         if len(anyof) == 0:
             # Edge case: response schema with only null type present is invalid in Vertex AI
@@ -296,6 +358,13 @@ def convert_anyof_null_to_nullable(schema, depth=0):
         if contains_null:
             # set all types to nullable following guidance found here: https://cloud.google.com/vertex-ai/generative-ai/docs/samples/generativeaionvertexai-gemini-controlled-generation-response-schema-3#generativeaionvertexai_gemini_controlled_generation_response_schema_3-python
             for atype in anyof:
+                # Remove items field if type is array and items is empty
+                if (
+                    atype.get("type") == "array"
+                    and "items" in atype
+                    and not atype["items"]
+                ):
+                    atype.pop("items")
                 atype["nullable"] = True
 
     properties = schema.get("properties", None)

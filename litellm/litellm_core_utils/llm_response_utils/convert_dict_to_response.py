@@ -10,7 +10,10 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.types.llms.databricks import DatabricksTool
-from litellm.types.llms.openai import ChatCompletionThinkingBlock
+from litellm.types.llms.openai import (
+    ChatCompletionThinkingBlock,
+    OpenAIModerationResponse,
+)
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
@@ -252,7 +255,9 @@ def _parse_content_for_reasoning(
     if not message_text:
         return None, message_text
 
-    reasoning_match = re.match(r"<think>(.*?)</think>(.*)", message_text, re.DOTALL)
+    reasoning_match = re.match(
+        r"<(?:think|thinking)>(.*?)</(?:think|thinking)>(.*)", message_text, re.DOTALL
+    )
 
     if reasoning_match:
         return reasoning_match.group(1), reasoning_match.group(2)
@@ -270,12 +275,14 @@ def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[s
     Returns:
         tuple[Optional[str], Optional[str]]: A tuple of (reasoning_content, content)
     """
+    message_content = message.get("content")
     if "reasoning_content" in message:
         return message["reasoning_content"], message["content"]
     elif "reasoning" in message:
         return message["reasoning"], message["content"]
-    else:
-        return _parse_content_for_reasoning(message.get("content"))
+    elif isinstance(message_content, str):
+        return _parse_content_for_reasoning(message_content)
+    return None, message_content
 
 
 class LiteLLMResponseObjectHandler:
@@ -296,6 +303,12 @@ class LiteLLMResponseObjectHandler:
             model_response_dict.update(response_object)
             model_response_object = ImageResponse(**model_response_dict)
             return model_response_object
+
+    @staticmethod
+    def convert_to_moderation_response(
+        response_object: dict,
+    ) -> OpenAIModerationResponse:
+        return OpenAIModerationResponse(**response_object)
 
     @staticmethod
     def convert_chat_to_text_completion(
@@ -519,6 +532,12 @@ def convert_to_model_response_object(  # noqa: PLR0915
                 if finish_reason is None:
                     # gpt-4 vision can return 'finish_reason' or 'finish_details'
                     finish_reason = choice.get("finish_details") or "stop"
+                if (
+                    finish_reason == "stop"
+                    and message.tool_calls
+                    and len(message.tool_calls) > 0
+                ):
+                    finish_reason = "tool_calls"
                 logprobs = choice.get("logprobs", None)
                 enhancements = choice.get("enhancements", None)
                 choice = Choices(

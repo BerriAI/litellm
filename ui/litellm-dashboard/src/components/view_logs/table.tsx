@@ -1,4 +1,4 @@
-import { Fragment, useEffect } from "react";
+import { Fragment } from "react";
 import {
   ColumnDef,
   flexRender,
@@ -23,71 +23,34 @@ interface DataTableProps<TData, TValue> {
   renderSubComponent: (props: { row: Row<TData> }) => React.ReactElement;
   getRowCanExpand: (row: Row<TData>) => boolean;
   isLoading?: boolean;
-  expandedRequestId?: string | null;
-  onRowExpand?: (requestId: string | null) => void;
-  setSelectedKeyIdInfoView?: (keyId: string | null) => void;
+  loadingMessage?: string;
+  noDataMessage?: string;
 }
 
-export function DataTable<TData extends { request_id: string }, TValue>({
+export function DataTable<TData, TValue>({
   data = [],
   columns,
   getRowCanExpand,
   renderSubComponent,
   isLoading = false,
-  expandedRequestId,
-  onRowExpand,
+  loadingMessage = "🚅 Loading logs...",
+  noDataMessage = "No logs found",
 }: DataTableProps<TData, TValue>) {
-  const table = useReactTable({
+  const table = useReactTable<TData>({
     data,
     columns,
     getRowCanExpand,
+    getRowId: (row: TData, index: number) => {
+      const _row: any = row as any;
+      return (
+        _row?.request_id ??
+        String(index)
+      );
+    },
     getCoreRowModel: getCoreRowModel(),
     getExpandedRowModel: getExpandedRowModel(),
-    state: {
-      expanded: expandedRequestId 
-        ? data.reduce((acc, row, index) => {
-            if (row.request_id === expandedRequestId) {
-              acc[index] = true;
-            }
-            return acc;
-          }, {} as Record<string, boolean>)
-        : {},
-    },
-    onExpandedChange: (updater) => {
-      if (!onRowExpand) return;
-      
-      // Get current expanded state
-      const currentExpanded = expandedRequestId 
-        ? data.reduce((acc, row, index) => {
-            if (row.request_id === expandedRequestId) {
-              acc[index] = true;
-            }
-            return acc;
-          }, {} as Record<string, boolean>)
-        : {};
-      
-      // Calculate new expanded state
-      const newExpanded = typeof updater === 'function' 
-        ? updater(currentExpanded) 
-        : updater;
-      
-      // If empty, it means we're closing the expanded row
-      if (Object.keys(newExpanded).length === 0) {
-        onRowExpand(null);
-        return;
-      }
-      
-      // Find the request_id of the expanded row
-      const expandedIndex = Object.keys(newExpanded)[0];
-      const expandedRow = expandedIndex !== undefined ? data[parseInt(expandedIndex)] : null;
-      
-      // Call the onRowExpand callback with the request_id
-      onRowExpand(expandedRow ? expandedRow.request_id : null);
-    },
   });
 
-  // No need for the useEffect here as we're handling everything in onExpandedChange
-  
   return (
     <div className="rounded-lg custom-border">
       <Table className="[&_td]:py-0.5 [&_th]:py-1">
@@ -114,7 +77,7 @@ export function DataTable<TData extends { request_id: string }, TValue>({
             <TableRow>
               <TableCell colSpan={columns.length} className="h-8 text-center">
                 <div className="text-center text-gray-500">
-                  <p>🚅 Loading logs...</p>
+                  <p>{loadingMessage}</p>
                 </div>
               </TableCell>
             </TableRow>
@@ -147,7 +110,7 @@ export function DataTable<TData extends { request_id: string }, TValue>({
           : <TableRow>
               <TableCell colSpan={columns.length} className="h-8 text-center">
                 <div className="text-center text-gray-500">
-                  <p>No logs found</p>
+                  <p>{noDataMessage}</p>
                 </div>
               </TableCell>
             </TableRow>

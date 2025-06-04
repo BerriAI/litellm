@@ -5,12 +5,47 @@ import { all_admin_roles } from "@/utils/roles";
 import { message } from "antd";
 import { TagNewRequest, TagUpdateRequest, TagDeleteRequest, TagInfoRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
 import { Team } from "./key_team_helpers/key_list";
+import { UserInfo } from "./view_users/types";
+import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
 
 const isLocal = process.env.NODE_ENV === "development";
-export const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+export const defaultProxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+const defaultServerRootPath = "/";
+export let serverRootPath = defaultServerRootPath;
+export let proxyBaseUrl = defaultProxyBaseUrl;
 if (isLocal != true) {
   console.log = function() {};
 }
+
+const updateProxyBaseUrl = (serverRootPath: string, receivedProxyBaseUrl: string | null = null) => {
+  /**
+   * Special function for updating the proxy base url. Should only be called by getUiConfig.
+   */
+  const defaultProxyBaseUrl = isLocal ? "http://localhost:4000" : window.location.origin;
+  let initialProxyBaseUrl = receivedProxyBaseUrl || defaultProxyBaseUrl;
+  console.log("proxyBaseUrl:", proxyBaseUrl);
+  console.log("serverRootPath:", serverRootPath);
+  if (serverRootPath.length > 0 && !initialProxyBaseUrl.endsWith(serverRootPath) && serverRootPath != "/") {
+    initialProxyBaseUrl += serverRootPath;
+    proxyBaseUrl = initialProxyBaseUrl;
+  }
+  console.log("Updated proxyBaseUrl:", proxyBaseUrl);
+};
+
+const updateServerRootPath = (receivedServerRootPath: string) => {
+  serverRootPath = receivedServerRootPath;
+};
+
+export const getProxyBaseUrl = () => {
+  return proxyBaseUrl;
+};
+
+const HTTP_REQUEST = {
+  GET: "GET",
+  POST: "POST",
+  PUT: "PUT",
+  DELETE: "DELETE",
+};
 
 export const DEFAULT_ORGANIZATION = "default_organization";
 
@@ -37,11 +72,16 @@ export interface Organization {
   teams: any[] | null;
   users: any[] | null;
   members: any[] | null;
+  object_permission?: {
+    object_permission_id: string;
+    mcp_servers: string[];
+    vector_stores: string[];
+  };
 }
 
 export interface CredentialItem {
   credential_name: string;
-  credential_values: object;
+  credential_values: any;
   credential_info: {
     custom_llm_provider?: string;
     description?: string;
@@ -49,17 +89,17 @@ export interface CredentialItem {
   };
 }
 
+export interface LiteLLMWellKnownUiConfig {
+  server_root_path: string;
+  proxy_base_url: string | null;
+}
+
 export interface CredentialsResponse {
   credentials: CredentialItem[];
 }
 
-
-const baseUrl = "/"; // Assuming the base URL is the root
-
-
 let lastErrorTime = 0;
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const handleError = async (errorData: string) => {
   const currentTime = Date.now();
@@ -67,9 +107,8 @@ const handleError = async (errorData: string) => {
     if (errorData.includes("Authentication Error - Expired Key")) {
       message.info("UI Session Expired. Logging out.");
       lastErrorTime = currentTime;
-      await sleep(3000); // 5 second sleep
       document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-      window.location.href = baseUrl;
+      window.location.href = window.location.pathname;
     }
     lastErrorTime = currentTime;
   } else {
@@ -85,6 +124,20 @@ let globalLitellmHeaderName: string  = "Authorization";
 export function setGlobalLitellmHeaderName(headerName: string = "Authorization") {
   console.log(`setGlobalLitellmHeaderName: ${headerName}`);
   globalLitellmHeaderName = headerName;
+}
+
+export const getUiConfig = async () => {
+  console.log("Getting UI config");
+  /**Special route to get the proxy base url and server root path */
+  const url = defaultProxyBaseUrl ? `${defaultProxyBaseUrl}/litellm/.well-known/litellm-ui-config` : `/litellm/.well-known/litellm-ui-config`;
+  const response = await fetch(url);
+  const jsonData: LiteLLMWellKnownUiConfig = await response.json();
+  /**
+   * Update the proxy base url and server root path
+   */
+  console.log("jsonData in getUiConfig:", jsonData);
+  updateProxyBaseUrl(jsonData.server_root_path, jsonData.proxy_base_url);
+  return jsonData;
 }
 
 export const getOpenAPISchema = async () => {
@@ -670,6 +723,13 @@ export const teamDeleteCall = async (accessToken: String, teamID: String) => {
   }
 };
 
+export type UserListResponse = {
+  page: number,
+  page_size: number,
+  total: number,
+  total_pages: number,
+  users: UserInfo[]
+}
 
 export const userListCall = async (
   accessToken: String, 
@@ -748,7 +808,7 @@ export const userListCall = async (
       throw new Error("Network response was not ok");
     }
 
-    const data = await response.json();
+    const data = await response.json() as UserListResponse;
     console.log("/user/list API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -848,10 +908,85 @@ export const teamInfoCall = async (
   }
 };
 
+type TeamListResponse = {
+  teams: Team[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+};
+
+export const v2TeamListCall = async (
+  accessToken: String, 
+  organizationID: string | null,
+  userID: String | null = null,
+  teamID: string | null = null,
+  team_alias: string | null = null,
+  page: number = 1,
+  page_size: number = 10,
+  sort_by: string | null = null,
+  sort_order: 'asc' | 'desc' | null = null,
+): Promise<TeamListResponse> => {
+  /**
+   * Get list of teams with filtering and sorting options
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/team/list` : `/v2/team/list`;
+    console.log("in teamInfoCall");
+    const queryParams = new URLSearchParams();
+    
+    if (userID) {
+      queryParams.append('user_id', userID.toString());
+    }
+    
+    if (organizationID) {
+      queryParams.append('organization_id', organizationID.toString());
+    }
+
+    if (teamID) {
+      queryParams.append('team_id', teamID.toString());
+    }
+
+    if (team_alias) {
+      queryParams.append('team_alias', team_alias.toString());
+    }
+    
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("/v2/team/list API Response:", data);
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+
 export const teamListCall = async (
   accessToken: String, 
   organizationID: string | null,
   userID: String | null = null,
+  teamID: string | null = null,
+  team_alias: string | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -867,6 +1002,14 @@ export const teamListCall = async (
     
     if (organizationID) {
       queryParams.append('organization_id', organizationID.toString());
+    }
+
+    if (teamID) {
+      queryParams.append('team_id', teamID.toString());
+    }
+
+    if (team_alias) {
+      queryParams.append('team_alias', team_alias.toString());
     }
     
     const queryString = queryParams.toString();
@@ -1777,7 +1920,8 @@ export const modelAvailableCall = async (
   userID: String,
   userRole: String,
   return_wildcard_routes: boolean = false,
-  teamID: String | null = null
+  teamID: String | null = null,
+  include_model_access_groups: boolean = false
 ) => {
   /**
    * Get all the models user has access to
@@ -1788,6 +1932,9 @@ export const modelAvailableCall = async (
     const params = new URLSearchParams();
     if (return_wildcard_routes === true) {
       params.append('return_wildcard_routes', 'True');
+    }
+    if (include_model_access_groups === true) {
+      params.append('include_model_access_groups', 'True');
     }
     if (teamID) {
       params.append('team_id', teamID.toString());
@@ -2055,6 +2202,8 @@ export const uiSpendLogsCall = async (
   page?: number,
   page_size?: number,
   user_id?: string,
+  status_filter?: string,
+  model?: string
 ) => {
   try {
     // Construct base URL
@@ -2070,7 +2219,8 @@ export const uiSpendLogsCall = async (
     if (page) queryParams.append('page', page.toString());
     if (page_size) queryParams.append('page_size', page_size.toString());
     if (user_id) queryParams.append('user_id', user_id);
-
+    if (status_filter) queryParams.append('status_filter', status_filter);
+    if (model) queryParams.append('model', model);
     // Append query parameters to URL if any exist
     const queryString = queryParams.toString();
     if (queryString) {
@@ -2493,6 +2643,9 @@ export const keyInfoCall = async (accessToken: String, keys: String[]) => {
 
     if (!response.ok) {
       const errorData = await response.text();
+      if (errorData.includes("Invalid proxy server token passed")) {
+        throw new Error("Invalid proxy server token passed");
+      }
       handleError(errorData);
       throw new Error("Network response was not ok");
     }
@@ -2603,8 +2756,12 @@ export const keyListCall = async (
   organizationID: string | null,
   teamID: string | null,
   selectedKeyAlias: string | null,
+  userID: string | null,
+  keyHash: string | null,
   page: number,
   pageSize: number,
+  sortBy: string | null = null,
+  sortOrder: string | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -2626,6 +2783,14 @@ export const keyListCall = async (
       queryParams.append('key_alias', selectedKeyAlias)
     }
 
+    if (keyHash) {
+      queryParams.append('key_hash', keyHash);
+    }
+
+    if (userID) {
+      queryParams.append('user_id', userID.toString());
+    }
+
     if (page) {
       queryParams.append('page', page.toString());
     }
@@ -2634,6 +2799,13 @@ export const keyListCall = async (
       queryParams.append('size', pageSize.toString());
     }
 
+    if (sortBy) {
+      queryParams.append('sort_by', sortBy);
+    }
+
+    if (sortOrder) {
+      queryParams.append('sort_order', sortOrder);
+    }
     queryParams.append('return_full_object', 'true');
     queryParams.append('include_team_keys', 'true');
     
@@ -2818,7 +2990,7 @@ export const getPossibleUserRoles = async (accessToken: String) => {
       const errorData = await response.text();
       throw new Error("Network response was not ok");
     }
-    const data = await response.json();
+    const data = await response.json() as Record<string, Record<string, string>>;
     console.log("response from user/available_role", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -3137,14 +3309,58 @@ export const teamUpdateCall = async (
       const errorData = await response.text();
       handleError(errorData);
       console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      message.error("Failed to update team settings: " + errorData);
+      throw new Error(errorData);
     }
     const data = await response.json() as { data: Team, team_id: string };
     console.log("Update Team Response:", data);
     return data;
+    // Handle success - you might want to update some state or UI based on the updated team
+  } catch (error) {
+    console.error("Failed to update team:", error);
+    throw error;
+  }
+};
+
+/**
+ * Patch update a model
+ * 
+ * @param accessToken 
+ * @param formValues 
+ * @returns 
+ */
+export const modelPatchUpdateCall = async (
+  accessToken: string,
+  formValues: Record<string, any>, // Assuming formValues is an object
+  modelId: string
+) => {
+  try {
+    console.log("Form Values in modelUpateCall:", formValues); // Log the form values before making the API call
+
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/model/${modelId}/update` : `/model/${modelId}/update`;
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...formValues, // Include formValues in the request body
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      console.error("Error update from the server:", errorData);
+      throw new Error("Network response was not ok");
+    }
+    const data = await response.json();
+    console.log("Update model Response:", data);
+    return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
-    console.error("Failed to create key:", error);
+    console.error("Failed to update model:", error);
     throw error;
   }
 };
@@ -3193,14 +3409,15 @@ export interface Member {
 export const teamMemberAddCall = async (
   accessToken: string,
   teamId: string,
-  formValues: Member // Assuming formValues is an object
+  formValues: Member
 ) => {
   try {
-    console.log("Form Values in teamMemberAddCall:", formValues); // Log the form values before making the API call
+    console.log("Form Values in teamMemberAddCall:", formValues);
 
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/team/member_add`
       : `/team/member_add`;
+
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -3209,21 +3426,30 @@ export const teamMemberAddCall = async (
       },
       body: JSON.stringify({
         team_id: teamId,
-        member: formValues, // Include formValues in the request body
+        member: formValues,
       }),
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      // Read and parse JSON error body
+      const errorText = await response.text();
+      let parsedError: any = {};
+
+      try {
+        parsedError = JSON.parse(errorText);
+      } catch (e) {
+        console.warn("Failed to parse error body as JSON:", errorText);
+      }
+
+      const rawMessage = parsedError?.detail?.error || "Failed to add team member";
+      const err = new Error(rawMessage);
+      (err as any).raw = parsedError;
+      throw err;
     }
 
     const data = await response.json();
     console.log("API Response:", data);
     return data;
-    // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -3236,7 +3462,7 @@ export const teamMemberUpdateCall = async (
   formValues: Member // Assuming formValues is an object
 ) => {
   try {
-    console.log("Form Values in teamMemberAddCall:", formValues); // Log the form values before making the API call
+    console.log("Form Values in teamMemberUpdateCall:", formValues);
 
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/team/member_update`
@@ -3255,21 +3481,30 @@ export const teamMemberUpdateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      // Read and parse JSON error body
+      const errorText = await response.text();
+      let parsedError: any = {};
+
+      try {
+        parsedError = JSON.parse(errorText);
+      } catch (e) {
+        console.warn("Failed to parse error body as JSON:", errorText);
+      }
+
+      const rawMessage = parsedError?.detail?.error || "Failed to add team member";
+      const err = new Error(rawMessage);
+      (err as any).raw = parsedError;
+      throw err;
     }
 
     const data = await response.json();
     console.log("API Response:", data);
     return data;
-    // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
-    console.error("Failed to create key:", error);
+    console.error("Failed to update team member:", error);
     throw error;
   }
-}
+};
 
 export const teamMemberDeleteCall = async (
   accessToken: string,
@@ -3461,7 +3696,10 @@ export const userUpdateUserCall = async (
       throw new Error("Network response was not ok");
     }
 
-    const data = await response.json();
+    const data = await response.json() as {
+      user_id: string;
+      data: UserInfo;
+    };
     console.log("API Response:", data);
     //message.success("User role updated");
     return data;
@@ -4083,6 +4321,8 @@ export const getProxyUISettings = async (
    * Get all the models user has access to
    */
   try {
+    console.log("Getting proxy UI settings");
+    console.log("proxyBaseUrl in getProxyUISettings:", proxyBaseUrl);
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/sso/get/ui_settings`
       : `/sso/get/ui_settings`;
@@ -4115,8 +4355,7 @@ export const getProxyUISettings = async (
 
 export const getGuardrailsList = async (accessToken: String) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/list` : `/guardrails/list`;
-
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v2/guardrails/list` : `/v2/guardrails/list`;
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -4132,14 +4371,42 @@ export const getGuardrailsList = async (accessToken: String) => {
     }
 
     const data = await response.json();
-    console.log("Guardrails list response:", data);
     return data;
   } catch (error) {
-    console.error("Failed to fetch guardrails list:", error);
+    console.error("Failed to get guardrails list:", error);
     throw error;
   }
 };
 
+export const createGuardrailCall = async (accessToken: string, guardrailData: any) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails` : `/guardrails`;
+    
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        guardrail: guardrailData
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error(errorData);
+    }
+
+    const data = await response.json();
+    console.log("Create guardrail response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to create guardrail:", error);
+    throw error;
+  }
+};
 
 export const uiSpendLogDetailsCall = async (
   accessToken: string,
@@ -4244,13 +4511,106 @@ export const updateInternalUserSettings = async (accessToken: string, settings: 
   }
 };
 
+export const fetchMCPServers = async (accessToken: string) => {
+  try {
+    // Construct base URL
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
 
-export const listMCPTools = async (accessToken: string) => {
+    console.log("Fetching MCP servers from:", url);
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Fetched MCP servers:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch MCP servers:", error);
+    throw error;
+  }
+};
+
+export const createMCPServer = async (
+  accessToken: string,
+  formValues: Record<string, any> // Assuming formValues is an object
+) => {
+  try {
+    console.log("Form Values in createMCPServer:", formValues); // Log the form values before making the API call
+    
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
+    
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...formValues, // Include formValues in the request body
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      console.error("Error response from the server:", errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("API Response:", data);
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const deleteMCPServer = async (
+  accessToken: String,
+  serverId: String
+) => {
+  try {
+    const url =
+      (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/server/${serverId}`;
+    console.log("in deleteMCPServer:", serverId);
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.DELETE,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+  } catch (error) {
+    console.error("Failed to delete key:", error);
+    throw error;
+  }
+};
+
+export const listMCPTools = async (accessToken: string, serverId: string) => {
   try {
     // Construct base URL
     let url = proxyBaseUrl 
-      ? `${proxyBaseUrl}/mcp/tools/list`
-      : `/mcp/tools/list`;
+      ? `${proxyBaseUrl}/mcp/tools/list?server_id=${serverId}`
+      : `/mcp/tools/list?server_id=${serverId}`;
 
     console.log("Fetching MCP tools from:", url);
     
@@ -4605,6 +4965,394 @@ export const teamPermissionsUpdateCall = async (
     return data;
   } catch (error) {
     console.error("Failed to update team permissions:", error);
+    throw error;
+  }
+};
+
+/**
+ * Get all spend logs for a particular session
+ */
+export const sessionSpendLogsCall = async (
+  accessToken: string,
+  session_id: string
+) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/spend/logs/session/ui?session_id=${encodeURIComponent(session_id)}`
+      : `/spend/logs/session/ui?session_id=${encodeURIComponent(session_id)}`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch session logs:", error);
+    throw error;
+  }
+};
+
+export const vectorStoreCreateCall = async (
+  accessToken: string,
+  formValues: Record<string, any>
+): Promise<void> => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/vector_store/new`
+      : `/vector_store/new`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`
+      },
+      body: JSON.stringify(formValues)
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || 'Failed to create vector store');
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error creating vector store:', error);
+    throw error;
+  }
+};
+
+export const vectorStoreListCall = async (
+  accessToken: string,
+  page: number = 1,
+  page_size: number = 100
+): Promise<any> => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/vector_store/list`
+      : `/vector_store/list`;
+
+    
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`
+      }
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || 'Failed to list vector stores');
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error listing vector stores:', error);
+    throw error;
+  }
+};
+
+export const vectorStoreDeleteCall = async (
+  accessToken: string,
+  vectorStoreId: string
+): Promise<void> => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/vector_store/delete`
+      : `/vector_store/delete`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`
+      },
+      body: JSON.stringify({ vector_store_id: vectorStoreId })
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || 'Failed to delete vector store');
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error deleting vector store:', error);
+    throw error;
+  }
+};
+
+export const vectorStoreInfoCall = async (
+  accessToken: string,
+  vectorStoreId: string
+): Promise<any> => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/vector_store/info`
+      : `/vector_store/info`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`
+      },
+      body: JSON.stringify({ vector_store_id: vectorStoreId })
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || 'Failed to get vector store info');
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error getting vector store info:', error);
+    throw error;
+  }
+};
+
+
+export const getEmailEventSettings = async (accessToken: string): Promise<EmailEventSettingsResponse> => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/email/event_settings` : `/email/event_settings`;
+    
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to get email event settings");
+    }
+
+    const data = await response.json();
+    console.log("Email event settings response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to get email event settings:", error);
+    throw error;
+  }
+};
+
+export const updateEmailEventSettings = async (
+  accessToken: string,
+  settings: EmailEventSettingsUpdateRequest
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/email/event_settings` : `/email/event_settings`;
+    
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(settings),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to update email event settings");
+    }
+
+    const data = await response.json();
+    console.log("Update email event settings response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to update email event settings:", error);
+    throw error;
+  }
+};
+
+export const resetEmailEventSettings = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/email/event_settings/reset` : `/email/event_settings/reset`;
+    
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      }
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to reset email event settings");
+    }
+
+    const data = await response.json();
+    console.log("Reset email event settings response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to reset email event settings:", error);
+    throw error;
+  }
+};
+
+export { type UserInfo } from "./view_users/types"; // Re-export UserInfo
+export { type Team } from "./key_team_helpers/key_list"; // Re-export Team
+
+export const deleteGuardrailCall = async (accessToken: string, guardrailId: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/${guardrailId}` : `/guardrails/${guardrailId}`;
+    
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error(errorData);
+    }
+
+    const data = await response.json();
+    console.log("Delete guardrail response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to delete guardrail:", error);
+    throw error;
+  }
+};
+
+export const getGuardrailUISettings = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/ui/add_guardrail_settings` : `/guardrails/ui/add_guardrail_settings`;
+    
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to get guardrail UI settings");
+    }
+
+    const data = await response.json();
+    console.log("Guardrail UI settings response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to get guardrail UI settings:", error);
+    throw error;
+  }
+};
+
+export const getGuardrailProviderSpecificParams = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/ui/provider_specific_params` : `/guardrails/ui/provider_specific_params`;
+    
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to get guardrail provider specific parameters");
+    }
+
+    const data = await response.json();
+    console.log("Guardrail provider specific params response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to get guardrail provider specific parameters:", error);
+    throw error;
+  }
+};
+
+export const getGuardrailInfo = async (accessToken: string, guardrailId: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/${guardrailId}/info` : `/guardrails/${guardrailId}/info`;
+    
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to get guardrail info");
+    }
+
+    const data = await response.json();
+    console.log("Guardrail info response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to get guardrail info:", error);
+    throw error;
+  }
+};
+
+export const updateGuardrailCall = async (
+  accessToken: string,
+  guardrailId: string,
+  updateData: {
+    guardrail_name?: string;
+    default_on?: boolean;
+    guardrail_info?: Record<string, any>;
+  }
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/${guardrailId}` : `/guardrails/${guardrailId}`;
+    
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(updateData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to update guardrail");
+    }
+
+    const data = await response.json();
+    console.log("Update guardrail response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to update guardrail:", error);
     throw error;
   }
 };

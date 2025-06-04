@@ -446,6 +446,23 @@ async def test_add_model_run_health():
         # cleanup
         await delete_model(session=session, model_id=model_id)
 
+@pytest.mark.asyncio
+async def test_get_personal_models_for_user():
+    """
+    Test /models endpoint with team
+    """
+    from tests.test_users import new_user
+    async with aiohttp.ClientSession() as session:
+        # Creat a user
+        user_data = await new_user(session=session, i=0, models=["gpt-3.5-turbo"])
+        user_id = user_data["user_id"]
+        user_api_key = user_data["key"]
+
+        model_group_info = await get_model_group_info(session=session, key=user_api_key)
+        print(model_group_info)
+
+        assert len(model_group_info["data"]) == 1
+        assert model_group_info["data"][0]["model_group"] == "gpt-3.5-turbo"
 
 @pytest.mark.asyncio
 async def test_model_group_info_e2e():
@@ -487,8 +504,8 @@ async def test_team_model_e2e():
     - update model
     - delete model
     """
-    from test_users import new_user
-    from test_team import new_team
+    from tests.test_users import new_user
+    from tests.test_team import new_team
     import uuid
     async with aiohttp.ClientSession() as session:
         # Creat a user

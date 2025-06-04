@@ -37,7 +37,7 @@
       {
         "datasource": {
           "type": "prometheus",
-          "uid": "bdiyc60dco54we"
+          "uid": "${DS_PROMETHEUS}"
         },
         "description": "Total requests per second made to proxy - success + failure ",
         "fieldConfig": {
@@ -119,7 +119,7 @@
           {
             "datasource": {
               "type": "prometheus",
-              "uid": "bdiyc60dco54we"
+              "uid": "${DS_PROMETHEUS}"
             },
             "disableTextWrap": false,
             "editorMode": "code",
@@ -138,7 +138,7 @@
       {
         "datasource": {
           "type": "prometheus",
-          "uid": "bdiyc60dco54we"
+          "uid": "${DS_PROMETHEUS}"
         },
         "description": "Failures per second by Exception Class",
         "fieldConfig": {
@@ -220,7 +220,7 @@
           {
             "datasource": {
               "type": "prometheus",
-              "uid": "bdiyc60dco54we"
+              "uid": "${DS_PROMETHEUS}"
             },
             "disableTextWrap": false,
             "editorMode": "code",
@@ -239,7 +239,7 @@
       {
         "datasource": {
           "type": "prometheus",
-          "uid": "bdiyc60dco54we"
+          "uid": "${DS_PROMETHEUS}"
         },
         "description": "Average Response latency (seconds)",
         "fieldConfig": {
@@ -346,7 +346,7 @@
           {
             "datasource": {
               "type": "prometheus",
-              "uid": "bdiyc60dco54we"
+              "uid": "${DS_PROMETHEUS}"
             },
             "disableTextWrap": false,
             "editorMode": "code",
@@ -361,7 +361,7 @@
           {
             "datasource": {
               "type": "prometheus",
-              "uid": "bdiyc60dco54we"
+              "uid": "${DS_PROMETHEUS}"
             },
             "editorMode": "code",
             "expr": "histogram_quantile(0.5, sum(rate(litellm_request_total_latency_metric_bucket[2m])) by (le))",
@@ -391,7 +391,7 @@
       {
         "datasource": {
           "type": "prometheus",
-          "uid": "bdiyc60dco54we"
+          "uid": "${DS_PROMETHEUS}"
         },
         "description": "x-ratelimit-remaining-requests returning from LLM APIs",
         "fieldConfig": {
@@ -473,7 +473,7 @@
           {
             "datasource": {
               "type": "prometheus",
-              "uid": "bdiyc60dco54we"
+              "uid": "${DS_PROMETHEUS}"
             },
             "editorMode": "code",
             "expr": "topk(5, sort(litellm_remaining_requests))",
@@ -488,7 +488,7 @@
       {
         "datasource": {
           "type": "prometheus",
-          "uid": "bdiyc60dco54we"
+          "uid": "${DS_PROMETHEUS}"
         },
         "description": "x-ratelimit-remaining-tokens from LLM API ",
         "fieldConfig": {
@@ -570,7 +570,7 @@
           {
             "datasource": {
               "type": "prometheus",
-              "uid": "bdiyc60dco54we"
+              "uid": "${DS_PROMETHEUS}"
             },
             "editorMode": "code",
             "expr": "topk(5, sort(litellm_remaining_tokens))",
@@ -598,7 +598,7 @@
       {
         "datasource": {
           "type": "prometheus",
-          "uid": "bdiyc60dco54we"
+          "uid": "${DS_PROMETHEUS}"
         },
         "description": "Requests per second by Key Alias (keys are LiteLLM Virtual Keys). If key is None - means no Alias Set ",
         "fieldConfig": {
@@ -679,7 +679,7 @@
           {
             "datasource": {
               "type": "prometheus",
-              "uid": "bdiyc60dco54we"
+              "uid": "${DS_PROMETHEUS}"
             },
             "editorMode": "code",
             "expr": "sum(rate(litellm_proxy_total_requests_metric_total[2m])) by (api_key_alias)\n",
@@ -694,7 +694,7 @@
       {
         "datasource": {
           "type": "prometheus",
-          "uid": "bdiyc60dco54we"
+          "uid": "${DS_PROMETHEUS}"
         },
         "description": "Requests per second by Team Alias. If team is None - means no team alias Set ",
         "fieldConfig": {
@@ -775,7 +775,7 @@
           {
             "datasource": {
               "type": "prometheus",
-              "uid": "bdiyc60dco54we"
+              "uid": "${DS_PROMETHEUS}"
             },
             "editorMode": "code",
             "expr": "sum(rate(litellm_proxy_total_requests_metric_total[2m])) by (team_alias)\n",
@@ -792,7 +792,27 @@
     "schemaVersion": 40,
     "tags": [],
     "templating": {
-      "list": []
+      "list": [
+        {
+          "current": {
+            "selected": false,
+            "text": "prometheus",
+            "value": "edx8memhpd9tsb"
+          },
+          "hide": 0,
+          "includeAll": false,
+          "label": "datasource",
+          "multi": false,
+          "name": "DS_PROMETHEUS",
+          "options": [],
+          "query": "prometheus",
+          "queryValue": "",
+          "refresh": 1,
+          "regex": "",
+          "skipUrlSync": false,
+          "type": "datasource"
+        }
+      ]
     },
     "time": {
       "from": "now-6h",

@@ -73,12 +73,6 @@ import { AllKeysTable } from "./all_keys_table";
 import { Team } from "./key_team_helpers/key_list";
 import { Setter } from "@/types";
 
-const isLocal = process.env.NODE_ENV === "development";
-const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
-if (isLocal != true) {
-  console.log = function () {};
-}
-
 interface EditKeyModalProps {
   visible: boolean;
   onCancel: () => void;
@@ -110,6 +104,7 @@ interface ViewKeyTableProps {
   setCurrentOrg: React.Dispatch<React.SetStateAction<Organization | null>>;
   selectedKeyAlias: string | null;
   setSelectedKeyAlias: Setter<string | null>;
+  createClicked: boolean;
 }
 
 interface ItemData {
@@ -159,7 +154,8 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   organizations,
   setCurrentOrg,
   selectedKeyAlias,
-  setSelectedKeyAlias
+  setSelectedKeyAlias,
+  createClicked
 }) => {
   const [isButtonClicked, setIsButtonClicked] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -171,7 +167,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   
   // NEW: Declare filter states for team and key alias.
   const [teamFilter, setTeamFilter] = useState<string>(selectedTeam?.team_id || "");
-  const [keyAliasFilter, setKeyAliasFilter] = useState<string>("");
+
 
   // Keep the team filter in sync with the incoming prop.
   useEffect(() => {
@@ -186,16 +182,9 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     currentOrg,
     selectedKeyAlias,
     accessToken,
+    createClicked,
   });
 
-  // Make both refresh and addKey functions available globally
-  if (typeof window !== 'undefined') {
-    window.refreshKeysList = refresh;
-    window.addNewKeyToList = (newKey) => {
-      // Add the new key to the keys list without making an API call
-      setKeys((prevKeys) => [newKey, ...prevKeys]);
-    };
-  }
 
   const handlePageChange = (newPage: number) => {
     refresh({ page: newPage });
@@ -285,42 +274,6 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     fetchUserModels();
   }, [accessToken, userID, userRole]);
 
-  const handleModelLimitClick = (token: KeyResponse) => {
-    setSelectedToken(token);
-    setModelLimitModalVisible(true);
-  };
-
-  const handleModelLimitSubmit = async (updatedMetadata: any) => {
-    if (accessToken == null || selectedToken == null) {
-      return;
-    }
-
-    const formValues = {
-      ...selectedToken,
-      metadata: updatedMetadata,
-      key: selectedToken.token,
-    };
-
-    try {
-      let newKeyValues = await keyUpdateCall(accessToken, formValues);
-      console.log("Model limits updated:", newKeyValues);
-
-      // Update the keys with the updated key
-      if (data) {
-        const updatedData = data.map((key) =>
-          key.token === selectedToken.token ? newKeyValues : key
-        );
-        setData(updatedData);
-      }
-      message.success("Model-specific limits updated successfully");
-    } catch (error) {
-      console.error("Error updating model-specific limits:", error);
-      message.error("Failed to update model-specific limits");
-    }
-
-    setModelLimitModalVisible(false);
-    setSelectedToken(null);
-  };
 
   useEffect(() => {
     if (teams) {

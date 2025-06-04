@@ -18,12 +18,14 @@ import {
   modelAvailableCall,
   invitationCreateCall,
   getProxyUISettings,
+  getProxyBaseUrl,
 } from "./networking";
 import BulkCreateUsers from "./bulk_create_users_button";
 const { Option } = Select;
 import { Tooltip } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import { useQueryClient } from "@tanstack/react-query";
 
 interface CreateuserProps {
   userID: string;
@@ -50,6 +52,7 @@ const Createuser: React.FC<CreateuserProps> = ({
   onUserCreated,
   isEmbedded = false,
 }) => {
+  const queryClient = useQueryClient();
   const [uiSettings, setUISettings] = useState<UISettings | null>(null);
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -59,10 +62,7 @@ const Createuser: React.FC<CreateuserProps> = ({
     useState(false);
   const [invitationLinkData, setInvitationLinkData] =
     useState<InvitationLink | null>(null);
-  const router = useRouter();
-  const isLocal = process.env.NODE_ENV === "development";
-
-  const [baseUrl, setBaseUrl] = useState("http://localhost:4000");
+  const [baseUrl, setBaseUrl] = useState<string | null>(null);
   // get all models
   useEffect(() => {
     const fetchData = async () => {
@@ -95,17 +95,11 @@ const Createuser: React.FC<CreateuserProps> = ({
       }
     };
 
+    setBaseUrl(getProxyBaseUrl());
+
     fetchData(); // Call the function to fetch model data when the component mounts
   }, []); // Empty dependency array to run only once
 
-  useEffect(() => {
-    if (!router) {
-      return;
-    }
-
-    const base = new URL("/", window.location.href);
-    setBaseUrl(base.toString());
-  }, [router]);
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
@@ -117,18 +111,20 @@ const Createuser: React.FC<CreateuserProps> = ({
     form.resetFields();
   };
 
-  const handleCreate = async (formValues: { user_id: string, models?: string[] }) => {
+  const handleCreate = async (formValues: { user_id: string, models?: string[], user_role: string }) => {
     try {
       message.info("Making API Call");
       if (!isEmbedded) {
         setIsModalVisible(true);
       }
-      if (!formValues.models || formValues.models.length === 0) {
+      if ((!formValues.models || formValues.models.length === 0) && formValues.user_role !== "proxy_admin") {
+        console.log("formValues.user_role", formValues.user_role)
         // If models is empty or undefined, set it to "no-default-models"
         formValues.models = ["no-default-models"];
       }
       console.log("formValues in create user:", formValues);
       const response = await userCreateCall(accessToken, null, formValues);
+      await queryClient.invalidateQueries({ queryKey: ['userList'] })
       console.log("user create Response:", response);
       setApiuser(true);
       const user_id = response.data?.user_id || response.user_id;
@@ -356,7 +352,7 @@ const Createuser: React.FC<CreateuserProps> = ({
         <OnboardingModal
           isInvitationLinkModalVisible={isInvitationLinkModalVisible}
           setIsInvitationLinkModalVisible={setIsInvitationLinkModalVisible}
-          baseUrl={baseUrl}
+          baseUrl={baseUrl || ""}
           invitationLinkData={invitationLinkData}
         />
       )}

@@ -25,7 +25,7 @@ export const columns = (
       return (
         <Tooltip title={model.model_info.id}>
           <div 
-            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left w-full truncate whitespace-nowrap cursor-pointer"
+            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left w-full truncate whitespace-nowrap cursor-pointer max-w-[15ch]"
             onClick={() => setSelectedModelId(model.model_info.id)}
           >
             {model.model_info.id}

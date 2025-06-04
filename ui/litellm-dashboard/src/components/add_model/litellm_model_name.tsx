@@ -25,20 +25,32 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
     if (values.includes("all-wildcard")) {
       form.setFieldsValue({ model_name: undefined, model_mappings: [] });
     } else {
-      // Update model mappings immediately for each selected model
-      const mappings = values
-        .map(model => ({
+      // Get current model value to check if we need to update
+      const currentModel = form.getFieldValue('model');
+
+      // Only update if the value has actually changed
+      if (JSON.stringify(currentModel) !== JSON.stringify(values)) {
+
+        // Create mappings first
+        const mappings = values.map(model => ({
           public_name: model,
           litellm_model: model
         }));
-      form.setFieldsValue({ model_mappings: mappings });
+        
+        // Update both fields in one call to reduce re-renders
+        form.setFieldsValue({ 
+          model: values,
+          model_mappings: mappings
+        });
+        
+      }
     }
   };
 
   // Handle custom model name changes
   const handleCustomModelNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const customName = e.target.value;
-    
+
     // Immediately update the model mappings
     const currentMappings = form.getFieldValue('model_mappings') || [];
     const updatedMappings = currentMappings.map((mapping: any) => {
@@ -69,7 +81,11 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
           {(selectedProvider === Providers.Azure) || 
            (selectedProvider === Providers.OpenAI_Compatible) || 
            (selectedProvider === Providers.Ollama) ? (
-            <TextInput placeholder={getPlaceholder(selectedProvider)} />
+            <>
+              <TextInput 
+                placeholder={getPlaceholder(selectedProvider)} 
+              />
+            </>
           ) : providerModels.length > 0 ? (
             <AntSelect
               mode="multiple"

@@ -35,14 +35,40 @@ class AnthropicComputerTool(TypedDict, total=False):
     name: Required[str]
 
 
+class AnthropicWebSearchUserLocation(TypedDict, total=False):
+    city: Optional[str]
+    country: Optional[str]
+    region: Optional[str]
+    timezone: Optional[str]
+    type: Required[Literal["approximate"]]
+
+
+class AnthropicWebSearchTool(TypedDict, total=False):
+    name: Required[Literal["web_search"]]
+    type: Required[str]
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+    max_uses: Optional[int]
+    user_location: Optional[AnthropicWebSearchUserLocation]
+
+
 class AnthropicHostedTools(TypedDict, total=False):  # for bash_tool and text_editor
     type: Required[str]
     name: Required[str]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
+class AnthropicCodeExecutionTool(TypedDict, total=False):
+    type: Required[str]
+    name: Required[Literal["code_execution"]]
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+
+
 AllAnthropicToolsValues = Union[
-    AnthropicComputerTool, AnthropicHostedTools, AnthropicMessagesTool
+    AnthropicComputerTool,
+    AnthropicHostedTools,
+    AnthropicMessagesTool,
+    AnthropicWebSearchTool,
+    AnthropicCodeExecutionTool,
 ]
 
 
@@ -88,9 +114,27 @@ class AnthropicContentParamSource(TypedDict):
     data: str
 
 
+class AnthropicContentParamSourceUrl(TypedDict):
+    type: Literal["url"]
+    url: str
+
+
+class AnthropicContentParamSourceFileId(TypedDict):
+    type: Literal["file"]
+    file_id: str
+
+
+class AnthropicMessagesContainerUploadParam(TypedDict, total=False):
+    type: Required[Literal["container_upload"]]
+    file_id: str
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+
+
 class AnthropicMessagesImageParam(TypedDict, total=False):
     type: Required[Literal["image"]]
-    source: Required[AnthropicContentParamSource]
+    source: Required[
+        Union[AnthropicContentParamSource, AnthropicContentParamSourceFileId]
+    ]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
@@ -100,7 +144,13 @@ class CitationsObject(TypedDict):
 
 class AnthropicMessagesDocumentParam(TypedDict, total=False):
     type: Required[Literal["document"]]
-    source: Required[AnthropicContentParamSource]
+    source: Required[
+        Union[
+            AnthropicContentParamSource,
+            AnthropicContentParamSourceFileId,
+            AnthropicContentParamSourceUrl,
+        ]
+    ]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
     title: str
     context: str
@@ -130,6 +180,7 @@ AnthropicMessagesUserMessageValues = Union[
     AnthropicMessagesImageParam,
     AnthropicMessagesToolResultParam,
     AnthropicMessagesDocumentParam,
+    AnthropicMessagesContainerUploadParam,
 ]
 
 
@@ -153,22 +204,23 @@ AllAnthropicMessageValues = Union[
 ]
 
 
-class AnthropicMessageRequestBase(TypedDict, total=False):
-    messages: Required[List[AllAnthropicMessageValues]]
-    max_tokens: Required[int]
-    metadata: AnthropicMetadata
-    stop_sequences: List[str]
-    stream: bool
-    system: Union[str, List]
-    temperature: float
-    tool_choice: AnthropicMessagesToolChoice
-    tools: List[AllAnthropicToolsValues]
-    top_k: int
-    top_p: float
+class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
+    max_tokens: Optional[int]
+    metadata: Optional[Union[AnthropicMetadata, Dict]]
+    stop_sequences: Optional[List[str]]
+    stream: Optional[bool]
+    system: Optional[Union[str, List]]
+    temperature: Optional[float]
+    thinking: Optional[Dict]
+    tool_choice: Optional[Union[AnthropicMessagesToolChoice, Dict]]
+    tools: Optional[List[Union[AllAnthropicToolsValues, Dict]]]
+    top_k: Optional[int]
+    top_p: Optional[float]
 
 
-class AnthropicMessagesRequest(AnthropicMessageRequestBase, total=False):
+class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
     model: Required[str]
+    messages: Required[Union[List[AllAnthropicMessageValues], List[Dict]]]
     # litellm param - used for tracking litellm proxy metadata in the request
     litellm_metadata: dict
 

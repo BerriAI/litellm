@@ -170,6 +170,8 @@ class CustomPricingLiteLLMParams(BaseModel):
     output_cost_per_token: Optional[float] = None
     input_cost_per_second: Optional[float] = None
     output_cost_per_second: Optional[float] = None
+    input_cost_per_pixel: Optional[float] = None
+    output_cost_per_pixel: Optional[float] = None
 
 
 class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
@@ -200,6 +202,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     max_budget: Optional[float] = None
     budget_duration: Optional[str] = None
     use_in_pass_through: Optional[bool] = False
+    use_litellm_proxy: Optional[bool] = False
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: Optional[bool] = False
     model_info: Optional[Dict] = None
@@ -242,6 +245,8 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         budget_duration: Optional[str] = None,
         # Pass through params
         use_in_pass_through: Optional[bool] = False,
+        # Dynamic param to force using litellm proxy
+        use_litellm_proxy: Optional[bool] = False,
         # This will merge the reasoning content in the choices
         merge_reasoning_content_in_choices: Optional[bool] = False,
         model_info: Optional[Dict] = None,
@@ -312,6 +317,7 @@ class LiteLLM_Params(GenericLiteLLMParams):
         max_file_size_mb: Optional[float] = None,
         # will use deployment on pass-through endpoints if True
         use_in_pass_through: Optional[bool] = False,
+        use_litellm_proxy: Optional[bool] = False,
         **params,
     ):
         args = locals()

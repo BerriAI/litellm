@@ -78,9 +78,7 @@
                 "endTime": "2025-01-22T09:59:39.365756-08:00",
                 "completionStartTime": "2025-01-22T09:59:39.365756-08:00",
                 "model": "gpt-3.5-turbo",
-                "modelParameters": {
-                    "extra_body": "{}"
-                },
+                "modelParameters": {"extra_body": "{}"},
                 "usage": {
                     "input": 10,
                     "output": 20,

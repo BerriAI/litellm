@@ -41,13 +41,13 @@ class BaseModelResponseIterator:
         self, str_line: str
     ) -> Union[GenericStreamingChunk, ModelResponseStream]:
         # chunk is a str at this point
-
+        stripped_json_chunk: Optional[dict] = None
         stripped_chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(
             str_line
         )
         try:
             if stripped_chunk is not None:
-                stripped_json_chunk: Optional[dict] = json.loads(stripped_chunk)
+                stripped_json_chunk = json.loads(stripped_chunk)
             else:
                 stripped_json_chunk = None
         except json.JSONDecodeError:

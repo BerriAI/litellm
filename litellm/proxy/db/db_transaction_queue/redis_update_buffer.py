@@ -19,6 +19,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
+    DailyTagSpendTransaction,
     DailyTeamSpendTransaction,
     DailyUserSpendTransaction,
     DBSpendUpdateTransactions,
@@ -60,9 +61,9 @@ class RedisUpdateBuffer:
         """
         from litellm.proxy.proxy_server import general_settings
 
-        _use_redis_transaction_buffer: Optional[
-            Union[bool, str]
-        ] = general_settings.get("use_redis_transaction_buffer", False)
+        _use_redis_transaction_buffer: Optional[Union[bool, str]] = (
+            general_settings.get("use_redis_transaction_buffer", False)
+        )
         if isinstance(_use_redis_transaction_buffer, str):
             _use_redis_transaction_buffer = str_to_bool(_use_redis_transaction_buffer)
         if _use_redis_transaction_buffer is None:
@@ -176,14 +177,6 @@ class RedisUpdateBuffer:
             "ALL DAILY SPEND UPDATE TRANSACTIONS: %s", daily_spend_update_transactions
         )
 
-        # only store in redis if there are any updates to commit
-        if (
-            self._number_of_transactions_to_store_in_redis(db_spend_update_transactions)
-            == 0
-        ):
-            return
-
-        # Store all transaction types using the helper method
         await self._store_transactions_in_redis(
             transactions=db_spend_update_transactions,
             redis_key=REDIS_UPDATE_BUFFER_KEY,
@@ -331,6 +324,30 @@ class RedisUpdateBuffer:
         ]
         return cast(
             Dict[str, DailyTeamSpendTransaction],
+            DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
+                list_of_daily_spend_update_transactions
+            ),
+        )
+
+    async def get_all_daily_tag_spend_update_transactions_from_redis_buffer(
+        self,
+    ) -> Optional[Dict[str, DailyTagSpendTransaction]]:
+        """
+        Gets all the daily tag spend update transactions from Redis
+        """
+        if self.redis_cache is None:
+            return None
+        list_of_transactions = await self.redis_cache.async_lpop(
+            key=REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY,
+            count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
+        )
+        if list_of_transactions is None:
+            return None
+        list_of_daily_spend_update_transactions = [
+            json.loads(transaction) for transaction in list_of_transactions
+        ]
+        return cast(
+            Dict[str, DailyTagSpendTransaction],
             DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
                 list_of_daily_spend_update_transactions
             ),

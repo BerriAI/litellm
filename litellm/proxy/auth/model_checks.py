@@ -53,12 +53,16 @@ def get_provider_models(
 def _get_models_from_access_groups(
     model_access_groups: Dict[str, List[str]],
     all_models: List[str],
+    include_model_access_groups: Optional[bool] = False,
 ) -> List[str]:
     idx_to_remove = []
     new_models = []
     for idx, model in enumerate(all_models):
         if model in model_access_groups:
-            idx_to_remove.append(idx)
+            if (
+                not include_model_access_groups
+            ):  # remove access group, unless requested - e.g. when creating a key and trying to see list of models
+                idx_to_remove.append(idx)
             new_models.extend(model_access_groups[model])
 
     for idx in sorted(idx_to_remove, reverse=True):
@@ -72,12 +76,14 @@ def get_key_models(
     user_api_key_dict: UserAPIKeyAuth,
     proxy_model_list: List[str],
     model_access_groups: Dict[str, List[str]],
+    include_model_access_groups: Optional[bool] = False,
 ) -> List[str]:
     """
     Returns:
     - List of model name strings
     - Empty list if no models set
     - If model_access_groups is provided, only return models that are in the access groups
+    - If include_model_access_groups is True, it includes the 'keys' of the model_access_groups in the response - {"beta-models": ["gpt-4", "claude-v1"]} -> returns 'beta-models'
     """
     all_models: List[str] = []
     if len(user_api_key_dict.models) > 0:
@@ -99,6 +105,7 @@ def get_team_models(
     team_models: List[str],
     proxy_model_list: List[str],
     model_access_groups: Dict[str, List[str]],
+    include_model_access_groups: Optional[bool] = False,
 ) -> List[str]:
     """
     Returns:
@@ -115,7 +122,9 @@ def get_team_models(
             all_models = proxy_model_list
 
     all_models = _get_models_from_access_groups(
-        model_access_groups=model_access_groups, all_models=all_models
+        model_access_groups=model_access_groups,
+        all_models=all_models,
+        include_model_access_groups=include_model_access_groups,
     )
 
     verbose_proxy_logger.debug("ALL TEAM MODELS - {}".format(len(all_models)))
@@ -130,6 +139,8 @@ def get_complete_model_list(
     infer_model_from_keys: Optional[bool],
     return_wildcard_routes: Optional[bool] = False,
     llm_router: Optional[Router] = None,
+    model_access_groups: Dict[str, List[str]] = {},
+    include_model_access_groups: Optional[bool] = False,
 ) -> List[str]:
     """Logic for returning complete model list for a given key + team pair"""
 
@@ -146,6 +157,8 @@ def get_complete_model_list(
         unique_models.update(team_models)
     else:
         unique_models.update(proxy_model_list)
+        if include_model_access_groups:
+            unique_models.update(model_access_groups.keys())
 
         if user_model:
             unique_models.add(user_model)
@@ -161,6 +174,7 @@ def get_complete_model_list(
     )
 
     no_wildcards = filterfalse(_check_wildcard_routing, unique_models) # they were added above if necessary
+  
     return list(no_wildcards) + all_wildcard_models
 
 

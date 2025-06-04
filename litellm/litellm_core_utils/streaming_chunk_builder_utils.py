@@ -348,11 +348,17 @@ class ChunkProcessor:
                     and usage_chunk_dict["completion_tokens"] > 0
                 ):
                     completion_tokens = usage_chunk_dict["completion_tokens"]
-                if usage_chunk_dict["cache_creation_input_tokens"] is not None:
+                if usage_chunk_dict["cache_creation_input_tokens"] is not None and (
+                    usage_chunk_dict["cache_creation_input_tokens"] > 0
+                    or cache_creation_input_tokens is None
+                ):
                     cache_creation_input_tokens = usage_chunk_dict[
                         "cache_creation_input_tokens"
                     ]
-                if usage_chunk_dict["cache_read_input_tokens"] is not None:
+                if usage_chunk_dict["cache_read_input_tokens"] is not None and (
+                    usage_chunk_dict["cache_read_input_tokens"] > 0
+                    or cache_read_input_tokens is None
+                ):
                     cache_read_input_tokens = usage_chunk_dict[
                         "cache_read_input_tokens"
                     ]

@@ -6,12 +6,24 @@ import io
 import mimetypes
 import re
 from os import PathLike
-from typing import Any, Dict, List, Literal, Mapping, Optional, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Union,
+    cast,
+)
 
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
     ChatCompletionFileObject,
+    ChatCompletionResponseMessage,
+    ChatCompletionToolParam,
     ChatCompletionUserMessage,
 )
 from litellm.types.utils import (
@@ -23,6 +35,9 @@ from litellm.types.utils import (
     StreamingChoices,
 )
 
+if TYPE_CHECKING:  # newer pattern to avoid importing pydantic objects on __init__.py
+    from litellm.types.llms.openai import ChatCompletionImageObject
+
 DEFAULT_USER_CONTINUE_MESSAGE = ChatCompletionUserMessage(
     content="Please continue.", role="user"
 )
@@ -30,6 +45,9 @@ DEFAULT_USER_CONTINUE_MESSAGE = ChatCompletionUserMessage(
 DEFAULT_ASSISTANT_CONTINUE_MESSAGE = ChatCompletionAssistantMessage(
     content="Please continue.", role="assistant"
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LoggingClass
 
 
 def handle_any_messages_to_chat_completion_str_messages_conversion(
@@ -97,7 +115,9 @@ def strip_none_values_from_message(message: AllMessageValues) -> AllMessageValue
     return cast(AllMessageValues, {k: v for k, v in message.items() if v is not None})
 
 
-def convert_content_list_to_str(message: AllMessageValues) -> str:
+def convert_content_list_to_str(
+    message: Union[AllMessageValues, ChatCompletionResponseMessage]
+) -> str:
     """
     - handles scenario where content is list and not string
     - content list is just text, and no images
@@ -342,14 +362,14 @@ def get_format_from_file_id(file_id: Optional[str]) -> Optional[str]:
     unified_file_id = litellm_proxy:{};unified_id,{}
     If not a unified file id, returns 'file' as default format
     """
-    from litellm.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        convert_b64_uid_to_unified_uid,
+    )
 
     if not file_id:
         return None
     try:
-        transformed_file_id = (
-            _PROXY_LiteLLMManagedFiles._convert_b64_uid_to_unified_uid(file_id)
-        )
+        transformed_file_id = convert_b64_uid_to_unified_uid(file_id)
         if transformed_file_id.startswith(
             SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value
         ):
@@ -556,3 +576,115 @@ def _get_image_mime_type_from_url(url: str) -> Optional[str]:
             return mime_type
 
     return None
+
+
+def get_tool_call_names(tools: List[ChatCompletionToolParam]) -> List[str]:
+    """
+    Get tool call names from tools
+    """
+    tool_call_names: List[str] = []
+    for tool in tools:
+        if tool.get("type") == "function":
+            tool_call_name = tool.get("function", {}).get("name")
+            if tool_call_name:
+                tool_call_names.append(tool_call_name)
+    return tool_call_names
+
+
+def is_function_call(optional_params: dict) -> bool:
+    """
+    Checks if the optional params contain the function call
+    """
+    if "functions" in optional_params and optional_params.get("functions"):
+        return True
+    return False
+
+
+def get_file_ids_from_messages(messages: List[AllMessageValues]) -> List[str]:
+    """
+    Gets file ids from messages
+    """
+    file_ids = []
+    for message in messages:
+        if message.get("role") == "user":
+            content = message.get("content")
+            if content:
+                if isinstance(content, str):
+                    continue
+                for c in content:
+                    if c["type"] == "file":
+                        file_object = cast(ChatCompletionFileObject, c)
+                        file_object_file_field = file_object["file"]
+                        file_id = file_object_file_field.get("file_id")
+                        if file_id:
+                            file_ids.append(file_id)
+    return file_ids
+
+
+
+def check_is_function_call(logging_obj: "LoggingClass") -> bool:
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        is_function_call,
+    )
+
+    if hasattr(logging_obj, "optional_params") and isinstance(
+        logging_obj.optional_params, dict
+    ):
+        if is_function_call(logging_obj.optional_params):
+            return True
+
+    return False
+
+def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:
+    """
+    Filters a value from a dictionary
+
+    Goes through the nested dict and removes the key if it exists
+    """
+    from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        return dictionary
+
+    # Create a copy of keys to avoid modifying dict during iteration
+    keys = list(dictionary.keys())
+    for k in keys:
+        v = dictionary[k]
+        if k == key:
+            del dictionary[k]
+        elif isinstance(v, dict):
+            filter_value_from_dict(v, key, depth + 1)
+        elif isinstance(v, list):
+            for item in v:
+                if isinstance(item, dict):
+                    filter_value_from_dict(item, key, depth + 1)
+    return dictionary
+
+
+def migrate_file_to_image_url(
+    message: "ChatCompletionFileObject",
+) -> "ChatCompletionImageObject":
+    """
+    Migrate file to image_url
+    """
+    from litellm.types.llms.openai import (
+        ChatCompletionImageObject,
+        ChatCompletionImageUrlObject,
+    )
+
+    file_id = message["file"].get("file_id")
+    file_data = message["file"].get("file_data")
+    format = message["file"].get("format")
+    if not file_id and not file_data:
+        raise ValueError("file_id and file_data are both None")
+    image_url_object = ChatCompletionImageObject(
+        type="image_url",
+        image_url=ChatCompletionImageUrlObject(
+            url=cast(str, file_id or file_data),
+        ),
+    )
+    if format and isinstance(image_url_object["image_url"], dict):
+        image_url_object["image_url"]["format"] = format
+    return image_url_object
+
+

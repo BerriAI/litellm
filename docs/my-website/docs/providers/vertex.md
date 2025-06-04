@@ -11,7 +11,7 @@ import TabItem from '@theme/TabItem';
 | Description | Vertex AI is a fully-managed AI development platform for building and using generative AI. |
 | Provider Route on LiteLLM | `vertex_ai/` |
 | Link to Provider Doc | [Vertex AI ↗](https://cloud.google.com/vertex-ai) |
-| Base URL | [https://{vertex_location}-aiplatform.googleapis.com/](https://{vertex_location}-aiplatform.googleapis.com/) |
+| Base URL | 1. Regional endpoints<br/>[https://{vertex_location}-aiplatform.googleapis.com/](https://{vertex_location}-aiplatform.googleapis.com/)<br/>2. Global endpoints (limited availability)<br/>[https://aiplatform.googleapis.com/](https://{aiplatform.googleapis.com/)|
 | Supported Operations | [`/chat/completions`](#sample-usage), `/completions`, [`/embeddings`](#embedding-models), [`/audio/speech`](#text-to-speech-apis), [`/fine_tuning`](#fine-tuning-apis), [`/batches`](#batch-apis), [`/files`](#batch-apis), [`/images`](#image-generation-models) |
 
 
@@ -347,7 +347,9 @@ Return a `list[Recipe]`
 completion(model="vertex_ai/gemini-1.5-flash-preview-0514", messages=messages, response_format={ "type": "json_object" })
 ```
 
-### **Grounding - Web Search**
+### **Google Hosted Tools (Web Search, Code Execution, etc.)**
+
+#### **Web Search**
 
 Add Google Search Result grounding to vertex ai calls. 
 
@@ -364,7 +366,7 @@ from litellm import completion
 ## SETUP ENVIRONMENT
 # !gcloud auth application-default login - run this to add vertex credentials to your env
 
-tools = [{"googleSearchRetrieval": {}}] # 👈 ADD GOOGLE SEARCH
+tools = [{"googleSearch": {}}] # 👈 ADD GOOGLE SEARCH
 
 resp = litellm.completion(
                     model="vertex_ai/gemini-1.0-pro-001",
@@ -391,7 +393,7 @@ client = OpenAI(
 response = client.chat.completions.create(
     model="gemini-pro",
     messages=[{"role": "user", "content": "Who won the world cup?"}],
-    tools=[{"googleSearchRetrieval": {}}],
+    tools=[{"googleSearch": {}}],
 )
 
 print(response)
@@ -410,7 +412,7 @@ curl http://localhost:4000/v1/chat/completions \
     ],
    "tools": [
         {
-            "googleSearchRetrieval": {} 
+            "googleSearch": {} 
         }
     ]
   }'
@@ -421,6 +423,8 @@ curl http://localhost:4000/v1/chat/completions \
 
 </TabItem>
 </Tabs>
+
+#### **Enterprise Web Search**
 
 You can also use the `enterpriseWebSearch` tool for an [enterprise compliant search](https://cloud.google.com/vertex-ai/generative-ai/docs/grounding/web-grounding-enterprise).
 
@@ -491,6 +495,53 @@ curl http://localhost:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
+#### **Code Execution**
+
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers
+from litellm import completion
+import os
+
+## SETUP ENVIRONMENT
+# !gcloud auth application-default login - run this to add vertex credentials to your env
+
+
+tools = [{"codeExecution": {}}] # 👈 ADD CODE EXECUTION
+
+response = completion(
+    model="vertex_ai/gemini-2.0-flash",
+    messages=[{"role": "user", "content": "What is the weather in San Francisco?"}],
+    tools=tools,
+)
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash showLineNumbers
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+  "model": "gemini-2.0-flash",
+  "messages": [{"role": "user", "content": "What is the weather in San Francisco?"}],
+  "tools": [{"codeExecution": {}}]
+}
+'
+```
+
+</TabItem>
+</Tabs>
+
+
+
+
 
 #### **Moving from Vertex AI SDK to LiteLLM (GROUNDING)**
 
@@ -529,7 +580,7 @@ from litellm import completion
 
 # !gcloud auth application-default login - run this to add vertex credentials to your env
 
-tools = [{"googleSearchRetrieval": {"disable_attributon": False}}] # 👈 ADD GOOGLE SEARCH
+tools = [{"googleSearch": {"disable_attributon": False}}] # 👈 ADD GOOGLE SEARCH
 
 resp = litellm.completion(
                     model="vertex_ai/gemini-1.0-pro-001",
@@ -692,7 +743,7 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 ### **Context Caching**
 
-Use Vertex AI context caching is supported by calling provider api directly. (Unified Endpoint support comin soon.).
+Use Vertex AI context caching is supported by calling provider api directly. (Unified Endpoint support coming soon.).
 
 [**Go straight to provider**](../pass_through/vertex_ai.md#context-caching)
 
@@ -832,7 +883,7 @@ OR
 
 You can set:
 - `vertex_credentials` (str) - can be a json string or filepath to your vertex ai service account.json
-- `vertex_location` (str) - place where vertex model is deployed (us-central1, asia-southeast1, etc.)
+- `vertex_location` (str) - place where vertex model is deployed (us-central1, asia-southeast1, etc.). Some models support the global location, please see [Vertex AI documentation](https://cloud.google.com/vertex-ai/generative-ai/docs/learn/locations#supported_models)
 - `vertex_project` Optional[str] - use if vertex project different from the one in vertex_credentials
 
 as dynamic params for a `litellm.completion` call. 
@@ -910,7 +961,7 @@ export VERTEXAI_PROJECT="my-test-project" # ONLY use if model project is differe
 
 
 ## Specifying Safety Settings 
-In certain use-cases you may need to make calls to the models and pass [safety settigns](https://ai.google.dev/docs/safety_setting_gemini) different from the defaults. To do so, simple pass the `safety_settings` argument to `completion` or `acompletion`. For example:
+In certain use-cases you may need to make calls to the models and pass [safety settings](https://ai.google.dev/docs/safety_setting_gemini) different from the defaults. To do so, simple pass the `safety_settings` argument to `completion` or `acompletion`. For example:
 
 ### Set per model/request
 
@@ -1284,11 +1335,18 @@ ModelResponse(
 
 
 
-## Llama 3 API
+## Meta/Llama API
  
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
+| meta/llama-3.2-90b-vision-instruct-maas | `completion('vertex_ai/meta/llama-3.2-90b-vision-instruct-maas', messages)` |
+| meta/llama3-8b-instruct-maas | `completion('vertex_ai/meta/llama3-8b-instruct-maas', messages)` |
+| meta/llama3-70b-instruct-maas | `completion('vertex_ai/meta/llama3-70b-instruct-maas', messages)` |
 | meta/llama3-405b-instruct-maas   | `completion('vertex_ai/meta/llama3-405b-instruct-maas', messages)` |
+| meta/llama-4-scout-17b-16e-instruct-maas | `completion('vertex_ai/meta/llama-4-scout-17b-16e-instruct-maas', messages)` |
+| meta/llama-4-scout-17-128e-instruct-maas | `completion('vertex_ai/meta/llama-4-scout-128b-16e-instruct-maas', messages)` |
+| meta/llama-4-maverick-17b-128e-instruct-maas | `completion('vertex_ai/meta/llama-4-maverick-17b-128e-instruct-maas',messages)` |
+| meta/llama-4-maverick-17b-16e-instruct-maas | `completion('vertex_ai/meta/llama-4-maverick-17b-16e-instruct-maas',messages)` |
 
 ### Usage
 
@@ -2050,7 +2108,7 @@ response = completion(
 print(response.choices[0])
 ```
 </TabItem>
-<TabItem value="proxy" lable="PROXY">
+<TabItem value="proxy" label="PROXY">
 
 1. Add model to config 
 

@@ -13,6 +13,7 @@
     "@headlessui/tailwindcss": "^0.2.0",
     "@heroicons/react": "^1.0.6",
     "@remixicon/react": "^4.1.1",
+    "@tanstack/react-pacer": "^0.2.0",
     "@tanstack/react-query": "^5.64.1",
     "@tanstack/react-table": "^8.20.6",
     "@tremor/react": "^3.13.3",
@@ -31,7 +32,8 @@
     "react-dom": "^18",
     "react-markdown": "^9.0.1",
     "react-syntax-highlighter": "^15.6.1",
-    "tailwind-merge": "^3.2.0"
+    "tailwind-merge": "^3.2.0",
+    "uuid": "^11.1.0"
   },
   "devDependencies": {
     "@tailwindcss/forms": "^0.5.7",
@@ -41,6 +43,7 @@
     "@types/react-copy-to-clipboard": "^5.0.7",
     "@types/react-dom": "^18",
     "@types/react-syntax-highlighter": "^15.5.11",
+    "@types/uuid": "^10.0.0",
     "autoprefixer": "^10.4.17",
     "eslint": "^8",
     "eslint-config-next": "14.1.0",
