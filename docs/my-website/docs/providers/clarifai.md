@@ -41,7 +41,7 @@ response = completion(
     model="openai/https://clarifai.com/openai/chat-completion/models/o4-mini",
     api_base="https://api.clarifai.com/v2/ext/openai/v1",
     api_key=os.environ["CLARIFAI_PAT"],
-  messages=[{ "content": "Tell me a joke about physics?","role": "user"}]
+    messages=[{ "content": "Tell me a joke about physics?","role": "user"}]
 )
 ```
 
@@ -74,6 +74,8 @@ litellm --config /path/to/config.yaml
 
 # Server running on http://0.0.0.0:4000
 ```
+</TabItem>
+</Tabs>
 
 ### 3. Test it
 
