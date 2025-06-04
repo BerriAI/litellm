@@ -34,6 +34,10 @@ class TestCustomLogger(CustomLogger):
         self.standard_logging_payload = kwargs.get("standard_logging_object")
         pass
 
+@pytest.fixture(autouse=True)
+def add_aws_region_to_env(monkeypatch):
+    monkeypatch.setenv("AWS_REGION", "us-west-2")
+
 
 @pytest.fixture
 def setup_vector_store_registry():
