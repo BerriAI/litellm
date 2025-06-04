@@ -42,7 +42,8 @@ os.environ["CLARIFAI_PAT"] = "YOUR_CLARIFAI_PAT"
 response = completion(
     model="openai/https://clarifai.com/openai/chat-completion/models/o4-mini",
     api_base="https://api.clarifai.com/v2/ext/openai/v1",
-    messages=[{ "content": "Tell me a joke about physics?","role": "user"}]
+    api_key=os.environ["CLARIFAI_PAT"],
+  messages=[{ "content": "Tell me a joke about physics?","role": "user"}]
 )
 ```
 
