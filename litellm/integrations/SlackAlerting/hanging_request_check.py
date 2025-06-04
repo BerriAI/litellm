@@ -161,15 +161,14 @@ class AlertingHangingRequestCheck:
         ################
         # Send the Alert on Slack
         ################
-        request_info = f"""
-        Request Model: `{hanging_request_data.model}`\n 
-        API Base: `{hanging_request_data.api_base}`\n
-        Key Alias: `{hanging_request_data.key_alias}`\n
-        Team Alias: `{hanging_request_data.team_alias}`\n
-        """
+        request_info = f"""Request Model: `{hanging_request_data.model}`
+API Base: `{hanging_request_data.api_base}`
+Key Alias: `{hanging_request_data.key_alias}`
+Team Alias: `{hanging_request_data.team_alias}`"""
+
         alerting_message = f"`Requests are hanging - {self.slack_alerting_object.alerting_threshold}s+ request time`"
         await self.slack_alerting_object.send_alert(
-            message=alerting_message + request_info,
+            message=alerting_message + "\n" + request_info,
             level="Medium",
             alert_type=AlertType.llm_requests_hanging,
             alerting_metadata=hanging_request_data.alerting_metadata or {},
