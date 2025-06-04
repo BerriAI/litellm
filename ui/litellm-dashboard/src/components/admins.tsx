@@ -62,7 +62,6 @@ import {
   Member,
   userGetAllUsersCall,
   User,
-  setCallbacksCall,
   invitationCreateCall,
   getPossibleUserRoles,
   addAllowedIP,
@@ -194,11 +193,9 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   const handleShowInstructions = (formValues: Record<string, any>) => {
-    handleAdminCreate(formValues);
-    handleSSOUpdate(formValues);
+    console.log("Form submitted with values:", formValues);
     setIsAddSSOModalVisible(false);
     setIsInstructionsModalVisible(true);
-    // Optionally, you can call handleSSOUpdate here with the formValues
   };
 
   const handleInstructionsOk = () => {
@@ -493,33 +490,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
-  const handleSSOUpdate = async (formValues: Record<string, any>) => {
-    if (accessToken == null) {
-      return;
-    }
-
-    const provider = formValues.sso_provider;
-    const config = ssoProviderConfigs[provider];
-    
-    const envVars: Record<string, string> = {
-      PROXY_BASE_URL: formValues.proxy_base_url,
-    };
-
-    // Add provider-specific environment variables using the configuration
-    if (config) {
-      Object.entries(config.envVarMap).forEach(([formKey, envKey]) => {
-        if (formValues[formKey]) {
-          envVars[envKey] = formValues[formKey];
-        }
-      });
-    }
-
-    const payload = {
-      environment_variables: envVars,
-    };
-    
-    setCallbacksCall(accessToken, payload);
-  };
   console.log(`admins: ${admins?.length}`);
   return (
     <div className="w-full m-2 mt-2 p-8">
@@ -564,6 +534,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                 handleInstructionsOk={handleInstructionsOk}
                 handleInstructionsCancel={handleInstructionsCancel}
                 form={form}
+                accessToken={accessToken}
               />
               <Modal
               title="Manage Allowed IP Addresses"
