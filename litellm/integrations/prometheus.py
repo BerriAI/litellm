@@ -117,15 +117,9 @@ class PrometheusLogger(CustomLogger):
             self.litellm_tokens_metric = Counter(
                 "litellm_total_tokens",
                 "Total number of input + output tokens from LLM requests",
-                labelnames=[
-                    "end_user",
-                    "hashed_api_key",
-                    "api_key_alias",
-                    "model",
-                    "team",
-                    "team_alias",
-                    "user",
-                ],
+                labelnames=PrometheusMetricLabels.get_labels(
+                    label_name="litellm_total_tokens_metric"
+                ),
             )
 
             self.litellm_input_tokens_metric = Counter(
