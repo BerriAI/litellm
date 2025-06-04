@@ -1,5 +1,5 @@
 """
-This file contains the calling Azure OpenAI's `/openai/realtime` endpoint.
+This file contains the calling OpenAI's `/openai/realtime` endpoint.
 
 This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
@@ -19,7 +19,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         """
         api_base = api_base.replace("https://", "wss://")
         api_base = api_base.replace("http://", "ws://")
-        return f"{api_base}/v1/realtime?model={model}"
+        return f"{api_base}/realtime?model={model}"
 
     async def async_realtime(
         self,
@@ -35,9 +35,9 @@ class OpenAIRealtime(OpenAIChatCompletion):
         from websockets.asyncio.client import ClientConnection
 
         if api_base is None:
-            raise ValueError("api_base is required for Azure OpenAI calls")
+            raise ValueError("api_base is required for OpenAI calls")
         if api_key is None:
-            raise ValueError("api_key is required for Azure OpenAI calls")
+            raise ValueError("api_key is required for OpenAI calls")
 
         url = self._construct_url(api_base, model)
 
