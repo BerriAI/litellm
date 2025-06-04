@@ -513,6 +513,49 @@ def get_end_user_id_from_request_body(request_body: dict) -> Optional[str]:
     return None
 
 
+def get_end_user_id_from_request_body_or_headers(
+    request_body: dict, 
+    headers: dict, 
+    general_settings: Optional[dict] = None
+) -> Optional[str]:
+    """
+    Get end user ID from either request body or headers.
+    
+    First checks the request body using the existing logic, then falls back to headers
+    if user_header_name is configured in general_settings.
+    
+    Args:
+        request_body (dict): The request body
+        headers (dict): The request headers  
+        general_settings (Optional[dict]): General settings containing user_header_name
+        
+    Returns:
+        Optional[str]: The end user ID if found, None otherwise
+    """
+    # First try to get from request body
+    end_user_id = get_end_user_id_from_request_body(request_body)
+    if end_user_id is not None:
+        return end_user_id
+    
+    # If not found in body and general_settings provided, try headers
+    if general_settings is None:
+        return None
+        
+    header_name = general_settings.get("user_header_name")
+    if header_name is None or header_name == "":
+        return None
+        
+    if not isinstance(header_name, str):
+        return None
+    
+    # Case insensitive header lookup
+    for header_key, header_value in headers.items():
+        if header_key.lower() == header_name.lower():
+            return str(header_value) if header_value is not None else None
+    
+    return None
+
+
 def get_model_from_request(
     request_data: dict, route: str
 ) -> Optional[Union[str, List[str]]]:

@@ -41,6 +41,7 @@ from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHan
 from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
     get_end_user_id_from_request_body,
+    get_end_user_id_from_request_body_or_headers,
     get_model_from_request,
     get_request_route,
     is_pass_through_provider_route,
@@ -587,8 +588,12 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         _end_user_object = None
         end_user_params = {}
 
-        end_user_id = get_end_user_id_from_request_body(request_data)
-        if end_user_id:
+        end_user_id = get_end_user_id_from_request_body_or_headers(
+            request_body=request_data,
+            headers=dict(request.headers),
+            general_settings=general_settings
+        )
+        if end_user_id is not None:
             try:
                 end_user_params["end_user_id"] = end_user_id
 
@@ -1105,6 +1110,18 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             api_key=api_key,
         )
 
+    end_user_id = get_end_user_id_from_request_body_or_headers(
+        request_body=request_data,
+        headers=dict(request.headers),
+        general_settings=general_settings
+    )
+    if end_user_id is not None:
+        user_api_key_auth_obj.end_user_id = end_user_id
+
+    user_api_key_auth_obj.request_route = route
+
+    return user_api_key_auth_obj
+
 
 @tracer.wrap()
 async def user_api_key_auth(
@@ -1125,6 +1142,7 @@ async def user_api_key_auth(
     """
     Parent function to authenticate user api key / jwt token.
     """
+    from litellm.proxy.proxy_server import general_settings
 
     request_data = await _read_request_body(request=request)
     route: str = get_request_route(request=request)
@@ -1140,7 +1158,11 @@ async def user_api_key_auth(
         custom_litellm_key_header=custom_litellm_key_header,
     )
 
-    end_user_id = get_end_user_id_from_request_body(request_data)
+    end_user_id = get_end_user_id_from_request_body_or_headers(
+        request_body=request_data,
+        headers=dict(request.headers),
+        general_settings=general_settings
+    )
     if end_user_id is not None:
         user_api_key_auth_obj.end_user_id = end_user_id
 
