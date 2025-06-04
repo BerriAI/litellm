@@ -1379,12 +1379,77 @@ class CustomStreamWrapper:
         except StopIteration:
             raise StopIteration
         except Exception as e:
-            traceback.format_exc()
-            setattr(e, "message", str(e))
+            traceback_exception = traceback.format_exc()
+            
+            # Check if this is a retryable error that occurred before streaming started
+            is_retryable_error = (
+                isinstance(e, (litellm.RateLimitError, litellm.APIConnectionError, litellm.Timeout)) or
+                (hasattr(e, '__class__') and 
+                 e.__class__.__name__ in ['RateLimitError', 'APIConnectionError', 'Timeout']) and
+                not self.chunks  # No chunks have been sent yet
+            )
+            
+            # Log error in a cleaner, user-friendly format similar to non-streaming
+            error_msg = str(e)
+            if hasattr(e, 'message'):
+                error_msg = e.message
+            
+            # If it's a retryable error before streaming started, use clean logging
+            if is_retryable_error:
+                verbose_logger.info(
+                    f"litellm.completion(model={self.model})\033[31m Exception {error_msg}\033[0m"
+                )
+                
+                # Check if we should retry - look for num_retries in the original call
+                completion_kwargs = getattr(self.logging_obj, 'kwargs', {})
+                num_retries = completion_kwargs.get('num_retries', 0)
+                
+                # Safely check if num_retries is a valid integer and greater than 0
+                try:
+                    if num_retries and isinstance(num_retries, (int, float)) and num_retries > 0:
+                        verbose_logger.info(f"Retrying request with num_retries: {num_retries}")
+                        
+                        # Raise the original exception to let the router's retry mechanism handle it
+                        # The router will catch this and retry the entire request
+                        if self.logging_obj is not None:
+                            threading.Thread(
+                                target=self.logging_obj.failure_handler,
+                                args=(e, error_msg),
+                            ).start()
+                        raise e
+                except (TypeError, AttributeError):
+                    # If num_retries comparison fails, skip retry logic
+                    pass
+            else:
+                # For non-retryable errors or after streaming started, keep existing behavior
+                verbose_logger.exception(
+                    f"litellm.streaming error - {error_msg}"
+                )
+            
+            if self.logging_obj is not None:
+                ## LOGGING - Use full traceback for non-retryable errors
+                threading.Thread(
+                    target=self.logging_obj.failure_handler,
+                    args=(e, traceback_exception),
+                ).start()
+                
+                # Safely handle async failure handler
+                try:
+                    if hasattr(asyncio, 'create_task') and asyncio.get_event_loop().is_running():
+                        asyncio.create_task(
+                            self.logging_obj.async_failure_handler(e, traceback_exception)
+                        )
+                except (RuntimeError, AttributeError):
+                    # No event loop running or async_failure_handler is not a coroutine, skip async logging
+                    pass
+            
+            ## Map to OpenAI Exception
             raise exception_type(
                 model=self.model,
                 custom_llm_provider=self.custom_llm_provider,
                 original_exception=e,
+                completion_kwargs={},
+                extra_kwargs={},
             )
 
     def set_logging_event_loop(self, loop):
@@ -1589,18 +1654,77 @@ class CustomStreamWrapper:
                 return processed_chunk
         except Exception as e:
             traceback_exception = traceback.format_exc()
-            # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
-            threading.Thread(
-                target=self.logging_obj.failure_handler, args=(e, traceback_exception)
-            ).start()
-            if isinstance(e, OpenAIError):
-                raise e
-            else:
-                raise exception_type(
-                    model=self.model,
-                    original_exception=e,
-                    custom_llm_provider=self.custom_llm_provider,
+            
+            # Check if this is a retryable error that occurred before streaming started
+            is_retryable_error = (
+                isinstance(e, (litellm.RateLimitError, litellm.APIConnectionError, litellm.Timeout)) or
+                (hasattr(e, '__class__') and 
+                 e.__class__.__name__ in ['RateLimitError', 'APIConnectionError', 'Timeout']) and
+                not self.chunks  # No chunks have been sent yet
+            )
+            
+            # Log error in a cleaner, user-friendly format similar to non-streaming
+            error_msg = str(e)
+            if hasattr(e, 'message'):
+                error_msg = e.message
+            
+            # If it's a retryable error before streaming started, use clean logging
+            if is_retryable_error:
+                verbose_logger.info(
+                    f"litellm.completion(model={self.model})\033[31m Exception {error_msg}\033[0m"
                 )
+                
+                # Check if we should retry - look for num_retries in the original call
+                completion_kwargs = getattr(self.logging_obj, 'kwargs', {})
+                num_retries = completion_kwargs.get('num_retries', 0)
+                
+                # Safely check if num_retries is a valid integer and greater than 0
+                try:
+                    if num_retries and isinstance(num_retries, (int, float)) and num_retries > 0:
+                        verbose_logger.info(f"Retrying request with num_retries: {num_retries}")
+                        
+                        # Raise the original exception to let the router's retry mechanism handle it
+                        # The router will catch this and retry the entire request
+                        if self.logging_obj is not None:
+                            threading.Thread(
+                                target=self.logging_obj.failure_handler,
+                                args=(e, error_msg),
+                            ).start()
+                        raise e
+                except (TypeError, AttributeError):
+                    # If num_retries comparison fails, skip retry logic
+                    pass
+            else:
+                # For non-retryable errors or after streaming started, keep existing behavior
+                verbose_logger.exception(
+                    f"litellm.streaming error - {error_msg}"
+                )
+            
+            if self.logging_obj is not None:
+                ## LOGGING - Use full traceback for non-retryable errors
+                threading.Thread(
+                    target=self.logging_obj.failure_handler,
+                    args=(e, traceback_exception),
+                ).start()
+                
+                # Safely handle async failure handler
+                try:
+                    if hasattr(asyncio, 'create_task') and asyncio.get_event_loop().is_running():
+                        asyncio.create_task(
+                            self.logging_obj.async_failure_handler(e, traceback_exception)
+                        )
+                except (RuntimeError, AttributeError):
+                    # No event loop running or async_failure_handler is not a coroutine, skip async logging
+                    pass
+            
+            ## Map to OpenAI Exception
+            raise exception_type(
+                model=self.model,
+                custom_llm_provider=self.custom_llm_provider,
+                original_exception=e,
+                completion_kwargs={},
+                extra_kwargs={},
+            )
 
     def fetch_sync_stream(self):
         if self.completion_stream is None and self.make_call is not None:
@@ -1785,16 +1909,69 @@ class CustomStreamWrapper:
             raise e
         except Exception as e:
             traceback_exception = traceback.format_exc()
+            
+            # Check if this is a retryable error that occurred before streaming started
+            is_retryable_error = (
+                isinstance(e, (litellm.RateLimitError, litellm.APIConnectionError, litellm.Timeout)) or
+                (hasattr(e, '__class__') and 
+                 e.__class__.__name__ in ['RateLimitError', 'APIConnectionError', 'Timeout']) and
+                not self.chunks  # No chunks have been sent yet
+            )
+            
+            # Log error in a cleaner, user-friendly format similar to non-streaming
+            error_msg = str(e)
+            if hasattr(e, 'message'):
+                error_msg = e.message
+            
+            # If it's a retryable error before streaming started, use clean logging
+            if is_retryable_error:
+                verbose_logger.info(
+                    f"litellm.completion(model={self.model})\033[31m Exception {error_msg}\033[0m"
+                )
+                
+                # Check if we should retry - look for num_retries in the original call
+                completion_kwargs = getattr(self.logging_obj, 'kwargs', {})
+                num_retries = completion_kwargs.get('num_retries', 0)
+                
+                # Safely check if num_retries is a valid integer and greater than 0
+                try:
+                    if num_retries and isinstance(num_retries, (int, float)) and num_retries > 0:
+                        verbose_logger.info(f"Retrying request with num_retries: {num_retries}")
+                        
+                        # Raise the original exception to let the router's retry mechanism handle it
+                        # The router will catch this and retry the entire request
+                        if self.logging_obj is not None:
+                            threading.Thread(
+                                target=self.logging_obj.failure_handler,
+                                args=(e, error_msg),
+                            ).start()
+                        raise e
+                except (TypeError, AttributeError):
+                    # If num_retries comparison fails, skip retry logic
+                    pass
+            else:
+                # For non-retryable errors or after streaming started, keep existing behavior
+                verbose_logger.exception(
+                    f"litellm.streaming error - {error_msg}"
+                )
+            
             if self.logging_obj is not None:
-                ## LOGGING
+                ## LOGGING - Use full traceback for non-retryable errors
                 threading.Thread(
                     target=self.logging_obj.failure_handler,
                     args=(e, traceback_exception),
-                ).start()  # log response
-                # Handle any exceptions that might occur during streaming
-                asyncio.create_task(
-                    self.logging_obj.async_failure_handler(e, traceback_exception)  # type: ignore
-                )
+                ).start()
+                
+                # Safely handle async failure handler
+                try:
+                    if hasattr(asyncio, 'create_task') and asyncio.get_event_loop().is_running():
+                        asyncio.create_task(
+                            self.logging_obj.async_failure_handler(e, traceback_exception)
+                        )
+                except (RuntimeError, AttributeError):
+                    # No event loop running or async_failure_handler is not a coroutine, skip async logging
+                    pass
+            
             ## Map to OpenAI Exception
             raise exception_type(
                 model=self.model,
