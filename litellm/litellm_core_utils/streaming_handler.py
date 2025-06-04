@@ -26,7 +26,6 @@ from litellm.types.utils import (
     Usage,
 )
 
-from ..exceptions import OpenAIError
 from .core_helpers import map_finish_reason, process_response_headers
 from .exception_mapping_utils import exception_type
 from .llm_response_utils.get_api_base import get_api_base
