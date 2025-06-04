@@ -433,6 +433,29 @@ def apply_user_info_values_to_sso_user_defined_values(
     return user_defined_values
 
 
+async def check_and_update_if_proxy_admin_id(
+    user_role: str, user_id: str, prisma_client: Optional[PrismaClient]
+):
+    """
+    - Check if user role in DB is admin
+    - If not, update user role in DB to admin role
+    """
+    proxy_admin_id = os.getenv("PROXY_ADMIN_ID")
+    if proxy_admin_id is not None and proxy_admin_id == user_id:
+        if user_role and user_role == LitellmUserRoles.PROXY_ADMIN.value:
+            return user_role
+
+        if prisma_client:
+            await prisma_client.db.litellm_usertable.update(
+                where={"user_id": user_id},
+                data={"user_role": LitellmUserRoles.PROXY_ADMIN.value},
+            )
+
+        user_role = LitellmUserRoles.PROXY_ADMIN.value
+
+    return user_role
+
+
 @router.get("/sso/callback", tags=["experimental"], include_in_schema=False)
 async def auth_callback(request: Request):  # noqa: PLR0915
     """Verify login"""
@@ -451,6 +474,7 @@ async def auth_callback(request: Request):  # noqa: PLR0915
         user_api_key_cache,
         user_custom_sso,
     )
+    from litellm.proxy.utils import get_custom_url
     from litellm.types.proxy.ui_sso import ReturnedUITokenObject
 
     if prisma_client is None:
@@ -469,12 +493,11 @@ async def auth_callback(request: Request):  # noqa: PLR0915
             param="master_key",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-    redirect_url = os.getenv("PROXY_BASE_URL", str(request.base_url))
-    if redirect_url.endswith("/"):
-        redirect_url += "sso/callback"
-    else:
-        redirect_url += "/sso/callback"
+    redirect_url = SSOAuthenticationHandler.get_redirect_url_for_sso(
+        request=request, sso_callback_route="sso/callback"
+    )
 
+    verbose_proxy_logger.info(f"Redirecting to {redirect_url}")
     result = None
     if google_client_id is not None:
         result = await GoogleSSOHandler.get_google_callback_response(
@@ -602,17 +625,17 @@ async def auth_callback(request: Request):  # noqa: PLR0915
     key = response["token"]  # type: ignore
     user_id = response["user_id"]  # type: ignore
 
-    litellm_dashboard_ui = "/ui/"
+    litellm_dashboard_ui = get_custom_url(
+        request_base_url=str(request.base_url), route="ui/"
+    )
     user_role = (
         user_defined_values["user_role"]
         or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
     )
-    if (
-        os.getenv("PROXY_ADMIN_ID", None) is not None
-        and os.environ["PROXY_ADMIN_ID"] == user_id
-    ):
-        # checks if user is admin
-        user_role = LitellmUserRoles.PROXY_ADMIN.value
+    if user_id and isinstance(user_id, str):
+        user_role = await check_and_update_if_proxy_admin_id(
+            user_role=user_role, user_id=user_id, prisma_client=prisma_client
+        )
 
     verbose_proxy_logger.debug(
         f"user_role: {user_role}; ui_access_mode: {ui_access_mode}"
@@ -947,7 +970,9 @@ class SSOAuthenticationHandler:
         """
         Get the redirect URL for SSO
         """
-        redirect_url = os.getenv("PROXY_BASE_URL", str(request.base_url))
+        from litellm.proxy.utils import get_custom_url
+
+        redirect_url = get_custom_url(request_base_url=str(request.base_url))
         if redirect_url.endswith("/"):
             redirect_url += sso_callback_route
         else:

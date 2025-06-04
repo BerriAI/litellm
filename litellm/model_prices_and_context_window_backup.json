@@ -4737,6 +4737,18 @@
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
+    "cerebras/qwen-3-32b": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 4e-07,
+        "output_cost_per_token": 8e-07,
+        "litellm_provider": "cerebras",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "source": "https://inference-docs.cerebras.ai/support/pricing"
+    },
     "friendliai/meta-llama-3.1-8b-instruct": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
@@ -4994,6 +5006,58 @@
         "supports_computer_use": true
     },
     "claude-sonnet-4-20250514": {
+        "max_tokens": 64000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01,
+            "search_context_size_high": 0.01
+        },
+        "cache_creation_input_token_cost": 3.75e-06,
+        "cache_read_input_token_cost": 3e-07,
+        "litellm_provider": "anthropic",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "tool_use_system_prompt_tokens": 159,
+        "supports_assistant_prefill": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_computer_use": true
+    },
+    "claude-4-opus-20250514": {
+        "max_tokens": 32000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 32000,
+        "input_cost_per_token": 1.5e-05,
+        "output_cost_per_token": 7.5e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01,
+            "search_context_size_high": 0.01
+        },
+        "cache_creation_input_token_cost": 1.875e-05,
+        "cache_read_input_token_cost": 1.5e-06,
+        "litellm_provider": "anthropic",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "tool_use_system_prompt_tokens": 159,
+        "supports_assistant_prefill": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_computer_use": true
+    },
+    "claude-4-sonnet-20250514": {
         "max_tokens": 64000,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -7884,6 +7948,16 @@
         "output_vector_size": 768,
         "input_cost_per_character": 2.5e-08,
         "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 0,
+        "litellm_provider": "vertex_ai-embedding-models",
+        "mode": "embedding",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models"
+    },
+    "gemini-embedding-001": {
+        "max_tokens": 2048,
+        "max_input_tokens": 2048,
+        "output_vector_size": 3072,
+        "input_cost_per_token": 1.5e-07,
         "output_cost_per_token": 0,
         "litellm_provider": "vertex_ai-embedding-models",
         "mode": "embedding",
@@ -12672,10 +12746,10 @@
         "output_cost_per_token": 1e-07,
         "litellm_provider": "fireworks_ai",
         "mode": "chat",
-        "supports_function_calling": true,
+        "supports_function_calling": false,
         "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing",
-        "supports_tool_choice": true
+        "supports_tool_choice": false
     },
     "fireworks_ai/accounts/fireworks/models/llama-v3p2-3b-instruct": {
         "max_tokens": 16384,
@@ -12685,10 +12759,10 @@
         "output_cost_per_token": 1e-07,
         "litellm_provider": "fireworks_ai",
         "mode": "chat",
-        "supports_function_calling": true,
+        "supports_function_calling": false,
         "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing",
-        "supports_tool_choice": true
+        "supports_tool_choice": false
     },
     "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct": {
         "max_tokens": 16384,
@@ -12698,10 +12772,10 @@
         "output_cost_per_token": 1e-07,
         "litellm_provider": "fireworks_ai",
         "mode": "chat",
-        "supports_function_calling": true,
+        "supports_function_calling": false,
         "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing",
-        "supports_tool_choice": true
+        "supports_tool_choice": false
     },
     "fireworks_ai/accounts/fireworks/models/llama-v3p2-11b-vision-instruct": {
         "max_tokens": 16384,
@@ -12711,13 +12785,13 @@
         "output_cost_per_token": 2e-07,
         "litellm_provider": "fireworks_ai",
         "mode": "chat",
-        "supports_function_calling": true,
+        "supports_function_calling": false,
         "supports_vision": true,
         "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing",
-        "supports_tool_choice": true
+        "supports_tool_choice": false
     },
-    "accounts/fireworks/models/llama-v3p2-90b-vision-instruct": {
+    "fireworks_ai/accounts/fireworks/models/llama-v3p2-90b-vision-instruct": {
         "max_tokens": 16384,
         "max_input_tokens": 16384,
         "max_output_tokens": 16384,
@@ -12725,7 +12799,7 @@
         "output_cost_per_token": 9e-07,
         "litellm_provider": "fireworks_ai",
         "mode": "chat",
-        "supports_function_calling": true,
+        "supports_tool_choice": false,
         "supports_vision": true,
         "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing"
@@ -12764,10 +12838,10 @@
         "output_cost_per_token": 9e-07,
         "litellm_provider": "fireworks_ai",
         "mode": "chat",
-        "supports_function_calling": true,
+        "supports_function_calling": false,
         "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing",
-        "supports_tool_choice": true
+        "supports_tool_choice": false
     },
     "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-32b-instruct": {
         "max_tokens": 4096,
@@ -12777,10 +12851,10 @@
         "output_cost_per_token": 9e-07,
         "litellm_provider": "fireworks_ai",
         "mode": "chat",
-        "supports_function_calling": true,
+        "supports_function_calling": false,
         "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing",
-        "supports_tool_choice": true
+        "supports_tool_choice": false
     },
     "fireworks_ai/accounts/fireworks/models/yi-large": {
         "max_tokens": 32768,
@@ -12790,10 +12864,10 @@
         "output_cost_per_token": 3e-06,
         "litellm_provider": "fireworks_ai",
         "mode": "chat",
-        "supports_function_calling": true,
+        "supports_function_calling": false,
         "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing",
-        "supports_tool_choice": true
+        "supports_tool_choice": false
     },
     "fireworks_ai/accounts/fireworks/models/deepseek-coder-v2-instruct": {
         "max_tokens": 65536,
@@ -12803,10 +12877,10 @@
         "output_cost_per_token": 1.2e-06,
         "litellm_provider": "fireworks_ai",
         "mode": "chat",
-        "supports_function_calling": true,
+        "supports_function_calling": false,
         "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing",
-        "supports_tool_choice": true
+        "supports_tool_choice": false
     },
     "fireworks_ai/accounts/fireworks/models/deepseek-v3": {
         "max_tokens": 8192,
@@ -12818,7 +12892,7 @@
         "mode": "chat",
         "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing",
-        "supports_tool_choice": true
+        "supports_tool_choice": false
     },
     "fireworks_ai/accounts/fireworks/models/deepseek-r1": {
         "max_tokens": 20480,
@@ -12830,7 +12904,7 @@
         "mode": "chat",
         "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing",
-        "supports_tool_choice": true
+        "supports_tool_choice": false
     },
     "fireworks_ai/accounts/fireworks/models/deepseek-r1-basic": {
         "max_tokens": 20480,
@@ -12842,7 +12916,19 @@
         "mode": "chat",
         "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing",
-        "supports_tool_choice": true
+        "supports_tool_choice": false
+    },
+    "fireworks_ai/accounts/fireworks/models/deepseek-r1-0528": {
+        "max_tokens": 160000,
+        "max_input_tokens": 160000,
+        "max_output_tokens": 160000,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 8e-06,
+        "litellm_provider": "fireworks_ai",
+        "mode": "chat",
+        "source": "https://fireworks.ai/pricing",
+        "supports_tool_choice": false,
+        "supports_response_schema": true
     },
     "fireworks_ai/accounts/fireworks/models/llama-v3p1-405b-instruct": {
         "max_tokens": 16384,
@@ -12854,7 +12940,8 @@
         "mode": "chat",
         "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing",
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_function_calling": true
     },
     "fireworks_ai/accounts/fireworks/models/llama4-maverick-instruct-basic": {
         "max_tokens": 131072,
@@ -12866,7 +12953,7 @@
         "mode": "chat",
         "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing",
-        "supports_tool_choice": true
+        "supports_tool_choice": false
     },
     "fireworks_ai/accounts/fireworks/models/llama4-scout-instruct-basic": {
         "max_tokens": 131072,
@@ -12878,7 +12965,7 @@
         "mode": "chat",
         "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing",
-        "supports_tool_choice": true
+        "supports_tool_choice": false
     },
     "fireworks_ai/nomic-ai/nomic-embed-text-v1.5": {
         "max_tokens": 8192,

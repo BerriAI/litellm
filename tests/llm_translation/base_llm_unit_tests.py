@@ -269,6 +269,40 @@ class BaseLLMChatTest(ABC):
             )
 
         assert response is not None
+
+    @pytest.mark.asyncio
+    async def test_async_pdf_handling_with_file_id(self):
+        from litellm.utils import supports_pdf_input
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        litellm._turn_on_debug()
+
+
+        image_content = [
+            {"type": "text", "text": "What's this file about?"},
+            {
+                "type": "file",
+                "file": {
+                    "file_id": "https://upload.wikimedia.org/wikipedia/commons/2/20/Re_example.pdf"
+                },
+            },
+        ]
+
+        image_messages = [{"role": "user", "content": image_content}]
+
+        base_completion_call_args = self.get_base_completion_call_args()
+
+        if not supports_pdf_input(base_completion_call_args["model"], None):
+            pytest.skip("Model does not support image input")
+
+        response = await self.async_completion_function(
+            **base_completion_call_args,
+            messages=image_messages,
+        )
+
+        assert response is not None
+    
     
     def test_file_data_unit_test(self, pdf_messages):
         from litellm.utils import supports_pdf_input, return_raw_request
