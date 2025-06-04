@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { Modal, Form, Input, Button as Button2, Select, message } from "antd";
 import { Text, TextInput } from "@tremor/react";
 import { getSSOSettings, updateSSOSettings } from "./networking";
@@ -103,6 +103,8 @@ const SSOModals: React.FC<SSOModalsProps> = ({
   accessToken,
   ssoConfigured = false, // Default to false if not provided
 }) => {
+  const [isClearConfirmModalVisible, setIsClearConfirmModalVisible] = useState(false);
+
   // Load existing SSO settings when modal opens
   useEffect(() => {
     const loadSSOSettings = async () => {
@@ -172,6 +174,49 @@ const SSOModals: React.FC<SSOModalsProps> = ({
     } catch (error) {
       console.error("Failed to save SSO settings:", error);
       message.error("Failed to save SSO settings");
+    }
+  };
+
+  // Handle clearing SSO settings
+  const handleClearSSO = async () => {
+    if (!accessToken) {
+      message.error("No access token available");
+      return;
+    }
+
+    try {
+      // Clear all SSO settings by sending empty values
+      const clearSettings = {
+        google_client_id: '',
+        google_client_secret: '',
+        microsoft_client_id: '',
+        microsoft_client_secret: '',
+        microsoft_tenant: '',
+        generic_client_id: '',
+        generic_client_secret: '',
+        generic_authorization_endpoint: '',
+        generic_token_endpoint: '',
+        generic_userinfo_endpoint: '',
+        proxy_base_url: '',
+        user_email: '',
+        sso_provider: '',
+      };
+
+      await updateSSOSettings(accessToken, clearSettings);
+      
+      // Clear the form
+      form.resetFields();
+      
+      // Close the confirmation modal
+      setIsClearConfirmModalVisible(false);
+      
+      // Close the main SSO modal and trigger refresh
+      handleAddSSOOk();
+      
+      message.success("SSO settings cleared successfully");
+    } catch (error) {
+      console.error("Failed to clear SSO settings:", error);
+      message.error("Failed to clear SSO settings");
     }
   };
 
@@ -256,10 +301,50 @@ const SSOModals: React.FC<SSOModalsProps> = ({
               <TextInput />
             </Form.Item>
           </>
-          <div style={{ textAlign: "right", marginTop: "10px" }}>
+          <div style={{ textAlign: "right", marginTop: "10px", display: "flex", justifyContent: "flex-end", alignItems: "center", gap: "8px" }}>
+            {ssoConfigured && (
+              <Button2 
+                onClick={() => setIsClearConfirmModalVisible(true)}
+                style={{ 
+                  backgroundColor: '#6366f1', 
+                  borderColor: '#6366f1', 
+                  color: 'white'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = '#5558eb';
+                  e.currentTarget.style.borderColor = '#5558eb';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = '#6366f1';
+                  e.currentTarget.style.borderColor = '#6366f1';
+                }}
+              >
+                Clear
+              </Button2>
+            )}
             <Button2 htmlType="submit">Save</Button2>
           </div>
         </Form>
+      </Modal>
+
+      {/* Clear Confirmation Modal */}
+      <Modal
+        title="Confirm Clear SSO Settings"
+        visible={isClearConfirmModalVisible}
+        onOk={handleClearSSO}
+        onCancel={() => setIsClearConfirmModalVisible(false)}
+        okText="Yes, Clear"
+        cancelText="Cancel"
+        okButtonProps={{ 
+          danger: true,
+          style: { 
+            backgroundColor: '#dc2626', 
+            borderColor: '#dc2626' 
+          }
+        }}
+      >
+        <p>Are you sure you want to clear all SSO settings? This action cannot be undone.</p>
+        <p>Users will no longer be able to login using SSO after this change.</p>
       </Modal>
 
       <Modal
