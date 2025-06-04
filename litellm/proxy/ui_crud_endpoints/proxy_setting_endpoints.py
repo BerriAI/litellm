@@ -348,34 +348,62 @@ async def get_sso_provider_config():
     import os
     from litellm.proxy.proxy_server import general_settings
     
-    # Get SSO configuration from environment variables
-    config = SSOProviderConfig(
-        sso_provider=general_settings.get("sso_provider"),
-        google=GoogleSSOConfig(
-            google_client_id=os.getenv("GOOGLE_CLIENT_ID"),
-            google_client_secret="***" if os.getenv("GOOGLE_CLIENT_SECRET") else None,
-        ),
-        microsoft=MicrosoftSSOConfig(
-            microsoft_client_id=os.getenv("MICROSOFT_CLIENT_ID"),
-            microsoft_client_secret="***" if os.getenv("MICROSOFT_CLIENT_SECRET") else None,
-            microsoft_tenant=os.getenv("MICROSOFT_TENANT"),
-        ),
-        generic=GenericSSOConfig(
-            generic_client_id=os.getenv("GENERIC_CLIENT_ID"),
-            generic_client_secret="***" if os.getenv("GENERIC_CLIENT_SECRET") else None,
-            generic_authorization_endpoint=os.getenv("GENERIC_AUTHORIZATION_ENDPOINT"),
-            generic_token_endpoint=os.getenv("GENERIC_TOKEN_ENDPOINT"),
-            generic_userinfo_endpoint=os.getenv("GENERIC_USERINFO_ENDPOINT"),
-            generic_scope=os.getenv("GENERIC_SCOPE", "openid email profile"),
-        ),
-        proxy_base_url=os.getenv("PROXY_BASE_URL") or general_settings.get("proxy_base_url"),
-        user_email=general_settings.get("admin_user_email"),
-    )
-    
-    return {
-        "config": config.model_dump(),
-        "status": "success"
-    }
+    try:
+        # Helper function to mask secrets consistently
+        def mask_secret(value):
+            return "***" if value and value.strip() else None
+        
+        # Get SSO configuration from environment variables
+        config = SSOProviderConfig(
+            sso_provider=general_settings.get("sso_provider"),
+            google=GoogleSSOConfig(
+                google_client_id=os.getenv("GOOGLE_CLIENT_ID"),
+                google_client_secret=mask_secret(os.getenv("GOOGLE_CLIENT_SECRET")),
+            ),
+            microsoft=MicrosoftSSOConfig(
+                microsoft_client_id=os.getenv("MICROSOFT_CLIENT_ID"),
+                microsoft_client_secret=mask_secret(os.getenv("MICROSOFT_CLIENT_SECRET")),
+                microsoft_tenant=os.getenv("MICROSOFT_TENANT"),
+            ),
+            generic=GenericSSOConfig(
+                generic_client_id=os.getenv("GENERIC_CLIENT_ID"),
+                generic_client_secret=mask_secret(os.getenv("GENERIC_CLIENT_SECRET")),
+                generic_authorization_endpoint=os.getenv("GENERIC_AUTHORIZATION_ENDPOINT"),
+                generic_token_endpoint=os.getenv("GENERIC_TOKEN_ENDPOINT"),
+                generic_userinfo_endpoint=os.getenv("GENERIC_USERINFO_ENDPOINT"),
+                generic_scope=os.getenv("GENERIC_SCOPE", "openid email profile"),
+            ),
+            proxy_base_url=os.getenv("PROXY_BASE_URL") or general_settings.get("proxy_base_url"),
+            user_email=general_settings.get("admin_user_email"),
+        )
+        
+        # Convert to dict and remove None values for cleaner response
+        config_dict = config.model_dump(exclude_none=False)
+        
+        # Clean up provider configs - remove if all values are None
+        def is_provider_configured(provider_config):
+            if not provider_config:
+                return False
+            return any(v is not None for v in provider_config.values())
+        
+        if not is_provider_configured(config_dict.get("google")):
+            config_dict["google"] = None
+        if not is_provider_configured(config_dict.get("microsoft")):
+            config_dict["microsoft"] = None
+        if not is_provider_configured(config_dict.get("generic")):
+            config_dict["generic"] = None
+        
+        return {
+            "config": config_dict,
+            "status": "success"
+        }
+        
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error getting SSO provider config: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get SSO provider configuration: {str(e)}"
+        )
 
 
 async def _update_general_settings(config: SSOConfigRequest, general_settings: dict):
