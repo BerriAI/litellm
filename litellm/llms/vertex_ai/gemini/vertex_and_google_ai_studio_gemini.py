@@ -44,7 +44,6 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParamFunctionChunk,
-    ChatCompletionUsageBlock,
     OpenAIChatCompletionFinishReason,
 )
 from litellm.types.llms.vertex_ai import (
@@ -66,7 +65,6 @@ from litellm.types.utils import (
     ChatCompletionTokenLogprob,
     ChoiceLogprobs,
     CompletionTokensDetailsWrapper,
-    GenericStreamingChunk,
     PromptTokensDetailsWrapper,
     TopLogprob,
     Usage,
