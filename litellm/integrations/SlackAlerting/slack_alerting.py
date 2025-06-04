@@ -41,7 +41,7 @@ from litellm.types.integrations.slack_alerting import *
 
 from ..email_templates.templates import *
 from .batching_handler import send_to_webhook, squash_payloads
-from .utils import _add_langfuse_trace_id_to_alert, process_slack_alerting_variables
+from .utils import process_slack_alerting_variables
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router

@@ -280,6 +280,10 @@ class ProxyLogging:
         self.db_spend_update_writer = DBSpendUpdateWriter()
         self.proxy_hook_mapping: Dict[str, CustomLogger] = {}
 
+        # Guard flags to prevent duplicate background tasks
+        self.daily_report_started: bool = False
+        self.hanging_requests_check_started: bool = False
+
     def startup_event(
         self,
         llm_router: Optional[Router],
@@ -301,21 +305,25 @@ class ProxyLogging:
         if (
             self.slack_alerting_instance is not None
             and "daily_reports" in self.slack_alerting_instance.alert_types
+            and not self.daily_report_started
         ):
             asyncio.create_task(
                 self.slack_alerting_instance._run_scheduled_daily_report(
                     llm_router=llm_router
                 )
             )  # RUN DAILY REPORT (if scheduled)
+            self.daily_report_started = True
 
         if (
             self.slack_alerting_instance is not None
             and AlertType.llm_requests_hanging
             in self.slack_alerting_instance.alert_types
+            and not self.hanging_requests_check_started
         ):
             asyncio.create_task(
                 self.slack_alerting_instance.hanging_request_check.check_for_hanging_requests()
             )  # RUN HANGING REQUEST CHECK (if user wants to alert on hanging requests)
+            self.hanging_requests_check_started = True
 
     def update_values(
         self,
