@@ -613,6 +613,9 @@ class SagemakerLLM(BaseAWSLLM):
                 region_name=region_name,
             )
 
+        # Make it possible to customize the input key depending on the model deployed
+        input_key = optional_params.pop("input_key", "text_inputs")
+
         # pop streaming if it's in the optional params as 'stream' raises an error with sagemaker
         inference_params = deepcopy(optional_params)
         inference_params.pop("stream", None)
@@ -626,7 +629,7 @@ class SagemakerLLM(BaseAWSLLM):
                 inference_params[k] = v
 
         #### HF EMBEDDING LOGIC
-        data = json.dumps({"inputs": input}).encode("utf-8")
+        data = json.dumps({input_key: input}).encode("utf-8")
 
         ## LOGGING
         request_str = f"""
@@ -670,11 +673,15 @@ class SagemakerLLM(BaseAWSLLM):
         )
 
         print_verbose(f"raw model_response: {response}")
-        if "embedding" not in response:
+        
+        if isinstance(response, list):
+            embeddings = response
+        elif isinstance(response, dict):
+            embeddings = response["embedding"]
+        else:
             raise SagemakerError(
-                status_code=500, message="embedding not found in response"
+                status_code=500, message="Response is not a list nor a dict with 'embedding' key"
             )
-        embeddings = response["embedding"]
 
         if not isinstance(embeddings, list):
             raise SagemakerError(
