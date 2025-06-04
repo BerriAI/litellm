@@ -67,6 +67,7 @@ import {
   addAllowedIP,
   getAllowedIPs,
   deleteAllowedIP,
+  getSSOSettings,
 } from "./networking";
 
 const AdminPanel: React.FC<AdminPanelProps> = ({
@@ -98,6 +99,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const [isDeleteIPModalVisible, setIsDeleteIPModalVisible] = useState(false);
   const [allowedIPs, setAllowedIPs] = useState<string[]>([]);
   const [ipToDelete, setIPToDelete] = useState<string | null>(null);
+  const [ssoConfigured, setSsoConfigured] = useState<boolean>(false);
   const router = useRouter();
 
   const [possibleUIRoles, setPossibleUIRoles] = useState<null | Record<
@@ -115,6 +117,30 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
   let nonSssoUrl = baseUrl;
   nonSssoUrl += "/fallback/login";
+
+  // Extract the SSO configuration check logic into a separate function for reuse
+  const checkSSOConfiguration = async () => {
+    if (accessToken && premiumUser) {
+      try {
+        const ssoData = await getSSOSettings(accessToken);
+        console.log("SSO data:", ssoData);
+        
+        // Check if any SSO provider is configured
+        if (ssoData && ssoData.values) {
+          const hasGoogleSSO = ssoData.values.google_client_id && ssoData.values.google_client_secret;
+          const hasMicrosoftSSO = ssoData.values.microsoft_client_id && ssoData.values.microsoft_client_secret;
+          const hasGenericSSO = ssoData.values.generic_client_id && ssoData.values.generic_client_secret;
+          
+          setSsoConfigured(hasGoogleSSO || hasMicrosoftSSO || hasGenericSSO);
+        } else {
+          setSsoConfigured(false);
+        }
+      } catch (error) {
+        console.error("Error checking SSO configuration:", error);
+        setSsoConfigured(false);
+      }
+    }
+  };
 
   const handleShowAllowedIPs = async () => {
     try {
@@ -185,6 +211,10 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const handleAddSSOOk = () => {
     setIsAddSSOModalVisible(false);
     form.resetFields();
+    // Refresh SSO configuration status
+    if (accessToken && premiumUser) {
+      checkSSOConfiguration();
+    }
   };
 
   const handleAddSSOCancel = () => {
@@ -199,10 +229,18 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const handleInstructionsOk = () => {
     setIsInstructionsModalVisible(false);
+    // Refresh SSO configuration status after instructions are closed
+    if (accessToken && premiumUser) {
+      checkSSOConfiguration();
+    }
   };
 
   const handleInstructionsCancel = () => {
     setIsInstructionsModalVisible(false);
+    // Refresh SSO configuration status after instructions are closed
+    if (accessToken && premiumUser) {
+      checkSSOConfiguration();
+    }
   };
 
   const roles = ["proxy_admin", "proxy_admin_viewer"];
@@ -263,6 +301,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
     fetchProxyAdminInfo();
   }, [accessToken]);
+
+  // Add new useEffect to check SSO configuration
+  useEffect(() => {
+    checkSSOConfiguration();
+  }, [accessToken, premiumUser]);
 
   const handleMemberUpdateOk = () => {
     setIsUpdateModalModalVisible(false);
@@ -509,7 +552,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                     style={{ width: '150px' }}
                     onClick={() => premiumUser === true ? setIsAddSSOModalVisible(true) : message.error("Only premium users can add SSO")}
                   >
-                    Add SSO
+                    {ssoConfigured ? "Edit SSO Settings" : "Add SSO"}
                   </Button>
                 </div>
                 <div>
@@ -534,6 +577,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                 handleInstructionsCancel={handleInstructionsCancel}
                 form={form}
                 accessToken={accessToken}
+                ssoConfigured={ssoConfigured}
               />
               <Modal
               title="Manage Allowed IP Addresses"

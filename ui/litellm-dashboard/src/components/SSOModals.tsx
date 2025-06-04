@@ -13,6 +13,7 @@ interface SSOModalsProps {
   handleInstructionsCancel: () => void;
   form: any; // Replace with proper Form type if available
   accessToken: string | null;
+  ssoConfigured?: boolean; // Add optional prop to indicate if SSO is configured
 }
 
 const ssoProviderLogoMap: Record<string, string> = {
@@ -100,6 +101,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
   handleInstructionsCancel,
   form,
   accessToken,
+  ssoConfigured = false, // Default to false if not provided
 }) => {
   // Load existing SSO settings when modal opens
   useEffect(() => {
@@ -197,7 +199,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
   return (
     <>
       <Modal
-        title="Add SSO"
+        title={ssoConfigured ? "Edit SSO Settings" : "Add SSO"}
         visible={isAddSSOModalVisible}
         width={800}
         footer={null}
