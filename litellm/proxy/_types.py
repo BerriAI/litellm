@@ -441,6 +441,8 @@ class LiteLLMRoutes(enum.Enum):
             "/test",
             "/config/yaml",
             "/metrics",
+            "/litellm/.well-known/litellm-ui-config",
+            "/.well-known/litellm-ui-config",
         ]
     )
 
@@ -2442,7 +2444,7 @@ class CreatePassThroughEndpoint(LiteLLMPydanticObjectBase):
 class LiteLLM_TeamMembership(LiteLLMPydanticObjectBase):
     user_id: str
     team_id: str
-    budget_id: str
+    budget_id: Optional[str] = None
     litellm_budget_table: Optional[LiteLLM_BudgetTable]
 
 

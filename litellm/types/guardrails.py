@@ -234,6 +234,10 @@ class PresidioPresidioConfigModelUserInterface(BaseModel):
         # extra param to let the ui know this is a boolean
         json_schema_extra={"ui_type": GuardrailParamUITypes.BOOL},
     )
+    presidio_language: Optional[str] = Field(
+        default="en",
+        description="Language code for Presidio PII analysis (e.g., 'en', 'de', 'es', 'fr')",
+    )
 
 
 class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):

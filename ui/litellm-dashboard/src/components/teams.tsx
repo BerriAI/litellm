@@ -60,11 +60,7 @@ import AvailableTeamsPanel from "@/components/team/available_teams";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import PremiumVectorStoreSelector from "./common_components/PremiumVectorStoreSelector";
 import type { KeyResponse, Team } from "./key_team_helpers/key_list";
-const isLocal = process.env.NODE_ENV === "development";
-const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
-if (isLocal != true) {
-  console.log = function() {};
-}
+
 interface TeamProps {
   teams: Team[] | null;
   searchParams: any;

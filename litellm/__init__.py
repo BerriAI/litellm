@@ -119,6 +119,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "resend_email",
     "smtp_email",
     "deepeval",
+    "s3_v2",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
@@ -190,6 +191,7 @@ maritalk_key: Optional[str] = None
 ai21_key: Optional[str] = None
 ollama_key: Optional[str] = None
 openrouter_key: Optional[str] = None
+datarobot_key: Optional[str] = None
 predibase_key: Optional[str] = None
 huggingface_key: Optional[str] = None
 vertex_project: Optional[str] = None
@@ -215,6 +217,7 @@ use_client: bool = False
 ssl_verify: Union[str, bool] = True
 ssl_certificate: Optional[str] = None
 disable_streaming_logging: bool = False
+disable_token_counter: bool = False
 disable_add_transform_inline_image_block: bool = False
 in_memory_llm_clients_cache: LLMClientCache = LLMClientCache()
 safe_memory_mode: bool = False
@@ -402,6 +405,7 @@ mistral_chat_models: List = []
 text_completion_codestral_models: List = []
 anthropic_models: List = []
 openrouter_models: List = []
+datarobot_models: List = []
 vertex_language_models: List = []
 vertex_vision_models: List = []
 vertex_chat_models: List = []
@@ -509,6 +513,8 @@ def add_known_models():
             empower_models.append(key)
         elif value.get("litellm_provider") == "openrouter":
             openrouter_models.append(key)
+        elif value.get("litellm_provider") == "datarobot":
+            datarobot_models.append(key)
         elif value.get("litellm_provider") == "vertex_ai-text-models":
             vertex_text_models.append(key)
         elif value.get("litellm_provider") == "vertex_ai-code-text-models":
@@ -659,6 +665,7 @@ model_list = (
     + anthropic_models
     + replicate_models
     + openrouter_models
+    + datarobot_models
     + huggingface_models
     + vertex_chat_models
     + vertex_text_models
@@ -719,6 +726,7 @@ models_by_provider: dict = {
     "together_ai": together_ai_models,
     "baseten": baseten_models,
     "openrouter": openrouter_models,
+    "datarobot": datarobot_models,
     "vertex_ai": vertex_chat_models
     + vertex_text_models
     + vertex_anthropic_models
@@ -869,6 +877,7 @@ from .llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfi
 from .llms.oobabooga.chat.transformation import OobaboogaConfig
 from .llms.maritalk import MaritalkConfig
 from .llms.openrouter.chat.transformation import OpenrouterConfig
+from .llms.datarobot.chat.transformation import DataRobotConfig
 from .llms.anthropic.chat.transformation import AnthropicConfig
 from .llms.anthropic.common_utils import AnthropicModelInfo
 from .llms.groq.stt.transformation import GroqSTTConfig
