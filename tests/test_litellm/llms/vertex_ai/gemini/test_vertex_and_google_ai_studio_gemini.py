@@ -527,9 +527,7 @@ def test_vertex_ai_streaming_usage_calculation():
         iterator.chunk_parser(chunk)
 
         # Verify _calculate_usage was called with correct parameters
-        mock_calculate_usage.assert_called_once_with(
-            completion_response=None, usage_metadata=usage_metadata
-        )
+        mock_calculate_usage.assert_called_once_with(completion_response=chunk)
 
     # Test non-streaming response parsing
     with patch.object(VertexGeminiConfig, "_calculate_usage") as mock_calculate_usage:
