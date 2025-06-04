@@ -1,5 +1,5 @@
 #### CRUD ENDPOINTS for UI Settings #####
-from typing import Any, List, Union
+from typing import Any, Dict, List, Union
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -14,6 +14,16 @@ router = APIRouter()
 
 class IPAddress(BaseModel):
     ip: str
+
+
+class SSOSettingsResponse(BaseModel):
+    """Response model for SSO settings with values and schema information"""
+    
+    values: Dict[str, Any]
+    """The current SSO configuration values"""
+    
+    schema: Dict[str, Any]
+    """Schema information including descriptions and property types for UI display"""
 
 
 @router.get(
@@ -287,6 +297,7 @@ async def update_default_team_settings(settings: DefaultTeamSSOParams):
     "/get/sso_settings",
     tags=["SSO Settings"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=SSOSettingsResponse,
 )
 async def get_sso_settings():
     """
