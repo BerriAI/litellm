@@ -89,6 +89,7 @@ global_langfuse_logger = LangFuseLogger(
     langfuse_public_key="global_public_key",
     langfuse_secret="global_secret",
     langfuse_host="https://global.langfuse.com",
+    langfuse_environment="global_environment",
 )
 
 
@@ -97,12 +98,14 @@ standard_params_1 = StandardCallbackDynamicParams(
     langfuse_public_key="test_public_key",
     langfuse_secret="test_secret",
     langfuse_host="https://test.langfuse.com",
+    langfuse_environment="test_environment",
 )
 
 standard_params_2 = StandardCallbackDynamicParams(
     langfuse_public_key="test_public_key",
     langfuse_secret_key="test_secret",
     langfuse_host="https://test.langfuse.com",
+    langfuse_environment="test_environment",
 )
 
 
@@ -129,6 +132,7 @@ def test_get_langfuse_logger_for_request_with_dynamic_params(
     assert result.public_key == "test_public_key"
     assert result.secret_key == "test_secret"
     assert result.langfuse_host == "https://test.langfuse.com"
+    assert result.langfuse_environment == "test_environment"
 
     print("langfuse logger=", result)
     print("vars in langfuse logger=", vars(result))
@@ -139,6 +143,7 @@ def test_get_langfuse_logger_for_request_with_dynamic_params(
             "langfuse_public_key": "test_public_key",
             "langfuse_secret": "test_secret",
             "langfuse_host": "https://test.langfuse.com",
+            "langfuse_environment": "test_environment",
         },
         service_name="langfuse",
     )
@@ -167,6 +172,7 @@ def test_get_langfuse_logger_for_request_with_no_dynamic_params(
         assert result.public_key == "global_public_key"
         assert result.secret_key == "global_secret"
         assert result.langfuse_host == "https://global.langfuse.com"
+        assert result.langfuse_environment == "global_environment"
 
 
 def test_dynamic_langfuse_credentials_are_passed():
@@ -175,6 +181,7 @@ def test_dynamic_langfuse_credentials_are_passed():
         langfuse_public_key="test_key",
         langfuse_secret="test_secret",
         langfuse_host="https://test.langfuse.com",
+        langfuse_environment="test_environment",
     )
     assert (
         LangFuseHandler._dynamic_langfuse_credentials_are_passed(
@@ -210,11 +217,13 @@ def test_get_dynamic_langfuse_logging_config():
         langfuse_public_key="dynamic_key",
         langfuse_secret="dynamic_secret",
         langfuse_host="https://dynamic.langfuse.com",
+        langfuse_environment="dynamic_environment",
     )
     config = LangFuseHandler.get_dynamic_langfuse_logging_config(dynamic_params)
     assert config["langfuse_public_key"] == "dynamic_key"
     assert config["langfuse_secret"] == "dynamic_secret"
     assert config["langfuse_host"] == "https://dynamic.langfuse.com"
+    assert config["langfuse_environment"] == "dynamic_environment"
 
     # Test with no dynamic params
     empty_params = StandardCallbackDynamicParams()
@@ -222,12 +231,16 @@ def test_get_dynamic_langfuse_logging_config():
     assert config["langfuse_public_key"] is None
     assert config["langfuse_secret"] is None
     assert config["langfuse_host"] is None
+    assert config["langfuse_environment"] is None
 
 
 def test_return_global_langfuse_logger():
     mock_cache = Mock()
     global_logger = LangFuseLogger(
-        langfuse_public_key="global_key", langfuse_secret="global_secret"
+        langfuse_public_key="global_key", 
+        langfuse_secret="global_secret",
+        langfuse_host="https://global.langfuse.com",
+        langfuse_environment="global_environment",
     )
 
     # Test with existing global logger
@@ -256,7 +269,9 @@ def test_get_langfuse_logger_for_request_with_cached_logger():
     """
     mock_cache = Mock()
     cached_logger = LangFuseLogger(
-        langfuse_public_key="cached_key", langfuse_secret="cached_secret"
+        langfuse_public_key="cached_key", langfuse_secret="cached_secret",
+        langfuse_host="https://cached.langfuse.com",
+        langfuse_environment="cached_environment",
     )
     mock_cache.get_cache.return_value = cached_logger
 
@@ -264,6 +279,7 @@ def test_get_langfuse_logger_for_request_with_cached_logger():
         langfuse_public_key="test_key",
         langfuse_secret="test_secret",
         langfuse_host="https://test.langfuse.com",
+        langfuse_environment="test_environment",
     )
 
     result = LangFuseHandler.get_langfuse_logger_for_request(
