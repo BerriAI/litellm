@@ -1,12 +1,10 @@
 import type { ColumnDef } from "@tanstack/react-table";
-import { getCountryFromIP } from "./ip_lookup";
-import moment from "moment";
-import React from "react";
-import { CountryCell } from "./country_cell";
+import React, { useState } from "react";
 import { getProviderLogoAndName } from "../provider_info_helpers";
 import { Tooltip } from "antd";
 import { TimeCell } from "./time_cell";
-import { Button } from "@tremor/react";
+import { Button, Badge } from "@tremor/react";
+import { Eye, EyeOff} from "lucide-react"
 
 // Helper to get the appropriate logo URL
 const getLogoUrl = (
@@ -400,7 +398,55 @@ export type AuditLogEntry = {
   updated_values: Record<string, any>;
 }
 
+
+const getActionBadge = (action: string) => {
+  const actionColors = {
+    created: "blue",
+    updated: "slate",
+    deleted: "red",
+    rotated: "amber",
+  } as const;
+
+  return (
+    <Badge 
+      color={actionColors[action as keyof typeof actionColors] || "gray"} 
+      className="flex items-center gap-1"
+    >
+      <span className="whitespace-nowrap text-xs">{action}</span>
+    </Badge>
+
+  )
+}
+
 export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
+  {
+    id: "expander",
+    header: () => null,
+    cell: ({ row }) => {
+      const ExpanderCell = () => {
+        const [localExpanded, setLocalExpanded] = React.useState(row.getIsExpanded());
+
+        const toggleHandler = React.useCallback(() => {
+          setLocalExpanded((prev) => !prev);
+          row.getToggleExpandedHandler()();
+        }, [row]);
+
+        return row.getCanExpand() ? (
+          <button
+            onClick={toggleHandler}
+            style={{ cursor: "pointer" }}
+            aria-label={localExpanded ? "Collapse row" : "Expand row"}
+            className="w-6 h-6 flex items-center justify-center focus:outline-none"
+          >
+            {localExpanded ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+          </button>
+        ) : (
+          <span className="w-6 h-6 flex items-center justify-center text-gray-300">●</span>
+        );
+      };
+      return <ExpanderCell />;
+    },
+  },
   {
     header: "Created At",
     accessorKey: "before_value.created_at",
@@ -417,48 +463,26 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
   {
     header: "Action",
     accessorKey: "action",
-    cell: (info: any) => <span>{info.getValue()}</span>,
+    cell: (info: any) => <span>{getActionBadge(info.getValue())}</span>,
   },
   {
     header: "Changed By",
     accessorKey: "changed_by",
-    cell: (info: any) => <span>{info.getValue()}</span>,
-  },
-  {
-    header: "Changed By API Key",
-    accessorKey: "changed_by_api_key",
-    cell: (info: any) => <span>{info.getValue()}</span>,
-  },
-  {
-    id: "changed_fields",
-    header: "Changed Fields",
     cell: (info: any) => {
-      const action = info.row.original.action;
-      const before = info.row.original.before_value;
-      const updated = info.row.original.updated_values;
-      const changedKeys: string[] = [];
-
-      // Only compute and show changed fields if the action is 'updated'
-      if (action && action.toLowerCase() === 'updated') {
-        if (updated && typeof updated === 'object') {
-          Object.keys(updated).forEach(key => {
-            if (!before || !(key in before) || JSON.stringify(before[key]) !== JSON.stringify(updated[key])) {
-              changedKeys.push(key);
-            }
-          });
-        }
-        
-        if (changedKeys.length > 0) {
-          return (
-            <Tooltip title={changedKeys.join(", ")}>
-              <span className="max-w-[20ch] truncate block">
-                {changedKeys.join(", ")}
-              </span>
+      const changedBy = info.row.original.changed_by;
+      const apiKey = info.row.original.changed_by_api_key;
+      return (
+        <div className="space-y-1">
+          <div className="font-medium">{changedBy}</div>
+          {apiKey && ( // Only show API key if it exists
+            <Tooltip title={apiKey}>
+              <div className="text-xs text-muted-foreground max-w-[15ch] truncate"> {/* Apply max-width and truncate */}
+                {apiKey}
+              </div>
             </Tooltip>
-          );
-        }
-      }
-      return "-"; // Return "-" if action is not 'updated' or no fields changed
+          )}
+        </div>
+      );
     },
   },
   {
@@ -487,18 +511,37 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
     },
   },
   {
-    header: "Object ID",
+    header: "Affected Item ID",
     accessorKey: "object_id",
-    cell: (info: any) => <span>{info.getValue()}</span>,
+    cell: (props) => {
+      const ObjectIdDisplay = () => {
+        const objectId = props.getValue();
+        const [copied, setCopied] = useState(false);
+
+        if (!objectId) return <>-</>;
+
+        const handleCopy = async () => {
+          try {
+            await navigator.clipboard.writeText(String(objectId));
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          } catch (err) {
+            console.error("Failed to copy object ID: ", err);
+          }
+        };
+
+        return (
+          <Tooltip title={copied ? "Copied!" : String(objectId)}>
+            <span
+              className="max-w-[20ch] truncate block cursor-pointer hover:text-blue-600"
+              onClick={handleCopy}
+            >
+              {String(objectId)}
+            </span>
+          </Tooltip>
+        );
+      };
+      return <ObjectIdDisplay />;
+    },
   },
-  {
-    header: "Initial Values",
-    accessorKey: "before_value",
-    cell: (info: any) => <CollapsibleJsonCell jsonData={info.getValue()} />,
-  },
-  {
-    header: "Updated Values",
-    accessorKey: "updated_values",
-    cell: (info: any) => <CollapsibleJsonCell jsonData={info.getValue()} />,
-  }
 ]
