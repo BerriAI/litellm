@@ -470,6 +470,7 @@ const sidebars = {
       items: [
         "observability/agentops_integration",
         "observability/langfuse_integration",
+        "observability/langfuse_otel_integration",
         "observability/lunary_integration",
         "observability/deepeval_integration",
         "observability/mlflow",

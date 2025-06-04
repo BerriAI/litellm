@@ -109,6 +109,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "argilla",
     "mlflow",
     "langfuse",
+    "langfuse_otel",
     "pagerduty",
     "humanloop",
     "gcs_pubsub",
