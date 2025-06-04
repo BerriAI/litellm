@@ -233,7 +233,10 @@ class BaseRoutingStrategy(ABC):
                     await self.dual_cache.in_memory_cache.async_get_cache(key=key) or 0
                 )
                 delta = after - before
-                merged = redis_val + delta
+                if after < redis_val:
+                    merged = redis_val + delta
+                else:  # redis is behind in-memory cache
+                    merged = after
                 await self.dual_cache.in_memory_cache.async_set_cache(
                     key=key, value=merged
                 )

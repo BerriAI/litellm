@@ -33,11 +33,11 @@ class BaseUpdateQueue:
         updates = []
         while not self.update_queue.empty():
             # Circuit breaker to ensure we're not stuck dequeuing updates. Protect CPU utilization
-            # if len(updates) >= MAX_IN_MEMORY_QUEUE_FLUSH_COUNT:
-            #     verbose_proxy_logger.warning(
-            #         "Max in memory queue flush count reached, stopping flush"
-            #     )
-            #     break
+            if len(updates) >= MAX_IN_MEMORY_QUEUE_FLUSH_COUNT:
+                verbose_proxy_logger.warning(
+                    "Max in memory queue flush count reached, stopping flush"
+                )
+                break
             updates.append(await self.update_queue.get())
         return updates
 
