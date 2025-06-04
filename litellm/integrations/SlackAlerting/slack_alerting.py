@@ -90,7 +90,6 @@ class SlackAlerting(CustomBatchLogger):
         self.flush_lock = asyncio.Lock()
         self.periodic_started = False
         self.hanging_request_check = AlertingHangingRequestCheck(
-            alerting_threshold=alerting_threshold,
             slack_alerting_object=self,
         )
         super().__init__(**kwargs, flush_lock=self.flush_lock)
@@ -458,14 +457,12 @@ class SlackAlerting(CustomBatchLogger):
 
     async def response_taking_too_long(
         self,
-        start_time: Optional[datetime.datetime] = None,
-        end_time: Optional[datetime.datetime] = None,
-        type: Literal["hanging_request", "slow_response"] = "hanging_request",
         request_data: Optional[dict] = None,
     ):
         if self.alerting is None or self.alert_types is None:
             return
-        if type not in self.alert_types:
+
+        if AlertType.llm_requests_hanging not in self.alert_types:
             return
 
         await self.hanging_request_check.add_request_to_hanging_request_check(

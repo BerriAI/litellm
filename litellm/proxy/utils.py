@@ -308,6 +308,15 @@ class ProxyLogging:
                 )
             )  # RUN DAILY REPORT (if scheduled)
 
+        if (
+            self.slack_alerting_instance is not None
+            and AlertType.llm_requests_hanging
+            in self.slack_alerting_instance.alert_types
+        ):
+            asyncio.create_task(
+                self.slack_alerting_instance.hanging_request_check.check_for_hanging_requests()
+            )  # RUN HANGING REQUEST CHECK (if user wants to alert on hanging requests)
+
     def update_values(
         self,
         alerting: Optional[List] = None,
