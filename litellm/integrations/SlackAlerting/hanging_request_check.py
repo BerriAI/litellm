@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Optional
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.types.integrations.slack_alerting import (
     HANGING_ALERT_BUFFER_TIME_SECONDS,
     MAX_OLDEST_HANGING_REQUESTS_TO_CHECK,
@@ -52,7 +53,7 @@ class AlertingHangingRequestCheck:
         if request_data is None:
             return
 
-        request_metadata = request_data.get("metadata", {})
+        request_metadata = get_litellm_metadata_from_kwargs(kwargs=request_data)
         model = request_data.get("model", "")
         api_base: Optional[str] = None
 
