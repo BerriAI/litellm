@@ -266,7 +266,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         return Tools(googleSearch={})
 
-    def _map_function(self, value: List[dict]) -> List[Tools]:
+    def _map_function(self, value: List[dict]) -> List[Tools]: # noqa: PLR0915
         gtool_func_declarations = []
         googleSearch: Optional[dict] = None
         googleSearchRetrieval: Optional[dict] = None
