@@ -7948,6 +7948,16 @@
         "mode": "embedding",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models"
     },
+    "gemini-embedding-001": {
+        "max_tokens": 2048,
+        "max_input_tokens": 2048,
+        "output_vector_size": 3072,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 0,
+        "litellm_provider": "vertex_ai-embedding-models",
+        "mode": "embedding",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models"
+    },
     "text-embedding-005": {
         "max_tokens": 2048,
         "max_input_tokens": 2048,
