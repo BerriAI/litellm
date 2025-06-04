@@ -1,180 +1,246 @@
 # Clarifai
-Anthropic, OpenAI, Mistral, Llama and Gemini LLMs are Supported on Clarifai. 
 
-:::warning 
+Anthropic, OpenAI, Mistral, Llama, xAI, Gemini and most of Open soured LLMs are Supported on Clarifai.
 
-Streaming is not yet supported on using clarifai and litellm. Tracking support here: https://github.com/BerriAI/litellm/issues/4162
+| Property | Details |
+|-------|-------|
+| Description | Clarifai is a powerful AI platform that provides access to a wide range of LLMs through a unified API. LiteLLM enables seamless integration with Clarifai's models using an OpenAI-compatible interface. |
+| Provider Route on LiteLLM | `openai/` (add this prefix to the Clarifai model URL, e.g. `openai/https://clarifai.com/openai/chat-completion/models/o4-mini`) |
+| Provider Doc | [Clarifai ↗](https://docs.clarifai.com/) |
+| API Endpoint for Provider | `https://api.clarifai.com/v2/ext/openai/v1` |
+| Supported Endpoints | `/chat/completions` |
 
-:::
+## Benefits
+
+- **Unified Interface:** Use the same OpenAI-compatible syntax across multiple LLM providers
+- **Lightweight and Fast:** Simple, performant, and easy to configure
+- **Flexible Deployment:** Integrate Clarifai's specialized models in existing or new workflows
+- **Wide Model Selection:** Access to a diverse range of models from various providers
 
 ## Pre-Requisites
-`pip install litellm`
 
-## Required Environment Variables
-To obtain your Clarifai Personal access token follow this [link](https://docs.clarifai.com/clarifai-basics/authentication/personal-access-tokens/). Optionally the PAT can also be passed in `completion` function.
-
-```python
-os.environ["CLARIFAI_API_KEY"] = "YOUR_CLARIFAI_PAT"  # CLARIFAI_PAT
-
+```bash
+pip install litellm
 ```
 
-## Usage
+## Required Environment Variables
+
+To obtain your Clarifai Personal access token follow this [link](https://docs.clarifai.com/clarifai-basics/authentication/personal-access-tokens/).
+
+```python
+os.environ["CLARIFAI_PAT"] = "YOUR_CLARIFAI_PAT"  # CLARIFAI_PAT
+```
+
+## Basic Usage
 
 ```python
 import os
 from litellm import completion
 
-os.environ["CLARIFAI_API_KEY"] = ""
+os.environ["CLARIFAI_PAT"] = "YOUR_CLARIFAI_PAT"
 
 response = completion(
-  model="clarifai/mistralai.completion.mistral-large",
-  messages=[{ "content": "Tell me a joke about physics?","role": "user"}]
+    model="openai/https://clarifai.com/openai/chat-completion/models/o4-mini",
+    api_base="https://api.clarifai.com/v2/ext/openai/v1",
+    messages=[{ "content": "Tell me a joke about physics?","role": "user"}]
 )
 ```
 
-**Output**
-```json
-{
-    "id": "chatcmpl-572701ee-9ab2-411c-ac75-46c1ba18e781",
-    "choices": [
-      {
-        "finish_reason": "stop",
-        "index": 1,
-        "message": {
-          "content": "Sure, here's a physics joke for you:\n\nWhy can't you trust an atom?\n\nBecause they make up everything!",
-          "role": "assistant"
-        }
-      }
-    ],
-    "created": 1714410197,
-    "model": "https://api.clarifai.com/v2/users/mistralai/apps/completion/models/mistral-large/outputs",
-    "object": "chat.completion",
-    "system_fingerprint": null,
-    "usage": {
-      "prompt_tokens": 14,
-      "completion_tokens": 24,
-      "total_tokens": 38
-    }
-  }
+## Usage with LiteLLM Proxy
+
+Here's how to call Clarifai with the LiteLLM Proxy Server
+
+### 1. Save key in your environment
+
+```bash
+export CLARIFAI_PAT="your-pat"
 ```
 
-## Clarifai models
-liteLLM supports all models on [Clarifai community](https://clarifai.com/explore/models?filterData=%5B%7B%22field%22%3A%22use_cases%22%2C%22value%22%3A%5B%22llm%22%5D%7D%5D&page=1&perPage=24)
+### 2. Start the proxy
 
-Example  Usage - Note: liteLLM supports all models deployed on Clarifai
+<Tabs>
+<TabItem value="config" label="config.yaml">
 
-## Llama LLMs
-| Model Name                        | Function Call |
----------------------------|---------------------------------|
-| clarifai/meta.Llama-2.llama2-7b-chat    | `completion('clarifai/meta.Llama-2.llama2-7b-chat', messages)`
-| clarifai/meta.Llama-2.llama2-13b-chat   | `completion('clarifai/meta.Llama-2.llama2-13b-chat', messages)`
-| clarifai/meta.Llama-2.llama2-70b-chat   | `completion('clarifai/meta.Llama-2.llama2-70b-chat', messages)` |
-| clarifai/meta.Llama-2.codeLlama-70b-Python   | `completion('clarifai/meta.Llama-2.codeLlama-70b-Python', messages)`| 
-| clarifai/meta.Llama-2.codeLlama-70b-Instruct | `completion('clarifai/meta.Llama-2.codeLlama-70b-Instruct', messages)` |   
+```yaml
+model_list:
+  - model_name: clarifai-model
+    litellm_params:
+      model: openai/https://clarifai.com/openai/chat-completion/models/o4-mini
+      api_key: os.environ/CLARIFAI_PAT
+      api_base: https://api.clarifai.com/v2/ext/openai/v1
+```
 
-## Mistral LLMs
-| Model Name                                  | Function Call                                                         |
-|---------------------------------------------|------------------------------------------------------------------------|
-| clarifai/mistralai.completion.mixtral-8x22B            | `completion('clarifai/mistralai.completion.mixtral-8x22B', messages)`               |
-| clarifai/mistralai.completion.mistral-large           | `completion('clarifai/mistralai.completion.mistral-large', messages)`              |
-| clarifai/mistralai.completion.mistral-medium          | `completion('clarifai/mistralai.completion.mistral-medium', messages)`             |
-| clarifai/mistralai.completion.mistral-small           | `completion('clarifai/mistralai.completion.mistral-small', messages)`              |
-| clarifai/mistralai.completion.mixtral-8x7B-Instruct-v0_1 | `completion('clarifai/mistralai.completion.mixtral-8x7B-Instruct-v0_1', messages)`
-| clarifai/mistralai.completion.mistral-7B-OpenOrca  | `completion('clarifai/mistralai.completion.mistral-7B-OpenOrca', messages)`          |
-| clarifai/mistralai.completion.openHermes-2-mistral-7B | `completion('clarifai/mistralai.completion.openHermes-2-mistral-7B', messages)`      |
+```bash
+litellm --config /path/to/config.yaml
 
+# Server running on http://0.0.0.0:4000
+```
 
-## Jurassic LLMs 
-| Model Name                                    | Function Call                                                      |
-|-----------------------------------------------|---------------------------------------------------------------------|
-| clarifai/ai21.complete.Jurassic2-Grande       | `completion('clarifai/ai21.complete.Jurassic2-Grande', messages)`       |
-| clarifai/ai21.complete.Jurassic2-Grande-Instruct | `completion('clarifai/ai21.complete.Jurassic2-Grande-Instruct', messages)` |
-| clarifai/ai21.complete.Jurassic2-Jumbo-Instruct  | `completion('clarifai/ai21.complete.Jurassic2-Jumbo-Instruct', messages)`  |
-| clarifai/ai21.complete.Jurassic2-Jumbo         | `completion('clarifai/ai21.complete.Jurassic2-Jumbo', messages)`          |
-| clarifai/ai21.complete.Jurassic2-Large         | `completion('clarifai/ai21.complete.Jurassic2-Large', messages)`          |
+### 3. Test it
 
-## Wizard LLMs
+<Tabs>
+<TabItem value="Curl" label="Curl Request">
 
-| Model Name                                    | Function Call                                                      |
-|-----------------------------------------------|---------------------------------------------------------------------|
-| clarifai/wizardlm.generate.wizardCoder-Python-34B | `completion('clarifai/wizardlm.generate.wizardCoder-Python-34B', messages)`    |
-| clarifai/wizardlm.generate.wizardLM-70B          | `completion('clarifai/wizardlm.generate.wizardLM-70B', messages)`             | 
-| clarifai/wizardlm.generate.wizardLM-13B          | `completion('clarifai/wizardlm.generate.wizardLM-13B', messages)`           |
-| clarifai/wizardlm.generate.wizardCoder-15B       | `completion('clarifai/wizardlm.generate.wizardCoder-15B', messages)`          |
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "clarifai-model",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+</TabItem>
+<TabItem value="openai" label="OpenAI v1.0.0+">
 
-## Anthropic models
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
 
-| Model Name                                    | Function Call                                                      |
-|-----------------------------------------------|---------------------------------------------------------------------|
-| clarifai/anthropic.completion.claude-v1       | `completion('clarifai/anthropic.completion.claude-v1', messages)`       |
-| clarifai/anthropic.completion.claude-instant-1_2 | `completion('clarifai/anthropic.completion.claude-instant-1_2', messages)` |
-| clarifai/anthropic.completion.claude-instant  | `completion('clarifai/anthropic.completion.claude-instant', messages)`  |
-| clarifai/anthropic.completion.claude-v2       | `completion('clarifai/anthropic.completion.claude-v2', messages)`       |
-| clarifai/anthropic.completion.claude-2_1      | `completion('clarifai/anthropic.completion.claude-2_1', messages)`      |
-| clarifai/anthropic.completion.claude-3-opus   | `completion('clarifai/anthropic.completion.claude-3-opus', messages)`   |
-| clarifai/anthropic.completion.claude-3-sonnet | `completion('clarifai/anthropic.completion.claude-3-sonnet', messages)` |
+response = client.chat.completions.create(
+    model="clarifai-model",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ]
+)
 
-## OpenAI GPT LLMs
+print(response)
+```
+</TabItem>
+</Tabs>
 
-| Model Name                                    | Function Call                                                      |
-|-----------------------------------------------|---------------------------------------------------------------------|
-| clarifai/openai.chat-completion.GPT-4         | `completion('clarifai/openai.chat-completion.GPT-4', messages)`          |
-| clarifai/openai.chat-completion.GPT-3_5-turbo | `completion('clarifai/openai.chat-completion.GPT-3_5-turbo', messages)`  |
-| clarifai/openai.chat-completion.gpt-4-turbo   | `completion('clarifai/openai.chat-completion.gpt-4-turbo', messages)`    |
-| clarifai/openai.completion.gpt-3_5-turbo-instruct | `completion('clarifai/openai.completion.gpt-3_5-turbo-instruct', messages)` |
+## Streaming Support
 
-## GCP LLMs
+LiteLLM supports streaming responses with Clarifai models:
 
-| Model Name                                    | Function Call                                                      |
-|-----------------------------------------------|---------------------------------------------------------------------|
-| clarifai/gcp.generate.gemini-1_5-pro         | `completion('clarifai/gcp.generate.gemini-1_5-pro', messages)`          |
-| clarifai/gcp.generate.imagen-2               | `completion('clarifai/gcp.generate.imagen-2', messages)`                |
-| clarifai/gcp.generate.code-gecko             | `completion('clarifai/gcp.generate.code-gecko', messages)`              |
-| clarifai/gcp.generate.code-bison             | `completion('clarifai/gcp.generate.code-bison', messages)`              |
-| clarifai/gcp.generate.text-bison            | `completion('clarifai/gcp.generate.text-bison', messages)`               |
-| clarifai/gcp.generate.gemma-2b-it            | `completion('clarifai/gcp.generate.gemma-2b-it', messages)`              |
-| clarifai/gcp.generate.gemma-7b-it            | `completion('clarifai/gcp.generate.gemma-7b-it', messages)`              |
-| clarifai/gcp.generate.gemini-pro            | `completion('clarifai/gcp.generate.gemini-pro', messages)`               |
-| clarifai/gcp.generate.gemma-1_1-7b-it       | `completion('clarifai/gcp.generate.gemma-1_1-7b-it', messages)`          |
+```python
+import litellm
 
-## Cohere LLMs
-| Model Name                                    | Function Call                                                      |
-|-----------------------------------------------|---------------------------------------------------------------------|
-| clarifai/cohere.generate.cohere-generate-command | `completion('clarifai/cohere.generate.cohere-generate-command', messages)` |
- clarifai/cohere.generate.command-r-plus' | `completion('clarifai/clarifai/cohere.generate.command-r-plus', messages)`|
+for chunk in litellm.completion(
+    model="openai/https://clarifai.com/openai/chat-completion/models/o4-mini",
+    api_key="YOUR_CLARIFAI_PAT",
+    api_base="https://api.clarifai.com/v2/ext/openai/v1",
+    messages=[
+        {"role": "user", "content": "Tell me a fun fact about space."}
+    ],
+    stream=True,
+):
+    print(chunk.choices[0].delta)
+```
 
-## Databricks LLMs
+## Tool Calling (Function Calling)
 
-| Model Name                                        | Function Call                                                      |
-|---------------------------------------------------|---------------------------------------------------------------------|
-| clarifai/databricks.drbx.dbrx-instruct           | `completion('clarifai/databricks.drbx.dbrx-instruct', messages)`   |
-| clarifai/databricks.Dolly-v2.dolly-v2-12b        | `completion('clarifai/databricks.Dolly-v2.dolly-v2-12b', messages)`|
+Clarifai models accessed via LiteLLM support function calling:
 
-## Microsoft LLMs
+```python
+import litellm
 
-| Model Name                                        | Function Call                                                      |
-|---------------------------------------------------|---------------------------------------------------------------------|
-| clarifai/microsoft.text-generation.phi-2          | `completion('clarifai/microsoft.text-generation.phi-2', messages)`  |
-| clarifai/microsoft.text-generation.phi-1_5        | `completion('clarifai/microsoft.text-generation.phi-1_5', messages)`|
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Get current temperature for a given location.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "location": {
+                    "type": "string",
+                    "description": "City and country e.g. Tokyo, Japan"
+                }
+            },
+            "required": ["location"],
+            "additionalProperties": False
+        },
+    }
+}]
 
-## Salesforce models
+response = litellm.completion(
+    model="openai/https://clarifai.com/openai/chat-completion/models/o4-mini",
+    api_key="YOUR_CLARIFAI_PAT",
+    api_base="https://api.clarifai.com/v2/ext/openai/v1",
+    messages=[{"role": "user", "content": "What is the weather in Paris today?"}],
+    tools=tools,
+)
 
-| Model Name                                                | Function Call                                                                |
-|-----------------------------------------------------------|-------------------------------------------------------------------------------|
-| clarifai/salesforce.blip.general-english-image-caption-blip-2 | `completion('clarifai/salesforce.blip.general-english-image-caption-blip-2', messages)` |
-| clarifai/salesforce.xgen.xgen-7b-8k-instruct             | `completion('clarifai/salesforce.xgen.xgen-7b-8k-instruct', messages)`         |
+print(response.choices[0].message.tool_calls)
+```
 
+## Important Notes
 
-## Other Top performing LLMs
+- Always prefix Clarifai model URLs with `openai/` when specifying the model name
+- You must set `api_base` to `https://api.clarifai.com/v2/ext/openai/v1`
+- Use your Clarifai Personal Access Token (PAT) as the API key
+- Usage is tracked and billed through Clarifai
+- API rate limits are subject to your Clarifai account settings
+- Most OpenAI parameters are supported, but some advanced features may vary by model
 
-| Model Name                                        | Function Call                                                      |
-|---------------------------------------------------|---------------------------------------------------------------------|
-| clarifai/deci.decilm.deciLM-7B-instruct          | `completion('clarifai/deci.decilm.deciLM-7B-instruct', messages)`  |
-| clarifai/upstage.solar.solar-10_7b-instruct      | `completion('clarifai/upstage.solar.solar-10_7b-instruct', messages)` |
-| clarifai/openchat.openchat.openchat-3_5-1210     | `completion('clarifai/openchat.openchat.openchat-3_5-1210', messages)` |
-| clarifai/togethercomputer.stripedHyena.stripedHyena-Nous-7B | `completion('clarifai/togethercomputer.stripedHyena.stripedHyena-Nous-7B', messages)` |
-| clarifai/fblgit.una-cybertron.una-cybertron-7b-v2 | `completion('clarifai/fblgit.una-cybertron.una-cybertron-7b-v2', messages)` |
-| clarifai/tiiuae.falcon.falcon-40b-instruct       | `completion('clarifai/tiiuae.falcon.falcon-40b-instruct', messages)` |
-| clarifai/togethercomputer.RedPajama.RedPajama-INCITE-7B-Chat | `completion('clarifai/togethercomputer.RedPajama.RedPajama-INCITE-7B-Chat', messages)` |
-| clarifai/bigcode.code.StarCoder                  | `completion('clarifai/bigcode.code.StarCoder', messages)`           |
-| clarifai/mosaicml.mpt.mpt-7b-instruct            | `completion('clarifai/mosaicml.mpt.mpt-7b-instruct', messages)`     |
+## Supported Models
+
+Clarifai provides access to a wide range of models through their OpenAI-compatible interface. Here are some popular options:
+
+### OpenAI Models
+- [gpt-4_1](https://clarifai.com/openai/chat-completion/models/gpt-4_1)
+- [o3](https://clarifai.com/openai/chat-completion/models/o3)
+- [o4-mini](https://clarifai.com/openai/chat-completion/models/o4-mini)
+- [gpt-4o](https://clarifai.com/openai/chat-completion/models/gpt-4o)
+- Many more...
+
+### Anthropic Models
+- [claude-sonnet-4](https://clarifai.com/anthropic/completion/models/claude-sonnet-4)
+- [claude-3_5-haiku](https://clarifai.com/anthropic/completion/models/claude-3_5-haiku)
+- [claude-opus-4](https://clarifai.com/anthropic/completion/models/claude-opus-4)
+- [claude-3_5-sonnet](https://clarifai.com/anthropic/completion/models/claude-3_5-sonnet)
+- [claude-3_7-sonnet](https://clarifai.com/anthropic/completion/models/claude-3_7-sonnet)
+- Many more...
+
+### xAI Models
+- [grok-3](https://clarifai.com/xai/chat-completion/models/grok-3)
+- [grok-2-vision-1212](https://clarifai.com/xai/chat-completion/models/grok-2-vision-1212)
+- Many more...
+
+### Gemini Models
+- [gemini-2_5-pro](https://clarifai.com/gcp/generate/models/gemini-2_5-pro)
+- [gemini-2_5-flash](https://clarifai.com/gcp/generate/models/gemini-2_5-flash)
+- [gemini-2_0-flash](https://clarifai.com/gcp/generate/models/gemini-2_0-flash)
+- [gemini-2_0-flash-lite](https://clarifai.com/gcp/generate/models/gemini-2_0-flash-lite)
+- [gemini-pro](https://clarifai.com/gcp/generate/models/gemini-pro)
+- Many more...
+
+### Open Sourced Models
+- [DeepSeek-R1-0528-Qwen3-8B](https://clarifai.com/deepseek-ai/deepseek-chat/models/DeepSeek-R1-0528-Qwen3-8B)
+- [DeepSeek-R1-Distill-Qwen-7B](https://clarifai.com/deepseek-ai/deepseek-chat/models/DeepSeek-R1-Distill-Qwen-7B)
+- [DeepSeek-R1](https://clarifai.com/deepseek-ai/deepseek-chat/models/DeepSeek-R1)
+- [DeepSeek-R1-Distill-Qwen-32B](https://clarifai.com/deepseek-ai/deepseek-chat/models/DeepSeek-R1-Distill-Qwen-32B)
+- [Devstral-Small-2505](https://clarifai.com/mistralai/completion/models/Devstral-Small-2505_gguf-4bit)
+- [gemma-3-4b-it](https://clarifai.com/gcp/generate/models/gemma-3-4b-it)
+- [gemma-3-12b-it](https://clarifai.com/gcp/generate/models/gemma-3-12b-it)
+- [gemma-3-1b-it](https://clarifai.com/gcp/generate/models/gemma-3-1b-it)
+- Many more...
+
+For a complete list of available models, visit the [Clarifai Model Explorer](https://clarifai.com/explore/).
+
+## FAQs
+
+| Question | Answer |
+|----------|---------|
+| Can I use all Clarifai models with LiteLLM? | Most chat-completion models are supported. Use the Clarifai model URL as the `model`. |
+| Do I need a separate Clarifai PAT? | Yes, you must use a valid Clarifai Personal Access Token. |
+| Is tool calling supported? | Yes, provided the underlying Clarifai model supports function/tool calling. |
+| How is billing handled? | Clarifai usage is billed independently via Clarifai. |
+
+## Additional Resources
+
+- [Clarifai Documentation](https://docs.clarifai.com/)
+- [LiteLLM GitHub](https://github.com/BerriAI/litellm)
+- [Clarifai Runners Examples](https://github.com/Clarifai/runners-examples)
