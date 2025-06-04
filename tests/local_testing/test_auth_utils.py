@@ -80,7 +80,7 @@ def test_get_end_user_id_from_request_body_always_returns_str():
     mock_request.headers = {}
     
     request_body = {"user": 123}
-    end_user_id = get_end_user_id_from_request_body(mock_request, request_body)
+    end_user_id = get_end_user_id_from_request_body(request_body, mock_request)
     assert end_user_id == "123"
     assert isinstance(end_user_id, str)
 
@@ -185,7 +185,7 @@ def test_get_end_user_id_from_request_body_with_user_header_name(
     
     # Mock general_settings at the proxy_server module level
     with patch('litellm.proxy.proxy_server.general_settings', general_settings_config):
-        end_user_id = get_end_user_id_from_request_body(mock_request, request_body)
+        end_user_id = get_end_user_id_from_request_body(request_body, mock_request)
         assert end_user_id == expected_user_id
 
 
@@ -206,8 +206,33 @@ def test_get_end_user_id_from_request_body_no_user_found():
     request_body = {"model": "gpt-4", "messages": [{"role": "user", "content": "hello"}]}
     
     with patch('litellm.proxy.proxy_server.general_settings', general_settings_config):
-        end_user_id = get_end_user_id_from_request_body(mock_request, request_body)
+        end_user_id = get_end_user_id_from_request_body(request_body, mock_request)
         assert end_user_id is None
+
+
+def test_get_end_user_id_from_request_body_backwards_compatibility():
+    """Test that function works with just request_body parameter (backwards compatibility)"""
+    from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
+
+    # Test with just request_body - should work like before
+    request_body = {"user": "test-user-123"}
+    end_user_id = get_end_user_id_from_request_body(request_body)
+    assert end_user_id == "test-user-123"
+    
+    # Test with litellm_metadata
+    request_body = {"litellm_metadata": {"user": "litellm-user-456"}}
+    end_user_id = get_end_user_id_from_request_body(request_body)
+    assert end_user_id == "litellm-user-456"
+    
+    # Test with metadata.user_id
+    request_body = {"metadata": {"user_id": "metadata-user-789"}}
+    end_user_id = get_end_user_id_from_request_body(request_body)
+    assert end_user_id == "metadata-user-789"
+    
+    # Test with no user - should return None
+    request_body = {"model": "gpt-4"}
+    end_user_id = get_end_user_id_from_request_body(request_body)
+    assert end_user_id is None
 
 @pytest.mark.parametrize(
     "request_data, expected_model",
