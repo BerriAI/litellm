@@ -1396,6 +1396,21 @@ def select_anthropic_content_block_type_for_file(
         return "container_upload"
 
 
+def anthropic_infer_file_id_content_type(
+    file_id: str,
+) -> Literal["document_url", "container_upload"]:
+    """
+    Use when 'format' not provided.
+
+    - URL's - assume are document_url
+    - Else - assume is container_upload
+    """
+    if file_id.startswith("http") or file_id.startswith("https"):
+        return "document_url"
+    else:
+        return "container_upload"
+
+
 def anthropic_process_openai_file_message(
     message: ChatCompletionFileObject,
 ) -> Union[
@@ -1425,7 +1440,7 @@ def anthropic_process_openai_file_message(
         content_block_type = (
             select_anthropic_content_block_type_for_file(format)
             if format
-            else "container_upload"
+            else anthropic_infer_file_id_content_type(file_id)
         )
         return_block_param: Optional[
             Union[
@@ -1440,6 +1455,14 @@ def anthropic_process_openai_file_message(
                 source=AnthropicContentParamSourceFileId(
                     type="file",
                     file_id=file_id,
+                ),
+            )
+        elif content_block_type == "document_url":
+            return_block_param = AnthropicMessagesDocumentParam(
+                type="document",
+                source=AnthropicContentParamSourceUrl(
+                    type="url",
+                    url=file_id,
                 ),
             )
         elif content_block_type == "image":
