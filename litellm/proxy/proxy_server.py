@@ -89,31 +89,75 @@ list_of_messages = [
 
 
 def generate_feedback_box():
-    box_width = 60
+    try:
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.text import Text
+        from rich.align import Align
+        
+        console = Console()
+        
+        # Select a random message
+        message = random.choice(list_of_messages)
+        
+        # Create feedback panel with beautiful formatting
+        feedback_content = f"[yellow]{message}[/yellow]\n\n[cyan]https://github.com/BerriAI/litellm/issues/new[/cyan]"
+        
+        feedback_panel = Panel(
+            Align.center(feedback_content),
+            title="[bold blue]Feature Request[/bold blue]",
+            border_style="blue",
+            padding=(1, 2)
+        )
+        
+        # Create thank you message
+        thank_you_text = Text("Thank you for using LiteLLM! 🚄", style="bold green")
+        thank_you_subtitle = Text("- Krrish & Ishaan", style="italic cyan")
+        
+        # Create help panel
+        help_panel = Panel(
+            "[red]Give Feedback / Get Help:[/red] [cyan]https://github.com/BerriAI/litellm/issues/new[/cyan]",
+            title="[bold red]Need Help?[/bold red]",
+            border_style="red",
+            padding=(0, 2)
+        )
+        
+        console.print()
+        console.print(feedback_panel)
+        console.print()
+        console.print(Align.center(thank_you_text))
+        console.print(Align.center(thank_you_subtitle))
+        console.print()
+        console.print(help_panel)
+        console.print()
+        
+    except ImportError:
+        # Fallback to original implementation if rich is not available
+        box_width = 60
 
-    # Select a random message
-    message = random.choice(list_of_messages)
+        # Select a random message
+        message = random.choice(list_of_messages)
 
-    print()  # noqa
-    print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa
-    print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa
-    print("\033[1;37m" + "# {:^59} #\033[0m".format(message))  # noqa
-    print(  # noqa
-        "\033[1;37m"
-        + "# {:^59} #\033[0m".format("https://github.com/BerriAI/litellm/issues/new")
-    )  # noqa
-    print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa
-    print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa
-    print()  # noqa
-    print(" Thank you for using LiteLLM! - Krrish & Ishaan")  # noqa
-    print()  # noqa
-    print()  # noqa
-    print()  # noqa
-    print(  # noqa
-        "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"
-    )  # noqa
-    print()  # noqa
-    print()  # noqa
+        print()  # noqa
+        print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa
+        print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa
+        print("\033[1;37m" + "# {:^59} #\033[0m".format(message))  # noqa
+        print(  # noqa
+            "\033[1;37m"
+            + "# {:^59} #\033[0m".format("https://github.com/BerriAI/litellm/issues/new")
+        )  # noqa
+        print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa
+        print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa
+        print()  # noqa
+        print(" Thank you for using LiteLLM! - Krrish & Ishaan")  # noqa
+        print()  # noqa
+        print()  # noqa
+        print()  # noqa
+        print(  # noqa
+            "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"
+        )  # noqa
+        print()  # noqa
+        print()  # noqa
 
 
 from collections import defaultdict
