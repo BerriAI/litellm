@@ -16,14 +16,29 @@ class IPAddress(BaseModel):
     ip: str
 
 
-class SSOSettingsResponse(BaseModel):
-    """Response model for SSO settings with values and schema information"""
+class SettingsResponse(BaseModel):
+    """Base response model for settings with values and schema information"""
     
     values: Dict[str, Any]
-    """The current SSO configuration values"""
+    """The current configuration values"""
     
-    schema: Dict[str, Any]
+    field_schema: Dict[str, Any]
     """Schema information including descriptions and property types for UI display"""
+
+
+class SSOSettingsResponse(SettingsResponse):
+    """Response model for SSO settings"""
+    pass
+
+
+class InternalUserSettingsResponse(SettingsResponse):
+    """Response model for internal user settings"""
+    pass
+
+
+class DefaultTeamSettingsResponse(SettingsResponse):
+    """Response model for default team settings"""
+    pass
 
 
 @router.get(
@@ -151,19 +166,19 @@ async def _get_settings_with_schema(
     # Add descriptions to the response
     result = {
         "values": settings_dict,
-        "schema": {"description": schema.get("description", ""), "properties": {}},
+        "field_schema": {"description": schema.get("description", ""), "properties": {}},
     }
 
     # Add property descriptions
     for field_name, field_info in schema["properties"].items():
-        result["schema"]["properties"][field_name] = {
+        result["field_schema"]["properties"][field_name] = {
             "description": field_info.get("description", ""),
             "type": field_info.get("type", "string"),
         }
 
     # Add nested object descriptions
     for def_name, def_schema in schema.get("definitions", {}).items():
-        result["schema"][def_name] = {
+        result["field_schema"][def_name] = {
             "description": def_schema.get("description", ""),
             "properties": {
                 prop_name: {"description": prop_info.get("description", "")}
@@ -178,6 +193,7 @@ async def _get_settings_with_schema(
     "/get/internal_user_settings",
     tags=["SSO Settings"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=InternalUserSettingsResponse,
 )
 async def get_internal_user_settings():
     """
@@ -200,6 +216,7 @@ async def get_internal_user_settings():
     "/get/default_team_settings",
     tags=["SSO Settings"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=DefaultTeamSettingsResponse,
 )
 async def get_default_team_settings():
     """
@@ -345,12 +362,12 @@ async def get_sso_settings():
     # Add descriptions to the response
     result = {
         "values": sso_dict,
-        "schema": {"description": schema.get("description", ""), "properties": {}},
+        "field_schema": {"description": schema.get("description", ""), "properties": {}},
     }
     
     # Add property descriptions
     for field_name, field_info in schema["properties"].items():
-        result["schema"]["properties"][field_name] = {
+        result["field_schema"]["properties"][field_name] = {
             "description": field_info.get("description", ""),
             "type": field_info.get("type", "string"),
         }
