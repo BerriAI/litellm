@@ -114,6 +114,11 @@ class AnthropicContentParamSource(TypedDict):
     data: str
 
 
+class AnthropicContentParamSourceUrl(TypedDict):
+    type: Literal["url"]
+    url: str
+
+
 class AnthropicContentParamSourceFileId(TypedDict):
     type: Literal["file"]
     file_id: str
@@ -140,7 +145,11 @@ class CitationsObject(TypedDict):
 class AnthropicMessagesDocumentParam(TypedDict, total=False):
     type: Required[Literal["document"]]
     source: Required[
-        Union[AnthropicContentParamSource, AnthropicContentParamSourceFileId]
+        Union[
+            AnthropicContentParamSource,
+            AnthropicContentParamSourceFileId,
+            AnthropicContentParamSourceUrl,
+        ]
     ]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
     title: str
