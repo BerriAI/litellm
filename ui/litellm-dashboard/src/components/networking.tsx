@@ -5356,3 +5356,131 @@ export const updateGuardrailCall = async (
     throw error;
   }
 };
+
+// SSO Provider Configuration endpoints
+export interface SSOConfigRequest {
+  sso_provider: string;
+  google_client_id?: string;
+  google_client_secret?: string;
+  microsoft_client_id?: string;
+  microsoft_client_secret?: string;
+  microsoft_tenant?: string;
+  generic_client_id?: string;
+  generic_client_secret?: string;
+  generic_authorization_endpoint?: string;
+  generic_token_endpoint?: string;
+  generic_userinfo_endpoint?: string;
+  generic_scope?: string;
+  proxy_base_url: string;
+  user_email: string;
+}
+
+export interface SSOProviderConfig {
+  sso_provider?: string;
+  google?: {
+    google_client_id?: string;
+    google_client_secret?: string;
+  };
+  microsoft?: {
+    microsoft_client_id?: string;
+    microsoft_client_secret?: string;
+    microsoft_tenant?: string;
+  };
+  generic?: {
+    generic_client_id?: string;
+    generic_client_secret?: string;
+    generic_authorization_endpoint?: string;
+    generic_token_endpoint?: string;
+    generic_userinfo_endpoint?: string;
+    generic_scope?: string;
+  };
+  proxy_base_url?: string;
+  user_email?: string;
+}
+
+export const getSSOProviderConfig = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/get/sso_provider_config` : `/get/sso_provider_config`;
+    
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to get SSO provider configuration");
+    }
+
+    const data = await response.json();
+    console.log("SSO provider config response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to get SSO provider configuration:", error);
+    throw error;
+  }
+};
+
+export const updateSSOProviderConfig = async (
+  accessToken: string,
+  config: SSOConfigRequest
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/update/sso_provider_config` : `/update/sso_provider_config`;
+    
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(config),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to update SSO provider configuration");
+    }
+
+    const data = await response.json();
+    console.log("Update SSO provider config response:", data);
+    message.success("SSO provider configuration updated successfully");
+    return data;
+  } catch (error) {
+    console.error("Failed to update SSO provider configuration:", error);
+    throw error;
+  }
+};
+
+export const deleteSSOProviderConfig = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/delete/sso_provider_config` : `/delete/sso_provider_config`;
+    
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to delete SSO provider configuration");
+    }
+
+    const data = await response.json();
+    console.log("Delete SSO provider config response:", data);
+    message.success("SSO provider configuration deleted successfully");
+    return data;
+  } catch (error) {
+    console.error("Failed to delete SSO provider configuration:", error);
+    throw error;
+  }
+};
