@@ -293,7 +293,7 @@ export default function AuditLogs({
       let displayBeforeValue = before_value;
       let displayUpdatedValue = updated_values;
 
-      if (action === "updated" && before_value && updated_values) {
+      if ((action === "updated" || action === "rotated") && before_value && updated_values) {
         if (table_name === "LiteLLM_TeamTable" || table_name === "LiteLLM_UserTable" || table_name === "LiteLLM_VerificationToken") {
 
           const changedBefore: Record<string, any> = {};
