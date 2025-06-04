@@ -614,7 +614,7 @@ class SagemakerLLM(BaseAWSLLM):
             )
 
         # Make it possible to customize the input key depending on the model deployed
-        input_key = optional_params.pop("input_key", "text_inputs")
+        input_key = optional_params.pop("sagemaker_input_key", "text_inputs")
 
         # pop streaming if it's in the optional params as 'stream' raises an error with sagemaker
         inference_params = deepcopy(optional_params)
@@ -679,8 +679,11 @@ class SagemakerLLM(BaseAWSLLM):
         elif isinstance(response, dict):
             embeddings = response["embedding"]
         else:
+            maybe_keys = getattr(response, "keys", lambda: "not-a-dict")()
+            if maybe_keys:
+                maybe_keys = list(maybe_keys)
             raise SagemakerError(
-                status_code=500, message="Response is not a list nor a dict with 'embedding' key"
+                status_code=500, message=f'Unable to parse response: was not a list nor a dict with key "embedding". Found type "{type(response)}" with keys {maybe_keys}'
             )
 
         if not isinstance(embeddings, list):
