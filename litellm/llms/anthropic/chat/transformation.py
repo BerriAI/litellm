@@ -784,44 +784,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         return usage
 
-    def transform_response(
+    def transform_parsed_response(
         self,
-        model: str,
+        completion_response: dict,
         raw_response: httpx.Response,
         model_response: ModelResponse,
-        logging_obj: LoggingClass,
-        request_data: Dict,
-        messages: List[AllMessageValues],
-        optional_params: Dict,
-        litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
-    ) -> ModelResponse:
+    ):
         _hidden_params: Dict = {}
         _hidden_params["additional_headers"] = process_anthropic_headers(
             dict(raw_response.headers)
         )
-        ## LOGGING
-        logging_obj.post_call(
-            input=messages,
-            api_key=api_key,
-            original_response=raw_response.text,
-            additional_args={"complete_input_dict": request_data},
-        )
-
-        ## RESPONSE OBJECT
-        try:
-            completion_response = raw_response.json()
-        except Exception as e:
-            response_headers = getattr(raw_response, "headers", None)
-            raise AnthropicError(
-                message="Unable to get json response - {}, Original Response: {}".format(
-                    str(e), raw_response.text
-                ),
-                status_code=raw_response.status_code,
-                headers=response_headers,
-            )
         if "error" in completion_response:
             response_headers = getattr(raw_response, "headers", None)
             raise AnthropicError(
@@ -890,6 +863,50 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model_response.model = completion_response["model"]
 
         model_response._hidden_params = _hidden_params
+
+        return model_response
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LoggingClass,
+        request_data: Dict,
+        messages: List[AllMessageValues],
+        optional_params: Dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
+        ## LOGGING
+        logging_obj.post_call(
+            input=messages,
+            api_key=api_key,
+            original_response=raw_response.text,
+            additional_args={"complete_input_dict": request_data},
+        )
+
+        ## RESPONSE OBJECT
+        try:
+            completion_response = raw_response.json()
+        except Exception as e:
+            response_headers = getattr(raw_response, "headers", None)
+            raise AnthropicError(
+                message="Unable to get json response - {}, Original Response: {}".format(
+                    str(e), raw_response.text
+                ),
+                status_code=raw_response.status_code,
+                headers=response_headers,
+            )
+
+        model_response = self.transform_parsed_response(
+            completion_response=completion_response,
+            raw_response=raw_response,
+            model_response=model_response,
+            json_mode=json_mode,
+        )
         return model_response
 
     @staticmethod

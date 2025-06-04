@@ -7,6 +7,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic import get_anthropic_config
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )
@@ -43,7 +44,8 @@ class AnthropicPassthroughLoggingHandler:
         Transforms Anthropic response to OpenAI response, generates a standard logging object so downstream logging can be handled
         """
         model = response_body.get("model", "")
-        litellm_model_response: ModelResponse = AnthropicConfig().transform_response(
+        anthropic_config = get_anthropic_config(url_route)
+        litellm_model_response: ModelResponse = anthropic_config().transform_response(
             raw_response=httpx_response,
             model_response=litellm.ModelResponse(),
             model=model,
@@ -124,9 +126,9 @@ class AnthropicPassthroughLoggingHandler:
             litellm_model_response.id = logging_obj.litellm_call_id
             litellm_model_response.model = model
             logging_obj.model_call_details["model"] = model
-            logging_obj.model_call_details["custom_llm_provider"] = (
-                litellm.LlmProviders.ANTHROPIC.value
-            )
+            logging_obj.model_call_details[
+                "custom_llm_provider"
+            ] = litellm.LlmProviders.ANTHROPIC.value
             return kwargs
         except Exception as e:
             verbose_proxy_logger.exception(
