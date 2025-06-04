@@ -32,7 +32,7 @@ async def get_active_tasks_stats():
     for idx, task in enumerate(active_tasks):
 
         # reasonable max circuit breaker
-        if idx > MAX_TASKS_TO_CHECK:
+        if idx >= MAX_TASKS_TO_CHECK:
             break
         coro = task.get_coro()
         # Derive a human‐readable name from the coroutine:
