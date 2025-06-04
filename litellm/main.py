@@ -3040,7 +3040,52 @@ def completion(  # type: ignore # noqa: PLR0915
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
                 client=client,
             )
+        elif custom_llm_provider == "centml":
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("CENTML_API_BASE")
+                or "https://api.centml.com/openai/v1"
+            )
 
+            # set API KEY
+            api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.centml_key
+                or get_secret("CENTML_API_KEY")
+            )
+
+            headers = headers or litellm.headers
+
+            if extra_headers is not None:
+                optional_params["extra_headers"] = extra_headers
+
+            ## LOAD CONFIG - if set
+            config = litellm.CentmlConfig.get_config()
+            for k, v in config.items():
+                if (
+                    k not in optional_params
+                ):  # completion(top_k=3) > centml_config(top_k=3) <- allows for dynamic variables to be passed in
+                    optional_params[k] = v
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                custom_llm_provider=custom_llm_provider,
+                timeout=timeout,
+                headers=headers,
+                encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging,
+                client=client,
+            )
         elif custom_llm_provider == "triton":
             api_base = litellm.api_base or api_base
             response = base_llm_http_handler.completion(
