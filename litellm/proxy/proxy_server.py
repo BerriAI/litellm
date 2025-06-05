@@ -744,6 +744,7 @@ origins = ["*"]
 try:
     current_dir = os.path.dirname(os.path.abspath(__file__))
     ui_path = os.path.join(current_dir, "_experimental", "out")
+    litellm_asset_prefix = "/litellm-asset-prefix"
     # # Mount the _next directory at the root level
     app.mount(
         "/_next",
@@ -751,37 +752,14 @@ try:
         name="next_static",
     )
     app.mount(
-        "/litellm/_next",
+        f"{litellm_asset_prefix}/_next",
         StaticFiles(directory=os.path.join(ui_path, "_next")),
         name="next_static",
     )
     # print(f"mounted _next at {server_root_path}/ui/_next")
 
     app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
-    # if len(server_root_path) > 0:
-    #     app.mount(f"{server_root_path}/ui", StaticFiles(directory=ui_path, html=True), name="ui")
-    #     print(f"mounted ui at {server_root_path}/ui")
 
-    # # Add middleware to rewrite static asset paths
-    # @app.middleware("http")
-    # async def rewrite_static_paths(request: Request, call_next):
-    #     response = await call_next(request)
-
-    #     print(f"response.headers: {response.headers}, request.url.path: {request.url.path}")
-
-    #     # Only modify HTML responses from the UI
-    #     if request.url.path.startswith(f"{server_root_path}/ui"):
-    #         print(f"rewriting static paths for {request.url.path}")
-    #         content = await response.body()
-    #         # Replace /ui/_next with /litellm/ui/_next
-    #         modified_content = content.replace(b'/ui/_next', f'{server_root_path}/ui/_next'.encode())
-    #         return Response(
-    #             content=modified_content,
-    #             status_code=response.status_code,
-    #             headers=dict(response.headers),
-    #             media_type=response.media_type
-    #         )
-    #     return response
     # Iterate through files in the UI directory
     for root, dirs, files in os.walk(ui_path):
         for filename in files:
@@ -804,7 +782,16 @@ try:
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
                     content = f.read()
-                modified_content = content.replace("/litellm", server_root_path)
+
+                # Replace the asset prefix with the server root path
+                modified_content = content.replace(
+                    f"{litellm_asset_prefix}", server_root_path
+                )
+                # Replace the /.well-known/litellm-ui-config with the server root path
+                modified_content = modified_content.replace(
+                    "/litellm/.well-known/litellm-ui-config",
+                    f"{server_root_path}/.well-known/litellm-ui-config",
+                )
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(modified_content)
             except UnicodeDecodeError:
@@ -823,38 +810,6 @@ try:
             src = os.path.join(ui_path, filename)
             dst = os.path.join(folder_path, "index.html")
             os.rename(src, dst)
-
-    # http middleware to redirect `/server_root_path/.well-known/litellm-ui-config` -> `/litellm/.well-known/litellm-ui-config`
-    @app.middleware("http")
-    async def redirect_ui_config_middleware(request: Request, call_next):
-        if request.url.path.startswith(
-            f"{server_root_path}/.well-known{server_root_path}-ui-config"
-        ):
-            # serve the endpoint
-            return Response(
-                content=json.dumps(
-                    {
-                        "server_root_path": server_root_path,
-                        "proxy_base_path": str(request.base_url),
-                    }
-                ),
-                media_type="application/json",
-            )
-        return await call_next(request)
-
-    # if server_root_path != "":
-    #     verbose_proxy_logger.info(  # noqa
-    #         f"server_root_path is set, forwarding any /ui requests to {server_root_path}/ui, any /sso/key/generate requests to {server_root_path}/sso/key/generate"
-    #     )  # noqa
-
-    #     @app.middleware("http")
-    #     async def redirect_ui_middleware(request: Request, call_next):
-    #         if request.url.path.startswith("/ui"):
-    #             new_url = str(request.url).replace("/ui", f"{server_root_path}/ui", 1)
-    #             return RedirectResponse(new_url)
-    #         elif request.url.path == "/sso/key/generate":
-    #             return RedirectResponse(f"{server_root_path}/sso/key/generate")
-    #         return await call_next(request)
 
 except Exception:
     pass
