@@ -210,6 +210,7 @@ async def test_openai_with_vector_store_ids_in_tool_call_mock_openai(setup_vecto
         # Verify the API was called
         mock_client.assert_called_once()
         request_body = mock_client.call_args.kwargs
+        print("request body:", json.dumps(request_body, indent=4, default=str))
         
         # Verify the request contains messages with knowledge base context
         assert "messages" in request_body
@@ -225,6 +226,9 @@ async def test_openai_with_vector_store_ids_in_tool_call_mock_openai(setup_vecto
         # assert message[1] is the user message with the knowledge base context
         assert messages[1]["role"] == "user"
         assert BedrockVectorStore.CONTENT_PREFIX_STRING in messages[1]["content"]
+
+        # assert that the tool call was not sent to the upstream llm API if it's a litellm vector store
+        assert "tools" not in request_body
 
 
 @pytest.mark.asyncio
