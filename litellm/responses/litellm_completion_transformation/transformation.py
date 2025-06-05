@@ -764,14 +764,6 @@ class LiteLLMCompletionResponsesConfig:
             else:
                 raise ValueError(f"Unknown item type: {item}")
 
-        #model_response.id = responses_api_response.id
-        #model_response.created = int(responses_api_response.created_at)
-        #model_response.model = responses_api_response.model
-        #model_response.object = responses_api_response.object
-        #model_response.error = responses_api_response.error
-        #model_response.incomplete_details = responses_api_response.incomplete_details
-        #model_response.instructions = responses_api_response.instructions
-        #model_response.metadata = responses_api_response.metadata
         setattr(model_response, "choices", choices)
 
 
@@ -785,17 +777,5 @@ class LiteLLMCompletionResponsesConfig:
                 total_tokens=responses_api_response.usage.total_tokens,
             ),
         )
-        #model_response.parallel_tool_calls = responses_api_response.parallel_tool_calls
-        #model_response.temperature = responses_api_response.temperature
-        #model_response.tool_choice = responses_api_response.tool_choice
-        #model_response.tools = responses_api_response.tools
-        #model_response.top_p = responses_api_response.top_p
-        #model_response.max_output_tokens = responses_api_response.max_output_tokens
-        #model_response.previous_response_id = responses_api_response.previous_response_id
-        #model_response.reasoning = responses_api_response.reasoning
-        #model_response.status = responses_api_response.status
-        #model_response.truncation = responses_api_response.truncation
-        #model_response.usage = responses_api_response.usage
-        #model_response.user = responses_api_response.user
         return model_response
 
