@@ -1849,6 +1849,7 @@ class ModelResponseIterator:
                 args["tool_calls"] = [tool_use]
 
             returned_chunk = ModelResponseStream(
+                id=chunk.get("responseId", None),
                 choices=[
                     StreamingChoices(
                         index=0,
@@ -1858,8 +1859,6 @@ class ModelResponseIterator:
                 ],
                 usage=usage,
             )
-            if "responseId" in chunk:
-                returned_chunk.id = chunk["responseId"]
             return returned_chunk
         except json.JSONDecodeError:
             raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
