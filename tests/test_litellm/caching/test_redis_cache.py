@@ -97,8 +97,9 @@ async def test_redis_cache_async_batch_get_cache(monkeypatch, redis_no_ping):
 
 
 @pytest.mark.asyncio
-async def test_handle_lpop_count_for_older_redis_versions():
+async def test_handle_lpop_count_for_older_redis_versions(monkeypatch):
     """Test the helper method that handles LPOP with count for Redis versions < 7.0"""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
     # Create RedisCache instance
     redis_cache = RedisCache()
 
