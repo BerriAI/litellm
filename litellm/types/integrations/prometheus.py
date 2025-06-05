@@ -85,6 +85,8 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_output_tokens_metric",
     "litellm_deployment_successful_fallbacks",
     "litellm_deployment_failed_fallbacks",
+    "litellm_deployment_failure_responses",
+    "litellm_deployment_total_requests",
     "litellm_remaining_team_budget_metric",
     "litellm_team_max_budget_metric",
     "litellm_team_budget_remaining_hours_metric",
@@ -211,6 +213,32 @@ class PrometheusMetricLabels:
 
     litellm_deployment_failed_fallbacks = litellm_deployment_successful_fallbacks
 
+    litellm_deployment_failure_responses = [
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_BASE.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
+        UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+    ]
+
+    litellm_deployment_total_requests = [
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_BASE.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+    ]
+
     litellm_remaining_team_budget_metric = [
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
@@ -239,7 +267,15 @@ class PrometheusMetricLabels:
 
     @staticmethod
     def get_labels(label_name: DEFINED_PROMETHEUS_METRICS) -> List[str]:
-        default_labels = getattr(PrometheusMetricLabels, label_name)
+        default_labels = list(getattr(PrometheusMetricLabels, label_name))
+
+        groups = getattr(litellm, "custom_prometheus_metric_groups", [])
+        for group in groups:
+            if label_name in group.metrics:
+                for lbl in group.include_labels:
+                    if lbl not in default_labels:
+                        default_labels.append(lbl)
+
         return default_labels + [
             metric.replace(".", "_")
             for metric in litellm.custom_prometheus_metadata_labels
@@ -248,7 +284,13 @@ class PrometheusMetricLabels:
 
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+
+class CustomPrometheusMetricGroup(BaseModel):
+    """Configuration for grouping prometheus metrics with additional labels."""
+
+    group: str
+    metrics: List[str]
+    include_labels: List[str] = []
 
 
 class UserAPIKeyLabelValues(BaseModel):
