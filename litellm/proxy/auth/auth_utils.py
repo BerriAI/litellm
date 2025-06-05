@@ -499,21 +499,21 @@ def _has_user_setup_sso():
     return sso_setup
 
 
-def get_end_user_id_from_request_body(request_body: dict, request: Optional[Request] = None) -> Optional[str]:
+def get_end_user_id_from_request_body(request_body: dict, request_headers: Optional[dict] = None) -> Optional[str]:
     # Import general_settings here to avoid potential circular import issues at module level
     # and to ensure it's fetched at runtime.
     from litellm.proxy.proxy_server import general_settings
 
-    # Check 1: Custom Header from general_settings.user_header_name (only if request is provided)
+    # Check 1: Custom Header from general_settings.user_header_name (only if request_headers is provided)
     # User query: "system not respecting user_header_name property"
     # This implies the key in general_settings is 'user_header_name'.
-    if request is not None:
+    if request_headers is not None:
         user_id_header_config_key = "user_header_name" 
         
         custom_header_name_to_check = general_settings.get(user_id_header_config_key) 
         
         if custom_header_name_to_check and isinstance(custom_header_name_to_check, str):
-            user_id_from_header = request.headers.get(custom_header_name_to_check)
+            user_id_from_header = request_headers.get(custom_header_name_to_check)
             if user_id_from_header is not None and user_id_from_header.strip():
                 return str(user_id_from_header)
 

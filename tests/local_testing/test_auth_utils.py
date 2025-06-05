@@ -80,7 +80,7 @@ def test_get_end_user_id_from_request_body_always_returns_str():
     mock_request.headers = {}
     
     request_body = {"user": 123}
-    end_user_id = get_end_user_id_from_request_body(request_body, mock_request)
+    end_user_id = get_end_user_id_from_request_body(request_body, dict(mock_request.headers))
     assert end_user_id == "123"
     assert isinstance(end_user_id, str)
 
@@ -185,7 +185,7 @@ def test_get_end_user_id_from_request_body_with_user_header_name(
     
     # Mock general_settings at the proxy_server module level
     with patch('litellm.proxy.proxy_server.general_settings', general_settings_config):
-        end_user_id = get_end_user_id_from_request_body(request_body, mock_request)
+        end_user_id = get_end_user_id_from_request_body(request_body, dict(mock_request.headers))
         assert end_user_id == expected_user_id
 
 
@@ -206,7 +206,7 @@ def test_get_end_user_id_from_request_body_no_user_found():
     request_body = {"model": "gpt-4", "messages": [{"role": "user", "content": "hello"}]}
     
     with patch('litellm.proxy.proxy_server.general_settings', general_settings_config):
-        end_user_id = get_end_user_id_from_request_body(request_body, mock_request)
+        end_user_id = get_end_user_id_from_request_body(request_body, dict(mock_request.headers))
         assert end_user_id is None
 
 

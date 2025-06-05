@@ -587,7 +587,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         _end_user_object = None
         end_user_params = {}
 
-        end_user_id = get_end_user_id_from_request_body(request_data, request)
+        end_user_id = get_end_user_id_from_request_body(request_data, dict(request.headers))
         if end_user_id:
             try:
                 end_user_params["end_user_id"] = end_user_id
@@ -1140,7 +1140,7 @@ async def user_api_key_auth(
         custom_litellm_key_header=custom_litellm_key_header,
     )
 
-    end_user_id = get_end_user_id_from_request_body(request_data, request)
+    end_user_id = get_end_user_id_from_request_body(request_data, dict(request.headers))
     if end_user_id is not None:
         user_api_key_auth_obj.end_user_id = end_user_id
 
