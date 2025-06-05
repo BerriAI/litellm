@@ -75,7 +75,7 @@ def rerank(  # noqa: PLR0915
     query: str,
     documents: List[Union[str, Dict[str, Any]]],
     custom_llm_provider: Optional[
-        Literal["cohere", "together_ai", "azure_ai", "infinity", "litellm_proxy"]
+        Literal["cohere", "together_ai", "azure_ai", "infinity", "litellm_proxy", "voyage"]
     ] = None,
     top_n: Optional[int] = None,
     rank_fields: Optional[List[str]] = None,
@@ -322,6 +322,30 @@ def rerank(  # noqa: PLR0915
                 api_base=api_base,
                 logging_obj=litellm_logging_obj,
                 client=client,
+            )
+        elif _custom_llm_provider == "voyage":
+            api_key = (
+                dynamic_api_key or optional_params.api_key or litellm.api_key
+            )
+            api_base = (
+                dynamic_api_base
+                or optional_params.api_base
+                or litellm.api_base
+                or get_secret("VOYAGE_API_BASE")  # type: ignore
+            )
+            response = base_llm_http_handler.rerank(
+                model=model,
+                custom_llm_provider=_custom_llm_provider,
+                provider_config=rerank_provider_config,
+                optional_rerank_params=optional_rerank_params,
+                logging_obj=litellm_logging_obj,
+                timeout=optional_params.timeout,
+                api_key=dynamic_api_key or optional_params.api_key,
+                api_base=api_base,
+                _is_async=_is_async,
+                headers=headers or litellm.headers or {},
+                client=client,
+                model_response=model_response,
             )
         else:
             raise ValueError(f"Unsupported provider: {_custom_llm_provider}")
