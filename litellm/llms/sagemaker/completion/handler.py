@@ -614,7 +614,7 @@ class SagemakerLLM(BaseAWSLLM):
             )
 
         # Make it possible to customize the input key depending on the model deployed
-        input_key = optional_params.pop("sagemaker_input_key", "text_inputs")
+        input_key = optional_params.pop("sagemaker_input_key", "inputs")
 
         # pop streaming if it's in the optional params as 'stream' raises an error with sagemaker
         inference_params = deepcopy(optional_params)
