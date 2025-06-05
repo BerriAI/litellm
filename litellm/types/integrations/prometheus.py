@@ -80,6 +80,7 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_proxy_failed_requests_metric",
     "litellm_deployment_latency_per_output_token",
     "litellm_requests_metric",
+    "litellm_total_tokens_metric",
     "litellm_input_tokens_metric",
     "litellm_output_tokens_metric",
     "litellm_deployment_successful_fallbacks",
@@ -165,6 +166,17 @@ class PrometheusMetricLabels:
     ]
 
     litellm_input_tokens_metric = [
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+    ]
+
+    litellm_total_tokens_metric = [
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
