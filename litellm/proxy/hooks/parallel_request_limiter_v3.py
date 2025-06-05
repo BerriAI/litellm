@@ -84,31 +84,40 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 now = datetime.now().timestamp()
 
                 # If no window exists or window has expired, reset it
-                if current_window is None or (now - current_window) >= window_size:
-                    # Set new window start time
-                    await self.internal_usage_cache.async_set_cache(
-                        key=window_key,
-                        value=now,
-                        ttl=window_size,
-                        litellm_parent_otel_span=parent_otel_span,
-                    )
-                    # Reset counter
-                    await self.internal_usage_cache.async_set_cache(
+                # if current_window is None or (now - current_window) >= window_size:
+                #     print("resetting window")
+                #     # Set new window start time
+                #     await self.internal_usage_cache.async_set_cache(
+                #         key=window_key,
+                #         value=now,
+                #         ttl=window_size,
+                #         litellm_parent_otel_span=parent_otel_span,
+                #     )
+                #     # Reset counter
+                #     await self.internal_usage_cache.async_set_cache(
+                #         key=f"{key}:{value}:requests",
+                #         value=0,
+                #         ttl=window_size,
+                #         litellm_parent_otel_span=parent_otel_span,
+                #     )
+                #     current_count = 0
+                # else:
+                #     # Get current count
+                #     current_count = (
+                #         await self.internal_usage_cache.async_get_cache(
+                #             key=f"{key}:{value}:requests",
+                #             litellm_parent_otel_span=parent_otel_span,
+                #         )
+                #         or 0
+                #     )
+                # Get current count
+                current_count = (
+                    await self.internal_usage_cache.async_get_cache(
                         key=f"{key}:{value}:requests",
-                        value=0,
-                        ttl=window_size,
                         litellm_parent_otel_span=parent_otel_span,
                     )
-                    current_count = 0
-                else:
-                    # Get current count
-                    current_count = (
-                        await self.internal_usage_cache.async_get_cache(
-                            key=f"{key}:{value}:requests",
-                            litellm_parent_otel_span=parent_otel_span,
-                        )
-                        or 0
-                    )
+                    or 0
+                )
 
                 if current_count >= requests_limit:
                     status = {
@@ -150,7 +159,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         "limit_remaining": max(0, requests_limit - new_count),
                     }
             except Exception as e:
-                self.print_verbose(f"Error in rate limit check: {str(e)}")
+                verbose_proxy_logger.error(f"Error in rate limit check: {str(e)}")
                 status = {
                     "code": "OVER_LIMIT",
                     "current_limit": requests_limit,
