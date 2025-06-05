@@ -280,6 +280,10 @@ class ProxyLogging:
         self.db_spend_update_writer = DBSpendUpdateWriter()
         self.proxy_hook_mapping: Dict[str, CustomLogger] = {}
 
+        # Guard flags to prevent duplicate background tasks
+        self.daily_report_started: bool = False
+        self.hanging_requests_check_started: bool = False
+
     def startup_event(
         self,
         llm_router: Optional[Router],
@@ -301,12 +305,25 @@ class ProxyLogging:
         if (
             self.slack_alerting_instance is not None
             and "daily_reports" in self.slack_alerting_instance.alert_types
+            and not self.daily_report_started
         ):
             asyncio.create_task(
                 self.slack_alerting_instance._run_scheduled_daily_report(
                     llm_router=llm_router
                 )
             )  # RUN DAILY REPORT (if scheduled)
+            self.daily_report_started = True
+
+        if (
+            self.slack_alerting_instance is not None
+            and AlertType.llm_requests_hanging
+            in self.slack_alerting_instance.alert_types
+            and not self.hanging_requests_check_started
+        ):
+            asyncio.create_task(
+                self.slack_alerting_instance.hanging_request_check.check_for_hanging_requests()
+            )  # RUN HANGING REQUEST CHECK (if user wants to alert on hanging requests)
+            self.hanging_requests_check_started = True
 
     def update_values(
         self,
@@ -2847,7 +2864,16 @@ def is_known_model(model: Optional[str], llm_router: Optional[Router]) -> bool:
     return is_in_list
 
 
-def get_custom_url(request_base_url: str) -> str:
+def join_paths(base_path: str, route: str) -> str:
+    # Remove trailing/leading slashes
+    base_path = base_path.rstrip("/")
+    route = route.lstrip("/")
+
+    # Join with a single slash
+    return f"{base_path}/{route}"
+
+
+def get_custom_url(request_base_url: str, route: Optional[str] = None) -> str:
     """
     Use proxy base url, if set.
 
@@ -2857,6 +2883,8 @@ def get_custom_url(request_base_url: str) -> str:
 
     proxy_base_url = os.getenv("PROXY_BASE_URL")
     server_root_path = os.getenv("SERVER_ROOT_PATH") or ""
+    if route is not None:
+        server_root_path = join_paths(base_path=server_root_path, route=route)
     if proxy_base_url:
         ui_link = str(URL(proxy_base_url).join(server_root_path))
     else:

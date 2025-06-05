@@ -309,7 +309,10 @@ def test_vertex_ai_candidate_token_count_inclusive(
     Test that the candidate token count is inclusive of the thinking token count
     """
     v = VertexGeminiConfig()
-    assert v.is_candidate_token_count_inclusive(usage_metadata) is inclusive
+    assert (
+        VertexGeminiConfig.is_candidate_token_count_inclusive(usage_metadata)
+        is inclusive
+    )
 
     usage = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
     assert usage.prompt_tokens == expected_usage.prompt_tokens
@@ -490,3 +493,64 @@ def test_vertex_ai_map_tool_with_anyof():
         "anyOf": [{"type": "string", "nullable": True, "title": "Base Branch"}]
     }, f"Expected only anyOf field and its contents to be kept, but got {tools[0]['function_declarations'][0]['parameters']['properties']['base_branch']}"
 
+
+def test_vertex_ai_streaming_usage_calculation():
+    """
+    Ensure streaming usage calculation uses same function as non-streaming usage calculation
+    """
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+    usage_metadata = {
+        "promptTokenCount": 57,
+        "candidatesTokenCount": 10,
+        "totalTokenCount": 67,
+    }
+
+    # Test streaming chunk parsing
+    with patch.object(VertexGeminiConfig, "_calculate_usage") as mock_calculate_usage:
+        # Create a streaming chunk
+        chunk = {
+            "candidates": [{"content": {"parts": [{"text": "Hello"}]}}],
+            "usageMetadata": usage_metadata,
+        }
+
+        # Create iterator and parse chunk
+        iterator = ModelResponseIterator(
+            streaming_response=[], sync_stream=True, logging_obj=MagicMock()
+        )
+        iterator.chunk_parser(chunk)
+
+        # Verify _calculate_usage was called with correct parameters
+        mock_calculate_usage.assert_called_once_with(completion_response=chunk)
+
+    # Test non-streaming response parsing
+    with patch.object(VertexGeminiConfig, "_calculate_usage") as mock_calculate_usage:
+        # Create a completion response
+        completion_response = {
+            "candidates": [{"content": {"parts": [{"text": "Hello"}]}}],
+            "usageMetadata": usage_metadata,
+        }
+
+        # Parse completion response
+        v.transform_response(
+            model="gemini-pro",
+            raw_response=MagicMock(json=lambda: completion_response),
+            model_response=ModelResponse(),
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        # Verify _calculate_usage was called with correct parameters
+        mock_calculate_usage.assert_called_once_with(
+            completion_response=completion_response,
+        )
