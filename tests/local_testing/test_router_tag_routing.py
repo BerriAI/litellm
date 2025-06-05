@@ -288,3 +288,4 @@ def test_tag_routing_with_list_of_tags():
     assert is_valid_deployment_tag(["teamA", "teamB"], ["teamA", "teamC"])
     assert not is_valid_deployment_tag(["teamA", "teamB"], ["teamC"])
     assert not is_valid_deployment_tag(["teamA", "teamB"], [])
+    assert not is_valid_deployment_tag(["default"], ["teamA"])

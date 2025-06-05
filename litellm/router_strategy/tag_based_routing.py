@@ -33,13 +33,6 @@ def is_valid_deployment_tag(
             request_tags,
         )
         return True
-    elif "default" in deployment_tags:
-        verbose_logger.debug(
-            "adding default deployment with tags: %s, request tags: %s",
-            deployment_tags,
-            request_tags,
-        )
-        return True
     return False
 
 
