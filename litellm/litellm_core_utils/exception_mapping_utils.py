@@ -274,7 +274,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         + "Exception"
                     )
 
-                if "429" in error_str:
+                if "429" in error_str or "rate limit" in error_str.lower():
                     exception_mapping_worked = True
                     raise RateLimitError(
                         message=f"RateLimitError: {exception_provider} - {message}",
@@ -446,6 +446,15 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         exception_mapping_worked = True
                         raise RateLimitError(
                             message=f"RateLimitError: {exception_provider} - {message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            response=getattr(original_exception, "response", None),
+                            litellm_debug_info=extra_information,
+                        )
+                    elif original_exception.status_code == 500:
+                        exception_mapping_worked = True
+                        raise InternalServerError(
+                            message=f"InternalServerError: {exception_provider} - {message}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             response=getattr(original_exception, "response", None),

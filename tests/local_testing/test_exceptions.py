@@ -773,7 +773,7 @@ def test_litellm_predibase_exception():
 
 
 @pytest.mark.parametrize(
-    "provider", ["predibase", "vertex_ai_beta", "anthropic", "databricks", "watsonx"]
+    "provider", ["predibase", "vertex_ai_beta", "anthropic", "databricks", "watsonx", "fireworks_ai"]
 )
 def test_exception_mapping(provider):
     """
@@ -817,6 +817,72 @@ def test_exception_mapping(provider):
         )
 
     pass
+
+
+def test_fireworks_ai_429_exception_mapping():
+    """
+    Test that Fireworks AI 429 status codes are properly mapped to RateLimitError
+    instead of being converted to 400 BadRequestError.
+    
+    Related issue: https://github.com/BerriAI/litellm/issues/xxxxx
+    """
+    import litellm
+    from litellm.llms.fireworks_ai.common_utils import FireworksAIException
+    
+    # Create a mock FireworksAIException with 429 status code
+    mock_exception = FireworksAIException(
+        status_code=429,
+        message="Rate limit exceeded",
+        headers={"retry-after": "60"}
+    )
+    
+    try:
+        response = litellm.completion(
+            model="fireworks_ai/llama-v3p1-8b-instruct",
+            messages=[{"role": "user", "content": "Hello"}],
+            mock_response=mock_exception,
+        )
+        pytest.fail("Expected RateLimitError to be raised")
+    except litellm.RateLimitError as e:
+        # This is the expected behavior - 429 should map to RateLimitError
+        assert e.status_code == 429
+        assert "Rate limit exceeded" in str(e)
+    except Exception as e:
+        pytest.fail(f"Expected RateLimitError but got {type(e).__name__}: {e}")
+
+
+def test_fireworks_ai_rate_limit_text_detection():
+    """
+    Test that Fireworks AI rate limit errors are detected by text matching when no 429 status code is present.
+    
+    This tests the exact scenario from the real failure where Fireworks AI returns:
+    {"error":{"object":"error","type":"invalid_request_error","message":"rate limit exceeded, please try again later"}}
+    
+    This should be detected as a RateLimitError, not a BadRequestError.
+    """
+    import litellm
+    from litellm.llms.fireworks_ai.common_utils import FireworksAIException
+    
+    # Create a mock exception that simulates the exact Fireworks AI response
+    # with "invalid_request_error" type and "rate limit exceeded" message
+    mock_exception = FireworksAIException(
+        status_code=400,  # Fireworks AI is returning 400 instead of 429
+        message='{"error":{"object":"error","type":"invalid_request_error","message":"rate limit exceeded, please try again later"}}',
+        headers={}
+    )
+    
+    try:
+        response = litellm.completion(
+            model="fireworks_ai/qwen3-235b-a22b",
+            messages=[{"role": "user", "content": "Hello"}],
+            mock_response=mock_exception,
+        )
+        pytest.fail("Expected RateLimitError to be raised")
+    except litellm.RateLimitError as e:
+        # This is the expected behavior - should detect "rate limit" text and map to RateLimitError
+        assert "rate limit exceeded" in str(e).lower()
+    except Exception as e:
+        pytest.fail(f"Expected RateLimitError but got {type(e).__name__}: {e}")
 
 
 def test_anthropic_tool_calling_exception():
