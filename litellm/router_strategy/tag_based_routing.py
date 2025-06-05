@@ -91,7 +91,8 @@ async def get_deployments_for_tag(
 
                 if is_valid_deployment_tag(deployment_tags, request_tags):
                     new_healthy_deployments.append(deployment)
-                elif "default" in deployment_tags:
+
+                if "default" in deployment_tags:
                     default_deployments.append(deployment)
 
             if len(new_healthy_deployments) == 0 and len(default_deployments) == 0:
