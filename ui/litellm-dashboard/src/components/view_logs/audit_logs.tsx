@@ -37,14 +37,78 @@ const AuditLogRowExpansionPanel = React.memo(({ rowData }: { rowData: AuditLogEn
     .token.number,
     .token.boolean,
     .token.null {
-      color: #6A9955 !important; /* Dark green for JSON values */
+      color: #578043 !important; /* Darker green for JSON values */
     }
   `;
 
+  // Style overrides for ReactDiffViewer line highlights
+  const diffViewerStyles = {
+    variables: {
+      light: {
+        addedBackground: '#D5F5E3', // Darker green for added lines
+        removedBackground: '#FADBD8', // Darker red for removed lines
+      },
+    },
+  };
+    
+  // Custom renderer for the "Expand lines" message
+  const renderCodeFoldMessage = (
+    numLines: number,
+    isFolded: boolean, 
+    toggleFold: () => void
+  ) => (
+    <div
+      onClick={toggleFold}
+      style={{
+        cursor: 'pointer',
+        paddingLeft: '35px', 
+        fontSize: '0.85em',
+        color: '#007bff', 
+        textDecoration: 'none', 
+      }}
+      onMouseEnter={(e) => (e.currentTarget.style.textDecoration = 'underline')}
+      onMouseLeave={(e) => (e.currentTarget.style.textDecoration = 'none')}
+      title={`Click to ${isFolded ? 'expand' : 'collapse'} ${numLines} lines`}
+    >
+      {isFolded ? `Expand ${numLines} lines...` : `Collapse ${numLines} lines...`}
+    </div>
+  );
+
+  // Helper function to recursively mask sk- keys
+  const maskSKKeys = (data: any): any => {
+    if (typeof data === 'string') {
+      // Mask if: starts with sk-, length > 10 (our mask length), and not already in sk-...XXXX format
+      if (data.startsWith('sk-') && data.length > 10 && data.substring(3, 6) !== '...') {
+        return `${data.substring(0, 3)}...${data.substring(data.length - 4)}`;
+      }
+      return data;
+    }
+
+    if (Array.isArray(data)) {
+      return data.map(item => maskSKKeys(item));
+    }
+
+    if (typeof data === 'object' && data !== null) {
+      const maskedObject: Record<string, any> = {};
+      for (const key in data) {
+        if (Object.prototype.hasOwnProperty.call(data, key)) {
+          maskedObject[key] = maskSKKeys(data[key]);
+        }
+      }
+      return maskedObject;
+    }
+    
+    return data; // Return primitives other than strings, and null, as is
+  };
+
   const getDisplayString = (value: Record<string, any> | string | undefined | null) => {
     if (value === undefined || value === null) return "N/A";
+    // If it's already a string (e.g. our "N/A" messages), return it directly.
+    // Otherwise, it's an object that needs masking and stringifying.
     if (typeof value === 'string') return value;
-    return JSON.stringify(value, null, 2);
+    
+    const maskedValue = maskSKKeys(value);
+    return JSON.stringify(maskedValue, null, 2);
   };
 
   // Syntax highlighting function for JSON
@@ -74,27 +138,33 @@ const AuditLogRowExpansionPanel = React.memo(({ rowData }: { rowData: AuditLogEn
 
   if (action === "updated" || action === "rotated") {
     if (before_value && typeof before_value === 'object' && updated_values && typeof updated_values === 'object') {
-      const newFullState = { ...before_value, ...updated_values };
-      const stringifiedOld = getDisplayString(before_value);
-      const stringifiedNew = getDisplayString(newFullState);
+      // Mask before_value before creating newFullState to ensure diff is on masked data if needed
+      const masked_before_value = maskSKKeys(before_value);
+      // updated_values might only contain changes, so merge with masked_before_value
+      const newFullState = { ...masked_before_value, ...maskSKKeys(updated_values) }; 
+      
+      const stringifiedOld = getDisplayString(masked_before_value); // getDisplayString will re-mask then stringify
+      const stringifiedNew = getDisplayString(newFullState);     // getDisplayString will re-mask then stringify
+                                                                 // (maskSKKeys is idempotent for already masked keys)
 
-      if (stringifiedOld === stringifiedNew) {
+      if (stringifiedOld === stringifiedNew && JSON.stringify(before_value) === JSON.stringify({ ...before_value, ...updated_values })) {
         beforeString = getDisplayString({ "No fields changed": "N/A" });
         updatedString = getDisplayString({ "No fields changed": "N/A" });
       } else {
-        beforeString = stringifiedOld;
-        updatedString = stringifiedNew;
+        // Pass original unmasked data to getDisplayString, which will handle masking internally
+        beforeString = getDisplayString(before_value); 
+        updatedString = getDisplayString({ ...before_value, ...updated_values });
       }
     } else if (before_value && !updated_values) { 
-        beforeString = getDisplayString(before_value);
+        beforeString = getDisplayString(before_value); 
         updatedString = getDisplayString({ "Comment": "Updated values were not provided or were null." });
     } else { 
-      beforeString = getDisplayString(before_value);
-      updatedString = getDisplayString(updated_values);
+      beforeString = getDisplayString(before_value); 
+      updatedString = getDisplayString(updated_values); 
     }
   } else if (action === "created") {
     beforeString = "N/A (New Record)";
-    updatedString = getDisplayString(updated_values);
+    updatedString = getDisplayString(updated_values); 
   } else if (action === "deleted") {
     beforeString = getDisplayString(before_value);
     updatedString = "N/A (Record Deleted)";
@@ -107,31 +177,65 @@ const AuditLogRowExpansionPanel = React.memo(({ rowData }: { rowData: AuditLogEn
     (action === "updated" || action === "rotated") &&
     beforeString !== updatedString && 
     !(beforeString.includes("No fields changed") && updatedString.includes("No fields changed")) &&
-    !(beforeString === "N/A (New Record)" && updatedString === "N/A") && // More specific N/A checks
+    !(beforeString === "N/A (New Record)" && updatedString === "N/A") && 
     !(beforeString === "N/A" && updatedString === "N/A (Record Deleted)");
 
-  const renderLegacyValue = (value: Record<string, any> | string | undefined | null, isKeyTable: boolean) => {
+  const renderLegacyValue = (rawValue: Record<string, any> | string | undefined | null, isKeyTable: boolean) => {
     let displayValue: any;
-    // Ensure 'value' itself isn't null before trying to access properties or parse
-    if (value === null || value === undefined) {
+    
+    if (rawValue === null || rawValue === undefined) {
         return <Text>N/A</Text>;
     }
+
+    // If rawValue is a string that looks like JSON, parse it. Otherwise, use as is.
+    // This step should happen BEFORE masking if we expect to mask contents of a JSON string.
+    // However, our primary data `before_value`, `updated_values` are objects.
+    // `getDisplayString` handles string inputs like "N/A" by returning them.
+    // For `renderLegacyValue`, it's safer to assume `rawValue` is either an object or a non-JSON string.
+    
     try {
-        displayValue = (typeof value === 'string' && (value.startsWith('{') || value.startsWith('['))) ? JSON.parse(value) : value;
+        // If rawValue is a string that represents an object (e.g. "N/A", "No fields changed")
+        // it won't parse as JSON and will be handled later.
+        // If it's a string that IS JSON, it will be parsed.
+        // If it's an object, it remains an object.
+        displayValue = (typeof rawValue === 'string' && (rawValue.startsWith('{') || rawValue.startsWith('['))) 
+                       ? JSON.parse(rawValue) 
+                       : rawValue;
     } catch (e) {
-        displayValue = value; 
+        displayValue = rawValue; 
     }
 
-    if (typeof displayValue !== 'object' || displayValue === null || Object.keys(displayValue).length === 0) {
-        // If it's one of our special string messages, display it directly.
-        if (typeof displayValue === 'string' && (displayValue.startsWith("N/A") || displayValue.includes("No fields changed") || displayValue.includes("Comment"))) {
-            return <Text>{displayValue}</Text>;
+    // Now, apply masking to the processed displayValue
+    const maskedDisplayValue = maskSKKeys(displayValue);
+
+    // If maskedDisplayValue is a string (e.g. "N/A", or a simple string that was passed through maskSKKeys)
+    // and it's one of our special messages, render as Text.
+    if (typeof maskedDisplayValue === 'string') {
+        if (maskedDisplayValue.startsWith("N/A") || maskedDisplayValue.includes("No fields changed") || maskedDisplayValue.includes("Comment")) {
+            return <Text>{maskedDisplayValue}</Text>;
         }
+         // If it's some other string that's not an object after masking, render it as text
+        if (!(maskedDisplayValue.startsWith('{') || maskedDisplayValue.startsWith('['))) {
+             return <Text>{maskedDisplayValue}</Text>;
+        }
+        // If it's a string that still looks like JSON (shouldn't happen if maskSKKeys returned an object), try parsing again
+        // This path is unlikely given maskSKKeys behavior.
+        try {
+            displayValue = JSON.parse(maskedDisplayValue); // Re-assign to displayValue for object checks
+        } catch (e) {
+            return <Text>{maskedDisplayValue}</Text>; // Render as text if reparsing fails
+        }
+    } else {
+      displayValue = maskedDisplayValue; // It was an object, use the masked version
+    }
+
+
+    if (typeof displayValue !== 'object' || displayValue === null || Object.keys(displayValue).length === 0) {
         return <Text>{typeof displayValue === 'string' ? displayValue : "N/A"}</Text>;
     }
 
     if (isKeyTable) {
-      const changedKeys = Object.keys(displayValue);
+      const changedKeys = Object.keys(displayValue); // use the (potentially) masked displayValue
       const knownKeyFields = ['token', 'spend', 'max_budget'];
       
       const onlyKnownFieldsChanged = changedKeys.every(key => knownKeyFields.includes(key) || displayValue[key] === "N/A");
@@ -139,13 +243,13 @@ const AuditLogRowExpansionPanel = React.memo(({ rowData }: { rowData: AuditLogEn
       if (onlyKnownFieldsChanged && changedKeys.length > 0 && !displayValue["No differing fields detected in 'before' state"] && !displayValue["No differing fields detected in 'updated' state"] && !displayValue["No fields changed"] && !displayValue["Comment"]) {
         return (
           <div>
+            {/* Access properties from the (potentially) masked displayValue */}
             {changedKeys.includes('token') && <p><strong>Token:</strong> {displayValue.token || 'N/A'}</p>}
             {changedKeys.includes('spend') && <p><strong>Spend:</strong> {displayValue.spend !== undefined ? `$${Number(displayValue.spend).toFixed(6)}` : 'N/A'}</p>}
             {changedKeys.includes('max_budget') && <p><strong>Max Budget:</strong> {displayValue.max_budget !== undefined ? `$${Number(displayValue.max_budget).toFixed(6)}` : 'N/A'}</p>}
           </div>
         );
       } else {
-        // Check for our special message objects
         const specialMessageKey = Object.keys(displayValue).find(key => 
             key === "No differing fields detected in 'before' state" || 
             key === "No differing fields detected in 'updated' state" || 
@@ -155,9 +259,11 @@ const AuditLogRowExpansionPanel = React.memo(({ rowData }: { rowData: AuditLogEn
         if (specialMessageKey) {
            return <Text>{displayValue[specialMessageKey]}</Text>;
         }
+        // Stringify the (potentially) masked displayValue
         return <pre className="p-2 bg-gray-50 border rounded text-xs overflow-auto max-h-60">{JSON.stringify(displayValue, null, 2)}</pre>;
       }
     }
+    // Stringify the (potentially) masked displayValue
     return <pre className="p-2 bg-gray-50 border rounded text-xs overflow-auto max-h-60">{JSON.stringify(displayValue, null, 2)}</pre>;
   };
 
@@ -167,13 +273,15 @@ const AuditLogRowExpansionPanel = React.memo(({ rowData }: { rowData: AuditLogEn
       <div className="-mx-4 p-4 bg-slate-100 border-y border-slate-300">
         {shouldUseDiffViewer ? (
           <ReactDiffViewer
-            oldValue={beforeString}
-            newValue={updatedString}
+            oldValue={beforeString} // These are already stringified outputs of getDisplayString
+            newValue={updatedString} // which internally called maskSKKeys
             splitView={false}
             showDiffOnly={true} 
             hideLineNumbers={false}
             disableWordDiff={true}
             renderContent={highlightSyntax}
+            styles={diffViewerStyles}
+            codeFoldMessageRenderer={renderCodeFoldMessage}
           />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -263,20 +371,6 @@ export default function AuditLogs({
 
   const handleRefresh = () => {
     allLogsQuery.refetch();
-  };
-  
-  const handleFilterChange = (newFilters: Record<string, string>) => {
-    setFilters(newFilters);
-  };
-
-  const handleFilterReset = () => {
-    setFilters({});
-    setSelectedTeamId("");
-    setSelectedKeyHash("");
-    setObjectIdSearch("");
-    setSelectedActionFilter("all");
-    setSelectedTableFilter("all");
-    setClientCurrentPage(1);
   };
 
   const fetchKeyHashForAlias = useCallback(async (keyAlias: string) => {
