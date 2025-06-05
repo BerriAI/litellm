@@ -2,7 +2,7 @@
 const nextConfig = {
     output: 'export',
     basePath: '',
-    assetPrefix: '/litellm',  // This will make assets load from /litellm/_next/...
+    assetPrefix: '/litellm-asset-prefix',  // If a server_root_path is set, this will be overridden by runtime injection
 };
 
 nextConfig.experimental = {
