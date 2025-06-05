@@ -4,7 +4,7 @@ import { getProviderLogoAndName } from "../provider_info_helpers";
 import { Tooltip } from "antd";
 import { TimeCell } from "./time_cell";
 import { Button, Badge } from "@tremor/react";
-import { Eye, EyeOff} from "lucide-react"
+import { Eye, EyeOff, Info } from "lucide-react"
 
 // Helper to get the appropriate logo URL
 const getLogoUrl = (
@@ -511,7 +511,14 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
     },
   },
   {
-    header: "Affected Item ID",
+    header: () => (
+      <div style={{ display: 'flex', alignItems: 'center' }}>
+        <span>Affected Item ID</span>
+        <Tooltip title="This field stores the ID of the object that was affected by the audited action. It can be the key ID, team ID, user ID.">
+          <Info size={16} style={{ marginLeft: '4px', cursor: 'help' }} />
+        </Tooltip>
+      </div>
+    ),
     accessorKey: "object_id",
     cell: (props) => {
       const ObjectIdDisplay = () => {

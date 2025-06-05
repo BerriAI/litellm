@@ -51,29 +51,6 @@ const AuditLogRowExpansionPanel = React.memo(({ rowData }: { rowData: AuditLogEn
     },
   };
     
-  // Custom renderer for the "Expand lines" message
-  const renderCodeFoldMessage = (
-    numLines: number,
-    isFolded: boolean, 
-    toggleFold: () => void
-  ) => (
-    <div
-      onClick={toggleFold}
-      style={{
-        cursor: 'pointer',
-        paddingLeft: '35px', 
-        fontSize: '0.85em',
-        color: '#007bff', 
-        textDecoration: 'none', 
-      }}
-      onMouseEnter={(e) => (e.currentTarget.style.textDecoration = 'underline')}
-      onMouseLeave={(e) => (e.currentTarget.style.textDecoration = 'none')}
-      title={`Click to ${isFolded ? 'expand' : 'collapse'} ${numLines} lines`}
-    >
-      {isFolded ? `Expand ${numLines} lines...` : `Collapse ${numLines} lines...`}
-    </div>
-  );
-
   // Helper function to recursively mask sk- keys
   const maskSKKeys = (data: any): any => {
     if (typeof data === 'string') {
@@ -281,7 +258,6 @@ const AuditLogRowExpansionPanel = React.memo(({ rowData }: { rowData: AuditLogEn
             disableWordDiff={true}
             renderContent={highlightSyntax}
             styles={diffViewerStyles}
-            codeFoldMessageRenderer={renderCodeFoldMessage}
           />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -563,10 +539,10 @@ export default function AuditLogs({
                 <div className="flex items-center">
                   <input
                     type="text"
-                    placeholder="Search by Object ID..."
+                    placeholder="Search by modified key hash..."
                     value={objectIdSearch}
                     onChange={(e) => setObjectIdSearch(e.target.value)}
-                    className="px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    className="w-80 px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   />
                 </div>
                 
