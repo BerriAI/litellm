@@ -2,7 +2,6 @@ import asyncio
 import collections.abc
 import datetime
 import json
-import threading
 import time
 import traceback
 import uuid
@@ -56,20 +55,20 @@ def print_verbose(print_statement):
 def _should_use_clean_error_logging(error: Exception, chunks_sent: bool = False) -> bool:
     """
     Determine if we should use clean error logging instead of full stack traces.
-    
+
     This applies to errors that are likely to be retried at a higher level
     and where users benefit from cleaner error messages.
-    
+
     Args:
         error: The exception to check
         chunks_sent: Whether any chunks have been sent yet
-        
+
     Returns:
         bool: True if clean logging should be used
     """
     if chunks_sent:
         return False  # After streaming starts, always use detailed logging
-        
+
     # Use clean logging for common retryable errors
     return isinstance(error, (litellm.RateLimitError, litellm.APIConnectionError, litellm.Timeout))
 
@@ -1400,10 +1399,10 @@ class CustomStreamWrapper:
             raise StopIteration
         except Exception as e:
             traceback_exception = traceback.format_exc()
-            
+
             # Determine logging style based on error type and streaming state
             use_clean_logging = _should_use_clean_error_logging(e, len(self.chunks) > 0)
-            
+
             if use_clean_logging:
                 # Use clean logging for common errors that might be retried upstream
                 error_msg = str(e)
@@ -1413,14 +1412,14 @@ class CustomStreamWrapper:
             else:
                 # Use detailed logging for unexpected errors or after streaming started
                 verbose_logger.exception(f"litellm.streaming error - {str(e)}")
-            
+
             # Always do failure logging for all errors
             if self.logging_obj is not None:
                 executor.submit(
                     self.logging_obj.failure_handler,
                     e, traceback_exception
                 )
-                
+
                 # Safely handle async failure handler
                 try:
                     if hasattr(asyncio, 'create_task') and asyncio.get_event_loop().is_running():
@@ -1430,7 +1429,7 @@ class CustomStreamWrapper:
                 except (RuntimeError, AttributeError):
                     # No event loop running or async_failure_handler is not a coroutine, skip async logging
                     pass
-            
+
             ## Map to OpenAI Exception and let upstream retry logic handle retries
             raise exception_type(
                 model=self.model,
@@ -1642,10 +1641,10 @@ class CustomStreamWrapper:
                 return processed_chunk
         except Exception as e:
             traceback_exception = traceback.format_exc()
-            
+
             # Determine logging style based on error type and streaming state
             use_clean_logging = _should_use_clean_error_logging(e, len(self.chunks) > 0)
-            
+
             if use_clean_logging:
                 # Use clean logging for common errors that might be retried upstream
                 error_msg = str(e)
@@ -1655,14 +1654,14 @@ class CustomStreamWrapper:
             else:
                 # Use detailed logging for unexpected errors or after streaming started
                 verbose_logger.exception(f"litellm.streaming error - {str(e)}")
-            
+
             # Always do failure logging for all errors
             if self.logging_obj is not None:
                 executor.submit(
                     self.logging_obj.failure_handler,
                     e, traceback_exception
                 )
-                
+
                 # Safely handle async failure handler
                 try:
                     if hasattr(asyncio, 'create_task') and asyncio.get_event_loop().is_running():
@@ -1672,7 +1671,7 @@ class CustomStreamWrapper:
                 except (RuntimeError, AttributeError):
                     # No event loop running or async_failure_handler is not a coroutine, skip async logging
                     pass
-            
+
             ## Map to OpenAI Exception and let upstream retry logic handle retries
             raise exception_type(
                 model=self.model,
@@ -1858,7 +1857,7 @@ class CustomStreamWrapper:
                     self.logging_obj.failure_handler,
                     e, traceback_exception
                 )
-                
+
                 # Safely handle async failure handler
                 try:
                     if hasattr(asyncio, 'create_task') and asyncio.get_event_loop().is_running():
@@ -1868,7 +1867,7 @@ class CustomStreamWrapper:
                 except (RuntimeError, AttributeError):
                     # No event loop running or async_failure_handler is not a coroutine, skip async logging
                     pass
-            
+
             ## Map to OpenAI Exception
             raise exception_type(
                 model=self.model,
@@ -1879,10 +1878,10 @@ class CustomStreamWrapper:
             )
         except Exception as e:
             traceback_exception = traceback.format_exc()
-            
+
             # Determine logging style based on error type and streaming state
             use_clean_logging = _should_use_clean_error_logging(e, len(self.chunks) > 0)
-            
+
             if use_clean_logging:
                 # Use clean logging for common errors that might be retried upstream
                 error_msg = str(e)
@@ -1892,14 +1891,14 @@ class CustomStreamWrapper:
             else:
                 # Use detailed logging for unexpected errors or after streaming started
                 verbose_logger.exception(f"litellm.streaming error - {str(e)}")
-            
+
             # Always do failure logging for all errors
             if self.logging_obj is not None:
                 executor.submit(
                     self.logging_obj.failure_handler,
                     e, traceback_exception
                 )
-                
+
                 # Safely handle async failure handler
                 try:
                     if hasattr(asyncio, 'create_task') and asyncio.get_event_loop().is_running():
@@ -1909,7 +1908,7 @@ class CustomStreamWrapper:
                 except (RuntimeError, AttributeError):
                     # No event loop running or async_failure_handler is not a coroutine, skip async logging
                     pass
-            
+
             ## Map to OpenAI Exception and let upstream retry logic handle retries
             raise exception_type(
                 model=self.model,
