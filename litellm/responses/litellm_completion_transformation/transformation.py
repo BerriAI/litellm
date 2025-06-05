@@ -2,12 +2,16 @@
 Handles transforming from Responses API -> LiteLLM completion  (Chat Completion API)
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Literal
 
 from langfuse.api import ChatMessage
+from openai.types.chat import ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
+from openai.types.responses import ResponseReasoningItem, ResponseOutputMessage
 from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
+
+import litellm
 
 HAS_ENTERPRISE_DIRECTORY = False
 try:
@@ -53,7 +57,7 @@ from litellm.types.utils import (
     Function,
     Message,
     ModelResponse,
-    Usage,
+    Usage, StreamingChoices,
 )
 
 ########### Initialize Classes used for Responses API  ###########
@@ -692,49 +696,71 @@ class LiteLLMCompletionResponsesConfig:
         )
 
     @staticmethod
+    def _map_responses_status(status: Literal["in_progress", "completed", "incomplete"]) -> Literal["stop", "length", "tool_calls", "content_filter", "function_call"]:
+        if status == "in_progress":
+            return None
+        elif status == "completed":
+            return "stop"
+        elif status == "incomplete":
+            return None
+        else:
+            raise ValueError(f"Unknown status {status}")
+
+    @staticmethod
     def transform_responses_api_response_to_chat_completion_response(
         responses_api_response: ResponsesAPIResponse,
+        model_response: ModelResponse
     ) -> ModelResponse:
         """
         Inverse of transform_chat_completion_response_to_responses_api_response.
         """
         # Reconstruct choices from ResponsesAPIResponse.output
-        choices: List[Choice] = []
+        choices: List[Union[litellm.Choices, StreamingChoices]] = []
+        index = 0
         for item in responses_api_response.output:
-            if isinstance(item, GenericResponseOutputItem):
-                msg = ChatMessage(
-                    role=item.role,
-                    content=item.text if item.text else item.content[0] if item.content else ""
-                )
-                choices.append(Choice(
-                    message=msg,
-                    finish_reason=item.status
-                ))
+            if isinstance(item, ResponseReasoningItem):
+                pass # ignore for now.
+            elif isinstance(item, ResponseOutputMessage):
+                for content in item.content:
+                    msg = litellm.Message(
+                        role=item.role,
+                        content=content.text if content.text else ""
+                    )
+
+                    choices.append(litellm.Choices(
+                        message=msg,
+                        finish_reason=LiteLLMCompletionResponsesConfig._map_responses_status(item.status),
+                        index=index
+                    ))
+                    index += 1
+            elif isinstance(item, GenericResponseOutputItem):
+                raise ValueError("GenericResponseOutputItem not supported")
             elif isinstance(item, OutputFunctionToolCall):
                 # function/tool calls pass through as-is
-                choices.append(item)
+                raise ValueError("Function calling not supported yet.")
+            else:
+                raise ValueError("Unknown item type: " + item)
 
-        return ModelResponse(
-            id=responses_api_response.id,
-            created=responses_api_response.created_at,
-            model=responses_api_response.model,
-            object=responses_api_response.object,
-            error=responses_api_response.error,
-            incomplete_details=responses_api_response.incomplete_details,
-            instructions=responses_api_response.instructions,
-            metadata=responses_api_response.metadata,
-            choices=choices,
-            parallel_tool_calls=responses_api_response.parallel_tool_calls,
-            temperature=responses_api_response.temperature,
-            tool_choice=responses_api_response.tool_choice,
-            tools=responses_api_response.tools,
-            top_p=responses_api_response.top_p,
-            max_output_tokens=responses_api_response.max_output_tokens,
-            previous_response_id=responses_api_response.previous_response_id,
-            reasoning=responses_api_response.reasoning,
-            status=responses_api_response.status,
-            truncation=responses_api_response.truncation,
-            usage=responses_api_response.usage,
-            user=responses_api_response.user,
-        )
+        #model_response.id = responses_api_response.id
+        #model_response.created = int(responses_api_response.created_at)
+        #model_response.model = responses_api_response.model
+        #model_response.object = responses_api_response.object
+        #model_response.error = responses_api_response.error
+        #model_response.incomplete_details = responses_api_response.incomplete_details
+        #model_response.instructions = responses_api_response.instructions
+        #model_response.metadata = responses_api_response.metadata
+        setattr(model_response, "choices", choices);
+        #model_response.parallel_tool_calls = responses_api_response.parallel_tool_calls
+        #model_response.temperature = responses_api_response.temperature
+        #model_response.tool_choice = responses_api_response.tool_choice
+        #model_response.tools = responses_api_response.tools
+        #model_response.top_p = responses_api_response.top_p
+        #model_response.max_output_tokens = responses_api_response.max_output_tokens
+        #model_response.previous_response_id = responses_api_response.previous_response_id
+        #model_response.reasoning = responses_api_response.reasoning
+        #model_response.status = responses_api_response.status
+        #model_response.truncation = responses_api_response.truncation
+        #model_response.usage = responses_api_response.usage
+        #model_response.user = responses_api_response.user
+        return model_response
 

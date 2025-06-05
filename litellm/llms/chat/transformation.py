@@ -219,7 +219,8 @@ class ChatConfig(BaseConfig):
 
         # Inverse‐transform back to the original ModelResponse
         transformed = LiteLLMCompletionResponsesConfig.transform_responses_api_response_to_chat_completion_response(
-            responses_api_response=responses_api_response
+            responses_api_response=responses_api_response,
+            model_response=model_response
         )
 
         verbose_logger.debug(f"Chat provider: transformed {transformed}")
