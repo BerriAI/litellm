@@ -662,10 +662,13 @@ print(resp)
 
 LiteLLM translates OpenAI's `reasoning_effort` to Gemini's `thinking` parameter. [Code](https://github.com/BerriAI/litellm/blob/620664921902d7a9bfb29897a7b27c1a7ef4ddfb/litellm/llms/vertex_ai/gemini/vertex_and_google_ai_studio_gemini.py#L362)
 
+Added an additional non-OpenAI standard "disable" value for non-reasoning Gemini requests.
+
 **Mapping**
 
 | reasoning_effort | thinking |
 | ---------------- | -------- |
+| "disable"        | "budget_tokens": 0    |
 | "low"            | "budget_tokens": 1024 |
 | "medium"         | "budget_tokens": 2048 |
 | "high"           | "budget_tokens": 4096 |

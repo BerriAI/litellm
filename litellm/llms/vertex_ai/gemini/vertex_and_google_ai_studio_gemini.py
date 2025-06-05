@@ -26,6 +26,7 @@ import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
 from litellm import verbose_logger
 from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
@@ -427,6 +428,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
                 "includeThoughts": True,
+            }
+        elif reasoning_effort == "disable":
+            return {
+                "thinkingBudget": DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET,
+                "includeThoughts": False,
             }
         else:
             raise ValueError(f"Invalid reasoning effort: {reasoning_effort}")
