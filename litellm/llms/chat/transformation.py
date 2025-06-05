@@ -1,17 +1,22 @@
 """
 Chat provider mapping chat completion requests to /responses API and back to chat format
 """
+import json
+
 import httpx
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Iterator, AsyncIterator
 
 from openai.types.responses.response_create_params import ResponseCreateParamsBase
 from openai.types.responses.response import Response as ResponsesAPIResponse
+
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
-from litellm.types.utils import ModelResponse, Choices, Usage
+from litellm.types.utils import ModelResponse, Choices, Usage, GenericStreamingChunk, ModelResponseStream
 from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
-from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, ChatCompletionUsageBlock, \
+    ChatCompletionToolCallChunk, ChatCompletionToolCallFunctionChunk
 
 from litellm._logging import verbose_logger
 
@@ -236,153 +241,14 @@ class ChatConfig(BaseConfig):
         verbose_logger.debug(f"Chat provider: transformed {transformed}")
         return transformed
 
-    def transform_streaming_response(
+    def get_model_response_iterator(
         self,
-        model: str,  # noqa: U100
-        parsed_chunk: dict,
-        logging_obj: Any,  # noqa: U100
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
     ) -> Any:
-        # Transform responses API streaming chunk to chat completion format
-        verbose_logger.debug(f"Chat provider: transform_streaming_response called with chunk: {parsed_chunk}")
-        
-        if not parsed_chunk:
-            verbose_logger.debug("Chat provider: Empty parsed_chunk, returning None")
-            return None
-        
-        if not isinstance(parsed_chunk, dict):
-            verbose_logger.debug(f"Chat provider: Invalid chunk type {type(parsed_chunk)}, returning as-is")
-            return parsed_chunk
-            
-        # Handle different event types from responses API
-        event_type = parsed_chunk.get("type")
-        verbose_logger.debug(f"Chat provider: Processing event type: {event_type}")
-        
-        if event_type == "response.created":
-            # Initial response creation event
-            chunk = {
-                "id": parsed_chunk.get("response", {}).get("id"),
-                "object": "chat.completion.chunk",
-                "created": parsed_chunk.get("response", {}).get("created_at"),
-                "model": parsed_chunk.get("response", {}).get("model"),
-                "choices": [{
-                    "index": 0,
-                    "delta": {},
-                    "finish_reason": None
-                }]
-            }
-            verbose_logger.debug(f"Chat provider: response.created -> {chunk}")
-            return chunk
-        elif event_type == "response.output_item.added":
-            # New output item added
-            output_item = parsed_chunk.get("output_item", {})
-            if output_item.get("type") == "message":
-                return {
-                    "id": parsed_chunk.get("response_id"),
-                    "object": "chat.completion.chunk",
-                    "created": int(time.time()),
-                    "model": model,
-                    "choices": [{
-                        "index": 0,
-                        "delta": {"role": output_item.get("role", "assistant")},
-                        "finish_reason": None
-                    }]
-                }
-        elif event_type == "response.content_part.added":
-            # Content part added to output
-            content_part = parsed_chunk.get("part", {})
-            if content_part.get("type") == "text":
-                chunk = {
-                    "id": parsed_chunk.get("response_id"),
-                    "object": "chat.completion.chunk",
-                    "created": int(time.time()),
-                    "model": model,
-                    "choices": [{
-                        "index": 0,
-                        "delta": {"content": content_part.get("text", "")},
-                        "finish_reason": None
-                    }]
-                }
-                verbose_logger.debug(f"Chat provider: content_part.added -> {chunk}")
-                return chunk
-            else:
-                verbose_logger.debug(f"Chat provider: content_part.added with non-text type {content_part.get('type')}, skipping")
-                return None
-        elif event_type == "response.content_part.done":
-            # Content part completed
-            return {
-                "id": parsed_chunk.get("response_id"),
-                "object": "chat.completion.chunk",
-                "created": int(time.time()),
-                "model": model,
-                "choices": [{
-                    "index": 0,
-                    "delta": {},
-                    "finish_reason": None
-                }]
-            }
-        elif event_type == "response.output_item.done":
-            # Output item completed
-            output_item = parsed_chunk.get("output_item", {})
-            finish_reason = "stop"  # Default finish reason
-            
-            if output_item.get("type") == "message":
-                status = output_item.get("status")
-                finish_reason = self._map_responses_status_to_finish_reason(status)
-            
-            return {
-                "id": parsed_chunk.get("response_id"),
-                "object": "chat.completion.chunk",
-                "created": int(time.time()),
-                "model": model,
-                "choices": [{
-                    "index": 0,
-                    "delta": {},
-                    "finish_reason": finish_reason
-                }]
-            }
-        elif event_type == "response.done":
-            # Response completed - include usage if available
-            response = parsed_chunk.get("response", {})
-            usage_data = response.get("usage", {})
-            
-            chunk = {
-                "id": response.get("id"),
-                "object": "chat.completion.chunk",
-                "created": response.get("created_at", int(time.time())),
-                "model": response.get("model", model),
-                "choices": [{
-                    "index": 0,
-                    "delta": {},
-                    "finish_reason": None
-                }]
-            }
-            
-            # Add usage information if available
-            if usage_data:
-                chunk["usage"] = {
-                    "prompt_tokens": usage_data.get("input_tokens", 0),
-                    "completion_tokens": usage_data.get("output_tokens", 0),
-                    "total_tokens": usage_data.get("total_tokens", 0)
-                }
-            
-            return chunk
-        
-        # For any unhandled event types, create a minimal valid chunk or skip
-        verbose_logger.debug(f"Chat provider: Unhandled event type '{event_type}', creating empty chunk")
-        
-        # Return a minimal valid chunk for unknown events
-        return {
-            "id": parsed_chunk.get("response_id") or parsed_chunk.get("id") or "unknown",
-            "object": "chat.completion.chunk",
-            "created": int(time.time()),
-            "model": model,
-            "choices": [{
-                "index": 0,
-                "delta": {},
-                "finish_reason": None
-            }]
-        }
-    
+        return OpenAiResponsesToChatCompletionStreamIterator(model, streaming_response, sync_stream, json_mode)
+
     def map_openai_params(
         self,
         non_default_params: Dict[str, Any],
@@ -488,3 +354,160 @@ class ChatConfig(BaseConfig):
         }
         
         return status_mapping.get(status, "stop")
+
+
+
+class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
+
+    def __init__(
+            self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False
+    ):
+        super().__init__(streaming_response, sync_stream, json_mode)
+
+    def _handle_string_chunk(
+        self, str_line: str
+    ) -> Union[GenericStreamingChunk, ModelResponseStream]:
+        if not str_line or str_line.startswith("event:"):
+            # ignore.
+            return GenericStreamingChunk(
+                text="",
+                tool_use=None,
+                is_finished=False,
+                finish_reason="",
+                usage=None
+            )
+        index = str_line.find("data:")
+        if index != -1:
+            str_line = str_line[index + 5:]
+
+        return self.chunk_parser(json.loads(str_line))
+
+    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+        # Transform responses API streaming chunk to chat completion format
+        verbose_logger.debug(f"Chat provider: transform_streaming_response called with chunk: {chunk}")
+        parsed_chunk = chunk
+
+        if not parsed_chunk:
+            raise ValueError("Chat provider: Empty parsed_chunk")
+
+        if not isinstance(parsed_chunk, dict):
+            raise ValueError(f"Chat provider: Invalid chunk type {type(parsed_chunk)}")
+
+        # Handle different event types from responses API
+        event_type = parsed_chunk.get("type")
+        verbose_logger.debug(f"Chat provider: Processing event type: {event_type}")
+
+        if event_type == "response.created":
+            # Initial response creation event
+            verbose_logger.debug(f"Chat provider: response.created -> {chunk}")
+            return GenericStreamingChunk(
+                text="",
+                tool_use=None,
+                is_finished=False,
+                finish_reason="",
+                usage=None
+            )
+        elif event_type == "response.output_item.added":
+            # New output item added
+            output_item = parsed_chunk.get("item", {})
+            if output_item.get("type") == "function_call":
+                return GenericStreamingChunk(
+                    text="",
+
+                    tool_use=ChatCompletionToolCallChunk(
+                        id=output_item.get("call_id"),
+                        index=0,
+                        type="function",
+                        function=ChatCompletionToolCallFunctionChunk(
+                            name=parsed_chunk.get("name", None),
+                            arguments=parsed_chunk.get("arguments", "")
+                        )
+                    ),
+                    is_finished=False,
+                    finish_reason="",
+                    usage=None
+                )
+            elif output_item.get("type") == "message":
+                pass
+            elif output_item.get("type") == "reasoning":
+                pass
+            else:
+                raise ValueError(f"Chat provider: Invalid output_item  {output_item}")
+        elif event_type == "response.function_call_arguments.delta":
+            content_part: Optional[str] = parsed_chunk.get("delta", None)
+            if content_part:
+                return GenericStreamingChunk(
+                    text="",
+                    tool_use=ChatCompletionToolCallChunk(
+                        id=None,
+                        index=0,
+                        type="function",
+                        function=ChatCompletionToolCallFunctionChunk(
+                            name=None,
+                            arguments=content_part
+                        )
+                    ),
+                    is_finished=False,
+                    finish_reason="",
+                    usage=None
+                )
+            else:
+                raise ValueError(f"Chat provider: Invalid function argument delta {parsed_chunk}")
+        elif event_type == "response.output_item.done":
+            # New output item added
+            output_item = parsed_chunk.get("item", {})
+            if output_item.get("type") == "function_call":
+                return GenericStreamingChunk(
+                    text="",
+                    tool_use=ChatCompletionToolCallChunk(
+                        id=output_item.get("call_id"),
+                        index=0,
+                        type="function",
+                        function=ChatCompletionToolCallFunctionChunk(
+                            name=parsed_chunk.get("name", None),
+                            arguments="" # responses API sends everything again, we don't
+                        )
+                    ),
+                    is_finished=True,
+                    finish_reason="tool_calls",
+                    usage=None
+                )
+            elif output_item.get("type") == "message":
+                return GenericStreamingChunk(
+                    finish_reason="stop",
+                    is_finished=True,
+                    usage=None,
+                    text=""
+                )
+            elif output_item.get("type") == "reasoning":
+                pass
+            else:
+                raise ValueError(f"Chat provider: Invalid output_item  {output_item}")
+
+        elif event_type == "response.output_text.delta":
+            # Content part added to output
+            content_part: Optional[str] = parsed_chunk.get("delta", None)
+            if content_part is not None:
+                return GenericStreamingChunk(
+                    text=content_part,
+                    tool_use=None,
+                    is_finished=False,
+                    finish_reason="",
+                    usage=None
+                )
+            else:
+                raise ValueError(f"Chat provider: Invalid text delta {parsed_chunk}")
+        else:
+            pass
+        # For any unhandled event types, create a minimal valid chunk or skip
+        verbose_logger.debug(f"Chat provider: Unhandled event type '{event_type}', creating empty chunk")
+
+        # Return a minimal valid chunk for unknown events
+        return GenericStreamingChunk(
+            text="",
+            tool_use=None,
+            is_finished=False,
+            finish_reason="",
+            usage=None
+        )
+
