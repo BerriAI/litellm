@@ -1,5 +1,6 @@
 import json
 import time
+import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 import httpx
@@ -641,6 +642,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             _litellm_metadata
             and isinstance(_litellm_metadata, dict)
             and "user_id" in _litellm_metadata
+            and not _valid_user_id(_litellm_metadata.get("user_id", None))
         ):
             optional_params["metadata"] = {"user_id": _litellm_metadata["user_id"]}
 
@@ -784,44 +786,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         return usage
 
-    def transform_response(
+    def transform_parsed_response(
         self,
-        model: str,
+        completion_response: dict,
         raw_response: httpx.Response,
         model_response: ModelResponse,
-        logging_obj: LoggingClass,
-        request_data: Dict,
-        messages: List[AllMessageValues],
-        optional_params: Dict,
-        litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
-    ) -> ModelResponse:
+    ):
         _hidden_params: Dict = {}
         _hidden_params["additional_headers"] = process_anthropic_headers(
             dict(raw_response.headers)
         )
-        ## LOGGING
-        logging_obj.post_call(
-            input=messages,
-            api_key=api_key,
-            original_response=raw_response.text,
-            additional_args={"complete_input_dict": request_data},
-        )
-
-        ## RESPONSE OBJECT
-        try:
-            completion_response = raw_response.json()
-        except Exception as e:
-            response_headers = getattr(raw_response, "headers", None)
-            raise AnthropicError(
-                message="Unable to get json response - {}, Original Response: {}".format(
-                    str(e), raw_response.text
-                ),
-                status_code=raw_response.status_code,
-                headers=response_headers,
-            )
         if "error" in completion_response:
             response_headers = getattr(raw_response, "headers", None)
             raise AnthropicError(
@@ -890,6 +865,50 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model_response.model = completion_response["model"]
 
         model_response._hidden_params = _hidden_params
+
+        return model_response
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LoggingClass,
+        request_data: Dict,
+        messages: List[AllMessageValues],
+        optional_params: Dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
+        ## LOGGING
+        logging_obj.post_call(
+            input=messages,
+            api_key=api_key,
+            original_response=raw_response.text,
+            additional_args={"complete_input_dict": request_data},
+        )
+
+        ## RESPONSE OBJECT
+        try:
+            completion_response = raw_response.json()
+        except Exception as e:
+            response_headers = getattr(raw_response, "headers", None)
+            raise AnthropicError(
+                message="Unable to get json response - {}, Original Response: {}".format(
+                    str(e), raw_response.text
+                ),
+                status_code=raw_response.status_code,
+                headers=response_headers,
+            )
+
+        model_response = self.transform_parsed_response(
+            completion_response=completion_response,
+            raw_response=raw_response,
+            model_response=model_response,
+            json_mode=json_mode,
+        )
         return model_response
 
     @staticmethod
@@ -931,3 +950,19 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             message=error_message,
             headers=cast(httpx.Headers, headers),
         )
+
+
+def _valid_user_id(user_id: str) -> bool:
+    """
+    Validate that user_id is not an email or phone number.
+    Returns: bool: True if valid (not email or phone), False otherwise
+    """
+    email_pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+    phone_pattern = r"^\+?[\d\s\(\)-]{7,}$"
+
+    if re.match(email_pattern, user_id):
+        return False
+    if re.match(phone_pattern, user_id):
+        return False
+
+    return True

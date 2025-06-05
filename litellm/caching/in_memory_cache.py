@@ -234,3 +234,11 @@ class InMemoryCache(BaseCache):
         Get the remaining TTL of a key in in-memory cache
         """
         return self.ttl_dict.get(key, None)
+
+    async def async_get_oldest_n_keys(self, n: int) -> List[str]:
+        """
+        Get the oldest n keys in the cache
+        """
+        # sorted ttl dict by ttl
+        sorted_ttl_dict = sorted(self.ttl_dict.items(), key=lambda x: x[1])
+        return [key for key, _ in sorted_ttl_dict[:n]]
