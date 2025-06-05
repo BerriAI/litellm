@@ -8,7 +8,8 @@ Docs: https://docs.centml.ai/reference/chat-completions
 
 from typing import Optional
 
-from litellm import get_model_info, verbose_logger
+from litellm import verbose_logger
+from litellm.utils import _get_model_info_helper
 
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -21,9 +22,13 @@ class CentmlConfig(OpenAIGPTConfig):
         """
         supports_function_calling: Optional[bool] = None
         try:
-            model_info = get_model_info(model, custom_llm_provider="centml")
-            supports_function_calling = model_info.get(
-                "supports_function_calling", False)
+            # The model parameter here is the stripped name (e.g., meta-llama/Llama-4-Scout-17B-16E-Instruct)
+            # but the model cost map stores it with the provider prefix (e.g., centml/meta-llama/Llama-4-Scout-17B-16E-Instruct)
+            # So we need to construct the full model name for lookup
+            full_model_name = f"centml/{model}" if not model.startswith("centml/") else model
+            # Use _get_model_info_helper to avoid circular dependency with get_supported_openai_params
+            model_info = _get_model_info_helper(full_model_name, custom_llm_provider="centml")
+            supports_function_calling = model_info.get('supports_function_calling', False)
         except Exception as e:
             verbose_logger.debug(f"Error getting supported openai params: {e}")
             pass
