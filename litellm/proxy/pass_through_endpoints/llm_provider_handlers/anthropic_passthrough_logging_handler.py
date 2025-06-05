@@ -209,10 +209,6 @@ class AnthropicPassthroughLoggingHandler:
                 if transformed_openai_chunk is not None:
                     all_openai_chunks.append(transformed_openai_chunk)
 
-                verbose_proxy_logger.debug(
-                    "all openai chunks= %s",
-                    json.dumps(all_openai_chunks, indent=4, default=str),
-                )
             except (StopIteration, StopAsyncIteration):
                 break
         complete_streaming_response = litellm.stream_chunk_builder(
