@@ -78,8 +78,9 @@ curl http://localhost:4000/v1/batches \
 **Create File for Batch Completion**
 
 ```python
-from litellm
+import litellm
 import os 
+import asyncio
 
 os.environ["OPENAI_API_KEY"] = "sk-.."
 
@@ -97,8 +98,9 @@ print("Response from creating file=", file_obj)
 **Create Batch Request**
 
 ```python
-from litellm
+import litellm
 import os 
+import asyncio
 
 create_batch_response = await litellm.acreate_batch(
     completion_window="24h",

@@ -45,12 +45,12 @@ Setup your config.yaml with your azure model.
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/my_azure_deployment
       api_base: os.environ/AZURE_API_BASE
       api_key: "os.environ/AZURE_API_KEY"
-      api_version: "2024-07-01-preview" # [OPTIONAL] litellm uses the latest azure api_version by default
+      api_version: "2025-01-01-preview" # [OPTIONAL] litellm uses the latest azure api_version by default
 ```
 ---
 
@@ -127,15 +127,15 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
 -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {
         "role": "system",
-        "content": "You are a helpful math tutor. Guide the user through the solution step by step."
+        "content": "You are an LLM named gpt-4o"
       },
       {
         "role": "user",
-        "content": "how can I solve 8x + 7 = -23"
+        "content": "what is your name?"
       }
     ]
 }'
@@ -145,28 +145,63 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 ```bash
 {
-    "id": "chatcmpl-2076f062-3095-4052-a520-7c321c115c68",
-    "choices": [
-        {
-            "finish_reason": "stop",
-            "index": 0,
-            "message": {
-                "content": "I am gpt-3.5-turbo",
-                "role": "assistant",
-                "tool_calls": null,
-                "function_call": null
-            }
-        }
-    ],
-    "created": 1724962831,
-    "model": "gpt-3.5-turbo",
-    "object": "chat.completion",
-    "system_fingerprint": null,
-    "usage": {
-        "completion_tokens": 20,
-        "prompt_tokens": 10,
-        "total_tokens": 30
+  "id": "chatcmpl-BcO8tRQmQV6Dfw6onqMufxPkLLkA8",
+  "created": 1748488967,
+  "model": "gpt-4o-2024-11-20",
+  "object": "chat.completion",
+  "system_fingerprint": "fp_ee1d74bde0",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "My name is **gpt-4o**! How can I assist you today?",
+        "role": "assistant",
+        "tool_calls": null,
+        "function_call": null,
+        "annotations": []
+      }
     }
+  ],
+  "usage": {
+    "completion_tokens": 19,
+    "prompt_tokens": 28,
+    "total_tokens": 47,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": 0,
+      "audio_tokens": 0,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": 0
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0
+    }
+  },
+  "service_tier": null,
+  "prompt_filter_results": [
+    {
+      "prompt_index": 0,
+      "content_filter_results": {
+        "hate": {
+          "filtered": false,
+          "severity": "safe"
+        },
+        "self_harm": {
+          "filtered": false,
+          "severity": "safe"
+        },
+        "sexual": {
+          "filtered": false,
+          "severity": "safe"
+        },
+        "violence": {
+          "filtered": false,
+          "severity": "safe"
+        }
+      }
+    }
+  ]
 }
 ```
 
@@ -191,12 +226,12 @@ Track Spend, and control model access via virtual keys for the proxy
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/my_azure_deployment
       api_base: os.environ/AZURE_API_BASE
       api_key: "os.environ/AZURE_API_KEY"
-      api_version: "2024-07-01-preview" # [OPTIONAL] litellm uses the latest azure api_version by default
+      api_version: "2025-01-01-preview" # [OPTIONAL] litellm uses the latest azure api_version by default
 
 general_settings: 
   master_key: sk-1234 
@@ -276,7 +311,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-12...' \
 -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {
         "role": "system",
@@ -312,7 +347,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-12...' \
 -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {
         "role": "system",
@@ -331,7 +366,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 ```bash
 {
   "error": {
-    "message": "Max parallel request limit reached. Hit limit for api_key: daa1b272072a4c6841470a488c5dad0f298ff506e1cc935f4a181eed90c182ad. tpm_limit: 100, current_tpm: 29, rpm_limit: 1, current_rpm: 2.",
+    "message": "LiteLLM Rate Limit Handler for rate limit type = key. Crossed TPM / RPM / Max Parallel Request Limit. current rpm: 1, rpm limit: 1, current tpm: 348, tpm limit: 9223372036854775807, current max_parallel_requests: 0, max_parallel_requests: 9223372036854775807",
     "type": "None",
     "param": "None",
     "code": "429"
@@ -371,12 +406,12 @@ You can disable ssl verification with:
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/my_azure_deployment
       api_base: os.environ/AZURE_API_BASE
       api_key: "os.environ/AZURE_API_KEY"
-      api_version: "2024-07-01-preview"
+      api_version: "2025-01-01-preview"
 
 litellm_settings:
     ssl_verify: false # 👈 KEY CHANGE

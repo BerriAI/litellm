@@ -4,6 +4,10 @@ from typing import List, Literal
 ROUTER_MAX_FALLBACKS = int(os.getenv("ROUTER_MAX_FALLBACKS", 5))
 DEFAULT_BATCH_SIZE = int(os.getenv("DEFAULT_BATCH_SIZE", 512))
 DEFAULT_FLUSH_INTERVAL_SECONDS = int(os.getenv("DEFAULT_FLUSH_INTERVAL_SECONDS", 5))
+DEFAULT_S3_FLUSH_INTERVAL_SECONDS = int(
+    os.getenv("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", 10)
+)
+DEFAULT_S3_BATCH_SIZE = int(os.getenv("DEFAULT_S3_BATCH_SIZE", 512))
 DEFAULT_MAX_RETRIES = int(os.getenv("DEFAULT_MAX_RETRIES", 2))
 DEFAULT_MAX_RECURSE_DEPTH = int(os.getenv("DEFAULT_MAX_RECURSE_DEPTH", 100))
 DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER = int(
@@ -32,6 +36,9 @@ SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD = int(
     os.getenv("SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD", 1000)
 )  # Minimum number of requests to consider "reasonable traffic". Used for single-deployment cooldown logic.
 
+DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET = int(
+    os.getenv("DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET", 0)
+)
 DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET", 1024)
 )
@@ -141,6 +148,7 @@ DEFAULT_MAX_TOKENS_FOR_TRITON = int(os.getenv("DEFAULT_MAX_TOKENS_FOR_TRITON", 2
 #### Networking settings ####
 request_timeout: float = float(os.getenv("REQUEST_TIMEOUT", 6000))  # time in seconds
 STREAM_SSE_DONE_STRING: str = "[DONE]"
+STREAM_SSE_DATA_PREFIX: str = "data: "
 ### SPEND TRACKING ###
 DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND = float(
     os.getenv("DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND", 0.001400)
@@ -152,13 +160,21 @@ FIREWORKS_AI_16_B = int(os.getenv("FIREWORKS_AI_16_B", 16))
 FIREWORKS_AI_80_B = int(os.getenv("FIREWORKS_AI_80_B", 80))
 #### Logging callback constants ####
 REDACTED_BY_LITELM_STRING = "REDACTED_BY_LITELM"
+MAX_LANGFUSE_INITIALIZED_CLIENTS = int(
+    os.getenv("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50)
+)
+DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE = os.getenv(
+    "DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE", "streaming.chunk.yield"
+)
 
+############### LLM Provider Constants ###############
 ### ANTHROPIC CONSTANTS ###
 ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES = {
     "low": 1,
     "medium": 5,
     "high": 10,
 }
+DEFAULT_IMAGE_ENDPOINT_MODEL = "dall-e-2"
 
 LITELLM_CHAT_PROVIDERS = [
     "openai",
@@ -174,6 +190,7 @@ LITELLM_CHAT_PROVIDERS = [
     "replicate",
     "huggingface",
     "together_ai",
+    "datarobot",
     "openrouter",
     "vertex_ai",
     "vertex_ai_beta",
@@ -223,13 +240,16 @@ LITELLM_CHAT_PROVIDERS = [
     "galadriel",
     "novita",
     "meta_llama",
+    "featherless_ai",
     "nscale",
+    "nebius",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
     "openai",
     "azure",
-    "hosted_vllm"
+    "hosted_vllm",
+    "nebius",
 ]
 
 
@@ -275,6 +295,60 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "web_search_options",
 ]
 
+OPENAI_TRANSCRIPTION_PARAMS = [
+    "language",
+    "response_format",
+    "timestamp_granularities",
+]
+
+OPENAI_EMBEDDING_PARAMS = ["dimensions", "encoding_format", "user"]
+
+DEFAULT_EMBEDDING_PARAM_VALUES = {
+    **{k: None for k in OPENAI_EMBEDDING_PARAMS},
+    "model": None,
+    "custom_llm_provider": "",
+    "input": None,
+}
+
+DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
+    "functions": None,
+    "function_call": None,
+    "temperature": None,
+    "top_p": None,
+    "n": None,
+    "stream": None,
+    "stream_options": None,
+    "stop": None,
+    "max_tokens": None,
+    "max_completion_tokens": None,
+    "modalities": None,
+    "prediction": None,
+    "audio": None,
+    "presence_penalty": None,
+    "frequency_penalty": None,
+    "logit_bias": None,
+    "user": None,
+    "model": None,
+    "custom_llm_provider": "",
+    "response_format": None,
+    "seed": None,
+    "tools": None,
+    "tool_choice": None,
+    "max_retries": None,
+    "logprobs": None,
+    "top_logprobs": None,
+    "extra_headers": None,
+    "api_version": None,
+    "parallel_tool_calls": None,
+    "drop_params": None,
+    "allowed_openai_params": None,
+    "additional_drop_params": None,
+    "messages": None,
+    "reasoning_effort": None,
+    "thinking": None,
+    "web_search_options": None,
+}
+
 openai_compatible_endpoints: List = [
     "api.perplexity.ai",
     "api.endpoints.anyscale.com/v1",
@@ -292,7 +366,9 @@ openai_compatible_endpoints: List = [
     "api.x.ai/v1",
     "api.galadriel.ai/v1",
     "api.llama.com/compat/v1/",
+    "api.featherless.ai/v1",
     "inference.api.nscale.com/v1",
+    "api.studio.nebius.ai/v1",
 ]
 
 
@@ -325,7 +401,9 @@ openai_compatible_providers: List = [
     "galadriel",
     "novita",
     "meta_llama",
+    "featherless_ai",
     "nscale",
+    "nebius",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -334,6 +412,8 @@ openai_text_completion_compatible_providers: List = (
         "hosted_vllm",
         "meta_llama",
         "llamafile",
+        "featherless_ai",
+        "nebius",
     ]
 )
 _openai_like_providers: List = [
@@ -480,6 +560,39 @@ baseten_models: List = [
     "31dxrj3",
 ]  # FALCON 7B  # WizardLM  # Mosaic ML
 
+featherless_ai_models: List = [
+    "featherless-ai/Qwerky-72B",
+    "featherless-ai/Qwerky-QwQ-32B",
+    "Qwen/Qwen2.5-72B-Instruct",
+    "all-hands/openhands-lm-32b-v0.1",
+    "Qwen/Qwen2.5-Coder-32B-Instruct",
+    "deepseek-ai/DeepSeek-V3-0324",
+    "mistralai/Mistral-Small-24B-Instruct-2501",
+    "mistralai/Mistral-Nemo-Instruct-2407",
+    "ProdeusUnity/Stellar-Odyssey-12b-v0.0",
+]
+
+nebius_models: List = [
+    "Qwen/Qwen3-235B-A22B",
+    "Qwen/Qwen3-30B-A3B-fast",
+    "Qwen/Qwen3-32B",
+    "Qwen/Qwen3-14B",
+    "nvidia/Llama-3_1-Nemotron-Ultra-253B-v1",
+    "deepseek-ai/DeepSeek-V3-0324",
+    "deepseek-ai/DeepSeek-V3-0324-fast",
+    "deepseek-ai/DeepSeek-R1",
+    "deepseek-ai/DeepSeek-R1-fast",
+    "meta-llama/Llama-3.3-70B-Instruct-fast",
+    "Qwen/Qwen2.5-32B-Instruct-fast",
+    "Qwen/Qwen2.5-Coder-32B-Instruct-fast",
+]
+
+nebius_embedding_models: List = [
+    "BAAI/bge-en-icl",
+    "BAAI/bge-multilingual-gemma2",
+    "intfloat/e5-mistral-7b-instruct",
+]
+
 BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "cohere",
     "anthropic",
@@ -494,6 +607,7 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
 
 open_ai_embedding_models: List = ["text-embedding-ada-002"]
 cohere_embedding_models: List = [
+    "embed-v4.0",
     "embed-english-v3.0",
     "embed-english-light-v3.0",
     "embed-multilingual-v3.0",
@@ -577,6 +691,7 @@ PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES = int(
     os.getenv("PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES", 5)
 )
 MCP_TOOL_NAME_PREFIX = "mcp_tool"
+MAXIMUM_TRACEBACK_LINES_TO_LOG = int(os.getenv("MAXIMUM_TRACEBACK_LINES_TO_LOG", 100))
 
 ########################### LiteLLM Proxy Specific Constants ###########################
 ########################################################################################
@@ -616,7 +731,9 @@ LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
-PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME = "prometheus_emit_budget_metrics_job"
+PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME = "prometheus_emit_budget_metrics"
+SPEND_LOG_CLEANUP_JOB_NAME = "spend_log_cleanup"
+SPEND_LOG_RUN_LOOPS = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
 DEFAULT_CRON_JOB_LOCK_TTL_SECONDS = int(
     os.getenv("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60)
 )  # 1 minute
@@ -646,4 +763,9 @@ DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD = float(
 LENGTH_OF_LITELLM_GENERATED_KEY = int(os.getenv("LENGTH_OF_LITELLM_GENERATED_KEY", 16))
 SECRET_MANAGER_REFRESH_INTERVAL = int(
     os.getenv("SECRET_MANAGER_REFRESH_INTERVAL", 86400)
+)
+LITELLM_SETTINGS_SAFE_DB_OVERRIDES = ["default_internal_user_params"]
+SPECIAL_LITELLM_AUTH_TOKEN = ["ui-token"]
+DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(
+    os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60)
 )

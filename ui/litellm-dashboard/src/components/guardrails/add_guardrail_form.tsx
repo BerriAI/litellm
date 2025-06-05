@@ -3,13 +3,21 @@ import { Card, Form, Typography, Select, Input, Switch, Tooltip, Modal, message,
 import { Button, TextInput } from '@tremor/react';
 import type { FormInstance } from 'antd';
 import { GuardrailProviders, guardrail_provider_map, shouldRenderPIIConfigSettings, guardrailLogoMap } from './guardrail_info_helpers';
-import { createGuardrailCall, getGuardrailUISettings } from '../networking';
+import { createGuardrailCall, getGuardrailUISettings, getGuardrailProviderSpecificParams } from '../networking';
 import PiiConfiguration from './pii_configuration';
 import GuardrailProviderFields from './guardrail_provider_fields';
 
 const { Title, Text, Link } = Typography;
 const { Option } = Select;
 const { Step } = Steps;
+
+// Define human-friendly descriptions for each mode
+const modeDescriptions = {
+  pre_call: "Before LLM Call - Runs before the LLM call and checks the input (Recommended)",
+  during_call: "During LLM Call - Runs in parallel with the LLM call, with response held until check completes",
+  post_call: "After LLM Call - Runs after the LLM call and checks only the output",
+  logging_only: "Logging Only - Only runs on logging callbacks without affecting the LLM call"
+};
 
 interface AddGuardrailFormProps {
   visible: boolean;
@@ -35,6 +43,20 @@ interface LiteLLMParams {
   [key: string]: any; // Allow additional properties for specific guardrails
 }
 
+// Mapping of provider -> list of param descriptors
+interface ProviderParam {
+  param: string;
+  description: string;
+  required: boolean;
+  default_value?: string;
+  options?: string[];
+  type?: string;
+}
+
+interface ProviderParamsResponse {
+  [provider: string]: ProviderParam[];
+}
+
 const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ 
   visible, 
   onClose, 
@@ -48,22 +70,29 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
   const [selectedEntities, setSelectedEntities] = useState<string[]>([]);
   const [selectedActions, setSelectedActions] = useState<{[key: string]: string}>({});
   const [currentStep, setCurrentStep] = useState(0);
+  const [providerParams, setProviderParams] = useState<ProviderParamsResponse | null>(null);
 
-  // Fetch guardrail settings when the component mounts
+  // Fetch guardrail UI settings + provider params on mount / accessToken change
   useEffect(() => {
-    const fetchGuardrailSettings = async () => {
+    if (!accessToken) return;
+
+    const fetchData = async () => {
       try {
-        if (!accessToken) return;
-        
-        const data = await getGuardrailUISettings(accessToken);
-        setGuardrailSettings(data);
+        // Parallel requests for speed
+        const [uiSettings, providerParamsResp] = await Promise.all([
+          getGuardrailUISettings(accessToken),
+          getGuardrailProviderSpecificParams(accessToken),
+        ]);
+
+        setGuardrailSettings(uiSettings);
+        setProviderParams(providerParamsResp);
       } catch (error) {
-        console.error('Error fetching guardrail settings:', error);
-        message.error('Failed to load guardrail settings');
+        console.error('Error fetching guardrail data:', error);
+        message.error('Failed to load guardrail configuration');
       }
     };
-    
-    fetchGuardrailSettings();
+
+    fetchData();
   }, [accessToken]);
 
   const handleProviderChange = (value: string) => {
@@ -109,10 +138,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
           
           if (selectedProvider === 'PresidioPII') {
             fieldsToValidate.push('presidio_analyzer_api_base', 'presidio_anonymizer_api_base');
-          } else if (selectedProvider === 'Bedrock') {
-            fieldsToValidate.push('config');
           }
-          
           await form.validateFields(fieldsToValidate);
         }
       }
@@ -193,23 +219,38 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
         try {
           const configObj = JSON.parse(values.config);
           // For some guardrails, the config values need to be in litellm_params
-          // Especially for providers like Bedrock that need guardrailIdentifier and guardrailVersion
-          if (values.provider === 'Bedrock' && configObj) {
-            if (configObj.guardrail_id) {
-              guardrailData.litellm_params.guardrailIdentifier = configObj.guardrail_id;
-            }
-            if (configObj.guardrail_version) {
-              guardrailData.litellm_params.guardrailVersion = configObj.guardrail_version;
-            }
-          } else {
-            // For other providers, add the config to guardrail_info
-            guardrailData.guardrail_info = configObj;
-          }
+          guardrailData.guardrail_info = configObj;
         } catch (error) {
           message.error('Invalid JSON in configuration');
           setLoading(false);
           return;
         }
+      }
+
+      /******************************
+       * Add provider-specific params
+       * ----------------------------------
+       * The backend exposes exactly which extra parameters a provider
+       * accepts via `/guardrails/ui/provider_specific_params`.
+       * Instead of copying every unknown form field, we fetch the list for
+       * the selected provider and ONLY pass those recognised params.
+       ******************************/
+
+      // Use pre-fetched provider params to copy recognised params
+      if (providerParams && selectedProvider) {
+        const providerKey = guardrail_provider_map[selectedProvider]?.toLowerCase();
+        const providerSpecificParams = providerParams[providerKey] || [];
+
+        const allowedParams = new Set<string>(
+          providerSpecificParams.map((p) => p.param)
+        );
+
+        allowedParams.forEach((paramName) => {
+          const paramValue = values[paramName];
+          if (paramValue !== undefined && paramValue !== null && paramValue !== '') {
+            guardrailData.litellm_params[paramName] = paramValue;
+          }
+        });
       }
 
       if (!accessToken) {
@@ -252,13 +293,36 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
           <Select 
             placeholder="Select a guardrail provider"
             onChange={handleProviderChange}
+            labelInValue={false}
             optionLabelProp="label"
+            dropdownRender={menu => menu}
+            showSearch={true}
           >
             {Object.entries(GuardrailProviders).map(([key, value]) => (
               <Option 
                 key={key} 
                 value={key}
-                label={value}
+                label={
+                  <div style={{ display: 'flex', alignItems: 'center' }}>
+                    {guardrailLogoMap[value] && (
+                      <img 
+                        src={guardrailLogoMap[value]} 
+                        alt=""
+                        style={{ 
+                          height: '20px', 
+                          width: '20px', 
+                          marginRight: '8px',
+                          objectFit: 'contain'
+                        }}
+                        onError={(e) => {
+                          // Hide broken image icon if image fails to load
+                          e.currentTarget.style.display = 'none';
+                        }}
+                      />
+                    )}
+                    <span>{value}</span>
+                  </div>
+                }
               >
                 <div style={{ display: 'flex', alignItems: 'center' }}>
                   {guardrailLogoMap[value] && (
@@ -284,22 +348,52 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
           </Select>
         </Form.Item>
 
-        {/* Use the GuardrailProviderFields component to render provider-specific fields */}
-        <GuardrailProviderFields selectedProvider={selectedProvider} />
-
         <Form.Item
           name="mode"
           label="Mode"
           tooltip="How the guardrail should be applied"
           rules={[{ required: true, message: 'Please select a mode' }]}
         >
-          <Select>
+          <Select
+            optionLabelProp="label"
+            mode="multiple"
+          >
             {guardrailSettings?.supported_modes?.map(mode => (
-              <Option key={mode} value={mode}>{mode}</Option>
+              <Option key={mode} value={mode} label={mode}>
+                <div>
+                  <div>
+                    <strong>{mode}</strong>
+                    {mode === 'pre_call' && <Tag color="green" style={{ marginLeft: '8px' }}>Recommended</Tag>}
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#888' }}>{modeDescriptions[mode as keyof typeof modeDescriptions]}</div>
+                </div>
+              </Option>
             )) || (
               <>
-                <Option value="pre_call">pre_call</Option>
-                <Option value="post_call">post_call</Option>
+                <Option value="pre_call" label="pre_call">
+                  <div>
+                    <div><strong>pre_call</strong> <Tag color="green">Recommended</Tag></div>
+                    <div style={{ fontSize: '12px', color: '#888' }}>{modeDescriptions.pre_call}</div>
+                  </div>
+                </Option>
+                <Option value="during_call" label="during_call">
+                  <div>
+                    <div><strong>during_call</strong></div>
+                    <div style={{ fontSize: '12px', color: '#888' }}>{modeDescriptions.during_call}</div>
+                  </div>
+                </Option>
+                <Option value="post_call" label="post_call">
+                  <div>
+                    <div><strong>post_call</strong></div>
+                    <div style={{ fontSize: '12px', color: '#888' }}>{modeDescriptions.post_call}</div>
+                  </div>
+                </Option>
+                <Option value="logging_only" label="logging_only">
+                  <div>
+                    <div><strong>logging_only</strong></div>
+                    <div style={{ fontSize: '12px', color: '#888' }}>{modeDescriptions.logging_only}</div>
+                  </div>
+                </Option>
               </>
             )}
           </Select>
@@ -308,11 +402,20 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
         <Form.Item
           name="default_on"
           label="Always On"
-          tooltip="If enabled, this guardrail will be applied to all requests by default"
-          valuePropName="checked"
+          tooltip="If enabled, this guardrail will be applied to all requests by default."
         >
-          <Switch />
+          <Select>
+            <Select.Option value={true}>Yes</Select.Option>
+            <Select.Option value={false}>No</Select.Option>
+          </Select>
         </Form.Item>
+
+        {/* Use the GuardrailProviderFields component to render provider-specific fields */}
+        <GuardrailProviderFields 
+          selectedProvider={selectedProvider} 
+          accessToken={accessToken} 
+          providerParams={providerParams}
+        />
       </>
     );
   };
@@ -394,7 +497,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
         form={form}
         layout="vertical"
         initialValues={{
-          mode: guardrailSettings?.supported_modes?.[0] || "pre_call",
+          mode: "pre_call",
           default_on: false
         }}
       >
