@@ -3124,24 +3124,13 @@ async def async_data_generator(
         done_message = "[DONE]"
         yield f"data: {done_message}\n\n"
     except Exception as e:
-        # Check if this is a retryable error for better logging
-        is_retryable_error = isinstance(e, (litellm.RateLimitError, litellm.APIConnectionError, litellm.Timeout))
-        
-        if is_retryable_error:
-            # Use cleaner logging for retryable errors, similar to non-streaming
-            error_msg = str(e)
-            if hasattr(e, 'message'):
-                error_msg = e.message
-            verbose_proxy_logger.info(
-                f"litellm.proxy.proxy_server.async_data_generator(): Retryable exception occurred - {error_msg}"
+        # Use consistent error logging format - no need to duplicate retryable logic here
+        # since this is proxy-level error handling, not router-level retries
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.async_data_generator(): Exception occurred - {}".format(
+                str(e)
             )
-        else:
-            # Use full traceback for other errors
-            verbose_proxy_logger.exception(
-                "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
-                    str(e)
-                )
-            )
+        )
         
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
@@ -3157,14 +3146,10 @@ async def async_data_generator(
         elif isinstance(e, StreamingCallbackError):
             error_msg = str(e)
         else:
-            # For retryable errors, use cleaner error messages
-            if is_retryable_error:
-                error_msg = str(e)
-                if hasattr(e, 'message'):
-                    error_msg = e.message
-            else:
-                error_traceback = traceback.format_exc()
-                error_msg = f"{str(e)}\n\n{error_traceback}"
+            # Use simpler error message format for proxy-level error handling
+            error_msg = str(e)
+            if hasattr(e, 'message'):
+                error_msg = e.message
 
         proxy_exception = ProxyException(
             message=getattr(e, "message", error_msg),

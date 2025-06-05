@@ -692,11 +692,11 @@ async def test_streaming_completion_start_time(logging_obj: Logging):
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_streaming_error_handling_improvements(sync_mode: bool):
-    """Test that streaming error handling provides clean error messages and detects retryable errors correctly"""
+    """Test that streaming error handling provides clean error messages for common errors"""
     import time
     from unittest.mock import AsyncMock
     
-    # Mock a stream that raises a RateLimitError
+    # Mock a stream that raises an error
     class MockStreamWithError:
         def __init__(self, error_to_raise):
             self.error = error_to_raise
@@ -720,19 +720,18 @@ async def test_streaming_error_handling_improvements(sync_mode: bool):
                 raise self.error
             raise StopAsyncIteration
 
-    # Test retryable errors
-    retryable_errors = [
+    # Test common errors that should get clean logging
+    common_errors = [
         RateLimitError('Rate limit exceeded', model='test-model', llm_provider='test'),
         APIConnectionError('Connection failed', model='test-model', llm_provider='test'), 
         Timeout('Request timeout', model='test-model', llm_provider='test')
     ]
     
-    for error in retryable_errors:
+    for error in common_errors:
         mock_stream = MockStreamWithError(error)
         mock_logging = MagicMock()
         mock_logging.failure_handler = MagicMock()
-        mock_logging.async_failure_handler = AsyncMock()  # Properly mock async method
-        mock_logging.kwargs = {'num_retries': 0}  # Properly mock kwargs
+        mock_logging.async_failure_handler = AsyncMock()
         
         wrapper = CustomStreamWrapper(
             completion_stream=mock_stream,
@@ -741,7 +740,7 @@ async def test_streaming_error_handling_improvements(sync_mode: bool):
             custom_llm_provider='test'
         )
         
-        # Test that retryable errors are properly detected  
+        # Test that errors are properly raised and allow upstream retry handling
         error_raised = False
         error_type = None
         
@@ -759,20 +758,18 @@ async def test_streaming_error_handling_improvements(sync_mode: bool):
                 error_raised = True
                 error_type = type(e)
         
-        # Should have raised an error
+        # Should have raised an error to allow upstream retry handling
         assert error_raised, f"Expected error to be raised for {type(error).__name__}"
         # The error should bubble up through exception mapping - might not be exact same type
-        # but should still be a LiteLLM exception
+        # but should still be a LiteLLM exception that can be handled by upstream retry logic
         assert error_type is not None
     
-    # Test non-retryable error - this will get mapped to APIConnectionError by exception mapping
-    # which is expected behavior to ensure all errors go through LiteLLM exception system
-    non_retryable_error = Exception('Some other error')
-    mock_stream = MockStreamWithError(non_retryable_error)
+    # Test that any exception gets properly handled
+    other_error = Exception('Some other error')
+    mock_stream = MockStreamWithError(other_error)
     mock_logging = MagicMock()
     mock_logging.failure_handler = MagicMock()
     mock_logging.async_failure_handler = AsyncMock()
-    mock_logging.kwargs = {'num_retries': 0}
     
     wrapper = CustomStreamWrapper(
         completion_stream=mock_stream,
@@ -797,29 +794,36 @@ async def test_streaming_error_handling_improvements(sync_mode: bool):
             error_raised = True
             final_exception = e
     
-    assert error_raised, "Expected error to be raised for non-retryable error"
+    assert error_raised, "Expected error to be raised for any error"
     # The exception mapping system maps generic exceptions to LiteLLM exceptions
-    # This is expected behavior - all errors should go through the LiteLLM exception system
+    # This ensures consistent error handling across the system
     assert final_exception is not None
     # Should be a LiteLLM exception type (likely APIConnectionError from exception mapping)
     assert hasattr(final_exception, 'llm_provider') or 'litellm' in str(type(final_exception).__module__)
 
 
-def test_retryable_error_detection():
-    """Test that retryable errors are correctly identified"""
-    # Test retryable errors
+def test_clean_error_logging_detection():
+    """Test that clean error logging is correctly applied to common errors"""
+    from litellm.litellm_core_utils.streaming_handler import _should_use_clean_error_logging
+    
+    # Test common errors that should get clean logging (when no chunks sent)
     rate_limit_error = RateLimitError('Rate limit exceeded', model='test-model', llm_provider='test')
     api_connection_error = APIConnectionError('Connection failed', model='test-model', llm_provider='test')
     timeout_error = Timeout('Timeout occurred', model='test-model', llm_provider='test')
     
-    # These should be detected as retryable
-    assert isinstance(rate_limit_error, (RateLimitError, APIConnectionError, Timeout))
-    assert isinstance(api_connection_error, (RateLimitError, APIConnectionError, Timeout))
-    assert isinstance(timeout_error, (RateLimitError, APIConnectionError, Timeout))
+    # These should use clean logging when no chunks have been sent
+    assert _should_use_clean_error_logging(rate_limit_error, chunks_sent=False)
+    assert _should_use_clean_error_logging(api_connection_error, chunks_sent=False)
+    assert _should_use_clean_error_logging(timeout_error, chunks_sent=False)
     
-    # Regular exceptions should not be retryable
+    # After chunks are sent, always use detailed logging
+    assert not _should_use_clean_error_logging(rate_limit_error, chunks_sent=True)
+    assert not _should_use_clean_error_logging(api_connection_error, chunks_sent=True)
+    assert not _should_use_clean_error_logging(timeout_error, chunks_sent=True)
+    
+    # Regular exceptions should use detailed logging
     regular_error = Exception('Regular error')
     value_error = ValueError('Value error')
     
-    assert not isinstance(regular_error, (RateLimitError, APIConnectionError, Timeout))
-    assert not isinstance(value_error, (RateLimitError, APIConnectionError, Timeout))
+    assert not _should_use_clean_error_logging(regular_error, chunks_sent=False)
+    assert not _should_use_clean_error_logging(value_error, chunks_sent=False)
