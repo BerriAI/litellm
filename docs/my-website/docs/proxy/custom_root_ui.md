@@ -2,6 +2,12 @@
 
 💥 Use this when you want to serve LiteLLM on a custom base url path like `https://localhost:4000/api/v1` 
 
+:::info
+
+Requires v1.72.3 or higher.
+
+:::
+
 ## Usage
 
 ### 1. Set `SERVER_ROOT_PATH` in your .env
@@ -20,34 +26,7 @@ litellm proxy --config /path/to/config.yaml
 
 After running the proxy you can access it on `http://0.0.0.0:4000/api/v1/` (since we set `SERVER_ROOT_PATH="/api/v1"`)
 
-
-### 3. Reserve the `/litellm` path
-
-LiteLLM uses the `/litellm` path to discover the custom root path. So you need to reserve this path in your proxy.
-
-If you are running the UI, it will query the `/litellm/.well-known/litellm-ui-config` endpoint to get the UI configuration.
-
-So you need to reserve the `/litellm` path in your proxy.
-
-You can see the results with:
-
-```bash
-curl http://0.0.0.0:4000/litellm/.well-known/litellm-ui-config
-```
-
-Expected result:
-
-```json
-
-{
-  "server_root_path": "/api/v1",
-  ...
-}
-
-```
-
-
-### 4. Verify Running on correct path
+### 3. Verify Running on correct path
 
 <Image img={require('../../img/custom_root_path.png')} />
 
