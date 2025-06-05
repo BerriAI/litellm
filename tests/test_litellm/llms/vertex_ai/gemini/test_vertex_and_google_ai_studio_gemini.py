@@ -1,13 +1,14 @@
 import asyncio
+import json
 from copy import deepcopy
 from typing import List, cast
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import BaseModel
 
 import litellm
-from litellm import ModelResponse
+from litellm import ModelResponse, completion
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
@@ -554,3 +555,48 @@ def test_vertex_ai_streaming_usage_calculation():
         mock_calculate_usage.assert_called_once_with(
             completion_response=completion_response,
         )
+
+
+def test_vertex_ai_response_id():
+    """Test that litellm preserves the response ID from Vertex AI's API for non-streaming responses"""
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "responseId": "vertex_ai_response_123",
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [{"text": "Hello! How can I help you today?"}],
+                },
+                "finishReason": "STOP",
+                "safetyRatings": [
+                    {
+                        "category": "HARM_CATEGORY_HATE_SPEECH",
+                        "probability": "NEGLIGIBLE",
+                    }
+                ],
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 8,
+            "totalTokenCount": 18,
+        },
+    }
+
+    with patch.object(client, "post", return_value=mock_response) as mock_post:
+        response = completion(
+            model="vertex_ai/gemini-1.5-pro",
+            messages=[{"role": "user", "content": "Hi!"}],
+            client=client,
+        )
+
+        # Verify the response ID is preserved
+        assert response.id == "vertex_ai_response_123"
+        assert response.choices[0].message.content == "Hello! How can I help you today?"
