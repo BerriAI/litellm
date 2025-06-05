@@ -429,6 +429,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_video_input": {"type": "boolean"},
                 "supports_vision": {"type": "boolean"},
                 "supports_web_search": {"type": "boolean"},
+                "supports_url_context": {"type": "boolean"},
                 "supports_reasoning": {"type": "boolean"},
                 "tool_use_system_prompt_tokens": {"type": "number"},
                 "tpm": {"type": "number"},
@@ -759,8 +760,8 @@ def test_get_model_info_shows_supports_computer_use():
     info_gpt = litellm.get_model_info(model_known_not_to_support_computer_use)
     print(f"Info for {model_known_not_to_support_computer_use}: {info_gpt}")
     assert (
-        info_gpt.get("supports_computer_use") is False
-    )  # Expecting False due to the default in ModelInfoBase
+        info_gpt.get("supports_computer_use") is None
+    )  # Expecting None due to the default in ModelInfoBase
 
 
 @pytest.mark.parametrize(

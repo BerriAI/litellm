@@ -176,6 +176,18 @@ class GeminiThinkingConfig(TypedDict, total=False):
 GeminiResponseModalities = Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]
 
 
+class PrebuiltVoiceConfig(TypedDict):
+    voiceName: str
+
+
+class VoiceConfig(TypedDict):
+    prebuiltVoiceConfig: PrebuiltVoiceConfig
+
+
+class SpeechConfig(TypedDict, total=False):
+    voiceConfig: VoiceConfig
+
+
 class GenerationConfig(TypedDict, total=False):
     temperature: float
     top_p: float
@@ -199,6 +211,7 @@ class Tools(TypedDict, total=False):
     googleSearch: dict
     googleSearchRetrieval: dict
     enterpriseWebSearch: dict
+    url_context: dict
     code_execution: dict
     retrieval: Retrieval
 
@@ -252,6 +265,7 @@ class RequestBody(TypedDict, total=False):
     safetySettings: List[SafetSettingsConfig]
     generationConfig: GenerationConfig
     cachedContent: str
+    speechConfig: SpeechConfig
 
 
 class CachedContentRequestBody(TypedDict, total=False):

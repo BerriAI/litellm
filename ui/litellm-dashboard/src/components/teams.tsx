@@ -58,12 +58,9 @@ import {
 import { CogIcon } from "@heroicons/react/outline";
 import AvailableTeamsPanel from "@/components/team/available_teams";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
+import PremiumVectorStoreSelector from "./common_components/PremiumVectorStoreSelector";
 import type { KeyResponse, Team } from "./key_team_helpers/key_list";
-const isLocal = process.env.NODE_ENV === "development";
-const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
-if (isLocal != true) {
-  console.log = function() {};
-}
+
 interface TeamProps {
   teams: Team[] | null;
   searchParams: any;
@@ -72,6 +69,7 @@ interface TeamProps {
   userID: string | null;
   userRole: string | null;
   organizations: Organization[] | null;
+  premiumUser?: boolean;
 }
 
 interface FilterState {
@@ -134,7 +132,8 @@ const Teams: React.FC<TeamProps> = ({
   setTeams,
   userID,
   userRole,
-  organizations
+  organizations,
+  premiumUser = false
 }) => {
   const [lastRefreshed, setLastRefreshed] = useState("");
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
@@ -441,7 +440,7 @@ const Teams: React.FC<TeamProps> = ({
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
         {
-          userRole == "Admin" || userRole == "Org Admin"? 
+          (userRole == "Admin" || userRole == "Org Admin") && !selectedTeamId? 
           <Button
             className="w-fit"
             onClick={() => setIsTeamModalVisible(true)}
@@ -1086,11 +1085,12 @@ const Teams: React.FC<TeamProps> = ({
                             className="mt-8"
                             help="Select vector stores this team can access. Leave empty for access to all vector stores"
                           >
-                            <VectorStoreSelector
+                            <PremiumVectorStoreSelector
                               onChange={(values) => form.setFieldValue('allowed_vector_store_ids', values)}
                               value={form.getFieldValue('allowed_vector_store_ids')}
                               accessToken={accessToken || ''}
                               placeholder="Select vector stores (optional)"
+                              premiumUser={premiumUser}
                             />
                           </Form.Item>
                         </AccordionBody>

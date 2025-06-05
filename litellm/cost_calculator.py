@@ -1209,28 +1209,7 @@ def batch_cost_calculator(
     return total_prompt_cost, total_completion_cost
 
 
-class RealtimeAPITokenUsageProcessor:
-    @staticmethod
-    def collect_usage_from_realtime_stream_results(
-        results: OpenAIRealtimeStreamList,
-    ) -> List[Usage]:
-        """
-        Collect usage from realtime stream results
-        """
-        response_done_events: List[OpenAIRealtimeStreamResponseBaseObject] = cast(
-            List[OpenAIRealtimeStreamResponseBaseObject],
-            [result for result in results if result["type"] == "response.done"],
-        )
-        usage_objects: List[Usage] = []
-        for result in response_done_events:
-            usage_object = (
-                ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-                    result["response"].get("usage", {})
-                )
-            )
-            usage_objects.append(usage_object)
-        return usage_objects
-
+class BaseTokenUsageProcessor:
     @staticmethod
     def combine_usage_objects(usage_objects: List[Usage]) -> Usage:
         """
@@ -1266,13 +1245,17 @@ class RealtimeAPITokenUsageProcessor:
                     combined.prompt_tokens_details = PromptTokensDetailsWrapper()
 
                 # Check what keys exist in the model's prompt_tokens_details
-                for attr in dir(usage.prompt_tokens_details):
-                    if not attr.startswith("_") and not callable(
-                        getattr(usage.prompt_tokens_details, attr)
+                for attr in usage.prompt_tokens_details.model_fields:
+                    if (
+                        hasattr(usage.prompt_tokens_details, attr)
+                        and not attr.startswith("_")
+                        and not callable(getattr(usage.prompt_tokens_details, attr))
                     ):
-                        current_val = getattr(combined.prompt_tokens_details, attr, 0)
-                        new_val = getattr(usage.prompt_tokens_details, attr, 0)
-                        if new_val is not None:
+                        current_val = (
+                            getattr(combined.prompt_tokens_details, attr, 0) or 0
+                        )
+                        new_val = getattr(usage.prompt_tokens_details, attr, 0) or 0
+                        if new_val is not None and isinstance(new_val, (int, float)):
                             setattr(
                                 combined.prompt_tokens_details,
                                 attr,
@@ -1307,6 +1290,29 @@ class RealtimeAPITokenUsageProcessor:
                             )
 
         return combined
+
+
+class RealtimeAPITokenUsageProcessor(BaseTokenUsageProcessor):
+    @staticmethod
+    def collect_usage_from_realtime_stream_results(
+        results: OpenAIRealtimeStreamList,
+    ) -> List[Usage]:
+        """
+        Collect usage from realtime stream results
+        """
+        response_done_events: List[OpenAIRealtimeStreamResponseBaseObject] = cast(
+            List[OpenAIRealtimeStreamResponseBaseObject],
+            [result for result in results if result["type"] == "response.done"],
+        )
+        usage_objects: List[Usage] = []
+        for result in response_done_events:
+            usage_object = (
+                ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                    result["response"].get("usage", {})
+                )
+            )
+            usage_objects.append(usage_object)
+        return usage_objects
 
     @staticmethod
     def collect_and_combine_usage_from_realtime_stream_results(
