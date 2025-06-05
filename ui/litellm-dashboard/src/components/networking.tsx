@@ -9,10 +9,43 @@ import { UserInfo } from "./view_users/types";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
 
 const isLocal = process.env.NODE_ENV === "development";
-export const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+export const defaultProxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+const defaultServerRootPath = "/";
+export let serverRootPath = defaultServerRootPath;
+export let proxyBaseUrl = defaultProxyBaseUrl;
 if (isLocal != true) {
   console.log = function() {};
 }
+
+const updateProxyBaseUrl = (serverRootPath: string, receivedProxyBaseUrl: string | null = null) => {
+  /**
+   * Special function for updating the proxy base url. Should only be called by getUiConfig.
+   */
+  const defaultProxyBaseUrl = isLocal ? "http://localhost:4000" : window.location.origin;
+  let initialProxyBaseUrl = receivedProxyBaseUrl || defaultProxyBaseUrl;
+  console.log("proxyBaseUrl:", proxyBaseUrl);
+  console.log("serverRootPath:", serverRootPath);
+  if (serverRootPath.length > 0 && !initialProxyBaseUrl.endsWith(serverRootPath) && serverRootPath != "/") {
+    initialProxyBaseUrl += serverRootPath;
+    proxyBaseUrl = initialProxyBaseUrl;
+  }
+  console.log("Updated proxyBaseUrl:", proxyBaseUrl);
+};
+
+const updateServerRootPath = (receivedServerRootPath: string) => {
+  serverRootPath = receivedServerRootPath;
+};
+
+export const getProxyBaseUrl = () => {
+  return proxyBaseUrl;
+};
+
+const HTTP_REQUEST = {
+  GET: "GET",
+  POST: "POST",
+  PUT: "PUT",
+  DELETE: "DELETE",
+};
 
 export const DEFAULT_ORGANIZATION = "default_organization";
 
@@ -39,6 +72,11 @@ export interface Organization {
   teams: any[] | null;
   users: any[] | null;
   members: any[] | null;
+  object_permission?: {
+    object_permission_id: string;
+    mcp_servers: string[];
+    vector_stores: string[];
+  };
 }
 
 export interface CredentialItem {
@@ -51,17 +89,17 @@ export interface CredentialItem {
   };
 }
 
+export interface LiteLLMWellKnownUiConfig {
+  server_root_path: string;
+  proxy_base_url: string | null;
+}
+
 export interface CredentialsResponse {
   credentials: CredentialItem[];
 }
 
-
-const baseUrl = "/"; // Assuming the base URL is the root
-
-
 let lastErrorTime = 0;
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const handleError = async (errorData: string) => {
   const currentTime = Date.now();
@@ -69,9 +107,8 @@ const handleError = async (errorData: string) => {
     if (errorData.includes("Authentication Error - Expired Key")) {
       message.info("UI Session Expired. Logging out.");
       lastErrorTime = currentTime;
-      await sleep(3000); // 5 second sleep
       document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-      window.location.href = baseUrl;
+      window.location.href = window.location.pathname;
     }
     lastErrorTime = currentTime;
   } else {
@@ -87,6 +124,20 @@ let globalLitellmHeaderName: string  = "Authorization";
 export function setGlobalLitellmHeaderName(headerName: string = "Authorization") {
   console.log(`setGlobalLitellmHeaderName: ${headerName}`);
   globalLitellmHeaderName = headerName;
+}
+
+export const getUiConfig = async () => {
+  console.log("Getting UI config");
+  /**Special route to get the proxy base url and server root path */
+  const url = defaultProxyBaseUrl ? `${defaultProxyBaseUrl}/litellm/.well-known/litellm-ui-config` : `/litellm/.well-known/litellm-ui-config`;
+  const response = await fetch(url);
+  const jsonData: LiteLLMWellKnownUiConfig = await response.json();
+  /**
+   * Update the proxy base url and server root path
+   */
+  console.log("jsonData in getUiConfig:", jsonData);
+  updateProxyBaseUrl(jsonData.server_root_path, jsonData.proxy_base_url);
+  return jsonData;
 }
 
 export const getOpenAPISchema = async () => {
@@ -1869,7 +1920,8 @@ export const modelAvailableCall = async (
   userID: String,
   userRole: String,
   return_wildcard_routes: boolean = false,
-  teamID: String | null = null
+  teamID: String | null = null,
+  include_model_access_groups: boolean = false
 ) => {
   /**
    * Get all the models user has access to
@@ -1880,6 +1932,9 @@ export const modelAvailableCall = async (
     const params = new URLSearchParams();
     if (return_wildcard_routes === true) {
       params.append('return_wildcard_routes', 'True');
+    }
+    if (include_model_access_groups === true) {
+      params.append('include_model_access_groups', 'True');
     }
     if (teamID) {
       params.append('team_id', teamID.toString());
@@ -2147,7 +2202,8 @@ export const uiSpendLogsCall = async (
   page?: number,
   page_size?: number,
   user_id?: string,
-  status_filter?: string
+  status_filter?: string,
+  model?: string
 ) => {
   try {
     // Construct base URL
@@ -2164,7 +2220,7 @@ export const uiSpendLogsCall = async (
     if (page_size) queryParams.append('page_size', page_size.toString());
     if (user_id) queryParams.append('user_id', user_id);
     if (status_filter) queryParams.append('status_filter', status_filter);
-
+    if (model) queryParams.append('model', model);
     // Append query parameters to URL if any exist
     const queryString = queryParams.toString();
     if (queryString) {
@@ -3353,14 +3409,15 @@ export interface Member {
 export const teamMemberAddCall = async (
   accessToken: string,
   teamId: string,
-  formValues: Member // Assuming formValues is an object
+  formValues: Member
 ) => {
   try {
-    console.log("Form Values in teamMemberAddCall:", formValues); // Log the form values before making the API call
+    console.log("Form Values in teamMemberAddCall:", formValues);
 
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/team/member_add`
       : `/team/member_add`;
+
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -3369,21 +3426,30 @@ export const teamMemberAddCall = async (
       },
       body: JSON.stringify({
         team_id: teamId,
-        member: formValues, // Include formValues in the request body
+        member: formValues,
       }),
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      // Read and parse JSON error body
+      const errorText = await response.text();
+      let parsedError: any = {};
+
+      try {
+        parsedError = JSON.parse(errorText);
+      } catch (e) {
+        console.warn("Failed to parse error body as JSON:", errorText);
+      }
+
+      const rawMessage = parsedError?.detail?.error || "Failed to add team member";
+      const err = new Error(rawMessage);
+      (err as any).raw = parsedError;
+      throw err;
     }
 
     const data = await response.json();
     console.log("API Response:", data);
     return data;
-    // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -3396,7 +3462,7 @@ export const teamMemberUpdateCall = async (
   formValues: Member // Assuming formValues is an object
 ) => {
   try {
-    console.log("Form Values in teamMemberAddCall:", formValues); // Log the form values before making the API call
+    console.log("Form Values in teamMemberUpdateCall:", formValues);
 
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/team/member_update`
@@ -3415,21 +3481,30 @@ export const teamMemberUpdateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      // Read and parse JSON error body
+      const errorText = await response.text();
+      let parsedError: any = {};
+
+      try {
+        parsedError = JSON.parse(errorText);
+      } catch (e) {
+        console.warn("Failed to parse error body as JSON:", errorText);
+      }
+
+      const rawMessage = parsedError?.detail?.error || "Failed to add team member";
+      const err = new Error(rawMessage);
+      (err as any).raw = parsedError;
+      throw err;
     }
 
     const data = await response.json();
     console.log("API Response:", data);
     return data;
-    // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
-    console.error("Failed to create key:", error);
+    console.error("Failed to update team member:", error);
     throw error;
   }
-}
+};
 
 export const teamMemberDeleteCall = async (
   accessToken: string,
@@ -4246,6 +4321,8 @@ export const getProxyUISettings = async (
    * Get all the models user has access to
    */
   try {
+    console.log("Getting proxy UI settings");
+    console.log("proxyBaseUrl in getProxyUISettings:", proxyBaseUrl);
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/sso/get/ui_settings`
       : `/sso/get/ui_settings`;
@@ -4434,13 +4511,106 @@ export const updateInternalUserSettings = async (accessToken: string, settings: 
   }
 };
 
+export const fetchMCPServers = async (accessToken: string) => {
+  try {
+    // Construct base URL
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
 
-export const listMCPTools = async (accessToken: string) => {
+    console.log("Fetching MCP servers from:", url);
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Fetched MCP servers:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch MCP servers:", error);
+    throw error;
+  }
+};
+
+export const createMCPServer = async (
+  accessToken: string,
+  formValues: Record<string, any> // Assuming formValues is an object
+) => {
+  try {
+    console.log("Form Values in createMCPServer:", formValues); // Log the form values before making the API call
+    
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
+    
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...formValues, // Include formValues in the request body
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      console.error("Error response from the server:", errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("API Response:", data);
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const deleteMCPServer = async (
+  accessToken: String,
+  serverId: String
+) => {
+  try {
+    const url =
+      (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/server/${serverId}`;
+    console.log("in deleteMCPServer:", serverId);
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.DELETE,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+  } catch (error) {
+    console.error("Failed to delete key:", error);
+    throw error;
+  }
+};
+
+export const listMCPTools = async (accessToken: string, serverId: string) => {
   try {
     // Construct base URL
     let url = proxyBaseUrl 
-      ? `${proxyBaseUrl}/mcp/tools/list`
-      : `/mcp/tools/list`;
+      ? `${proxyBaseUrl}/mcp/tools/list?server_id=${serverId}`
+      : `/mcp/tools/list?server_id=${serverId}`;
 
     console.log("Fetching MCP tools from:", url);
     
@@ -5093,6 +5263,208 @@ export const getGuardrailUISettings = async (accessToken: string) => {
     return data;
   } catch (error) {
     console.error("Failed to get guardrail UI settings:", error);
+    throw error;
+  }
+};
+
+export const getGuardrailProviderSpecificParams = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/ui/provider_specific_params` : `/guardrails/ui/provider_specific_params`;
+    
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to get guardrail provider specific parameters");
+    }
+
+    const data = await response.json();
+    console.log("Guardrail provider specific params response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to get guardrail provider specific parameters:", error);
+    throw error;
+  }
+};
+
+export const getGuardrailInfo = async (accessToken: string, guardrailId: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/${guardrailId}/info` : `/guardrails/${guardrailId}/info`;
+    
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to get guardrail info");
+    }
+
+    const data = await response.json();
+    console.log("Guardrail info response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to get guardrail info:", error);
+    throw error;
+  }
+};
+
+export const updateGuardrailCall = async (
+  accessToken: string,
+  guardrailId: string,
+  updateData: {
+    guardrail_name?: string;
+    default_on?: boolean;
+    guardrail_info?: Record<string, any>;
+  }
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/${guardrailId}` : `/guardrails/${guardrailId}`;
+    
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(updateData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to update guardrail");
+    }
+
+    const data = await response.json();
+    console.log("Update guardrail response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to update guardrail:", error);
+    throw error;
+  }
+};
+
+export const getSSOSettings = async (accessToken: string) => {
+  try {
+    // Construct base URL
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/get/sso_settings`
+      : `/get/sso_settings`;
+
+    console.log("Fetching SSO configuration from:", url);
+    
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Fetched SSO configuration:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch SSO configuration:", error);
+    throw error;
+  }
+};
+
+
+export const updateSSOSettings = async (accessToken: string, settings: Record<string, any>) => {
+  try {
+    // Construct base URL
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/update/sso_settings`
+      : `/update/sso_settings`;
+
+    console.log("Updating SSO configuration:", settings);
+    
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(settings),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Updated SSO configuration:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to update SSO configuration:", error);
+    throw error;
+  }
+};
+
+export const uiAuditLogsCall = async (
+  accessToken: String,
+  start_date?: string,
+  end_date?: string,
+  page?: number,
+  page_size?: number,
+) => {
+  try {
+    // Construct base URL
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/audit` : `/audit`;
+
+    // Add query parameters if they exist
+    const queryParams = new URLSearchParams();
+    // if (start_date) queryParams.append('start_date', start_date);
+    // if (end_date) queryParams.append('end_date', end_date);
+    if (page) queryParams.append('page', page.toString());
+    if (page_size) queryParams.append('page_size', page_size.toString());
+
+    // Append query parameters to URL if any exist
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch audit logs:", error);
     throw error;
   }
 };

@@ -180,6 +180,19 @@ Use this for LLM API Error monitoring and tracking remaining rate limits and tok
 | `litellm_llm_api_latency_metric`  | Latency (seconds) for just the LLM API call - tracked for labels "model", "hashed_api_key", "api_key_alias", "team", "team_alias", "requested_model", "end_user", "user" |
 | `litellm_llm_api_time_to_first_token_metric`             | Time to first token for LLM API call - tracked for labels `model`, `hashed_api_key`, `api_key_alias`, `team`, `team_alias` [Note: only emitted for streaming requests] |
 
+## Tracking `end_user` on Prometheus
+
+By default LiteLLM does not track `end_user` on Prometheus. This is done to reduce the cardinality of the metrics from LiteLLM Proxy.
+
+If you want to track `end_user` on Prometheus, you can do the following:
+
+```yaml showLineNumbers title="config.yaml"
+litellm_settings:
+  callbacks: ["prometheus"]
+  enable_end_user_cost_tracking_prometheus_only: true
+```
+
+
 ## [BETA] Custom Metrics
 
 Track custom metrics on prometheus on all events mentioned above. 

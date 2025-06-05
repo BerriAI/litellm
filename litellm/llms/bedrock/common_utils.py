@@ -402,7 +402,9 @@ class BedrockModelInfo(BaseLLMModelInfo):
         return ["us", "eu", "apac"]
 
     @staticmethod
-    def get_bedrock_route(model: str) -> Literal["converse", "invoke", "converse_like"]:
+    def get_bedrock_route(
+        model: str,
+    ) -> Literal["converse", "invoke", "converse_like", "agent"]:
         """
         Get the bedrock route for the given model.
         """
@@ -414,6 +416,8 @@ class BedrockModelInfo(BaseLLMModelInfo):
             return "converse_like"
         elif "converse/" in model:
             return "converse"
+        elif "agent/" in model:
+            return "agent"
         elif (
             base_model in litellm.bedrock_converse_models
             or alt_model in litellm.bedrock_converse_models

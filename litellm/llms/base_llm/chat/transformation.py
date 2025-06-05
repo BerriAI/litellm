@@ -87,6 +87,7 @@ class BaseConfig(ABC):
             for k, v in cls.__dict__.items()
             if not k.startswith("__")
             and not k.startswith("_abc")
+            and not k.startswith("_is_base_class")
             and not isinstance(
                 v,
                 (
@@ -108,6 +109,15 @@ class BaseConfig(ABC):
         return (
             non_default_params.get("thinking", {}).get("type") == "enabled"
             or non_default_params.get("reasoning_effort") is not None
+        )
+
+    def is_max_tokens_in_request(self, non_default_params: dict) -> bool:
+        """
+        OpenAI spec allows max_tokens or max_completion_tokens to be specified.
+        """
+        return (
+            "max_tokens" in non_default_params
+            or "max_completion_tokens" in non_default_params
         )
 
     def update_optional_params_with_thinking_tokens(

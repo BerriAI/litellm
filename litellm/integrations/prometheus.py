@@ -117,15 +117,9 @@ class PrometheusLogger(CustomLogger):
             self.litellm_tokens_metric = Counter(
                 "litellm_total_tokens",
                 "Total number of input + output tokens from LLM requests",
-                labelnames=[
-                    "end_user",
-                    "hashed_api_key",
-                    "api_key_alias",
-                    "model",
-                    "team",
-                    "team_alias",
-                    "user",
-                ],
+                labelnames=PrometheusMetricLabels.get_labels(
+                    label_name="litellm_total_tokens_metric"
+                ),
             )
 
             self.litellm_input_tokens_metric = Counter(
@@ -550,20 +544,21 @@ class PrometheusLogger(CustomLogger):
         enum_values: UserAPIKeyLabelValues,
     ):
         # token metrics
-        self.litellm_tokens_metric.labels(
-            end_user_id,
-            user_api_key,
-            user_api_key_alias,
-            model,
-            user_api_team,
-            user_api_team_alias,
-            user_id,
-        ).inc(standard_logging_payload["total_tokens"])
 
         if standard_logging_payload is not None and isinstance(
             standard_logging_payload, dict
         ):
             _tags = standard_logging_payload["request_tags"]
+
+        _labels = prometheus_label_factory(
+            supported_enum_labels=PrometheusMetricLabels.get_labels(
+                label_name="litellm_proxy_total_requests_metric"
+            ),
+            enum_values=enum_values,
+        )
+        self.litellm_proxy_total_requests_metric.labels(**_labels).inc(
+            standard_logging_payload["total_tokens"]
+        )
 
         _labels = prometheus_label_factory(
             supported_enum_labels=PrometheusMetricLabels.get_labels(
@@ -802,6 +797,7 @@ class PrometheusLogger(CustomLogger):
         request_data: dict,
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: Optional[str] = None,
     ):
         """
         Track client side failures
@@ -832,6 +828,7 @@ class PrometheusLogger(CustomLogger):
                 exception_status=str(getattr(original_exception, "status_code", None)),
                 exception_class=self._get_exception_class_name(original_exception),
                 tags=_tags,
+                route=user_api_key_dict.request_route,
             )
             _labels = prometheus_label_factory(
                 supported_enum_labels=PrometheusMetricLabels.get_labels(
@@ -872,6 +869,7 @@ class PrometheusLogger(CustomLogger):
                 user=user_api_key_dict.user_id,
                 user_email=user_api_key_dict.user_email,
                 status_code="200",
+                route=user_api_key_dict.request_route,
             )
             _labels = prometheus_label_factory(
                 supported_enum_labels=PrometheusMetricLabels.get_labels(

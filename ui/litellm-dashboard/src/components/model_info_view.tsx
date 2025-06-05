@@ -142,13 +142,20 @@ export default function ModelInfoView({
       } else {
         delete updatedLitellmParams.cache_control_injection_points;
       }
+
+      // Parse the model_info from the form values
+      let updatedModelInfo;
+      try {
+        updatedModelInfo = values.model_info ? JSON.parse(values.model_info) : modelData.model_info;
+      } catch (e) {
+        message.error("Invalid JSON in Model Info");
+        return;
+      }
       
       const updateData = {
         model_name: values.model_name,
         litellm_params: updatedLitellmParams,
-        model_info: {
-          id: modelId,
-        }
+        model_info: updatedModelInfo
       };
 
       await modelPatchUpdateCall(accessToken, updateData, modelId);
@@ -157,7 +164,8 @@ export default function ModelInfoView({
         ...localModelData,
         model_name: values.model_name,
         litellm_model_name: values.litellm_model_name,
-        litellm_params: updatedLitellmParams
+        litellm_params: updatedLitellmParams,
+        model_info: updatedModelInfo
       };
       
       setLocalModelData(updatedModelData);
@@ -550,6 +558,24 @@ export default function ModelInfoView({
                       </div>
                     )}
 
+                    <div>
+                      <Text className="font-medium">Model Info</Text>
+                      {isEditing ? (
+                        <Form.Item name="model_info" className="mb-0">  
+                          <Input.TextArea 
+                            rows={4}  
+                            placeholder='{"gpt-4": 100, "claude-v1": 200}' 
+                            defaultValue={JSON.stringify(modelData.model_info, null, 2)}
+                          />  
+                        </Form.Item>
+                      ) : (
+                        <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
+                            {JSON.stringify(localModelData.model_info, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
                     <div>
                       <Text className="font-medium">Team ID</Text>
                       <div className="mt-1 p-2 bg-gray-50 rounded">
