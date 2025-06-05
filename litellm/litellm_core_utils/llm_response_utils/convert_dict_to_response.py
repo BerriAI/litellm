@@ -294,6 +294,22 @@ class LiteLLMResponseObjectHandler:
     ) -> ImageResponse:
         response_object.update({"hidden_params": hidden_params})
 
+        # Handle gpt-image-1 usage field with None values
+        if "usage" in response_object and response_object["usage"] is not None:
+            usage = response_object["usage"]
+            # Check if usage fields are None and provide defaults
+            if usage.get("input_tokens") is None:
+                usage["input_tokens"] = 0
+            if usage.get("output_tokens") is None:
+                usage["output_tokens"] = 0
+            if usage.get("total_tokens") is None:
+                usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
+            if usage.get("input_tokens_details") is None:
+                usage["input_tokens_details"] = {
+                    "image_tokens": 0,
+                    "text_tokens": 0,
+                }
+
         if model_response_object is None:
             model_response_object = ImageResponse(**response_object)
             return model_response_object
