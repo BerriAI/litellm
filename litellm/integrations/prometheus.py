@@ -544,20 +544,21 @@ class PrometheusLogger(CustomLogger):
         enum_values: UserAPIKeyLabelValues,
     ):
         # token metrics
-        self.litellm_tokens_metric.labels(
-            end_user_id,
-            user_api_key,
-            user_api_key_alias,
-            model,
-            user_api_team,
-            user_api_team_alias,
-            user_id,
-        ).inc(standard_logging_payload["total_tokens"])
 
         if standard_logging_payload is not None and isinstance(
             standard_logging_payload, dict
         ):
             _tags = standard_logging_payload["request_tags"]
+
+        _labels = prometheus_label_factory(
+            supported_enum_labels=PrometheusMetricLabels.get_labels(
+                label_name="litellm_proxy_total_requests_metric"
+            ),
+            enum_values=enum_values,
+        )
+        self.litellm_proxy_total_requests_metric.labels(**_labels).inc(
+            standard_logging_payload["total_tokens"]
+        )
 
         _labels = prometheus_label_factory(
             supported_enum_labels=PrometheusMetricLabels.get_labels(
