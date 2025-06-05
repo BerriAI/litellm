@@ -813,7 +813,10 @@ from .timeout import timeout
 from .cost_calculator import completion_cost
 from litellm.litellm_core_utils.litellm_logging import Logging, modify_integration
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
+from litellm.litellm_core_utils.core_helpers import (
+    remove_index_from_tool_calls,
+    remove_items_at_indices,
+)
 from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 from .utils import (
     client,

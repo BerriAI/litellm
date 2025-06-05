@@ -161,9 +161,12 @@ async def test_openai_with_knowledge_base_mock_openai(setup_vector_store_registr
         # Verify the API was called
         mock_client.assert_called_once()
         request_body = mock_client.call_args.kwargs
-        
+
         # Verify the request contains messages with knowledge base context
         assert "messages" in request_body
+        # The original tools field should be removed once the vector store ids
+        # have been processed by LiteLLM.
+        assert "tools" not in request_body
         messages = request_body["messages"]
         
         # We expect at least 2 messages:

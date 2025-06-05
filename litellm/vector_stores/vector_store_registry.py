@@ -3,6 +3,8 @@ import json
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from litellm.litellm_core_utils.core_helpers import remove_items_at_indices
+
 from litellm._logging import verbose_logger
 from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStore,
@@ -55,9 +57,26 @@ class VectorStoreRegistry:
         vector_store_ids = non_default_params.pop("vector_store_ids", None) or []
 
         # 2. check if vector_store_ids is provided as a tool in the request
-        vector_store_ids = self._get_vector_store_ids_from_tool_calls(
-            tools=tools, vector_store_ids=vector_store_ids
-        )
+        if tools:
+            tools_to_remove: List[int] = []
+            for i, tool in enumerate(tools):
+                tool_vector_store_ids: List[str] = tool.get("vector_store_ids", [])
+                if len(tool_vector_store_ids) == 0:
+                    continue
+
+                vector_store_ids.extend(tool_vector_store_ids)
+
+                # remove the tool if all vector_store_ids are recognised in the registry
+                recognised = all(
+                    any(vs.get("vector_store_id") == vs_id for vs in self.vector_stores)
+                    for vs_id in tool_vector_store_ids
+                )
+                if recognised:
+                    tools_to_remove.append(i)
+
+            # remove recognised tools from the original list
+            remove_items_at_indices(tools, tools_to_remove)
+
         return vector_store_ids
 
     def get_vector_store_to_run(
