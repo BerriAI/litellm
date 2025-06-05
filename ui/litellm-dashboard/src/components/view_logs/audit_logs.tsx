@@ -6,6 +6,13 @@ import { uiAuditLogsCall, keyListCall } from "../networking";
 import { AuditLogEntry, auditLogColumns } from "./columns";
 import { Text } from "@tremor/react";
 import { Team } from "../key_team_helpers/key_list";
+import _ReactDiffViewer from 'react-diff-viewer';
+import React from "react";
+import Prism from 'prismjs';
+import 'prismjs/components/prism-json';
+import 'prismjs/themes/prism-tomorrow.css';
+
+const ReactDiffViewer = (_ReactDiffViewer as any).default || _ReactDiffViewer;
 
 interface AuditLogsProps {
   accessToken: string | null;
@@ -16,6 +23,175 @@ interface AuditLogsProps {
   premiumUser: boolean;
   allTeams: Team[];
 }
+
+// Define AuditLogRowExpansionPanel as a standalone, memoized component
+const AuditLogRowExpansionPanel = React.memo(({ rowData }: { rowData: AuditLogEntry }) => {
+  const { before_value, updated_values, table_name, action } = rowData;
+
+  // CSS overrides
+  const prismStyleOverride = `
+    .token.property {
+      color: #4A90E2 !important; /* Dark blue for JSON keys */
+    }
+    .token.string,
+    .token.number,
+    .token.boolean,
+    .token.null {
+      color: #6A9955 !important; /* Dark green for JSON values */
+    }
+  `;
+
+  const getDisplayString = (value: Record<string, any> | string | undefined | null) => {
+    if (value === undefined || value === null) return "N/A";
+    if (typeof value === 'string') return value;
+    return JSON.stringify(value, null, 2);
+  };
+
+  // Syntax highlighting function for JSON
+  const highlightSyntax = (jsonString: string) => {
+    // Prism.highlight can throw if language not found, though 'json' should be safe
+    try {
+      // Check if the string is one of our special "N/A" or "Comment" messages
+      if (jsonString === "N/A" || 
+          jsonString === "N/A (New Record)" || 
+          jsonString === "N/A (Record Deleted)" ||
+          jsonString.includes("No fields changed") ||
+          jsonString.includes("Updated values were not provided")) {
+        // Don't highlight plain text messages, return them as is within a pre for consistency
+        return <pre style={{ display: 'inline' }}>{jsonString}</pre>;
+      }
+      const html = Prism.highlight(jsonString, Prism.languages.json, 'json');
+      return <pre style={{ display: 'inline' }} dangerouslySetInnerHTML={{ __html: html }} />;
+    } catch (e) {
+      console.error("Prism highlighting error:", e);
+      // Fallback to plain text if highlighting fails
+      return <pre style={{ display: 'inline' }}>{jsonString}</pre>;
+    }
+  };
+
+  let beforeString = "";
+  let updatedString = "";
+
+  if (action === "updated" || action === "rotated") {
+    if (before_value && typeof before_value === 'object' && updated_values && typeof updated_values === 'object') {
+      const newFullState = { ...before_value, ...updated_values };
+      const stringifiedOld = getDisplayString(before_value);
+      const stringifiedNew = getDisplayString(newFullState);
+
+      if (stringifiedOld === stringifiedNew) {
+        beforeString = getDisplayString({ "No fields changed": "N/A" });
+        updatedString = getDisplayString({ "No fields changed": "N/A" });
+      } else {
+        beforeString = stringifiedOld;
+        updatedString = stringifiedNew;
+      }
+    } else if (before_value && !updated_values) { 
+        beforeString = getDisplayString(before_value);
+        updatedString = getDisplayString({ "Comment": "Updated values were not provided or were null." });
+    } else { 
+      beforeString = getDisplayString(before_value);
+      updatedString = getDisplayString(updated_values);
+    }
+  } else if (action === "created") {
+    beforeString = "N/A (New Record)";
+    updatedString = getDisplayString(updated_values);
+  } else if (action === "deleted") {
+    beforeString = getDisplayString(before_value);
+    updatedString = "N/A (Record Deleted)";
+  } else {
+     beforeString = getDisplayString(before_value);
+     updatedString = getDisplayString(updated_values);
+  }
+  
+  const shouldUseDiffViewer = 
+    (action === "updated" || action === "rotated") &&
+    beforeString !== updatedString && 
+    !(beforeString.includes("No fields changed") && updatedString.includes("No fields changed")) &&
+    !(beforeString === "N/A (New Record)" && updatedString === "N/A") && // More specific N/A checks
+    !(beforeString === "N/A" && updatedString === "N/A (Record Deleted)");
+
+  const renderLegacyValue = (value: Record<string, any> | string | undefined | null, isKeyTable: boolean) => {
+    let displayValue: any;
+    // Ensure 'value' itself isn't null before trying to access properties or parse
+    if (value === null || value === undefined) {
+        return <Text>N/A</Text>;
+    }
+    try {
+        displayValue = (typeof value === 'string' && (value.startsWith('{') || value.startsWith('['))) ? JSON.parse(value) : value;
+    } catch (e) {
+        displayValue = value; 
+    }
+
+    if (typeof displayValue !== 'object' || displayValue === null || Object.keys(displayValue).length === 0) {
+        // If it's one of our special string messages, display it directly.
+        if (typeof displayValue === 'string' && (displayValue.startsWith("N/A") || displayValue.includes("No fields changed") || displayValue.includes("Comment"))) {
+            return <Text>{displayValue}</Text>;
+        }
+        return <Text>{typeof displayValue === 'string' ? displayValue : "N/A"}</Text>;
+    }
+
+    if (isKeyTable) {
+      const changedKeys = Object.keys(displayValue);
+      const knownKeyFields = ['token', 'spend', 'max_budget'];
+      
+      const onlyKnownFieldsChanged = changedKeys.every(key => knownKeyFields.includes(key) || displayValue[key] === "N/A");
+
+      if (onlyKnownFieldsChanged && changedKeys.length > 0 && !displayValue["No differing fields detected in 'before' state"] && !displayValue["No differing fields detected in 'updated' state"] && !displayValue["No fields changed"] && !displayValue["Comment"]) {
+        return (
+          <div>
+            {changedKeys.includes('token') && <p><strong>Token:</strong> {displayValue.token || 'N/A'}</p>}
+            {changedKeys.includes('spend') && <p><strong>Spend:</strong> {displayValue.spend !== undefined ? `$${Number(displayValue.spend).toFixed(6)}` : 'N/A'}</p>}
+            {changedKeys.includes('max_budget') && <p><strong>Max Budget:</strong> {displayValue.max_budget !== undefined ? `$${Number(displayValue.max_budget).toFixed(6)}` : 'N/A'}</p>}
+          </div>
+        );
+      } else {
+        // Check for our special message objects
+        const specialMessageKey = Object.keys(displayValue).find(key => 
+            key === "No differing fields detected in 'before' state" || 
+            key === "No differing fields detected in 'updated' state" || 
+            key === "No fields changed" || 
+            key === "Comment"
+        );
+        if (specialMessageKey) {
+           return <Text>{displayValue[specialMessageKey]}</Text>;
+        }
+        return <pre className="p-2 bg-gray-50 border rounded text-xs overflow-auto max-h-60">{JSON.stringify(displayValue, null, 2)}</pre>;
+      }
+    }
+    return <pre className="p-2 bg-gray-50 border rounded text-xs overflow-auto max-h-60">{JSON.stringify(displayValue, null, 2)}</pre>;
+  };
+
+  return (
+    <>
+      <style>{prismStyleOverride}</style>
+      <div className="-mx-4 p-4 bg-slate-100 border-y border-slate-300">
+        {shouldUseDiffViewer ? (
+          <ReactDiffViewer
+            oldValue={beforeString}
+            newValue={updatedString}
+            splitView={false}
+            showDiffOnly={true} 
+            hideLineNumbers={false}
+            disableWordDiff={true}
+            renderContent={highlightSyntax}
+          />
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <h4 className="font-semibold mb-2 text-sm text-slate-700">Before Value:</h4>
+              {renderLegacyValue(action === "deleted" ? (before_value) : before_value, table_name === "LiteLLM_VerificationToken")}
+            </div>
+            <div>
+              <h4 className="font-semibold mb-2 text-sm text-slate-700">Updated Value:</h4>
+              {renderLegacyValue(action === "created" ? (updated_values) : updated_values, table_name === "LiteLLM_VerificationToken")}
+            </div>
+          </div>
+        )}
+      </div>
+    </>
+  );
+});
+AuditLogRowExpansionPanel.displayName = 'AuditLogRowExpansionPanel'; // Optional: for better debugging
 
 export default function AuditLogs({
   userID,
@@ -258,101 +434,10 @@ export default function AuditLogs({
     return completeFilteredLogs.slice(start, end);
   }, [completeFilteredLogs, clientCurrentPage, pageSize]);
 
+  // renderSubComponent now simply instantiates the memoized component
   const renderSubComponent = useCallback(({ row }: { row: any }) => {
-    const AuditLogRowExpansionPanel = ({ rowData }: { rowData: AuditLogEntry }) => {
-      const { before_value, updated_values, table_name, action } = rowData;
-    
-      const renderValue = (value: Record<string, any>, isKeyTable: boolean) => {
-        if (!value || Object.keys(value).length === 0) return <Text>N/A</Text>;
-
-        if (isKeyTable) {
-          const changedKeys = Object.keys(value);
-          const knownKeyFields = ['token', 'spend', 'max_budget'];
-          
-          const onlyKnownFieldsChanged = changedKeys.every(key => knownKeyFields.includes(key));
-
-          if (onlyKnownFieldsChanged && changedKeys.length > 0) {
-            return (
-              <div>
-                {changedKeys.includes('token') && <p><strong>Token:</strong> {value.token || 'N/A'}</p>}
-                {changedKeys.includes('spend') && <p><strong>Spend:</strong> {value.spend !== undefined ? `$${Number(value.spend).toFixed(6)}` : 'N/A'}</p>}
-                {changedKeys.includes('max_budget') && <p><strong>Max Budget:</strong> {value.max_budget !== undefined ? `$${Number(value.max_budget).toFixed(6)}` : 'N/A'}</p>}
-              </div>
-            );
-          } else {
-            if (value["No differing fields detected in 'before' state"] || value["No differing fields detected in 'updated' state"] || value["No fields changed"]) {
-               return <Text>{value[Object.keys(value)[0]]}</Text> // Display the N/A message string
-            }
-            return <pre className="p-2 bg-gray-50 border rounded text-xs overflow-auto max-h-60">{JSON.stringify(value, null, 2)}</pre>;
-          }
-        }
-        
-        return <pre className="p-2 bg-gray-50 border rounded text-xs overflow-auto max-h-60">{JSON.stringify(value, null, 2)}</pre>;
-      };
-
-      let displayBeforeValue = before_value;
-      let displayUpdatedValue = updated_values;
-
-      if ((action === "updated" || action === "rotated") && before_value && updated_values) {
-        if (table_name === "LiteLLM_TeamTable" || table_name === "LiteLLM_UserTable" || table_name === "LiteLLM_VerificationToken") {
-
-          const changedBefore: Record<string, any> = {};
-          const changedUpdated: Record<string, any> = {};
-          const allKeys = new Set([...Object.keys(before_value), ...Object.keys(updated_values)]);
-
-          allKeys.forEach(key => {
-            const beforeValStr = JSON.stringify(before_value[key]);
-            const updatedValStr = JSON.stringify(updated_values[key]);
-            if (beforeValStr !== updatedValStr) {
-              if (before_value.hasOwnProperty(key)) {
-                 changedBefore[key] = before_value[key];
-              }
-              if (updated_values.hasOwnProperty(key)) {
-                changedUpdated[key] = updated_values[key];
-              }
-            }
-          });
-          
-          Object.keys(before_value).forEach(key => {
-            if (!updated_values.hasOwnProperty(key) && !changedBefore.hasOwnProperty(key)) {
-                changedBefore[key] = before_value[key];
-                changedUpdated[key] = undefined; 
-            }
-          });
-
-          Object.keys(updated_values).forEach(key => {
-            if (!before_value.hasOwnProperty(key) && !changedUpdated.hasOwnProperty(key)) {
-                changedUpdated[key] = updated_values[key];
-                changedBefore[key] = undefined; 
-            }
-          });
-
-          displayBeforeValue = Object.keys(changedBefore).length > 0 ? changedBefore : { "No differing fields detected in 'before' state": "N/A" };
-          displayUpdatedValue = Object.keys(changedUpdated).length > 0 ? changedUpdated : { "No differing fields detected in 'updated' state": "N/A" };
-          
-          if (Object.keys(changedBefore).length === 0 && Object.keys(changedUpdated).length === 0) {
-             displayBeforeValue = {"No fields changed": "N/A"};
-             displayUpdatedValue = {"No fields changed": "N/A"};
-          }
-        }
-      }
-    
-      return (
-        <div className="-mx-4 p-4 bg-slate-100 border-y border-slate-300 grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <h4 className="font-semibold mb-2 text-sm text-slate-700">Before Value:</h4>
-            {renderValue(displayBeforeValue, table_name === "LiteLLM_VerificationToken")}
-          </div>
-          <div>
-            <h4 className="font-semibold mb-2 text-sm text-slate-700">Updated Value:</h4>
-            {renderValue(displayUpdatedValue, table_name === "LiteLLM_VerificationToken")}
-          </div>
-        </div>
-      );
-    };
-
     return <AuditLogRowExpansionPanel rowData={row.original as AuditLogEntry} />;
-  }, []);
+  }, []); // Empty dependency array means this callback itself is stable
 
   if (!premiumUser) {
     return (
