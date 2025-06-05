@@ -3,30 +3,18 @@ This is a rate limiter implementation based on a similar one by Envoy proxy.
 
 This is currently in development and not yet ready for production.
 """
-import asyncio
 import sys
-from datetime import datetime, timedelta
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Tuple,
-    TypedDict,
-    Union,
-)
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypedDict, Union
 
 from fastapi import HTTPException
 from pydantic import BaseModel
 
 import litellm
-from litellm import DualCache, ModelResponse
+from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
-from litellm.proxy._types import CommonProxyErrors, CurrentItemRateLimit, UserAPIKeyAuth
+from litellm.proxy._types import UserAPIKeyAuth
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
