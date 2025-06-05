@@ -247,7 +247,7 @@ class ChatConfig(BaseConfig):
         sync_stream: bool,
         json_mode: Optional[bool] = False,
     ) -> Any:
-        return OpenAiResponsesToChatCompletionStreamIterator(model, streaming_response, sync_stream, json_mode)
+        return OpenAiResponsesToChatCompletionStreamIterator(streaming_response, sync_stream, json_mode)
 
     def map_openai_params(
         self,
