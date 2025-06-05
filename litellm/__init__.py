@@ -825,6 +825,7 @@ from .utils import (
     create_tokenizer,
     supports_function_calling,
     supports_web_search,
+    supports_url_context,
     supports_response_schema,
     supports_parallel_function_calling,
     supports_vision,

@@ -211,6 +211,7 @@ class Tools(TypedDict, total=False):
     googleSearch: dict
     googleSearchRetrieval: dict
     enterpriseWebSearch: dict
+    url_context: dict
     code_execution: dict
     retrieval: Retrieval
 
