@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Union, Literal
 from langfuse.api import ChatMessage
 from openai.types.chat import ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
-from openai.types.responses import ResponseReasoningItem, ResponseOutputMessage
+from openai.types.responses import ResponseReasoningItem, ResponseOutputMessage, ResponseFunctionToolCall
 from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
 
@@ -696,12 +696,14 @@ class LiteLLMCompletionResponsesConfig:
         )
 
     @staticmethod
-    def _map_responses_status(status: Literal["in_progress", "completed", "incomplete"]) -> Literal["stop", "length", "tool_calls", "content_filter", "function_call"]:
+    def _map_responses_status(status: Literal["in_progress", "completed", "incomplete"] | None) -> Literal["stop", "length", "tool_calls", "content_filter", "function_call"] | None:
         if status == "in_progress":
             return None
         elif status == "completed":
             return "stop"
         elif status == "incomplete":
+            return None
+        elif status is None:
             return None
         else:
             raise ValueError(f"Unknown status {status}")
@@ -729,17 +731,38 @@ class LiteLLMCompletionResponsesConfig:
 
                     choices.append(litellm.Choices(
                         message=msg,
-                        finish_reason=LiteLLMCompletionResponsesConfig._map_responses_status(item.status),
+                        finish_reason="stop",
                         index=index
                     ))
                     index += 1
+            elif isinstance(item, ResponseFunctionToolCall):
+                msg = litellm.Message(
+                    content=None,
+                    tool_calls=[
+                        {
+                            "id": item.call_id,
+                            "function": {
+                                "name": item.name,
+                                "arguments": item.arguments,
+                            },
+                            "type": "function",
+                        }
+                    ]
+                )
+
+                choices.append(litellm.Choices(
+                    message=msg,
+                    finish_reason="tool_calls",
+                    index=index
+                ))
+                index += 1
             elif isinstance(item, GenericResponseOutputItem):
                 raise ValueError("GenericResponseOutputItem not supported")
             elif isinstance(item, OutputFunctionToolCall):
                 # function/tool calls pass through as-is
                 raise ValueError("Function calling not supported yet.")
             else:
-                raise ValueError("Unknown item type: " + item)
+                raise ValueError(f"Unknown item type: {item}")
 
         #model_response.id = responses_api_response.id
         #model_response.created = int(responses_api_response.created_at)
@@ -749,7 +772,19 @@ class LiteLLMCompletionResponsesConfig:
         #model_response.incomplete_details = responses_api_response.incomplete_details
         #model_response.instructions = responses_api_response.instructions
         #model_response.metadata = responses_api_response.metadata
-        setattr(model_response, "choices", choices);
+        setattr(model_response, "choices", choices)
+
+
+        setattr(
+            model_response,
+            "usage",
+            litellm.Usage(
+                prompt_tokens=responses_api_response.usage.input_tokens,
+                completion_tokens=responses_api_response.usage.output_tokens,
+                reasoning_tokens=responses_api_response.usage.output_tokens_details.reasoning_tokens,
+                total_tokens=responses_api_response.usage.total_tokens,
+            ),
+        )
         #model_response.parallel_tool_calls = responses_api_response.parallel_tool_calls
         #model_response.temperature = responses_api_response.temperature
         #model_response.tool_choice = responses_api_response.tool_choice

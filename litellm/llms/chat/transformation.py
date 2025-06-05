@@ -103,14 +103,24 @@ class ChatConfig(BaseConfig):
                 })
             elif role == "assistant" and tool_calls:
                 # Convert assistant message with tool calls
-                if content:  # If there's text content, add it first
-                    input_items.append({
-                        "type": "message",
-                        "role": role,
-                        "content": self._convert_content_to_responses_format(content)
-                    })
-                # Note: Tool calls will be handled by the responses API directly
-                # We don't need to convert them back to input format here
+                # {
+                #     "type": "function_call",
+                #     "id": "fc_12345xyz",
+                #     "call_id": "call_12345xyz",
+                #     "name": "get_weather",
+                #     "arguments": "{\"latitude\":48.8566,\"longitude\":2.3522}"
+                # }
+                for tool_call in tool_calls:
+                    function = tool_call.get("function")
+                    if function:
+                        input_items.append({
+                            "type": "function_call",
+                            "call_id": tool_call["id"],
+                            "name": function["name"],
+                            "arguments": function["arguments"],
+                        })
+                    else:
+                        raise ValueError(f"tool call not supported: {tool_call}")
             else:
                 # Regular user/assistant message
                 input_items.append({
@@ -457,6 +467,7 @@ class ChatConfig(BaseConfig):
             if tool.get("type") == "function":
                 function = tool.get("function", {})
                 responses_tools.append({
+                    "type": "function",
                     "name": function.get("name", ""),
                     "description": function.get("description", ""),
                     "parameters": function.get("parameters", {}),
