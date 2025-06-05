@@ -377,7 +377,7 @@ def _add_custom_logger_callback_to_specific_event(callback: str, logging_event: 
         )
         return
 
-    callback_class = _init_custom_logger_compatible_class(  # type: ignore
+    callback_class = _init_custom_logger_compatible_class(
         cast(_custom_logger_compatible_callbacks_literal, callback),
         internal_usage_cache=None,
         llm_router=None,
@@ -511,8 +511,8 @@ def function_setup(  # noqa: PLR0915
             for callback in all_callbacks:
                 # check if callback is a string - e.g. "lago", "openmeter"
                 if isinstance(callback, str):
-                    callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore[arg-type]
-                        callback,  # type: ignore[arg-type]
+                    callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
+                        callback,
                         internal_usage_cache=None,
                         llm_router=None,  # type: ignore
                     )
@@ -1568,6 +1568,27 @@ def supports_web_search(model: str, custom_llm_provider: Optional[str] = None) -
         model=model,
         custom_llm_provider=custom_llm_provider,
         key="supports_web_search",
+    )
+
+
+def supports_url_context(model: str, custom_llm_provider: Optional[str] = None) -> bool:
+    """
+    Check if the given model supports URL context and return a boolean value.
+
+    Parameters:
+    model (str): The model name to be checked.
+    custom_llm_provider (str): The provider to be checked.
+
+    Returns:
+    bool: True if the model supports URL context, False otherwise.
+
+    Raises:
+    Exception: If the given model is not found in model_prices_and_context_window.json.
+    """
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_url_context",
     )
 
 
@@ -3654,9 +3675,6 @@ def _check_provider_match(model_info: dict, custom_llm_provider: Optional[str]) 
             return True
         elif custom_llm_provider.startswith("bedrock") and model_info["litellm_provider"].startswith("bedrock"):
             return True
-        elif custom_llm_provider == "litellm_proxy":
-            # For litellm_proxy, accept any underlying provider since proxy wraps other models
-            return True
         else:
             return False
 
@@ -3988,6 +4006,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_embedding_image_input=_model_info.get("supports_embedding_image_input", None),
                 supports_native_streaming=_model_info.get("supports_native_streaming", None),
                 supports_web_search=_model_info.get("supports_web_search", None),
+                supports_url_context=_model_info.get("supports_url_context", None),
                 supports_reasoning=_model_info.get("supports_reasoning", None),
                 supports_computer_use=_model_info.get("supports_computer_use", None),
                 search_context_cost_per_query=_model_info.get("search_context_cost_per_query", None),
@@ -4060,6 +4079,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             supports_audio_output: Optional[bool]
             supports_pdf_input: Optional[bool]
             supports_web_search: Optional[bool]
+            supports_url_context: Optional[bool]
             supports_reasoning: Optional[bool]
     Raises:
         Exception: If the model is not mapped yet.
