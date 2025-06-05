@@ -2,13 +2,13 @@
 Pulls the cost + context window + provider route for known models from https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
 
 This can be disabled by setting the LITELLM_LOCAL_MODEL_COST_MAP environment variable to True.
-LITELLM_PRICE_DIR must be relative to /app ( root fir of litellm)
+LITELLM_PRICE_DIR must be relative to /app ( root dir of litellm)
 
 ```
 export LITELLM_LOCAL_MODEL_COST_MAP=True
+export LITELLM_PRICE_DIR=config
 ```
 """
-
 import os
 import json
 import httpx
@@ -23,13 +23,11 @@ def get_model_cost_map(url: str) -> dict:
     - The remote fetch fails
     """
 
-    # Get the package name from env, fallback to "litellm" by default
-    model_price_directory = os.getenv("LITELLM_PRICE_DIR", "litellm")
 
     def load_local_backup() -> dict:
         """Load model cost data from the local backup JSON file."""
-        print(f"[INFO] Using local model cost map backup from package: {model_price_directory}")
-        with importlib.resources.open_text(model_price_directory, "model_prices_and_context_window_backup.json") as f:
+        backup_path = os.path.join(os.getenv("LITELLM_PRICE_DIR", "litellm"), "model_prices_and_context_window_backup.json")
+        with open(backup_path, "r") as f:
             return json.load(f)
 
     if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":
