@@ -520,6 +520,7 @@ router_settings:
 | LITELLM_LOCAL_MODEL_COST_MAP | Local configuration for model cost mapping in LiteLLM
 | LITELLM_LOG | Enable detailed logging for LiteLLM
 | LITELLM_MODE | Operating mode for LiteLLM (e.g., production, development)
+| LITELLM_PRICE_DIR | Where custom pricing file (model_prices_and_context_window_backup.json) is located, must be relative path to litellm root dir 
 | LITELLM_SALT_KEY | Salt key for encryption in LiteLLM
 | LITELLM_SECRET_AWS_KMS_LITELLM_LICENSE | AWS KMS encrypted license for LiteLLM
 | LITELLM_TOKEN | Access token for LiteLLM integration
