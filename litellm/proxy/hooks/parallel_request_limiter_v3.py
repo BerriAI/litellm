@@ -190,48 +190,48 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
             )
 
-        # User rate limits
-        if user_api_key_dict.user_id:
-            descriptors.append(
-                RateLimitDescriptor(
-                    key="user",
-                    value=user_api_key_dict.user_id,
-                    rate_limit={
-                        "requests_per_unit": user_api_key_dict.user_rpm_limit
-                        or sys.maxsize,
-                        "window_size": 60,
-                    },
-                )
-            )
+        # # User rate limits
+        # if user_api_key_dict.user_id:
+        #     descriptors.append(
+        #         RateLimitDescriptor(
+        #             key="user",
+        #             value=user_api_key_dict.user_id,
+        #             rate_limit={
+        #                 "requests_per_unit": user_api_key_dict.user_rpm_limit
+        #                 or sys.maxsize,
+        #                 "window_size": 60,
+        #             },
+        #         )
+        #     )
 
-        # Team rate limits
-        if user_api_key_dict.team_id:
-            descriptors.append(
-                RateLimitDescriptor(
-                    key="team",
-                    value=user_api_key_dict.team_id,
-                    rate_limit={
-                        "requests_per_unit": user_api_key_dict.team_rpm_limit
-                        or sys.maxsize,
-                        "window_size": 60,
-                    },
-                )
-            )
+        # # Team rate limits
+        # if user_api_key_dict.team_id:
+        #     descriptors.append(
+        #         RateLimitDescriptor(
+        #             key="team",
+        #             value=user_api_key_dict.team_id,
+        #             rate_limit={
+        #                 "requests_per_unit": user_api_key_dict.team_rpm_limit
+        #                 or sys.maxsize,
+        #                 "window_size": 60,
+        #             },
+        #         )
+        #     )
 
-        # End user rate limits
-        if user_api_key_dict.end_user_id:
-            descriptors.append(
-                RateLimitDescriptor(
-                    key="end_user",
-                    value=user_api_key_dict.end_user_id,
-                    rate_limit={
-                        "requests_per_unit": getattr(
-                            user_api_key_dict, "end_user_rpm_limit", sys.maxsize
-                        ),
-                        "window_size": 60,
-                    },
-                )
-            )
+        # # End user rate limits
+        # if user_api_key_dict.end_user_id:
+        #     descriptors.append(
+        #         RateLimitDescriptor(
+        #             key="end_user",
+        #             value=user_api_key_dict.end_user_id,
+        #             rate_limit={
+        #                 "requests_per_unit": getattr(
+        #                     user_api_key_dict, "end_user_rpm_limit", sys.maxsize
+        #                 ),
+        #                 "window_size": 60,
+        #             },
+        #         )
+        #     )
 
         # Check rate limits
         response = await self.should_rate_limit(
@@ -285,43 +285,43 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     )
                 )
 
-            # Get current limits
-            response = await self.should_rate_limit(
-                descriptors=descriptors,
-                parent_otel_span=user_api_key_dict.parent_otel_span,
-            )
+            # # Get current limits
+            # response = await self.should_rate_limit(
+            #     descriptors=descriptors,
+            #     parent_otel_span=user_api_key_dict.parent_otel_span,
+            # )
 
-            # Update response headers
-            if hasattr(response, "_hidden_params"):
-                _hidden_params = getattr(response, "_hidden_params")
-            else:
-                _hidden_params = None
+            # # Update response headers
+            # if hasattr(response, "_hidden_params"):
+            #     _hidden_params = getattr(response, "_hidden_params")
+            # else:
+            #     _hidden_params = None
 
-            if _hidden_params is not None and (
-                isinstance(_hidden_params, BaseModel)
-                or isinstance(_hidden_params, dict)
-            ):
-                if isinstance(_hidden_params, BaseModel):
-                    _hidden_params = _hidden_params.model_dump()
+            # if _hidden_params is not None and (
+            #     isinstance(_hidden_params, BaseModel)
+            #     or isinstance(_hidden_params, dict)
+            # ):
+            #     if isinstance(_hidden_params, BaseModel):
+            #         _hidden_params = _hidden_params.model_dump()
 
-                _additional_headers = _hidden_params.get("additional_headers", {}) or {}
+            #     _additional_headers = _hidden_params.get("additional_headers", {}) or {}
 
-                # Add rate limit headers
-                for i, status in enumerate(response["statuses"]):
-                    descriptor = descriptors[i]
-                    prefix = f"x-ratelimit-{descriptor['key']}"
-                    _additional_headers[f"{prefix}-remaining-requests"] = status[
-                        "limit_remaining"
-                    ]
-                    _additional_headers[f"{prefix}-limit-requests"] = status[
-                        "current_limit"
-                    ]
+            #     # Add rate limit headers
+            #     for i, status in enumerate(response["statuses"]):
+            #         descriptor = descriptors[i]
+            #         prefix = f"x-ratelimit-{descriptor['key']}"
+            #         _additional_headers[f"{prefix}-remaining-requests"] = status[
+            #             "limit_remaining"
+            #         ]
+            #         _additional_headers[f"{prefix}-limit-requests"] = status[
+            #             "current_limit"
+            #         ]
 
-                setattr(
-                    response,
-                    "_hidden_params",
-                    {**_hidden_params, "additional_headers": _additional_headers},
-                )
+            #     setattr(
+            #         response,
+            #         "_hidden_params",
+            #         {**_hidden_params, "additional_headers": _additional_headers},
+            #     )
 
         except Exception as e:
             self.print_verbose(f"Error in post-call hook: {str(e)}")
