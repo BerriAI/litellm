@@ -887,6 +887,7 @@ from .llms.triton.completion.transformation import TritonConfig
 from .llms.triton.completion.transformation import TritonGenerateConfig
 from .llms.triton.completion.transformation import TritonInferConfig
 from .llms.triton.embedding.transformation import TritonEmbeddingConfig
+from .llms.huggingface.rerank.transformation import HuggingFaceRerankConfig
 from .llms.databricks.chat.transformation import DatabricksConfig
 from .llms.databricks.embed.transformation import DatabricksEmbeddingConfig
 from .llms.predibase.chat.transformation import PredibaseConfig
