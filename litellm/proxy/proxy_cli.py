@@ -846,34 +846,24 @@ def run_server(  # noqa: PLR0915
         
         ### GET DB TOKEN FOR IAM AUTH ###
         if iam_token_db_auth:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-            ) as progress:
-                task = progress.add_task("Generating IAM auth token...", total=None)
-                
-                from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
+            from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
 
-                db_host = os.getenv("DATABASE_HOST")
-                db_port = os.getenv("DATABASE_PORT")
-                db_user = os.getenv("DATABASE_USER")
-                db_name = os.getenv("DATABASE_NAME")
-                db_schema = os.getenv("DATABASE_SCHEMA")
+            db_host = os.getenv("DATABASE_HOST")
+            db_port = os.getenv("DATABASE_PORT")
+            db_user = os.getenv("DATABASE_USER")
+            db_name = os.getenv("DATABASE_NAME")
+            db_schema = os.getenv("DATABASE_SCHEMA")
 
-                token = generate_iam_auth_token(
-                    db_host=db_host, db_port=db_port, db_user=db_user
-                )
+            token = generate_iam_auth_token(
+                db_host=db_host, db_port=db_port, db_user=db_user
+            )
 
-                _db_url = f"postgresql://{db_user}:{token}@{db_host}:{db_port}/{db_name}"
-                if db_schema:
-                    _db_url += f"?schema={db_schema}"
+            _db_url = f"postgresql://{db_user}:{token}@{db_host}:{db_port}/{db_name}"
+            if db_schema:
+                _db_url += f"?schema={db_schema}"
 
-                os.environ["DATABASE_URL"] = _db_url
-                os.environ["IAM_TOKEN_DB_AUTH"] = "True"
-                
-                progress.update(task, completed=True)
-                console.print("[green]✅ IAM token generated successfully[/green]")
+            os.environ["DATABASE_URL"] = _db_url
+            os.environ["IAM_TOKEN_DB_AUTH"] = "True"
 
         ### DECRYPT ENV VAR ###
         from litellm.secret_managers.aws_secret_manager import decrypt_env_var
@@ -882,21 +872,11 @@ def run_server(  # noqa: PLR0915
             os.getenv("USE_AWS_KMS", None) is not None
             and os.getenv("USE_AWS_KMS") == "True"
         ):
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-            ) as progress:
-                task = progress.add_task("Decrypting environment variables...", total=None)
-                
-                ## V2 IMPLEMENTATION OF AWS KMS - USER WANTS TO DECRYPT MULTIPLE KEYS IN THEIR ENV
-                new_env_var = decrypt_env_var()
+            ## V2 IMPLEMENTATION OF AWS KMS - USER WANTS TO DECRYPT MULTIPLE KEYS IN THEIR ENV
+            new_env_var = decrypt_env_var()
 
-                for k, v in new_env_var.items():
-                    os.environ[k] = v
-                    
-                progress.update(task, completed=True)
-                console.print("[green]✅ Environment variables decrypted[/green]")
+            for k, v in new_env_var.items():
+                os.environ[k] = v
 
         if config is not None:
             """
@@ -904,26 +884,13 @@ def run_server(  # noqa: PLR0915
 
             read from there and save it to os.env['DATABASE_URL']
             """
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-            ) as progress:
-                task = progress.add_task("Loading configuration...", total=None)
-                
-                try:
-                    import asyncio
+            try:
+                import asyncio
 
-                except Exception:
-                    console.print(Panel(
-                        "[red]Missing configuration dependencies![/red]\n\n"
-                        "Please install with: [cyan]pip install 'litellm[proxy]'[/cyan]",
-                        title="[bold red]Import Error[/bold red]",
-                        border_style="red"
-                    ))
-                    raise ImportError(
-                        "yaml needs to be imported. Run - `pip install 'litellm[proxy]'`"
-                    )
+            except Exception:
+                raise ImportError(
+                    "yaml needs to be imported. Run - `pip install 'litellm[proxy]'`"
+                )
 
                 proxy_config = ProxyConfig()
                 _config = asyncio.run(proxy_config.get_config(config_file_path=config))
@@ -1007,68 +974,63 @@ def run_server(  # noqa: PLR0915
                 if database_url is not None and isinstance(database_url, str):
                     os.environ["DATABASE_URL"] = database_url
 
-                progress.update(task, completed=True)
-                console.print("[green]✅ Configuration loaded successfully[/green]")
-
         if (
             os.getenv("DATABASE_URL", None) is not None
             or os.getenv("DIRECT_URL", None) is not None
         ):
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-            ) as progress:
-                task = progress.add_task("Setting up database...", total=None)
-                
-                try:
-                    from litellm.secret_managers.main import get_secret
+            # Display a nice message before database setup
+            db_setup_panel = Panel(
+                "[cyan]Setting up database connection and schema...[/cyan]",
+                title="[bold blue]Database Setup[/bold blue]",
+                border_style="blue"
+            )
+            console.print(db_setup_panel)
+            
+            try:
+                from litellm.secret_managers.main import get_secret
 
-                    if os.getenv("DATABASE_URL", None) is not None:
-                        ### add connection pool + pool timeout args
-                        params = {
-                            "connection_limit": db_connection_pool_limit,
-                            "pool_timeout": db_connection_timeout,
-                        }
-                        database_url = get_secret("DATABASE_URL", default_value=None)
-                        modified_url = append_query_params(database_url, params)
-                        os.environ["DATABASE_URL"] = modified_url
-                    if os.getenv("DIRECT_URL", None) is not None:
-                        ### add connection pool + pool timeout args
-                        params = {
-                            "connection_limit": db_connection_pool_limit,
-                            "pool_timeout": db_connection_timeout,
-                        }
-                        database_url = os.getenv("DIRECT_URL")
-                        modified_url = append_query_params(database_url, params)
-                        os.environ["DIRECT_URL"] = modified_url
-                        ###
-                    subprocess.run(["prisma"], capture_output=True)
-                    is_prisma_runnable = True
-                except FileNotFoundError:
-                    is_prisma_runnable = False
+                if os.getenv("DATABASE_URL", None) is not None:
+                    ### add connection pool + pool timeout args
+                    params = {
+                        "connection_limit": db_connection_pool_limit,
+                        "pool_timeout": db_connection_timeout,
+                    }
+                    database_url = get_secret("DATABASE_URL", default_value=None)
+                    modified_url = append_query_params(database_url, params)
+                    os.environ["DATABASE_URL"] = modified_url
+                if os.getenv("DIRECT_URL", None) is not None:
+                    ### add connection pool + pool timeout args
+                    params = {
+                        "connection_limit": db_connection_pool_limit,
+                        "pool_timeout": db_connection_timeout,
+                    }
+                    database_url = os.getenv("DIRECT_URL")
+                    modified_url = append_query_params(database_url, params)
+                    os.environ["DIRECT_URL"] = modified_url
+                    ###
+                subprocess.run(["prisma"], capture_output=True)
+                is_prisma_runnable = True
+            except FileNotFoundError:
+                is_prisma_runnable = False
 
-                if is_prisma_runnable:
-                    from litellm.proxy.db.check_migration import check_prisma_schema_diff
-                    from litellm.proxy.db.prisma_client import (
-                        PrismaManager,
-                        should_update_prisma_schema,
+            if is_prisma_runnable:
+                from litellm.proxy.db.check_migration import check_prisma_schema_diff
+                from litellm.proxy.db.prisma_client import (
+                    PrismaManager,
+                    should_update_prisma_schema,
+                )
+
+                if (
+                    should_update_prisma_schema(
+                        general_settings.get("disable_prisma_schema_update")
                     )
-
-                    if (
-                        should_update_prisma_schema(
-                            general_settings.get("disable_prisma_schema_update")
-                        )
-                        is False
-                    ):
-                        check_prisma_schema_diff(db_url=None)
-                    else:
-                        PrismaManager.setup_database(use_migrate=use_prisma_migrate)
+                    is False
+                ):
+                    check_prisma_schema_diff(db_url=None)
                 else:
-                    console.print("[yellow]⚠️  Unable to connect to DB. DATABASE_URL found but Prisma not available.[/yellow]")
-                    
-                progress.update(task, completed=True)
-                console.print("[green]✅ Database setup completed[/green]")
+                    PrismaManager.setup_database(use_migrate=use_prisma_migrate)
+            else:
+                console.print("[yellow]⚠️  Unable to connect to DB. DATABASE_URL found but Prisma not available.[/yellow]")
                 
         # Check port availability
         if port == 4000 and ProxyInitializationHelpers._is_port_in_use(port):
