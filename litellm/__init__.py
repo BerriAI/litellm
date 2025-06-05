@@ -17,6 +17,7 @@ from litellm.types.utils import (
     all_litellm_params as _litellm_completion_params,
     CredentialItem,
 )  # maintain backwards compatibility for root param
+from litellm.types.integrations.prometheus import CustomPrometheusMetricGroup
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,
@@ -301,6 +302,7 @@ disable_end_user_cost_tracking: Optional[bool] = None
 disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 custom_prometheus_metadata_labels: List[str] = []
+custom_prometheus_metric_groups: List[CustomPrometheusMetricGroup] = []
 #### REQUEST PRIORITIZATION ####
 priority_reservation: Optional[Dict[str, float]] = None
 
