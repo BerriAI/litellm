@@ -8,6 +8,7 @@ import { Text } from "@tremor/react";
 import { Team } from "../key_team_helpers/key_list";
 import _ReactDiffViewer from 'react-diff-viewer';
 import React from "react";
+import Image from 'next/image';
 import Prism from 'prismjs';
 import 'prismjs/components/prism-json';
 import 'prismjs/themes/prism-tomorrow.css';
@@ -284,7 +285,6 @@ export default function AuditLogs({
   accessToken,
   isActive,
   premiumUser,
-  allTeams,
 }: AuditLogsProps) {
   const [startTime, setStartTime] = useState<string>(
     moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm")
@@ -511,8 +511,26 @@ export default function AuditLogs({
 
   if (!premiumUser) {
     return (
-      <div>
-        <Text>This is a LiteLLM Enterprise feature, and requires a valid key to use. Get a trial key <a href="https://litellm.ai/pricing" target="_blank" rel="noopener noreferrer">here</a>.</Text>
+      <div style={{ textAlign: 'center', marginTop: '20px' }}>
+        <Text style={{ display: 'block', marginBottom: '10px' }}>
+          This is a LiteLLM Enterprise feature, and requires a valid key to use. 
+        </Text>
+        <Text style={{ display: 'block', marginBottom: '20px', fontStyle: 'italic' }}>
+          Here&apos;s a preview of what Audit Logs offer:
+        </Text>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img 
+          src="/ui/audit-logs-preview.png"
+          alt="Audit Logs Preview" 
+          style={{ 
+            maxWidth: '100%', 
+            maxHeight: '700px',
+            border: '1px solid #ccc', 
+            borderRadius: '8px',
+            boxShadow: '0 4px 8px rgba(0,0,0,0.1)',
+            margin: '0 auto'
+          }} 
+        />
       </div>
     );
   }
