@@ -12015,6 +12015,34 @@
         "mode": "chat",
         "supports_tool_choice": true
     },
+    "together_ai/deepseek-ai/DeepSeek-R1": {
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
+    "together_ai/deepseek-ai/DeepSeek-R1-Distill-Llama-70B": {
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
+    "together_ai/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B": {
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
+    "together_ai/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B": {
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
     "together_ai/mistralai/Mistral-Small-24B-Instruct-2501": {
         "litellm_provider": "together_ai",
         "supports_function_calling": true,
