@@ -26,7 +26,7 @@ import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
 from litellm import verbose_logger
 from litellm.constants import (
-    DEFAULT_REASONING_EFFORT_NONE_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
@@ -424,9 +424,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
                 "includeThoughts": True,
             }
-        elif reasoning_effort == "none":
+        elif reasoning_effort == "disable":
             return {
-                "thinkingBudget": DEFAULT_REASONING_EFFORT_NONE_THINKING_BUDGET,
+                "thinkingBudget": DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET,
                 "includeThoughts": False,
             }
         else:
@@ -1029,6 +1029,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         tools: Optional[List[ChatCompletionToolCallChunk]] = []
         functions: Optional[ChatCompletionToolCallFunctionChunk] = None
 
+        print("------JS: TESTTTTT ", _candidates)
+
         for idx, candidate in enumerate(_candidates):
             if "content" not in candidate:
                 continue
@@ -1144,6 +1146,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 model_response=model_response,
                 completion_response=completion_response,
             )
+
+        print("------JS: REQUEST DATA ", request_data)
+        print("------JS: TESTTTTT ", raw_response.text)
 
         _candidates = completion_response.get("candidates")
         if _candidates and len(_candidates) > 0:
