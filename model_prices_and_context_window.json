@@ -6474,7 +6474,8 @@
             "text"
         ],
         "source": "https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-preview",
-        "supports_web_search": true
+        "supports_web_search": true,
+        "supports_url_context": true
     },
     "gemini/gemini-2.5-flash-preview-04-17": {
         "max_tokens": 65535,
@@ -6556,7 +6557,8 @@
         ],
         "source": "https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-preview",
         "supports_parallel_function_calling": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "supports_url_context": true
     },
     "gemini-2.5-flash-preview-04-17": {
         "max_tokens": 65535,
@@ -6633,7 +6635,8 @@
         "supports_tool_choice": true,
         "source": "https://ai.google.dev/pricing#2_0flash",
         "supports_parallel_function_calling": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "supports_url_context": true
     },
     "gemini-2.0-flash-lite": {
         "max_input_tokens": 1048576,
@@ -6966,7 +6969,8 @@
         ],
         "supports_tool_choice": true,
         "source": "https://ai.google.dev/pricing#2_0flash",
-        "supports_web_search": true
+        "supports_web_search": true,
+        "supports_url_context": true
     },
     "gemini/gemini-2.0-flash-lite": {
         "max_input_tokens": 1048576,
@@ -7107,7 +7111,8 @@
             "text"
         ],
         "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-2.5-pro-preview",
-        "supports_web_search": true
+        "supports_web_search": true,
+        "supports_url_context": true
     },
     "gemini/gemini-2.5-pro-preview-03-25": {
         "max_tokens": 65535,
@@ -8815,20 +8820,6 @@
         "max_input_tokens": 1024,
         "input_cost_per_token": 1e-07,
         "input_cost_per_image": 0.0001,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "cohere",
-        "mode": "embedding",
-        "supports_image_input": true,
-        "supports_embedding_image_input": true,
-        "metadata": {
-            "notes": "'supports_image_input' is a deprecated field. Use 'supports_embedding_image_input' instead."
-        }
-    },
-    "embed-v4.0": {
-        "max_tokens": 1024,
-        "max_input_tokens": 1024,
-        "input_cost_per_token": 1.2e-07,
-        "input_cost_per_image": 4.7e-07,
         "output_cost_per_token": 0.0,
         "litellm_provider": "cohere",
         "mode": "embedding",
@@ -12009,34 +12000,6 @@
         "supports_tool_choice": true
     },
     "together_ai/deepseek-ai/DeepSeek-V3": {
-        "litellm_provider": "together_ai",
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "mode": "chat",
-        "supports_tool_choice": true
-    },
-    "together_ai/deepseek-ai/DeepSeek-R1": {
-        "litellm_provider": "together_ai",
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "mode": "chat",
-        "supports_tool_choice": true
-    },
-    "together_ai/deepseek-ai/DeepSeek-R1-Distill-Llama-70B": {
-        "litellm_provider": "together_ai",
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "mode": "chat",
-        "supports_tool_choice": true
-    },
-    "together_ai/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B": {
-        "litellm_provider": "together_ai",
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "mode": "chat",
-        "supports_tool_choice": true
-    },
-    "together_ai/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B": {
         "litellm_provider": "together_ai",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
