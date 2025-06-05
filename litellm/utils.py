@@ -4507,7 +4507,6 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ):
                     _model_info = None
 
-             Special fallback handling for litellm_proxy models
             if _model_info is None and custom_llm_provider == "litellm_proxy" and "/" in model:
                 # For litellm_proxy models, try to get model info for the underlying model with its correct provider
                 try:
