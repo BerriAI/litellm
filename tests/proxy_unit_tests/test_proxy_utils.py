@@ -547,6 +547,53 @@ def test_update_internal_user_params():
     )
 
 
+def test_update_internal_new_user_params_with_no_initial_role_set():
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_internal_new_user_params,
+    )
+    from litellm.proxy._types import NewUserRequest
+
+    litellm.default_internal_user_params = {
+        "max_budget": 100,
+        "budget_duration": "30d",
+        "models": ["gpt-3.5-turbo"],
+    }
+
+    data = NewUserRequest(user_email="krrish3@berri.ai")
+    data_json = data.model_dump()
+    updated_data_json = _update_internal_new_user_params(data_json, data)
+    assert updated_data_json["models"] == litellm.default_internal_user_params["models"]
+    assert (
+        updated_data_json["max_budget"]
+        == litellm.default_internal_user_params["max_budget"]
+    )
+    assert (
+        updated_data_json["budget_duration"]
+        == litellm.default_internal_user_params["budget_duration"]
+    )
+
+def test_update_internal_new_user_params_with_user_defined_values():
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_internal_new_user_params,
+    )
+    from litellm.proxy._types import NewUserRequest
+
+    litellm.default_internal_user_params = {
+        "max_budget": 100,
+        "budget_duration": "30d",
+        "models": ["gpt-3.5-turbo"],
+        "user_role": "proxy_admin",
+    }
+
+    data = NewUserRequest(user_email="krrish3@berri.ai", max_budget=1000, budget_duration="1mo")
+    data_json = data.model_dump()
+    updated_data_json = _update_internal_new_user_params(data_json, data)
+    assert updated_data_json["user_email"] == "krrish3@berri.ai"
+    assert updated_data_json["user_role"] == "proxy_admin"
+    assert updated_data_json["max_budget"] == 1000
+    assert updated_data_json["budget_duration"] == "1mo"
+    
+
 @pytest.mark.asyncio
 async def test_proxy_config_update_from_db():
     from litellm.proxy.proxy_server import ProxyConfig
@@ -592,7 +639,8 @@ async def test_proxy_config_update_from_db():
         }
 
 
-def test_prepare_key_update_data():
+@pytest.mark.asyncio
+async def test_prepare_key_update_data():
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         prepare_key_update_data,
     )
@@ -600,15 +648,15 @@ def test_prepare_key_update_data():
 
     existing_key_row = MagicMock()
     data = UpdateKeyRequest(key="test_key", models=["gpt-4"], duration="120s")
-    updated_data = prepare_key_update_data(data, existing_key_row)
+    updated_data = await prepare_key_update_data(data, existing_key_row)
     assert "expires" in updated_data
 
     data = UpdateKeyRequest(key="test_key", metadata={})
-    updated_data = prepare_key_update_data(data, existing_key_row)
+    updated_data = await prepare_key_update_data(data, existing_key_row)
     assert updated_data["metadata"] == {}
 
     data = UpdateKeyRequest(key="test_key", metadata=None)
-    updated_data = prepare_key_update_data(data, existing_key_row)
+    updated_data = await prepare_key_update_data(data, existing_key_row)
     assert updated_data["metadata"] is None
 
 
@@ -955,6 +1003,35 @@ def test_update_config_fields():
     )
     assert team_config["langfuse_public_key"] == "my-fake-key"
     assert team_config["langfuse_secret"] == "my-fake-secret"
+
+def test_update_config_fields_default_internal_user_params(monkeypatch):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    monkeypatch.setattr(litellm, "default_internal_user_params", None)
+
+
+    args = {
+        "current_config": {},
+        "param_name": "litellm_settings",
+        "db_param_value": {
+            "default_internal_user_params": {
+                "user_role": "proxy_admin",
+                "max_budget": 1000,
+                "budget_duration": "1mo",
+            },
+        },
+    }
+    updated_config = proxy_config._update_config_fields(**args)
+
+    assert litellm.default_internal_user_params == {
+        "user_role": "proxy_admin",
+        "max_budget": 1000,
+        "budget_duration": "1mo",
+    }
+
+    monkeypatch.setattr(litellm, "default_internal_user_params", None) # reset to default
 
 
 @pytest.mark.parametrize(

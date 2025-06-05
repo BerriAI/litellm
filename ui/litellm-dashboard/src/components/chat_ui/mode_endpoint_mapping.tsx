@@ -5,6 +5,7 @@ export enum ModelMode {
     IMAGE_GENERATION = "image_generation",
     CHAT = "chat",
     RESPONSES = "responses",
+    IMAGE_EDITS = "image_edits",
     // add additional modes as needed
   }
   
@@ -13,6 +14,7 @@ export enum ModelMode {
     IMAGE = "image",
     CHAT = "chat",
     RESPONSES = "responses",
+    IMAGE_EDITS = "image_edits",
     // add additional endpoint types if required
   }
   
@@ -21,6 +23,7 @@ export enum ModelMode {
     [ModelMode.IMAGE_GENERATION]: EndpointType.IMAGE,
     [ModelMode.CHAT]: EndpointType.CHAT,
     [ModelMode.RESPONSES]: EndpointType.RESPONSES,
+    [ModelMode.IMAGE_EDITS]: EndpointType.IMAGE_EDITS,
   };
 
   export const getEndpointType = (mode: string): EndpointType => {

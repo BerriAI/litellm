@@ -1,7 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
     output: 'export',
-    basePath: process.env.UI_BASE_PATH || '/ui',
+    basePath: '',
+    assetPrefix: '/litellm',  // This will make assets load from /litellm/_next/...
 };
 
 nextConfig.experimental = {

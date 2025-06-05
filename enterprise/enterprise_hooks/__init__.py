@@ -1,4 +1,3 @@
-import os
 from typing import Dict, Literal, Type, Union
 
 from litellm.integrations.custom_logger import CustomLogger

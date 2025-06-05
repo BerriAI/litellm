@@ -1122,6 +1122,21 @@ class RedisCache(BaseCache):
             )
             raise e
 
+    async def handle_lpop_count_for_older_redis_versions(
+        self, pipe: pipeline, key: str, count: int
+    ) -> List[bytes]:
+        result: List[bytes] = []
+        for _ in range(count):
+            pipe.lpop(key)
+            results = await pipe.execute()
+
+            # Filter out None values and decode bytes
+            for r in results:
+                if r is not None:
+                    result.append(r)
+
+        return result
+
     async def async_lpop(
         self,
         key: str,
@@ -1133,7 +1148,22 @@ class RedisCache(BaseCache):
         start_time = time.time()
         print_verbose(f"LPOP from Redis list: key: {key}, count: {count}")
         try:
-            result = await _redis_client.lpop(key, count)
+            major_version: int = 7
+            # Check Redis version and use appropriate method
+            if self.redis_version != "Unknown":
+                # Parse version string like "6.0.0" to get major version
+                major_version = int(self.redis_version.split(".")[0])
+
+            if count is not None and major_version < 7:
+                # For Redis < 7.0, use pipeline to execute multiple LPOP commands
+                async with _redis_client.pipeline(transaction=False) as pipe:
+                    result = await self.handle_lpop_count_for_older_redis_versions(
+                        pipe, key, count
+                    )
+            else:
+                # For Redis >= 7.0 or when count is None, use native LPOP with count
+                result = await _redis_client.lpop(key, count)
+
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time

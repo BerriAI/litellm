@@ -1,5 +1,6 @@
 # litellm/proxy/guardrails/guardrail_initializers.py
 import litellm
+from litellm.proxy._types import CommonProxyErrors
 from litellm.types.guardrails import *
 
 
@@ -112,6 +113,7 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
         pii_entities_config=litellm_params.pii_entities_config,
         presidio_analyzer_api_base=litellm_params.presidio_analyzer_api_base,
         presidio_anonymizer_api_base=litellm_params.presidio_anonymizer_api_base,
+        presidio_language=litellm_params.presidio_language,
     )
     litellm.logging_callback_manager.add_litellm_callback(_presidio_callback)
 
@@ -124,6 +126,7 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
             default_on=litellm_params.default_on,
             presidio_analyzer_api_base=litellm_params.presidio_analyzer_api_base,
             presidio_anonymizer_api_base=litellm_params.presidio_anonymizer_api_base,
+            presidio_language=litellm_params.presidio_language,
         )
         litellm.logging_callback_manager.add_litellm_callback(_success_callback)
 
@@ -131,9 +134,15 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
 
 
 def initialize_hide_secrets(litellm_params: LitellmParams, guardrail: Guardrail):
-    from litellm_enterprise.enterprise_callbacks.secret_detection import (
-        _ENTERPRISE_SecretDetection,
-    )
+    try:
+        from litellm_enterprise.enterprise_callbacks.secret_detection import (
+            _ENTERPRISE_SecretDetection,
+        )
+    except ImportError:
+        raise Exception(
+            "Trying to use Secret Detection"
+            + CommonProxyErrors.missing_enterprise_package.value
+        )
 
     _secret_detection_object = _ENTERPRISE_SecretDetection(
         detect_secrets_config=litellm_params.detect_secrets_config,
@@ -163,3 +172,18 @@ def initialize_guardrails_ai(litellm_params, guardrail):
     litellm.logging_callback_manager.add_litellm_callback(_guardrails_ai_callback)
 
     return _guardrails_ai_callback
+
+def initialize_pangea(litellm_params, guardrail):
+    from litellm.proxy.guardrails.guardrail_hooks.pangea import PangeaHandler
+
+    _pangea_callback = PangeaHandler(
+        guardrail_name=guardrail["guardrail_name"],
+        pangea_input_recipe=litellm_params.pangea_input_recipe,
+        pangea_output_recipe=litellm_params.pangea_output_recipe,
+        api_base=litellm_params.api_base,
+        api_key=litellm_params.api_key,
+        default_on=litellm_params.default_on,
+    )
+    litellm.logging_callback_manager.add_litellm_callback(_pangea_callback)
+
+    return _pangea_callback
