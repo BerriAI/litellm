@@ -28,7 +28,7 @@ pip install litellm
 To obtain your Clarifai Personal access token follow this [link](https://docs.clarifai.com/clarifai-basics/authentication/personal-access-tokens/).
 
 ```python
-os.environ["CLARIFAI_PAT"] = "YOUR_CLARIFAI_PAT"  # CLARIFAI_PAT
+os.environ["CLARIFAI_PAT"] = "CLARIFAI_API_KEY"  # CLARIFAI_PAT
 ```
 
 ## Basic Usage
@@ -130,7 +130,7 @@ import litellm
 
 for chunk in litellm.completion(
     model="openai/https://clarifai.com/openai/chat-completion/models/o4-mini",
-    api_key="YOUR_CLARIFAI_PAT",
+    api_key="CLARIFAI_API_KEY",
     api_base="https://api.clarifai.com/v2/ext/openai/v1",
     messages=[
         {"role": "user", "content": "Tell me a fun fact about space."}
@@ -168,7 +168,7 @@ tools = [{
 
 response = litellm.completion(
     model="openai/https://clarifai.com/openai/chat-completion/models/o4-mini",
-    api_key="YOUR_CLARIFAI_PAT",
+    api_key="CLARIFAI_API_KEY",
     api_base="https://api.clarifai.com/v2/ext/openai/v1",
     messages=[{"role": "user", "content": "What is the weather in Paris today?"}],
     tools=tools,
