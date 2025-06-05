@@ -980,8 +980,11 @@ class RedisCache(BaseCache):
                 pipe.expire(cache_key, _td)
         # Execute the pipeline and return results
         results = await pipe.execute()
-        print_verbose(f"Increment ASYNC Redis Cache PIPELINE: results: {results}")
-        return results
+        # only return float values
+        verbose_logger.debug(
+            f"Increment ASYNC Redis Cache PIPELINE: results: {results}"
+        )
+        return [r for r in results if isinstance(r, float)]
 
     async def async_increment_pipeline(
         self, increment_list: List[RedisPipelineIncrementOperation], **kwargs

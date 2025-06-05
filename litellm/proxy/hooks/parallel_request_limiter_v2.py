@@ -63,6 +63,8 @@ class _PROXY_MaxParallelRequestsHandler_v2(BaseRoutingStrategy, CustomLogger):
     # Class variables or attributes
     def __init__(self, internal_usage_cache: InternalUsageCache):
         self.internal_usage_cache = internal_usage_cache
+        self.slots = 6  # 6 slots per minute
+        self.slot_window_size = 10  # 10s per slot
         BaseRoutingStrategy.__init__(
             self,
             dual_cache=internal_usage_cache.dual_cache,
@@ -123,8 +125,10 @@ class _PROXY_MaxParallelRequestsHandler_v2(BaseRoutingStrategy, CustomLogger):
     def _get_slots_to_check(self, current_slot: int) -> List[str]:
         slots_to_check = []
         current_time = datetime.now()
-        for i in range(4):
-            slot_number = (current_slot - i) % 4  # This ensures we wrap around properly
+        for i in range(self.slots):
+            slot_number = (
+                current_slot - i
+            ) % self.slots  # This ensures we wrap around properly
             minute = current_time.minute
             hour = current_time.hour
 
@@ -164,7 +168,7 @@ class _PROXY_MaxParallelRequestsHandler_v2(BaseRoutingStrategy, CustomLogger):
         # Get current time and calculate the last 4 15s slots
         current_time = datetime.now()
         current_slot = (
-            current_time.second // 15
+            current_time.second // self.slot_window_size
         )  # This gives us 0-3 for the current 15s slot
         slots_to_check = self._get_slots_to_check(current_slot)
         slot_cache_keys = []
@@ -189,7 +193,7 @@ class _PROXY_MaxParallelRequestsHandler_v2(BaseRoutingStrategy, CustomLogger):
                         (key, -1 if increment_value_by_group[group] == 1 else 0)
                     )
                 else:
-                    self.add_to_in_memory_keys_to_update(key=key)
+                    increment_list.append((key, 0))
                 slot_cache_keys.append(key)
 
         if (
@@ -441,7 +445,7 @@ class _PROXY_MaxParallelRequestsHandler_v2(BaseRoutingStrategy, CustomLogger):
         current_hour = current_time.hour
         current_minute = current_time.minute
         current_slot = (
-            current_time.second // 15
+            current_time.second // self.slot_window_size
         )  # This gives us 0-3 for the current 15s slot
         slot_key = f"{current_time.strftime('%Y-%m-%d')}-{current_hour:02d}-{current_minute:02d}-{current_slot}"
         for rate_limit_type in rate_limit_types:
