@@ -1029,8 +1029,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         tools: Optional[List[ChatCompletionToolCallChunk]] = []
         functions: Optional[ChatCompletionToolCallFunctionChunk] = None
 
-        print("------JS: TESTTTTT ", _candidates)
-
         for idx, candidate in enumerate(_candidates):
             if "content" not in candidate:
                 continue
@@ -1146,9 +1144,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 model_response=model_response,
                 completion_response=completion_response,
             )
-
-        print("------JS: REQUEST DATA ", request_data)
-        print("------JS: TESTTTTT ", raw_response.text)
 
         _candidates = completion_response.get("candidates")
         if _candidates and len(_candidates) > 0:
