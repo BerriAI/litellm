@@ -642,7 +642,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             _litellm_metadata
             and isinstance(_litellm_metadata, dict)
             and "user_id" in _litellm_metadata
-            and not _valid_user_id(_litellm_metadata.get("user_id", None))
+            and _valid_user_id(_litellm_metadata.get("user_id", None))
         ):
             optional_params["metadata"] = {"user_id": _litellm_metadata["user_id"]}
 
