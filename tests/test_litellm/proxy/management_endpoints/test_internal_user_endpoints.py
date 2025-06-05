@@ -237,3 +237,27 @@ def test_update_internal_user_params_reset_spend_and_max_budget():
     assert "user_id" in non_default_values  # Should not add user_id if not provided
     assert non_default_values["user_id"] == "test_user_id"
     assert "budget_duration" not in non_default_values  # Should not add default values
+
+def test_assign_user_team_role_at_user_creation():
+    """
+    Test that new_user adds a new user with user team role.
+    Relevant Pull Request: https://github.com/BerriAI/litellm/pull/10579
+    """
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    # Create test data
+    test_team_data = NewTeamRequest(team_alias="tesr_team_1")
+
+    # Create new team
+    response = new_team(test_team_data, None)
+    # Assign team to new user and assign user role to new user
+
+"""def test_assigning_admin_team_role_at_user_creation_returns_error():
+    
+    Test that new_user returns error when adding a new user with admin team role.
+    Relevant Pull Request: https://github.com/BerriAI/litellm/pull/10579
+    
+
+    # Create new team
+    # Assign team to new user and assign admin role to new user"""
