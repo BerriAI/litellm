@@ -294,6 +294,36 @@ class RedisCache(BaseCache):
             )
             raise e
 
+    def async_register_script(self, script: str) -> Any:
+        """
+        Register a Lua script with Redis asynchronously.
+        Works with both standalone Redis and Redis Cluster.
+
+        Args:
+            script (str): The Lua script to register
+
+        Returns:
+            Any: A script object that can be called with keys and args
+        """
+        try:
+            _redis_client = self.init_async_client()
+            # For standalone Redis
+            if hasattr(_redis_client, "register_script"):
+                return _redis_client.register_script(script)  # type: ignore
+            # For Redis Cluster
+            else:
+                # Load the script and get its SHA
+                script_sha = _redis_client.script_load(script)
+
+                # Return a callable that uses evalsha
+                async def script_callable(keys: List[str], args: List[Any]) -> Any:
+                    return _redis_client.evalsha(script_sha, len(keys), *keys, *args)  # type: ignore
+
+                return script_callable
+        except Exception as e:
+            verbose_logger.error(f"Error registering Redis script: {str(e)}")
+            raise e
+
     async def async_set_cache(self, key, value, **kwargs):
         from redis.asyncio import Redis
 

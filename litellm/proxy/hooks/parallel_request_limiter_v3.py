@@ -27,6 +27,27 @@ else:
     Span = Any
     InternalUsageCache = Any
 
+RATE_LIMITER_SCRIPT = """
+local counter_key = KEYS[1]
+local window_key = KEYS[2]
+local now = ARGV[1]
+local window_size = ARGV[2]
+
+-- Check if window exists and is valid
+local window_start = redis.call('GET', window_key)
+if not window_start or (tonumber(now) - tonumber(window_start)) >= tonumber(window_size) then
+    -- Reset window and counter
+    redis.call('SET', window_key, now)
+    redis.call('SET', counter_key, 0)
+    redis.call('EXPIRE', window_key, window_size)
+    redis.call('EXPIRE', counter_key, window_size)
+    return 1
+end
+
+-- Increment counter
+return redis.call('INCR', counter_key)
+"""
+
 
 class RateLimitDescriptor(TypedDict):
     key: str
@@ -42,6 +63,14 @@ class RateLimitResponse(TypedDict):
 class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def __init__(self, internal_usage_cache: InternalUsageCache):
         self.internal_usage_cache = internal_usage_cache
+        if self.internal_usage_cache.dual_cache.redis_cache is not None:
+            self.rate_limiter_script = (
+                self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
+                    RATE_LIMITER_SCRIPT
+                )
+            )
+        else:
+            self.rate_limiter_script = None
 
     def print_verbose(self, print_statement):
         try:
@@ -50,6 +79,64 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 print(print_statement)  # noqa
         except Exception:
             pass
+
+    async def rate_limiter_script_handler(
+        self,
+        window_key: str,
+        counter_key: str,
+        now: float,
+        window_size: float,
+        parent_otel_span: Optional[Span] = None,
+    ) -> Any:
+        """
+        Update Redis
+        Update in-memory cache
+        Return the new count
+        """
+        if self.rate_limiter_script is not None:
+            result = await self.rate_limiter_script(
+                keys=[window_key, counter_key], args=[now, window_size]
+            )
+            # Update in-memory cache
+            await self.internal_usage_cache.async_set_cache(
+                key=counter_key,
+                value=result,
+                ttl=window_size,
+                litellm_parent_otel_span=parent_otel_span,
+                local_only=True,
+            )
+        else:  # in-memory only implementation
+            current_window = await self.internal_usage_cache.async_get_cache(
+                key=window_key,
+                litellm_parent_otel_span=parent_otel_span,
+            )
+            if current_window is None or (now - current_window) >= window_size:
+                # Set new window start time
+                await self.internal_usage_cache.async_set_cache(
+                    key=window_key,
+                    value=now,
+                    ttl=window_size,
+                    litellm_parent_otel_span=parent_otel_span,
+                )
+                # Reset counter
+                await self.internal_usage_cache.async_set_cache(
+                    key=counter_key,
+                    value=0,
+                    ttl=window_size,
+                    litellm_parent_otel_span=parent_otel_span,
+                )
+                result = 0
+            else:
+                # Get current count
+                result = (
+                    await self.internal_usage_cache.async_get_cache(
+                        key=counter_key,
+                        litellm_parent_otel_span=parent_otel_span,
+                    )
+                    or 0
+                )
+
+        return result
 
     async def should_rate_limit(
         self,
@@ -75,46 +162,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # Use atomic operations to check and increment in one go
             try:
                 # Get current window info
-                window_key = f"{key}:{value}:window"
-                current_window = await self.internal_usage_cache.async_get_cache(
-                    key=window_key,
-                    litellm_parent_otel_span=parent_otel_span,
-                )
+                window_key = f"{{{key}:{value}}}:window"
+                counter_key = f"{{{key}:{value}}}:requests"
 
                 now = datetime.now().timestamp()
 
-                # If no window exists or window has expired, reset it
-                # if current_window is None or (now - current_window) >= window_size:
-                #     print("resetting window")
-                #     # Set new window start time
-                #     await self.internal_usage_cache.async_set_cache(
-                #         key=window_key,
-                #         value=now,
-                #         ttl=window_size,
-                #         litellm_parent_otel_span=parent_otel_span,
-                #     )
-                #     # Reset counter
-                #     await self.internal_usage_cache.async_set_cache(
-                #         key=f"{key}:{value}:requests",
-                #         value=0,
-                #         ttl=window_size,
-                #         litellm_parent_otel_span=parent_otel_span,
-                #     )
-                #     current_count = 0
-                # else:
-                #     # Get current count
-                #     current_count = (
-                #         await self.internal_usage_cache.async_get_cache(
-                #             key=f"{key}:{value}:requests",
-                #             litellm_parent_otel_span=parent_otel_span,
-                #         )
-                #         or 0
-                #     )
-                # Get current count
+                # Get current count - local only
                 current_count = (
                     await self.internal_usage_cache.async_get_cache(
-                        key=f"{key}:{value}:requests",
+                        key=counter_key,
                         litellm_parent_otel_span=parent_otel_span,
+                        local_only=True,
                     )
                     or 0
                 )
@@ -130,18 +188,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     continue
 
                 # If we're under the limit, try to increment atomically
-                new_count = await self.internal_usage_cache.async_increment_cache(
-                    key=f"{key}:{value}:requests",
-                    value=1,
-                    ttl=window_size,
-                    litellm_parent_otel_span=parent_otel_span,
+                new_count = await self.rate_limiter_script_handler(
+                    window_key=window_key,
+                    counter_key=counter_key,
+                    now=now,
+                    window_size=window_size,
                 )
 
                 # Double check after increment
-                if new_count > requests_limit:
+                if new_count + 1 > requests_limit:
                     # We went over the limit, decrement back
                     await self.internal_usage_cache.async_increment_cache(
-                        key=f"{key}:{value}:requests",
+                        key=counter_key,
                         value=-1,
                         ttl=window_size,
                         litellm_parent_otel_span=parent_otel_span,
@@ -159,7 +217,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         "limit_remaining": max(0, requests_limit - new_count),
                     }
             except Exception as e:
-                verbose_proxy_logger.error(f"Error in rate limit check: {str(e)}")
+                verbose_proxy_logger.exception(f"Error in rate limit check: {str(e)}")
                 status = {
                     "code": "OVER_LIMIT",
                     "current_limit": requests_limit,
