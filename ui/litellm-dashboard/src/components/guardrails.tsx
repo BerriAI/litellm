@@ -13,9 +13,11 @@ import { Modal, message } from "antd";
 import { getGuardrailsList, deleteGuardrailCall } from "./networking";
 import AddGuardrailForm from "./guardrails/add_guardrail_form";
 import GuardrailTable from "./guardrails/guardrail_table";
+import { isAdminRole } from "@/utils/roles";
 
 interface GuardrailsPanelProps {
   accessToken: string | null;
+  userRole?: string;
 }
 
 interface GuardrailItem {
@@ -35,12 +37,15 @@ interface GuardrailsResponse {
   guardrails: GuardrailItem[];
 }
 
-const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken }) => {
+const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole }) => {
   const [guardrailsList, setGuardrailsList] = useState<GuardrailItem[]>([]);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [guardrailToDelete, setGuardrailToDelete] = useState<{id: string, name: string} | null>(null);
+  const [isViewingGuardrailInfo, setIsViewingGuardrailInfo] = useState(false);
+  
+  const isAdmin = userRole ? isAdminRole(userRole) : false;
 
   const fetchGuardrails = async () => {
     if (!accessToken) {
@@ -103,15 +108,17 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken }) => {
 
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
-      <div className="flex justify-between items-center mb-4">
-        <Button 
-          icon={PlusIcon} 
-          onClick={handleAddGuardrail}
-          disabled={!accessToken}
-        >
-          Add Guardrail
-        </Button>
-      </div>
+      {!isViewingGuardrailInfo && (
+        <div className="flex justify-between items-center mb-4">
+          <Button 
+            icon={PlusIcon} 
+            onClick={handleAddGuardrail}
+            disabled={!accessToken}
+          >
+            Add Guardrail
+          </Button>
+        </div>
+      )}
       
       <GuardrailTable 
         guardrailsList={guardrailsList}
@@ -119,6 +126,8 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken }) => {
         onDeleteClick={handleDeleteClick}
         accessToken={accessToken}
         onGuardrailUpdated={fetchGuardrails}
+        isAdmin={isAdmin}
+        onShowGuardrailInfo={setIsViewingGuardrailInfo}
       />
 
       <AddGuardrailForm 

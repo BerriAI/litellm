@@ -44,7 +44,7 @@ class BaseResponsesAPIStreamingIterator:
         self.responses_api_provider_config = responses_api_provider_config
         self.completed_response: Optional[ResponsesAPIStreamingResponse] = None
         self.start_time = datetime.now()
-        
+
         # set request kwargs
         self.litellm_metadata = litellm_metadata
         self.custom_llm_provider = custom_llm_provider
@@ -330,7 +330,8 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def _collect_text(self, resp: ResponsesAPIResponse) -> str:
         out = ""
         for out_item in resp.output:
-            if out_item.type == "message":
+            item_type = getattr(out_item, "type", None)
+            if item_type == "message":
                 for c in getattr(out_item, "content", []):
                     out += c.text
         return out

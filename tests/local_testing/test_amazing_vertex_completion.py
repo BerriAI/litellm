@@ -65,6 +65,7 @@ VERTEX_MODELS_TO_NOT_TEST = [
     "gemini-2.0-flash-exp",
     "gemini-2.0-flash-thinking-exp",
     "gemini-2.0-flash-thinking-exp-01-21",
+    "gemini-2.0-flash-preview-image-generation",
 ]
 
 
@@ -1530,6 +1531,61 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
 
             assert resp.model == model.split("/")[1]
 
+@pytest.mark.asyncio
+async def test_anthropic_message_via_anthropic_messages():
+    from litellm.llms.custom_httpx.llm_http_handler import AsyncHTTPHandler
+    from unittest.mock import MagicMock, AsyncMock
+
+    load_vertex_ai_credentials()
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.set_verbose = True
+    client = AsyncHTTPHandler()
+
+    httpx_response = AsyncMock()
+    httpx_response.side_effect = vertex_httpx_mock_post_valid_response_anthropic
+
+    call_1_kwargs = {}
+    call_2_kwargs = {}
+    with patch.object(client, "post", new=httpx_response) as mock_call:
+        messages = [{"role": "user", "content": "List 5 cookie recipes"}]
+        response = await litellm.anthropic_messages(model="vertex_ai/claude-3-5-sonnet@20240620", messages=messages, max_tokens=100, client=client)
+
+        print(f"response: {response}")
+        assert mock_call.call_count == 1
+        call_1_kwargs = mock_call.call_args.kwargs
+
+    with patch.object(client, "post", new=httpx_response) as mock_call:
+        response_2 = await litellm.acompletion(model="vertex_ai/claude-3-5-sonnet@20240620", messages=messages, max_tokens=100, client=client)
+        print(f"response_2: {response_2}")
+        call_args = mock_call.call_args
+        print(f"call_args: {call_args}")
+        call_2_kwargs = mock_call.call_args.kwargs
+        call_2_kwargs["url"] = call_args[0][0]
+    
+    """
+    Compare Call 1 and Call 2
+
+    Expect:
+        - url 
+        - headers
+        - data / json
+
+        to be the same, except for the Authorization header.
+    """
+    print(f"call_1_kwargs: {call_1_kwargs}")
+    print(f"call_2_kwargs: {call_2_kwargs}")
+    assert call_1_kwargs["url"] == call_2_kwargs["url"], f"Expected url to be the same, but got {call_1_kwargs['url']} and Expected {call_2_kwargs['url']}"
+    assert "Authorization".lower() in [k.lower() for k in call_1_kwargs["headers"].keys()], f"Expected Authorization header to be present in call_1_kwargs, but got {call_1_kwargs['headers'].keys()}"
+    assert "content-type".lower() in [k.lower() for k in call_1_kwargs["headers"].keys()], f"Expected Content-Type header to be present in call_1_kwargs, but got {call_1_kwargs['headers'].keys()}"
+
+    ## validate request body
+    print(f"call 1 kwargs keys: {call_1_kwargs.keys()}")
+    print(f"call_2_kwargs['json']: {type(call_2_kwargs['json'])}")
+    print(f"call_1_kwargs['data']: {type(call_1_kwargs['data'])}")
+    call_1_kwargs_data = json.loads(call_1_kwargs["data"])
+    for k, v in call_2_kwargs["json"].items():
+        assert k in call_1_kwargs_data, f"Expected {k} to be present in call_1_kwargs['data'], but got {call_1_kwargs_data.keys()}"
 
 @pytest.mark.parametrize(
     "model, vertex_location, supports_response_schema",
@@ -3073,6 +3129,7 @@ async def test_vertexai_embedding_finetuned(respx_mock: MockRouter):
     """
     load_vertex_ai_credentials()
     litellm.set_verbose = True
+    litellm.disable_aiohttp_transport = True # since this uses respx, we need to set use_aiohttp_transport to False
 
     # Test input
     input_text = ["good morning from litellm", "this is another item"]
@@ -3141,6 +3198,8 @@ async def test_vertexai_model_garden_model_completion(
 
     Using OpenAI compatible models from Vertex Model Garden
     """
+    litellm.disable_aiohttp_transport = True # since this uses respx, we need to set use_aiohttp_transport to False
+    litellm.module_level_aclient = httpx.AsyncClient()
     load_vertex_ai_credentials()
     litellm.set_verbose = True
 
@@ -3741,3 +3800,42 @@ def test_vertex_ai_llama_tool_calling():
     assert response.choices[0].message.tool_calls is not None
     assert response.choices[0].finish_reason == "tool_calls"
     assert response._hidden_params["response_cost"] > 0
+
+
+def test_vertex_schema_test():
+    load_vertex_ai_credentials()
+    litellm._turn_on_debug()
+
+    def tool_call(text: str | None) -> str:
+        return text or "No text provided"
+
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "git_create_branch",
+            "description": "Creates a new branch from an optional base branch",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo_path": {"title": "Repo Path", "type": "string"},
+                    "branch_name": {"title": "Branch Name", "type": "string"},
+                    "base_branch": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": None, "title": "Base Branch"},
+                },
+                "required": ["repo_path", "branch_name"],
+                "title": "GitCreateBranch",
+            }
+        }
+    }
+
+
+    response = litellm.completion(
+        model="vertex_ai/gemini-2.5-flash-preview-05-20",
+        messages=[{"role": "user", "content": "call the tool"}],
+        tools=[tool],
+        tool_choice="required",
+    )
+
+    print(response)
+
+

@@ -33,6 +33,8 @@ import {
   getPossibleUserRoles,
   userFilterUICall,
 } from "./networking";
+import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
+import PremiumVectorStoreSelector from "./common_components/PremiumVectorStoreSelector";
 import { Team } from "./key_team_helpers/key_list";
 import TeamDropdown from "./common_components/team_dropdown";
 import { InfoCircleOutlined } from '@ant-design/icons';
@@ -54,6 +56,7 @@ interface CreateKeyProps {
   data: any[] | null;
   teams: Team[] | null;
   addKey: (data: any) => void;
+  premiumUser?: boolean;
 }
 
 interface User {
@@ -104,7 +107,8 @@ export const fetchTeamModels = async (userID: string, userRole: string, accessTo
         userID,
         userRole,
         true,
-        teamID
+        teamID,
+        true
       );
       let available_model_names = model_available["data"].map(
         (element: { id: string }) => element.id
@@ -150,6 +154,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   accessToken,
   data,
   addKey,
+  premiumUser = false,
 }) => {
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -261,6 +266,15 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         metadata["service_account_id"] = formValues.key_alias;
         // Update the formValues with the new metadata
         formValues.metadata = JSON.stringify(metadata);
+      }
+
+      // Transform allowed_vector_store_ids into object_permission format
+      if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
+        formValues.object_permission = {
+          vector_stores: formValues.allowed_vector_store_ids
+        };
+        // Remove the original field as it's now part of object_permission
+        delete formValues.allowed_vector_store_ids;
       }
 
       const response = await keyCreateCall(accessToken, userID, formValues);
@@ -675,6 +689,27 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     options={guardrailsList.map(name => ({ value: name, label: name }))}
                   />
                 </Form.Item>
+                <Form.Item 
+                      label={
+                        <span>
+                          Allowed Vector Stores{' '}
+                          <Tooltip title="Select which vector stores this key can access. If none selected, the key will have access to all available vector stores">
+                            <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                          </Tooltip>
+                        </span>
+                      } 
+                      name="allowed_vector_store_ids" 
+                      className="mt-4"
+                      help="Select vector stores this key can access. Leave empty for access to all vector stores"
+                    >
+                      <PremiumVectorStoreSelector
+                        onChange={(values) => form.setFieldValue('allowed_vector_store_ids', values)}
+                        value={form.getFieldValue('allowed_vector_store_ids')}
+                        accessToken={accessToken}
+                        placeholder="Select vector stores (optional)"
+                        premiumUser={premiumUser}
+                      />
+                    </Form.Item>
 
                 <Form.Item 
                   label={
