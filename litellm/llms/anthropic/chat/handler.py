@@ -564,6 +564,24 @@ class ModelResponseIterator:
                 reasoning_content += thinking_content
         return reasoning_content
 
+    def _handle_redacted_thinking_content(
+        self,
+        content_block_start: ContentBlockStart,
+        provider_specific_fields: Dict[str, Any],
+    ) -> Tuple[List[ChatCompletionRedactedThinkingBlock], Dict[str, Any]]:
+        """
+        Handle the redacted thinking content
+        """
+        thinking_blocks = [
+            ChatCompletionRedactedThinkingBlock(
+                type="redacted_thinking",
+                data=content_block_start["content_block"]["data"],  # type: ignore
+            )
+        ]
+        provider_specific_fields["thinking_blocks"] = thinking_blocks
+
+        return thinking_blocks, provider_specific_fields
+
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
             type_chunk = chunk.get("type", "") or ""
@@ -621,12 +639,13 @@ class ModelResponseIterator:
                 elif (
                     content_block_start["content_block"]["type"] == "redacted_thinking"
                 ):
-                    thinking_blocks = [
-                        ChatCompletionRedactedThinkingBlock(
-                            type="redacted_thinking",
-                            data=content_block_start["content_block"]["data"],
-                        )
-                    ]
+                    (
+                        thinking_blocks,
+                        provider_specific_fields,
+                    ) = self._handle_redacted_thinking_content(  # type: ignore
+                        content_block_start=content_block_start,
+                        provider_specific_fields=provider_specific_fields,
+                    )
             elif type_chunk == "content_block_stop":
                 ContentBlockStop(**chunk)  # type: ignore
                 # check if tool call content block

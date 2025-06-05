@@ -309,7 +309,10 @@ def test_vertex_ai_candidate_token_count_inclusive(
     Test that the candidate token count is inclusive of the thinking token count
     """
     v = VertexGeminiConfig()
-    assert v.is_candidate_token_count_inclusive(usage_metadata) is inclusive
+    assert (
+        VertexGeminiConfig.is_candidate_token_count_inclusive(usage_metadata)
+        is inclusive
+    )
 
     usage = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
     assert usage.prompt_tokens == expected_usage.prompt_tokens
@@ -322,6 +325,8 @@ def test_streaming_chunk_includes_reasoning_tokens():
         ModelResponseIterator,
     )
 
+    litellm_logging = MagicMock()
+
     # Simulate a streaming chunk as would be received from Gemini
     chunk = {
         "candidates": [{"content": {"parts": [{"text": "Hello"}]}}],
@@ -332,14 +337,54 @@ def test_streaming_chunk_includes_reasoning_tokens():
             "thoughtsTokenCount": 3,
         },
     }
-    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True)
+    iterator = ModelResponseIterator(
+        streaming_response=[], sync_stream=True, logging_obj=litellm_logging
+    )
     streaming_chunk = iterator.chunk_parser(chunk)
-    assert streaming_chunk["usage"] is not None
-    assert streaming_chunk["usage"]["prompt_tokens"] == 5
-    assert streaming_chunk["usage"]["completion_tokens"] == 7
-    assert streaming_chunk["usage"]["total_tokens"] == 12
+    assert streaming_chunk.usage is not None
+    assert streaming_chunk.usage.prompt_tokens == 5
+    assert streaming_chunk.usage.completion_tokens == 7
+    assert streaming_chunk.usage.total_tokens == 12
+    assert streaming_chunk.usage.completion_tokens_details.reasoning_tokens == 3
+
+
+def test_streaming_chunk_includes_reasoning_content():
+    """
+    Ensure that when Gemini returns a chunk with `thought=True`, the parser maps it to `reasoning_content`.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    litellm_logging = MagicMock()
+
+    # Simulate a streaming chunk from Gemini which contains reasoning (thought) content
+    chunk = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "text": "I'm thinking through the problem...",
+                            "thought": True,
+                        }
+                    ]
+                }
+            }
+        ],
+        "usageMetadata": {},
+    }
+
+    iterator = ModelResponseIterator(
+        streaming_response=[], sync_stream=True, logging_obj=litellm_logging
+    )
+    streaming_chunk = iterator.chunk_parser(chunk)
+
+    # The text content should be empty and reasoning_content should be populated
+    assert streaming_chunk.choices[0].delta.content is None
     assert (
-        streaming_chunk["usage"]["completion_tokens_details"]["reasoning_tokens"] == 3
+        streaming_chunk.choices[0].delta.reasoning_content
+        == "I'm thinking through the problem..."
     )
 
 
@@ -375,3 +420,137 @@ def test_vertex_ai_usage_metadata_response_token_count():
     assert result.prompt_tokens_details.audio_tokens is None
     assert result.prompt_tokens_details.cached_tokens is None
     assert result.completion_tokens_details.text_tokens == 74
+
+
+def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
+    """
+    If budget_tokens is 0, do not set includeThoughts to True
+    """
+    from litellm.types.llms.anthropic import AnthropicThinkingParam
+
+    v = VertexGeminiConfig()
+    thinking_param: AnthropicThinkingParam = {"type": "enabled", "budget_tokens": 0}
+    assert "includeThoughts" not in v._map_thinking_param(thinking_param=thinking_param)
+
+    thinking_param: AnthropicThinkingParam = {"type": "enabled", "budget_tokens": 100}
+    assert v._map_thinking_param(thinking_param=thinking_param) == {
+        "includeThoughts": True,
+        "thinkingBudget": 100,
+    }
+
+
+def test_vertex_ai_map_tools():
+    v = VertexGeminiConfig()
+    tools = v._map_function(value=[{"code_execution": {}}])
+    assert len(tools) == 1
+    assert tools[0]["code_execution"] == {}
+    print(tools)
+
+    new_tools = v._map_function(value=[{"codeExecution": {}}])
+    assert len(new_tools) == 1
+    print("new_tools", new_tools)
+    assert new_tools[0]["code_execution"] == {}
+    print(new_tools)
+
+    assert tools == new_tools
+
+
+def test_vertex_ai_map_tool_with_anyof():
+    """
+    Related issue: https://github.com/BerriAI/litellm/issues/11164
+
+    Ensure if anyof is present, only the anyof field and its contents are kept - otherwise VertexAI will throw an error - https://github.com/BerriAI/litellm/issues/11164
+    """
+    v = VertexGeminiConfig()
+    value = [
+        {
+            "type": "function",
+            "function": {
+                "name": "git_create_branch",
+                "description": "Creates a new branch from an optional base branch",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "repo_path": {"title": "Repo Path", "type": "string"},
+                        "branch_name": {"title": "Branch Name", "type": "string"},
+                        "base_branch": {
+                            "anyOf": [{"type": "string"}, {"type": "null"}],
+                            "default": None,
+                            "title": "Base Branch",
+                        },
+                    },
+                    "required": ["repo_path", "branch_name"],
+                    "title": "GitCreateBranch",
+                },
+            },
+        }
+    ]
+    tools = v._map_function(value=value)
+
+    assert tools[0]["function_declarations"][0]["parameters"]["properties"][
+        "base_branch"
+    ] == {
+        "anyOf": [{"type": "string", "nullable": True, "title": "Base Branch"}]
+    }, f"Expected only anyOf field and its contents to be kept, but got {tools[0]['function_declarations'][0]['parameters']['properties']['base_branch']}"
+
+
+def test_vertex_ai_streaming_usage_calculation():
+    """
+    Ensure streaming usage calculation uses same function as non-streaming usage calculation
+    """
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+    usage_metadata = {
+        "promptTokenCount": 57,
+        "candidatesTokenCount": 10,
+        "totalTokenCount": 67,
+    }
+
+    # Test streaming chunk parsing
+    with patch.object(VertexGeminiConfig, "_calculate_usage") as mock_calculate_usage:
+        # Create a streaming chunk
+        chunk = {
+            "candidates": [{"content": {"parts": [{"text": "Hello"}]}}],
+            "usageMetadata": usage_metadata,
+        }
+
+        # Create iterator and parse chunk
+        iterator = ModelResponseIterator(
+            streaming_response=[], sync_stream=True, logging_obj=MagicMock()
+        )
+        iterator.chunk_parser(chunk)
+
+        # Verify _calculate_usage was called with correct parameters
+        mock_calculate_usage.assert_called_once_with(completion_response=chunk)
+
+    # Test non-streaming response parsing
+    with patch.object(VertexGeminiConfig, "_calculate_usage") as mock_calculate_usage:
+        # Create a completion response
+        completion_response = {
+            "candidates": [{"content": {"parts": [{"text": "Hello"}]}}],
+            "usageMetadata": usage_metadata,
+        }
+
+        # Parse completion response
+        v.transform_response(
+            model="gemini-pro",
+            raw_response=MagicMock(json=lambda: completion_response),
+            model_response=ModelResponse(),
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        # Verify _calculate_usage was called with correct parameters
+        mock_calculate_usage.assert_called_once_with(
+            completion_response=completion_response,
+        )
