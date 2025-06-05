@@ -52,7 +52,7 @@ Here's how to call Clarifai with the LiteLLM Proxy Server
 ### 1. Save key in your environment
 
 ```bash
-export CLARIFAI_PAT="your-pat"
+export CLARIFAI_PAT="CLARIFAI_API_KEY"
 ```
 
 ### 2. Start the proxy
