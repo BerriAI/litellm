@@ -5422,3 +5422,49 @@ export const updateSSOSettings = async (accessToken: string, settings: Record<st
     throw error;
   }
 };
+
+export const uiAuditLogsCall = async (
+  accessToken: String,
+  start_date?: string,
+  end_date?: string,
+  page?: number,
+  page_size?: number,
+) => {
+  try {
+    // Construct base URL
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/audit` : `/audit`;
+
+    // Add query parameters if they exist
+    const queryParams = new URLSearchParams();
+    // if (start_date) queryParams.append('start_date', start_date);
+    // if (end_date) queryParams.append('end_date', end_date);
+    if (page) queryParams.append('page', page.toString());
+    if (page_size) queryParams.append('page_size', page_size.toString());
+
+    // Append query parameters to URL if any exist
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch audit logs:", error);
+    throw error;
+  }
+};
