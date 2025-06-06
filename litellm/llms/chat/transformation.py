@@ -4,18 +4,16 @@ Chat provider mapping chat completion requests to /responses API and back to cha
 import json
 
 import httpx
-import time
 from typing import Any, Dict, List, Optional, Union, Iterator, AsyncIterator
 
-from openai.types.responses.response_create_params import ResponseCreateParamsBase
 from openai.types.responses.response import Response as ResponsesAPIResponse
 
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
-from litellm.types.utils import ModelResponse, Choices, Usage, GenericStreamingChunk, ModelResponseStream
+from litellm.types.utils import ModelResponse,  GenericStreamingChunk, ModelResponseStream
 from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
-from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, ChatCompletionUsageBlock, \
+from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, \
     ChatCompletionToolCallChunk, ChatCompletionToolCallFunctionChunk
 
 from litellm._logging import verbose_logger
@@ -43,18 +41,18 @@ class ChatConfig(BaseConfig):
         
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-            verbose_logger.debug(f"Chat provider: Set Authorization header from provided api_key")
+            verbose_logger.debug("Chat provider: Set Authorization header from provided api_key")
         elif not headers.get("Authorization"):
             # Try to get API key from environment or other sources
             import os
             openai_key = os.getenv("OPENAI_API_KEY")
             if openai_key:
                 headers["Authorization"] = f"Bearer {openai_key}"
-                verbose_logger.debug(f"Chat provider: Set Authorization header from OPENAI_API_KEY environment variable")
+                verbose_logger.debug("Chat provider: Set Authorization header from OPENAI_API_KEY environment variable")
             else:
                 verbose_logger.debug("Warning: No API key found for chat provider. Set OPENAI_API_KEY or provide api_key in config.")
         else:
-            verbose_logger.debug(f"Chat provider: Using existing Authorization header")
+            verbose_logger.debug("Chat provider: Using existing Authorization header")
         
         # Ensure proper content type
         if "Content-Type" not in headers:
@@ -83,13 +81,10 @@ class ChatConfig(BaseConfig):
         litellm_params: Dict[str, Any],
         headers: Dict[str, Any],  # noqa: U100
     ) -> Dict[str, Any]:
-        # Convert chat completion messages back to responses API input format
         input_items: List[Any] = []
-        
+
         # Process messages to extract system instructions and convert to responses format
         instructions = None
-        converted_messages = []
-        
         for msg in messages:
             role = msg.get("role")
             content = msg.get("content", "")
@@ -107,14 +102,6 @@ class ChatConfig(BaseConfig):
                     "output": content
                 })
             elif role == "assistant" and tool_calls:
-                # Convert assistant message with tool calls
-                # {
-                #     "type": "function_call",
-                #     "id": "fc_12345xyz",
-                #     "call_id": "call_12345xyz",
-                #     "name": "get_weather",
-                #     "arguments": "{\"latitude\":48.8566,\"longitude\":2.3522}"
-                # }
                 for tool_call in tool_calls:
                     function = tool_call.get("function")
                     if function:
@@ -195,10 +182,7 @@ class ChatConfig(BaseConfig):
                     request_data["instructions"] = instructions
                 else:
                     request_data[key] = value
-        
-        verbose_logger.debug(f"Chat provider: Final request data keys: {list(request_data.keys())}")
-        verbose_logger.debug(f"Chat provider: Stream in request: {request_data.get('stream', False)}")
-        
+
         return request_data
 
     def transform_response(
@@ -225,14 +209,9 @@ class ChatConfig(BaseConfig):
             traceback.print_exc()
             raise httpx.HTTPError(f"Invalid JSON from responses API: {raw_response.text}")
         
-        # Use the existing transformation logic to convert responses API to chat completion
-        responses_api_response = ResponsesAPIResponse.model_validate(raw_response.json())
-
-        # Transform the responses API response to chat completion format
-        verbose_logger.debug(f"Chat provider: Raw response from openai: {resp_json}")
+        responses_api_response = ResponsesAPIResponse.model_validate(resp_json)
         verbose_logger.debug(f"Chat provider: responses_api_request: {responses_api_response}")
 
-        # Inverse‐transform back to the original ModelResponse
         transformed = LiteLLMCompletionResponsesConfig.transform_responses_api_response_to_chat_completion_response(
             responses_api_response=responses_api_response,
             model_response=model_response

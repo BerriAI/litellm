@@ -4,9 +4,6 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 
 from typing import Any, Dict, List, Optional, Union, Literal
 
-from langfuse.api import ChatMessage
-from openai.types.chat import ChatCompletionMessage
-from openai.types.chat.chat_completion import Choice
 from openai.types.responses import ResponseReasoningItem, ResponseOutputMessage, ResponseFunctionToolCall
 from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
