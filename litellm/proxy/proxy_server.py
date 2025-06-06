@@ -2025,7 +2025,7 @@ class ProxyConfig:
                     for k, v in model["litellm_params"].items():
                         if isinstance(v, str) and v.startswith("os.environ/"):
                             model["litellm_params"][k] = get_secret(v)
-                    print(f"\033[32m    {model.get('model_name', '')}\033[0m")  # no
+                    verbose_proxy_logger.info("    %s", model.get('model_name', ''))
                 litellm_model_name = model["litellm_params"]["model"]
                 litellm_model_api_base = model["litellm_params"].get("api_base", None)
                 if "ollama" in litellm_model_name and litellm_model_api_base is None:
