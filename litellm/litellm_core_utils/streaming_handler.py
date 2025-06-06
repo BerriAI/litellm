@@ -1234,6 +1234,12 @@ class CustomStreamWrapper:
                                 or None,
                             ),
                         )
+                    elif isinstance(response_obj["usage"], Usage):
+                        setattr(
+                            model_response,
+                            "usage",
+                            response_obj["usage"],
+                        )
                     elif isinstance(response_obj["usage"], BaseModel):
                         setattr(
                             model_response,

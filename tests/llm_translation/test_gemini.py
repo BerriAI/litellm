@@ -196,12 +196,27 @@ def test_gemini_url_context():
 
 
 def test_gemini_with_grounding():
-    from litellm import completion, Usage
+    from litellm import completion, Usage, stream_chunk_builder
     litellm._turn_on_debug()
     tools = [{"googleSearch": {}}]
 
-    response = completion(model="gemini/gemini-2.0-flash", messages=[{"role": "user", "content": "What is the capital of France?"}], tools=tools)
-    print(response)
-    usage: Usage = response.usage
+    # response = completion(model="gemini/gemini-2.0-flash", messages=[{"role": "user", "content": "What is the capital of France?"}], tools=tools)
+    # print(response)
+    # usage: Usage = response.usage
+    # assert usage.prompt_tokens_details.web_search_requests is not None
+    # assert usage.prompt_tokens_details.web_search_requests > 0
+
+
+    ## Check streaming
+
+    response = completion(model="gemini/gemini-2.0-flash", messages=[{"role": "user", "content": "What is the capital of France?"}], tools=tools, stream=True)
+    chunks = []
+    for chunk in response:
+        chunks.append(chunk)
+    assert len(chunks) > 0
+    complete_response = stream_chunk_builder(chunks)
+    print(complete_response)
+    assert complete_response is not None
+    usage: Usage = complete_response.usage
     assert usage.prompt_tokens_details.web_search_requests is not None
     assert usage.prompt_tokens_details.web_search_requests > 0
