@@ -154,6 +154,7 @@ const sidebars = {
               "proxy/guardrails/bedrock",
               "proxy/guardrails/guardrails_ai",
               "proxy/guardrails/lakera_ai",
+              "proxy/guardrails/pangea",
               "proxy/guardrails/pii_masking_v2",
               "proxy/guardrails/secret_detection",
               "proxy/guardrails/custom_guardrail",
