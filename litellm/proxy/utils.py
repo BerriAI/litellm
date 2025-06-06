@@ -145,6 +145,7 @@ def display_model_initialization(model_list: List[dict], get_secret_function):
         from rich.panel import Panel
         from rich.table import Table
         from rich.align import Align
+        from litellm import get_llm_provider
         
         console = Console()
         
@@ -162,8 +163,15 @@ def display_model_initialization(model_list: List[dict], get_secret_function):
             model_name = model.get('model_name', 'Unknown')
             litellm_model = model["litellm_params"].get("model", "Unknown")
             
-            # Extract provider from model name if possible
-            provider = _extract_provider_from_model(litellm_model)
+            # Extract provider using get_llm_provider utility with try/except
+            provider = "OpenAI"  # default
+            try:
+                _, custom_llm_provider, _, _ = get_llm_provider(model=litellm_model)
+                if custom_llm_provider:
+                    provider = custom_llm_provider.replace("_", " ").title()
+            except Exception:
+                # Fallback to default provider if get_llm_provider fails
+                provider = "OpenAI"
             
             models_table.add_row(model_name, provider)
         
@@ -181,6 +189,8 @@ def display_model_initialization(model_list: List[dict], get_secret_function):
         
     except ImportError:
         # Fallback to original formatting if Rich is not available
+        from litellm import get_llm_provider
+        
         verbose_proxy_logger.info("LiteLLM: Proxy initialized with Config, Set models:")
         for model in model_list:
             ### LOAD FROM os.environ/ ###
@@ -190,50 +200,7 @@ def display_model_initialization(model_list: List[dict], get_secret_function):
             verbose_proxy_logger.info("    %s", model.get('model_name', ''))
 
 
-def _extract_provider_from_model(litellm_model: str) -> str:
-    """
-    Extract provider name from LiteLLM model string.
-    
-    Args:
-        litellm_model: The model string from litellm_params
-        
-    Returns:
-        str: The provider name
-    """
-    provider = "OpenAI"  # default
-    
-    if "anthropic" in litellm_model.lower():
-        provider = "Anthropic"
-    elif "azure" in litellm_model.lower():
-        provider = "Azure"
-    elif "gemini" in litellm_model.lower():
-        provider = "Google"
-    elif "claude" in litellm_model.lower():
-        provider = "Anthropic"
-    elif "ollama" in litellm_model.lower():
-        provider = "Ollama"
-    elif "groq" in litellm_model.lower():
-        provider = "Groq"
-    elif "together" in litellm_model.lower():
-        provider = "Together AI"
-    elif "replicate" in litellm_model.lower():
-        provider = "Replicate"
-    elif "huggingface" in litellm_model.lower():
-        provider = "Hugging Face"
-    elif "cohere" in litellm_model.lower():
-        provider = "Cohere"
-    elif "bedrock" in litellm_model.lower():
-        provider = "AWS Bedrock"
-    elif "vertex" in litellm_model.lower():
-        provider = "Google Vertex"
-    elif "/" in litellm_model and not litellm_model.startswith("gpt"):
-        # Likely a custom provider
-        provider = litellm_model.split("/")[0].replace("_", " ").title()
-    
-    # Clean up provider name - replace underscores with spaces
-    provider = provider.replace("_", " ")
-    
-    return provider
+
 
 
 def generate_feedback_box():
