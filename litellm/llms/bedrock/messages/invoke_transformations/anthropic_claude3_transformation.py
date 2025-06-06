@@ -113,9 +113,9 @@ class AmazonAnthropicClaude3MessagesConfig(
 
         # 1. anthropic_version is required for all claude models
         if "anthropic_version" not in anthropic_messages_request:
-            anthropic_messages_request[
-                "anthropic_version"
-            ] = self.DEFAULT_BEDROCK_ANTHROPIC_API_VERSION
+            anthropic_messages_request["anthropic_version"] = (
+                self.DEFAULT_BEDROCK_ANTHROPIC_API_VERSION
+            )
 
         # 2. `stream` is not allowed in request body for bedrock invoke
         if "stream" in anthropic_messages_request:
@@ -159,8 +159,31 @@ class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
         """
         Parse the chunk data into anthropic /messages format
 
-        No transformation is needed for anthropic /messages format
-
-        since bedrock invoke returns the response in the correct format
+        Bedrock returns usage metrics using camelCase keys. Convert these to
+        the Anthropic `/v1/messages` specification so callers receive a
+        consistent response shape when streaming.
         """
+        if "usage" in chunk_data and isinstance(chunk_data["usage"], dict):
+            usage = chunk_data["usage"]
+            anthropic_usage = {}
+            if "inputTokens" in usage:
+                anthropic_usage["input_tokens"] = usage["inputTokens"]
+            if "outputTokens" in usage:
+                anthropic_usage["output_tokens"] = usage["outputTokens"]
+            if "cacheWriteInputTokens" in usage:
+                anthropic_usage["cache_creation_input_tokens"] = usage[
+                    "cacheWriteInputTokens"
+                ]
+            if "cacheReadInputTokens" in usage:
+                anthropic_usage["cache_read_input_tokens"] = usage[
+                    "cacheReadInputTokens"
+                ]
+                # match Anthropic's behaviour of including cached tokens in
+                # input_tokens
+                anthropic_usage["input_tokens"] = (
+                    anthropic_usage.get("input_tokens", 0)
+                    + usage["cacheReadInputTokens"]
+                )
+            chunk_data["usage"] = anthropic_usage
+
         return chunk_data
