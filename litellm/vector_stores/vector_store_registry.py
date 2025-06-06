@@ -58,28 +58,32 @@ class VectorStoreRegistry:
         # 2. check if vector_store_ids is provided as a tool in the request
         vector_store_ids = self.get_and_pop_recognised_vector_store_tools(
             tools=tools,
+            vector_store_ids=vector_store_ids,
         )
 
         return vector_store_ids
 
     def get_and_pop_recognised_vector_store_tools(
-        self, tools: Optional[List[Dict]] = None
+        self, tools: Optional[List[Dict]] = None, vector_store_ids: List[str] = []
     ) -> List[str]:
         """
         Returns and pops the vector store ids from the tool calls
 
         It only pops the recognised vector store tools from the tools list.
+
+        Args:
+            tools: The tools to pop the vector store ids from
+            vector_store_ids: The list of vector store IDs the user provided
+
+        Returns:
+            The vector store ids that were popped
         """
-        vector_store_ids: List[str] = []
         if tools:
             tools_to_remove: List[int] = []
             for i, tool in enumerate(tools):
                 tool_vector_store_ids: List[str] = tool.get("vector_store_ids", [])
                 if len(tool_vector_store_ids) == 0:
                     continue
-
-                vector_store_ids.extend(tool_vector_store_ids)
-
                 # remove the tool if all vector_store_ids are recognised in the registry
                 recognised = all(
                     any(vs.get("vector_store_id") == vs_id for vs in self.vector_stores)
@@ -87,6 +91,7 @@ class VectorStoreRegistry:
                 )
                 if recognised:
                     tools_to_remove.append(i)
+                    vector_store_ids.extend(tool_vector_store_ids)
 
             # remove recognised tools from the original list
             remove_items_at_indices(
