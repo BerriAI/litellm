@@ -744,6 +744,7 @@ origins = ["*"]
 try:
     current_dir = os.path.dirname(os.path.abspath(__file__))
     ui_path = os.path.join(current_dir, "_experimental", "out")
+    litellm_asset_prefix = "/litellm-asset-prefix"
     # # Mount the _next directory at the root level
     app.mount(
         "/_next",
@@ -751,38 +752,53 @@ try:
         name="next_static",
     )
     app.mount(
-        "/litellm/_next",
+        f"{litellm_asset_prefix}/_next",
         StaticFiles(directory=os.path.join(ui_path, "_next")),
         name="next_static",
     )
     # print(f"mounted _next at {server_root_path}/ui/_next")
 
     app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
-    # if len(server_root_path) > 0:
-    #     app.mount(f"{server_root_path}/ui", StaticFiles(directory=ui_path, html=True), name="ui")
-    #     print(f"mounted ui at {server_root_path}/ui")
 
-    # # Add middleware to rewrite static asset paths
-    # @app.middleware("http")
-    # async def rewrite_static_paths(request: Request, call_next):
-    #     response = await call_next(request)
-
-    #     print(f"response.headers: {response.headers}, request.url.path: {request.url.path}")
-
-    #     # Only modify HTML responses from the UI
-    #     if request.url.path.startswith(f"{server_root_path}/ui"):
-    #         print(f"rewriting static paths for {request.url.path}")
-    #         content = await response.body()
-    #         # Replace /ui/_next with /litellm/ui/_next
-    #         modified_content = content.replace(b'/ui/_next', f'{server_root_path}/ui/_next'.encode())
-    #         return Response(
-    #             content=modified_content,
-    #             status_code=response.status_code,
-    #             headers=dict(response.headers),
-    #             media_type=response.media_type
-    #         )
-    #     return response
     # Iterate through files in the UI directory
+    for root, dirs, files in os.walk(ui_path):
+        for filename in files:
+            file_path = os.path.join(root, filename)
+            # Skip binary files and files that don't need path replacement
+            if filename.endswith(
+                (
+                    ".png",
+                    ".jpg",
+                    ".jpeg",
+                    ".gif",
+                    ".ico",
+                    ".woff",
+                    ".woff2",
+                    ".ttf",
+                    ".eot",
+                )
+            ):
+                continue
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+
+                # Replace the asset prefix with the server root path
+                modified_content = content.replace(
+                    f"{litellm_asset_prefix}", server_root_path
+                )
+                # Replace the /.well-known/litellm-ui-config with the server root path
+                modified_content = modified_content.replace(
+                    "/litellm/.well-known/litellm-ui-config",
+                    f"{server_root_path}/.well-known/litellm-ui-config",
+                )
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(modified_content)
+            except UnicodeDecodeError:
+                # Skip binary files that can't be decoded
+                continue
+
+    # Handle HTML file restructuring
     for filename in os.listdir(ui_path):
         if filename.endswith(".html") and filename != "index.html":
             # Create a folder with the same name as the HTML file
@@ -794,20 +810,6 @@ try:
             src = os.path.join(ui_path, filename)
             dst = os.path.join(folder_path, "index.html")
             os.rename(src, dst)
-
-    # if server_root_path != "":
-    #     verbose_proxy_logger.info(  # noqa
-    #         f"server_root_path is set, forwarding any /ui requests to {server_root_path}/ui, any /sso/key/generate requests to {server_root_path}/sso/key/generate"
-    #     )  # noqa
-
-    #     @app.middleware("http")
-    #     async def redirect_ui_middleware(request: Request, call_next):
-    #         if request.url.path.startswith("/ui"):
-    #             new_url = str(request.url).replace("/ui", f"{server_root_path}/ui", 1)
-    #             return RedirectResponse(new_url)
-    #         elif request.url.path == "/sso/key/generate":
-    #             return RedirectResponse(f"{server_root_path}/sso/key/generate")
-    #         return await call_next(request)
 
 except Exception:
     pass
@@ -874,9 +876,9 @@ model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
     dual_cache=user_api_key_cache
 )
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
-redis_usage_cache: Optional[RedisCache] = (
-    None  # redis cache used for tracking spend, tpm/rpm limits
-)
+redis_usage_cache: Optional[
+    RedisCache
+] = None  # redis cache used for tracking spend, tpm/rpm limits
 user_custom_auth = None
 user_custom_key_generate = None
 user_custom_sso = None
@@ -1203,9 +1205,9 @@ async def update_cache(  # noqa: PLR0915
         _id = "team_id:{}".format(team_id)
         try:
             # Fetch the existing cost for the given user
-            existing_spend_obj: Optional[LiteLLM_TeamTable] = (
-                await user_api_key_cache.async_get_cache(key=_id)
-            )
+            existing_spend_obj: Optional[
+                LiteLLM_TeamTable
+            ] = await user_api_key_cache.async_get_cache(key=_id)
             if existing_spend_obj is None:
                 # do nothing if team not in api key cache
                 return
@@ -2780,10 +2782,10 @@ class ProxyConfig:
         )
 
         try:
-            guardrails_in_db: List[Guardrail] = (
-                await GuardrailRegistry.get_all_guardrails_from_db(
-                    prisma_client=prisma_client
-                )
+            guardrails_in_db: List[
+                Guardrail
+            ] = await GuardrailRegistry.get_all_guardrails_from_db(
+                prisma_client=prisma_client
             )
             verbose_proxy_logger.debug(
                 "guardrails from the DB %s", str(guardrails_in_db)
@@ -3003,9 +3005,9 @@ async def initialize(  # noqa: PLR0915
         user_api_base = api_base
         dynamic_config[user_model]["api_base"] = api_base
     if api_version:
-        os.environ["AZURE_API_VERSION"] = (
-            api_version  # set this for azure - litellm can read this from the env
-        )
+        os.environ[
+            "AZURE_API_VERSION"
+        ] = api_version  # set this for azure - litellm can read this from the env
     if max_tokens:  # model-specific param
         dynamic_config[user_model]["max_tokens"] = max_tokens
     if temperature:  # model-specific param
@@ -7854,9 +7856,9 @@ async def get_config_list(
                             hasattr(sub_field_info, "description")
                             and sub_field_info.description is not None
                         ):
-                            nested_fields[idx].field_description = (
-                                sub_field_info.description
-                            )
+                            nested_fields[
+                                idx
+                            ].field_description = sub_field_info.description
                         idx += 1
 
                     _stored_in_db = None

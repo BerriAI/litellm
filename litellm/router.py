@@ -5236,6 +5236,12 @@ class Router:
                 ):
                     model_group_info.supports_web_search = True
                 if (
+                    model_info.get("supports_url_context", None) is not None
+                    and model_info["supports_url_context"] is True  # type: ignore
+                ):
+                    model_group_info.supports_url_context = True
+
+                if (
                     model_info.get("supports_reasoning", None) is not None
                     and model_info["supports_reasoning"] is True  # type: ignore
                 ):
