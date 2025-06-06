@@ -1,3 +1,4 @@
+import json
 from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 
 import httpx
@@ -13,6 +14,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import GenericStreamingChunk
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import ModelResponseStream
 
@@ -139,7 +141,26 @@ class AmazonAnthropicClaude3MessagesConfig(
         completion_stream = aws_decoder.aiter_bytes(
             httpx_response.aiter_bytes(chunk_size=aws_decoder.DEFAULT_CHUNK_SIZE)
         )
-        return completion_stream
+        # Convert decoded Bedrock events to Server-Sent Events expected by Anthropic clients.
+        return self.bedrock_sse_wrapper(completion_stream)
+
+    async def bedrock_sse_wrapper(
+        self,
+        completion_stream: AsyncIterator[
+            Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]
+        ],
+    ):
+        """
+        Bedrock invoke does not return SSE formatted data. This function is a wrapper to ensure litellm chunks are SSE formatted.
+        """
+        async for chunk in completion_stream:
+            if isinstance(chunk, dict):
+                event_type: str = str(chunk.get("type", "message"))
+                payload = f"event: {event_type}\n" f"data: {json.dumps(chunk)}\n\n"
+                yield payload.encode()
+            else:
+                # For non-dict chunks, forward the original value unchanged so callers can leverage the richer Python objects if they wish.
+                yield chunk
 
 
 class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
