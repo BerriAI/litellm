@@ -262,6 +262,7 @@ from litellm.proxy.utils import (
     _get_redoc_url,
     _is_projected_spend_over_limit,
     _is_valid_team_configs,
+    display_model_initialization,
     generate_feedback_box,
     get_custom_url,
     get_error_message_str,
@@ -1945,87 +1946,11 @@ class ProxyConfig:
         if model_list:
             router_params["model_list"] = model_list
             
-            # Import Rich console for beautiful model list display
-            try:
-                from rich.console import Console
-                from rich.panel import Panel
-                from rich.table import Table
-                from rich.align import Align
-                
-                console = Console()
-                
-                # Create a beautiful table for models
-                models_table = Table(title="🤖 Configured Models", show_header=True, header_style="bold cyan")
-                models_table.add_column("Model Name", style="green", min_width=25)
-                models_table.add_column("Provider", style="blue", min_width=15)
-                
-                for model in model_list:
-                    ### LOAD FROM os.environ/ ###
-                    for k, v in model["litellm_params"].items():
-                        if isinstance(v, str) and v.startswith("os.environ/"):
-                            model["litellm_params"][k] = get_secret(v)
-                    
-                    model_name = model.get('model_name', 'Unknown')
-                    litellm_model = model["litellm_params"].get("model", "Unknown")
-                    
-                    # Extract provider from model name if possible
-                    provider = "OpenAI"  # default
-                    if "anthropic" in litellm_model.lower():
-                        provider = "Anthropic"
-                    elif "azure" in litellm_model.lower():
-                        provider = "Azure"
-                    elif "gemini" in litellm_model.lower():
-                        provider = "Google"
-                    elif "claude" in litellm_model.lower():
-                        provider = "Anthropic"
-                    elif "ollama" in litellm_model.lower():
-                        provider = "Ollama"
-                    elif "groq" in litellm_model.lower():
-                        provider = "Groq"
-                    elif "together" in litellm_model.lower():
-                        provider = "Together AI"
-                    elif "replicate" in litellm_model.lower():
-                        provider = "Replicate"
-                    elif "huggingface" in litellm_model.lower():
-                        provider = "Hugging Face"
-                    elif "cohere" in litellm_model.lower():
-                        provider = "Cohere"
-                    elif "bedrock" in litellm_model.lower():
-                        provider = "AWS Bedrock"
-                    elif "vertex" in litellm_model.lower():
-                        provider = "Google Vertex"
-                    elif "/" in litellm_model and not litellm_model.startswith("gpt"):
-                        # Likely a custom provider
-                        provider = litellm_model.split("/")[0].replace("_", " ").title()
-                    
-                    # Clean up provider name - replace underscores with spaces
-                    provider = provider.replace("_", " ")
-                    
-                    models_table.add_row(model_name, provider)
-                
-                # Create initialization panel
-                init_panel = Panel(
-                    Align.center(models_table),
-                    title="[bold green]LiteLLM Proxy Initialized[/bold green]",
-                    border_style="green",
-                    padding=(1, 2)
-                )
-                
-                console.print()
-                console.print(init_panel)
-                console.print()
-                
-            except ImportError:
-                # Fallback to original formatting if Rich is not available
-                print(  # noqa
-                    "\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m"
-                )  # noqa
-                for model in model_list:
-                    ### LOAD FROM os.environ/ ###
-                    for k, v in model["litellm_params"].items():
-                        if isinstance(v, str) and v.startswith("os.environ/"):
-                            model["litellm_params"][k] = get_secret(v)
-                    verbose_proxy_logger.info("    %s", model.get('model_name', ''))
+            # Display beautiful model initialization using utils function
+            display_model_initialization(model_list, get_secret)
+            
+            # Check for Ollama models that need local server
+            for model in model_list:
                 litellm_model_name = model["litellm_params"]["model"]
                 litellm_model_api_base = model["litellm_params"].get("api_base", None)
                 if "ollama" in litellm_model_name and litellm_model_api_base is None:

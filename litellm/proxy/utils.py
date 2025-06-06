@@ -128,6 +128,114 @@ def showwarning(message, category, filename, lineno, file=None, line=None):
         file.write(traceback_info)
 
 
+def display_model_initialization(model_list: List[dict], get_secret_function):
+    """
+    Display beautiful model initialization information using Rich console.
+    
+    This function displays a formatted table of configured models with provider 
+    information using rich formatting if available, with a fallback to basic 
+    logging for environments without rich.
+    
+    Args:
+        model_list: List of model configuration dictionaries
+        get_secret_function: Function to retrieve secrets from environment variables
+    """
+    try:
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.table import Table
+        from rich.align import Align
+        
+        console = Console()
+        
+        # Create a beautiful table for models
+        models_table = Table(title="🤖 Configured Models", show_header=True, header_style="bold cyan")
+        models_table.add_column("Model Name", style="green", min_width=25)
+        models_table.add_column("Provider", style="blue", min_width=15)
+        
+        for model in model_list:
+            ### LOAD FROM os.environ/ ###
+            for k, v in model["litellm_params"].items():
+                if isinstance(v, str) and v.startswith("os.environ/"):
+                    model["litellm_params"][k] = get_secret_function(v)
+            
+            model_name = model.get('model_name', 'Unknown')
+            litellm_model = model["litellm_params"].get("model", "Unknown")
+            
+            # Extract provider from model name if possible
+            provider = _extract_provider_from_model(litellm_model)
+            
+            models_table.add_row(model_name, provider)
+        
+        # Create initialization panel
+        init_panel = Panel(
+            Align.center(models_table),
+            title="[bold green]LiteLLM Proxy Initialized[/bold green]",
+            border_style="green",
+            padding=(1, 2)
+        )
+        
+        console.print()
+        console.print(init_panel)
+        console.print()
+        
+    except ImportError:
+        # Fallback to original formatting if Rich is not available
+        verbose_proxy_logger.info("LiteLLM: Proxy initialized with Config, Set models:")
+        for model in model_list:
+            ### LOAD FROM os.environ/ ###
+            for k, v in model["litellm_params"].items():
+                if isinstance(v, str) and v.startswith("os.environ/"):
+                    model["litellm_params"][k] = get_secret_function(v)
+            verbose_proxy_logger.info("    %s", model.get('model_name', ''))
+
+
+def _extract_provider_from_model(litellm_model: str) -> str:
+    """
+    Extract provider name from LiteLLM model string.
+    
+    Args:
+        litellm_model: The model string from litellm_params
+        
+    Returns:
+        str: The provider name
+    """
+    provider = "OpenAI"  # default
+    
+    if "anthropic" in litellm_model.lower():
+        provider = "Anthropic"
+    elif "azure" in litellm_model.lower():
+        provider = "Azure"
+    elif "gemini" in litellm_model.lower():
+        provider = "Google"
+    elif "claude" in litellm_model.lower():
+        provider = "Anthropic"
+    elif "ollama" in litellm_model.lower():
+        provider = "Ollama"
+    elif "groq" in litellm_model.lower():
+        provider = "Groq"
+    elif "together" in litellm_model.lower():
+        provider = "Together AI"
+    elif "replicate" in litellm_model.lower():
+        provider = "Replicate"
+    elif "huggingface" in litellm_model.lower():
+        provider = "Hugging Face"
+    elif "cohere" in litellm_model.lower():
+        provider = "Cohere"
+    elif "bedrock" in litellm_model.lower():
+        provider = "AWS Bedrock"
+    elif "vertex" in litellm_model.lower():
+        provider = "Google Vertex"
+    elif "/" in litellm_model and not litellm_model.startswith("gpt"):
+        # Likely a custom provider
+        provider = litellm_model.split("/")[0].replace("_", " ").title()
+    
+    # Clean up provider name - replace underscores with spaces
+    provider = provider.replace("_", " ")
+    
+    return provider
+
+
 def generate_feedback_box():
     """
     Generate and display a beautiful feedback box with random message prompts.
