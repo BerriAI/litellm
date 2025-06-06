@@ -1834,13 +1834,13 @@ class ModelResponseIterator:
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             check_is_function_call,
         )
-        from litellm import verbose_logger # Ensure verbose_logger is available
 
         self.streaming_response = streaming_response
+        self.chunk_type: Literal["valid_json", "accumulated_json"] = "valid_json"
         self.accumulated_json = ""
+        self.sent_first_chunk = False
         self.logging_obj = logging_obj
         self.is_function_call = check_is_function_call(logging_obj)
-        self.verbose_logger = verbose_logger # Make it available for logging within methods
 
     def chunk_parser(self, chunk: dict) -> Optional["ModelResponseStream"]:
         try:
@@ -1892,83 +1892,78 @@ class ModelResponseIterator:
         self.response_iterator = self.streaming_response
         return self
 
+    def handle_valid_json_chunk(self, chunk: str) -> Optional["ModelResponseStream"]:
+        chunk = chunk.strip()
+        try:
+            json_chunk = json.loads(chunk)
+
+        except json.JSONDecodeError as e:
+            if (
+                self.sent_first_chunk is False
+            ):  # only check for accumulated json, on first chunk, else raise error. Prevent real errors from being masked.
+                self.chunk_type = "accumulated_json"
+                return self.handle_accumulated_json_chunk(chunk=chunk)
+            raise e
+
+        if self.sent_first_chunk is False:
+            self.sent_first_chunk = True
+
+        return self.chunk_parser(chunk=json_chunk)
+
+    def handle_accumulated_json_chunk(
+        self, chunk: str
+    ) -> Optional["ModelResponseStream"]:
+        chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
+        message = chunk.replace("\n\n", "")
+
+        # Accumulate JSON data
+        self.accumulated_json += message
+
+        # Try to parse the accumulated JSON
+        try:
+            _data = json.loads(self.accumulated_json)
+            self.accumulated_json = ""  # reset after successful parsing
+            return self.chunk_parser(chunk=_data)
+        except json.JSONDecodeError:
+            # If it's not valid JSON yet, continue to the next event
+            return None
+
     def _common_chunk_parsing_logic(
         self, chunk: str
     ) -> Optional["ModelResponseStream"]:
         try:
-            stripped_chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
-            stripped_chunk = stripped_chunk.strip()
+            chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
+            if len(chunk) > 0:
+                """
+                Check if initial chunk valid json
+                - if partial json -> enter accumulated json logic
+                - if valid - continue
+                """
+                if self.chunk_type == "valid_json":
+                    return self.handle_valid_json_chunk(chunk=chunk)
+                elif self.chunk_type == "accumulated_json":
+                    return self.handle_accumulated_json_chunk(chunk=chunk)
 
-            if not stripped_chunk:
-                # If the current chunk is empty after stripping,
-                # check if there's anything in the accumulator.
-                # This handles the end-of-stream case where chunk is ""
-                if self.accumulated_json:
-                    try:
-                        json_data = json.loads(self.accumulated_json)
-                        self.accumulated_json = "" # Clear accumulator
-                        return self.chunk_parser(chunk=json_data)
-                    except json.JSONDecodeError:
-                        # Accumulator has data but it's not valid JSON.
-                        # This might be an error or incomplete final data.
-                        # Log if this happens not due to an empty incoming chunk.
-                        if chunk != "": # Only log if the incoming chunk wasn't also empty
-                             self.verbose_logger.warning(
-                                f"Vertex Gemini Stream: Accumulator has unparsed data ('{self.accumulated_json[:200]}...') at end of non-empty chunk processing."
-                             )
-                        # Do not clear accumulator here, might be processed by a final call if stream ends.
-                        return None
-                return None # No stripped chunk and no accumulator content
-
-            # Attempt 1: Try to parse the current stripped_chunk as a standalone JSON object
-            try:
-                json_data = json.loads(stripped_chunk)
-                if self.accumulated_json:
-                    self.verbose_logger.warning(
-                        f"Vertex Gemini Stream: Parsed a standalone JSON chunk ('{stripped_chunk[:100]}...') while accumulator had data ('{self.accumulated_json[:100]}...'). Discarding accumulator."
-                    )
-                self.accumulated_json = ""
-                return self.chunk_parser(chunk=json_data)
-            except json.JSONDecodeError:
-                # If stripped_chunk is not a standalone JSON, append it to the accumulator.
-                self.accumulated_json += stripped_chunk
-                
-                # Attempt 2: Try to parse the accumulated JSON
-                try:
-                    if not self.accumulated_json: # Should not be reachable if stripped_chunk was non-empty
-                        return None
-                    
-                    _data = json.loads(self.accumulated_json)
-                    self.accumulated_json = ""  # reset after successful parsing
-                    return self.chunk_parser(chunk=_data)
-                except json.JSONDecodeError:
-                    # If it's not valid JSON yet, continue to the next event (accumulate more)
-                    return None
-        except Exception as e:
-            self.verbose_logger.error(f"Vertex Gemini Stream: Error parsing chunk: {e}. Chunk: '{chunk[:200]}'. Accumulator: '{self.accumulated_json[:200]}'")
+            return None
+        except Exception:
             raise
 
     def __next__(self):
-        while True:
-            try:
-                chunk = next(self.response_iterator)
-                model_response_stream = self._common_chunk_parsing_logic(chunk=chunk)
-                if model_response_stream is not None:
-                    return model_response_stream
-            except StopIteration:
-                if self.accumulated_json:
-                    model_response_stream = self._common_chunk_parsing_logic(chunk="")
-                    if model_response_stream is not None:
-                        return model_response_stream
-                    else:
-                        if self.accumulated_json:
-                             self.verbose_logger.warning(
-                                f"Vertex Gemini Stream (sync): End of stream, accumulator has unparsed data: {self.accumulated_json[:200]}"
-                             )
-                             self.accumulated_json = ""
-                raise
-            except ValueError as e:
-                 raise RuntimeError(f"Error receiving chunk from stream: {e}")
+        try:
+            chunk = self.response_iterator.__next__()
+        except StopIteration:
+            if self.chunk_type == "accumulated_json" and self.accumulated_json:
+                return self.handle_accumulated_json_chunk(chunk="")
+            raise StopIteration
+        except ValueError as e:
+            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+
+        try:
+            return self._common_chunk_parsing_logic(chunk=chunk)
+        except StopIteration:
+            raise StopIteration
+        except ValueError as e:
+            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
     # Async iterator
     def __aiter__(self):
@@ -1976,23 +1971,18 @@ class ModelResponseIterator:
         return self
 
     async def __anext__(self):
-        while True:
-            try:
-                chunk = await self.async_response_iterator.__anext__()
-                model_response_stream = self._common_chunk_parsing_logic(chunk=chunk)
-                if model_response_stream is not None:
-                    return model_response_stream
-            except StopAsyncIteration:
-                if self.accumulated_json:
-                    model_response_stream = self._common_chunk_parsing_logic(chunk="")
-                    if model_response_stream is not None:
-                        return model_response_stream
-                    else:
-                        if self.accumulated_json:
-                            self.verbose_logger.warning(
-                                f"Vertex Gemini Stream (async): End of stream, accumulator has unparsed data: {self.accumulated_json[:200]}"
-                            )
-                            self.accumulated_json = ""
-                raise
-            except ValueError as e:
-                raise RuntimeError(f"Error receiving chunk from stream: {e}")
+        try:
+            chunk = await self.async_response_iterator.__anext__()
+        except StopAsyncIteration:
+            if self.chunk_type == "accumulated_json" and self.accumulated_json:
+                return self.handle_accumulated_json_chunk(chunk="")
+            raise StopAsyncIteration
+        except ValueError as e:
+            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+
+        try:
+            return self._common_chunk_parsing_logic(chunk=chunk)
+        except StopAsyncIteration:
+            raise StopAsyncIteration
+        except ValueError as e:
+            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
