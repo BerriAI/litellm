@@ -1084,7 +1084,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             if "urlContextMetadata" in candidate:
                 # Add URL context metadata to grounding metadata
-                url_context_metadata.append(candidate["urlContextMetadata"])
+                url_context_metadata.append(cast(dict, candidate["urlContextMetadata"]))
 
             if "parts" in candidate["content"]:
                 (
@@ -1232,12 +1232,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model_response.choices = []
 
         try:
-            (
-                grounding_metadata,
-                url_context_metadata,
-                safety_ratings,
-                citation_metadata,
-            ) = ([], [], [], [])
+            grounding_metadata: List[dict] = []
+            url_context_metadata: List[dict] = []
+            safety_ratings: List[dict] = []
+            citation_metadata: List[dict] = []
             if _candidates:
                 (
                     grounding_metadata,
