@@ -543,6 +543,7 @@ class PrometheusLogger(CustomLogger):
         user_id: Optional[str],
         enum_values: UserAPIKeyLabelValues,
     ):
+        verbose_logger.debug("prometheus Logging - Enters token metrics function")
         # token metrics
 
         if standard_logging_payload is not None and isinstance(
@@ -556,7 +557,18 @@ class PrometheusLogger(CustomLogger):
             ),
             enum_values=enum_values,
         )
+
         self.litellm_proxy_total_requests_metric.labels(**_labels).inc(
+            standard_logging_payload["total_tokens"]
+        )
+
+        _labels = prometheus_label_factory(
+            supported_enum_labels=PrometheusMetricLabels.get_labels(
+                label_name="litellm_total_tokens_metric"
+            ),
+            enum_values=enum_values,
+        )
+        self.litellm_tokens_metric.labels(**_labels).inc(
             standard_logging_payload["total_tokens"]
         )
 

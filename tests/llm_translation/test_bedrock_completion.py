@@ -3147,6 +3147,8 @@ def test_bedrock_meta_llama_function_calling():
     Tests that:
     - meta llama models support function calling
     """
+    from litellm.utils import return_raw_request
+    from litellm.types.utils import CallTypes
     tools = [
             {
                 "type": "function",
@@ -3182,7 +3184,10 @@ def test_bedrock_meta_llama_function_calling():
         "model": "bedrock/us.meta.llama4-scout-17b-instruct-v1:0",
     }
 
-    response = completion(**request_args)
+    response = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs=request_args,
+    )
 
     print(response)
 
