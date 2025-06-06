@@ -57,6 +57,8 @@ class StandardBuiltInToolCostTracking:
                 model=model, custom_llm_provider=custom_llm_provider
             )
             result: Optional[float] = None
+            if custom_llm_provider is None and model_info is not None:
+                custom_llm_provider = model_info["litellm_provider"]
             if (
                 model_info is not None
                 and usage is not None
@@ -100,6 +102,8 @@ class StandardBuiltInToolCostTracking:
         - Chat Completion Response (ModelResponse)
         - ResponsesAPIResponse (streaming + non-streaming)
         """
+        from litellm.types.utils import PromptTokensDetailsWrapper
+
         if isinstance(response_object, ModelResponse):
             # chat completions only include url_citation annotations when a web search call is made
             return StandardBuiltInToolCostTracking.response_includes_annotation_type(
@@ -110,13 +114,21 @@ class StandardBuiltInToolCostTracking:
             return StandardBuiltInToolCostTracking.response_includes_output_type(
                 response_object=response_object, output_type="web_search_call"
             )
-        elif (
-            usage is not None
-            and hasattr(usage, "server_tool_use")
-            and usage.server_tool_use is not None
-            and usage.server_tool_use.web_search_requests is not None
-        ):
-            return True
+        elif usage is not None:
+            if (
+                hasattr(usage, "server_tool_use")
+                and usage.server_tool_use is not None
+                and usage.server_tool_use.web_search_requests is not None
+            ):
+                return True
+            elif (
+                hasattr(usage, "prompt_tokens_details")
+                and usage.prompt_tokens_details is not None
+                and isinstance(usage.prompt_tokens_details, PromptTokensDetailsWrapper)
+                and usage.prompt_tokens_details.web_search_requests is not None
+            ):
+                return True
+
         return False
 
     @staticmethod
