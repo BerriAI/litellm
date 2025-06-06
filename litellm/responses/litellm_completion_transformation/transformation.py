@@ -400,12 +400,13 @@ class LiteLLMCompletionResponsesConfig:
         Returns:
             Dictionary with transformed file structure for Chat Completion
         """
-        new_item = {"type": "file", "file": {}}
+        file_dict: Dict[str, Any] = {}
         keys = ["file_id", "file_data"]
         for key in keys:
             if item.get(key):
-                new_item["file"][key] = item.get(key)
+                file_dict[key] = item.get(key)
 
+        new_item: Dict[str, Any] = {"type": "file", "file": file_dict}
         return new_item
 
     @staticmethod
