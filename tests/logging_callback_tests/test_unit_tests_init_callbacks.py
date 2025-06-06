@@ -37,6 +37,7 @@ from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.s3_v2 import S3Logger
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.vector_stores.bedrock_vector_store import BedrockVectorStore
+from litellm.integrations.vector_stores.qdrant_vector_store import QdrantVectorStore
 from litellm.integrations.langfuse.langfuse_prompt_management import (
     LangfusePromptManagement,
 )
@@ -85,6 +86,7 @@ callback_class_str_to_classType = {
     "anthropic_cache_control_hook": AnthropicCacheControlHook,
     "agentops": AgentOps,
     "bedrock_vector_store": BedrockVectorStore,
+    "qdrant_vector_store": QdrantVectorStore,
     "generic_api": GenericAPILogger,
     "resend_email": ResendEmailLogger,
     "smtp_email": SMTPEmailLogger,
@@ -119,6 +121,8 @@ expected_env_vars = {
     "AWS_SECRET_ACCESS_KEY": "aws_secret_access_key",
     "AWS_ACCESS_KEY_ID": "aws_access_key_id",
     "AWS_REGION": "aws_region",
+    "QDRANT_API_BASE": "qdrant_api_base",
+    "QDRANT_API_KEY": "qdrant_api_key",
 }
 
 
