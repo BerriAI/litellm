@@ -38,10 +38,10 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
         usage is not None
         and usage.prompt_tokens_details is not None
         and isinstance(usage.prompt_tokens_details, PromptTokensDetailsWrapper)
+        and hasattr(usage.prompt_tokens_details, "web_search_requests")
+        and usage.prompt_tokens_details.web_search_requests is not None
     ):
-        number_of_web_search_requests = (
-            usage.prompt_tokens_details.web_search_requests or 0
-        )
+        number_of_web_search_requests = usage.prompt_tokens_details.web_search_requests
     else:
         number_of_web_search_requests = 0
 

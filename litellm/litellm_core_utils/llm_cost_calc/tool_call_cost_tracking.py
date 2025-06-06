@@ -125,6 +125,7 @@ class StandardBuiltInToolCostTracking:
                 hasattr(usage, "prompt_tokens_details")
                 and usage.prompt_tokens_details is not None
                 and isinstance(usage.prompt_tokens_details, PromptTokensDetailsWrapper)
+                and hasattr(usage.prompt_tokens_details, "web_search_requests")
                 and usage.prompt_tokens_details.web_search_requests is not None
             ):
                 return True
