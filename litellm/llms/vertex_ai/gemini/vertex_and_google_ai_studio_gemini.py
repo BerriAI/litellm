@@ -1230,7 +1230,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 )
 
         model_response.choices = []
-        model_response.id = completion_response.get("responseId", None)
+        response_id = completion_response.get("responseId")
+        if response_id:
+            model_response.id = response_id
         url_context_metadata: List[dict] = []
         try:
             grounding_metadata: List[dict] = []
@@ -1848,7 +1850,8 @@ class ModelResponseIterator:
             from litellm.types.utils import ModelResponseStream
 
             processed_chunk = GenerateContentResponseBody(**chunk)  # type: ignore
-            model_response = ModelResponseStream(choices=[])
+            response_id = processed_chunk.get("responseId")
+            model_response = ModelResponseStream(choices=[], id=response_id)
             usage: Optional[Usage] = None
             _candidates: Optional[List[Candidates]] = processed_chunk.get("candidates")
             grounding_metadata: List[dict] = []
