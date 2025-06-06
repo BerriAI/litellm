@@ -432,6 +432,7 @@ export default function CreateKeyPage() {
                   userRole={userRole}
                   accessToken={accessToken}
                   teams={(teams as Team[]) ?? []}
+                  premiumUser={premiumUser}
                 />
               ) : (
                 <Usage

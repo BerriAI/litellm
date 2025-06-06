@@ -1,6 +1,6 @@
 ---
-title: v1.72.0-stable
-slug: v1.72.0-stable
+title: "[PRE-RELEASE] v1.72.0-stable"
+slug: "pre-release-v1-72-0-stable"
 date: 2025-05-31T10:00:00
 authors:
   - name: Krrish Dholakia

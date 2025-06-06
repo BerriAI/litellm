@@ -210,6 +210,7 @@ async def test_openai_with_vector_store_ids_in_tool_call_mock_openai(setup_vecto
         # Verify the API was called
         mock_client.assert_called_once()
         request_body = mock_client.call_args.kwargs
+        print("request body:", json.dumps(request_body, indent=4, default=str))
         
         # Verify the request contains messages with knowledge base context
         assert "messages" in request_body
@@ -225,6 +226,48 @@ async def test_openai_with_vector_store_ids_in_tool_call_mock_openai(setup_vecto
         # assert message[1] is the user message with the knowledge base context
         assert messages[1]["role"] == "user"
         assert BedrockVectorStore.CONTENT_PREFIX_STRING in messages[1]["content"]
+
+        # assert that the tool call was not sent to the upstream llm API if it's a litellm vector store
+        assert "tools" not in request_body
+
+
+@pytest.mark.asyncio
+async def test_openai_with_mixed_tool_call_mock_openai(setup_vector_store_registry):
+    """Ensure unrecognized vector store tools are forwarded to the provider"""
+    litellm.callbacks = [BedrockVectorStore(aws_region_name="us-west-2")]
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key="fake-api-key")
+
+    with patch.object(
+        client.chat.completions.with_raw_response, "create"
+    ) as mock_client:
+        try:
+            await litellm.acompletion(
+                model="gpt-4",
+                messages=[{"role": "user", "content": "what is litellm?"}],
+                tools=[
+                    {"type": "file_search", "vector_store_ids": ["T37J8R4WTM"]},
+                    {"type": "file_search", "vector_store_ids": ["unknownVS"]},
+                ],
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs
+
+        assert "messages" in request_body
+        messages = request_body["messages"]
+        assert len(messages) >= 2
+        assert messages[1]["role"] == "user"
+        assert BedrockVectorStore.CONTENT_PREFIX_STRING in messages[1]["content"]
+
+        assert "tools" in request_body
+        tools = request_body["tools"]
+        assert len(tools) == 1
+        assert tools[0]["vector_store_ids"] == ["unknownVS"]
 
 
 @pytest.mark.asyncio
