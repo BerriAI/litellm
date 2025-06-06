@@ -219,7 +219,7 @@ def test_increment_token_metrics(prometheus_logger):
     )
 
     prometheus_logger.litellm_tokens_metric.labels.assert_called_once_with(
-        "user1", "key1", "alias1", "gpt-3.5-turbo", "team1", "team_alias1", "user1"
+        end_user=None, user=None, hashed_api_key='test_hash', api_key_alias='test_alias', team='test_team', team_alias='test_team_alias', requested_model=None, model='gpt-3.5-turbo'
     )
     prometheus_logger.litellm_tokens_metric.labels().inc.assert_called_once_with(100)
 
