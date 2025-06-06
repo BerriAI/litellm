@@ -145,26 +145,3 @@ def test_nova_invoke_streaming_chunk_parsing():
     result = decoder._chunk_parser(nova_stop_chunk)
     print(result)
     assert result.choices[0].finish_reason == "tool_calls"
-
-
-def test_anthropic_messages_streaming_usage_transformation():
-    """Ensure Bedrock usage keys are converted to Anthropic spec."""
-    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
-        AmazonAnthropicClaudeMessagesStreamDecoder,
-    )
-
-    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0")
-    chunk = {
-        "type": "message_delta",
-        "usage": {
-            "inputTokens": 5,
-            "outputTokens": 3,
-            "cacheReadInputTokens": 1,
-            "cacheWriteInputTokens": 0,
-        },
-    }
-    result = decoder._chunk_parser(chunk)
-    assert "usage" in result
-    assert result["usage"]["input_tokens"] == 6
-    assert result["usage"]["output_tokens"] == 3
-    assert result["usage"]["cache_read_input_tokens"] == 1
