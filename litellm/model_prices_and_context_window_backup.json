@@ -564,6 +564,35 @@
             "search_context_size_high": 50.0
         }
     },
+    "codex-mini-latest": {
+        "max_tokens": 100000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 1.5e-06,
+        "output_cost_per_token": 6e-06,
+        "cache_read_input_token_cost": 0.375e-06,
+        "litellm_provider": "openai",
+        "mode": "responses",
+        "supports_pdf_input": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supported_endpoints": [
+            "/v1/responses"
+        ]
+    },
     "o1-pro": {
         "max_tokens": 100000,
         "max_input_tokens": 200000,
@@ -2515,6 +2544,35 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_tool_choice": true
+    },
+    "azure/codex-mini-latest": {
+        "max_tokens": 100000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 1.5e-06,
+        "output_cost_per_token": 6e-06,
+        "cache_read_input_token_cost": 0.375e-06,
+        "litellm_provider": "azure",
+        "mode": "responses",
+        "supports_pdf_input": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supported_endpoints": [
+            "/v1/responses"
+        ]
     },
     "azure/o1-preview": {
         "max_tokens": 32768,
