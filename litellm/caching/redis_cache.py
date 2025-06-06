@@ -1044,8 +1044,6 @@ class RedisCache(BaseCache):
             async with _redis_client.pipeline(transaction=False) as pipe:
                 results = await self._pipeline_increment_helper(pipe, increment_list)
 
-            print_verbose(f"pipeline increment results: {results}")
-
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time

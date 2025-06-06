@@ -6,7 +6,17 @@ This is currently in development and not yet ready for production.
 import os
 import sys
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypedDict, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    TypedDict,
+    Union,
+    cast,
+)
 
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -29,8 +39,8 @@ else:
     InternalUsageCache = Any
 
 RATE_LIMITER_SCRIPT = """
-local counter_key = KEYS[1]
-local window_key = KEYS[2]
+local window_key = KEYS[1]
+local counter_key = KEYS[2]
 local now = ARGV[1]
 local window_size = ARGV[2]
 
@@ -48,6 +58,38 @@ end
 -- Increment counter
 local counter = redis.call('INCR', counter_key)
 return {counter, window_start}
+"""
+
+
+BATCH_RATE_LIMITER_SCRIPT = """
+local results = {}
+local now = ARGV[1]
+local window_size = ARGV[2]
+
+-- Process each window/counter pair
+for i = 1, #KEYS, 2 do
+    local window_key = KEYS[i]
+    local counter_key = KEYS[i + 1]
+
+    -- Check if window exists and is valid
+    local window_start = redis.call('GET', window_key)
+    if not window_start or (tonumber(now) - tonumber(window_start)) >= tonumber(window_size) then
+        -- Reset window and counter
+        redis.call('SET', window_key, now)
+        redis.call('SET', counter_key, 1)
+        redis.call('EXPIRE', window_key, window_size)
+        redis.call('EXPIRE', counter_key, window_size)
+        table.insert(results, now) -- window_start
+        table.insert(results, 1) -- counter
+    else
+        -- Increment counter
+        local counter = redis.call('INCR', counter_key)
+        table.insert(results, window_start) -- window_start
+        table.insert(results, counter) -- counter
+    end
+end
+
+return results
 """
 
 
@@ -71,8 +113,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     RATE_LIMITER_SCRIPT
                 )
             )
+            self.batch_rate_limiter_script = (
+                self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
+                    BATCH_RATE_LIMITER_SCRIPT
+                )
+            )
         else:
             self.rate_limiter_script = None
+            self.batch_rate_limiter_script = None
 
         self.window_size = int(os.getenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", 60))
 
@@ -91,7 +139,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         now: float,
         window_size: float,
         parent_otel_span: Optional[Span] = None,
-    ) -> Any:
+    ) -> int:
         """
         Update Redis
         Update in-memory cache
@@ -152,7 +200,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     or 1
                 )
 
-        return result
+        return int(result)
 
     async def should_rate_limit(
         self,
@@ -163,105 +211,67 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         Check if any of the rate limit descriptors should be rate limited.
         Returns a RateLimitResponse with the overall code and status for each descriptor.
+        Uses batch operations for Redis to improve performance.
         """
+        from litellm.types.caching import (
+            RedisPipelineIncrementOperation,
+            RedisPipelineSetOperation,
+        )
+
         statuses = []
         overall_code = "OK"
+        now = datetime.now().timestamp()
 
+        # Collect all keys and their metadata upfront
+        keys_to_fetch = []
+        key_metadata = {}  # Store metadata for each key
         for descriptor in descriptors:
             key = descriptor["key"]
             value = descriptor["value"]
             rate_limit = descriptor.get("rate_limit", {}) or {}
-
-            # Get the rate limit
             requests_limit = rate_limit.get("requests_per_unit", sys.maxsize)
-            window_size = rate_limit.get(
-                "window_size", self.window_size
-            )  # Default 60 second window
+            window_size = rate_limit.get("window_size", self.window_size)
 
-            # Use atomic operations to check and increment in one go
-            try:
-                # Get current window info
-                window_key = f"{{{key}:{value}}}:window"
-                counter_key = f"{{{key}:{value}}}:requests"
+            window_key = f"{{{key}:{value}}}:window"
+            counter_key = f"{{{key}:{value}}}:requests"
 
-                now = datetime.now().timestamp()
+            keys_to_fetch.extend([window_key, counter_key])
+            key_metadata[window_key] = {
+                "key": key,
+                "value": value,
+                "requests_limit": int(requests_limit),
+                "window_size": int(window_size),
+                "counter_key": counter_key,
+            }
+            key_metadata[counter_key] = key_metadata[window_key]
 
-                # Get current window
-                current_window = await self.internal_usage_cache.async_get_cache(
-                    key=window_key,
-                    litellm_parent_otel_span=parent_otel_span,
-                    local_only=True,
-                )
+        # Batch get all values
+        if self.batch_rate_limiter_script is not None:
+            cache_values = await self.batch_rate_limiter_script(
+                keys=keys_to_fetch,
+                args=[now, self.window_size],
+            )
+        else:
+            raise ValueError("Batch rate limiter script is not initialized")
 
-                # if not expired, check local cache
-                current_count: Optional[int] = None
-                if current_window is not None and (now - current_window) < window_size:
-                    current_count = await self.internal_usage_cache.async_get_cache(
-                        key=counter_key,
-                        litellm_parent_otel_span=parent_otel_span,
-                        local_only=True,
-                    )
+        for i in range(0, len(cache_values), 2):
+            window_key = keys_to_fetch[i]
+            counter_key = keys_to_fetch[i + 1]
+            window_value = cache_values[i]
+            counter_value = cache_values[i + 1]
+            requests_limit = key_metadata[window_key]["requests_limit"]
 
-                if current_count and current_count > requests_limit:
-                    status = {
-                        "code": "OVER_LIMIT",
-                        "current_limit": requests_limit,
-                        "limit_remaining": 0,
-                    }
-                    overall_code = "OVER_LIMIT"
-                    statuses.append(status)
-                    continue
-
-                if not read_only:
-                    # If we're under the limit, try to increment atomically
-                    new_count = await self.rate_limiter_script_handler(
-                        window_key=window_key,
-                        counter_key=counter_key,
-                        now=now,
-                        window_size=window_size,
-                    )
-
-                    # Double check after increment
-                    if new_count > requests_limit:
-                        # We went over the limit, decrement back
-                        await self.internal_usage_cache.async_increment_cache(
-                            key=counter_key,
-                            value=-1,
-                            ttl=window_size,
-                            litellm_parent_otel_span=parent_otel_span,
-                        )
-                        status = {
-                            "code": "OVER_LIMIT",
-                            "current_limit": requests_limit,
-                            "limit_remaining": 0,
-                        }
-                        overall_code = "OVER_LIMIT"
-                    else:
-                        status = {
-                            "code": "OK",
-                            "current_limit": requests_limit,
-                            "limit_remaining": max(0, requests_limit - new_count),
-                        }
-                else:
-                    # Just read the current count, don't increment
-                    status = {
-                        "code": "OK",
-                        "current_limit": requests_limit,
-                        "limit_remaining": max(
-                            0, requests_limit - (current_count or 0)
-                        ),
-                    }
-
-            except Exception as e:
-                verbose_proxy_logger.exception(f"Error in rate limit check: {str(e)}")
-                status = {
-                    "code": "OVER_LIMIT",
-                    "current_limit": requests_limit,
-                    "limit_remaining": 0,
-                }
+            if counter_value + 1 > requests_limit:
                 overall_code = "OVER_LIMIT"
-
-            statuses.append(status)
+            else:
+                overall_code = "OK"
+            statuses.append(
+                {
+                    "code": overall_code,
+                    "current_limit": requests_limit,
+                    "limit_remaining": requests_limit - counter_value,
+                }
+            )
 
         return RateLimitResponse(overall_code=overall_code, statuses=statuses)
 
@@ -389,43 +399,43 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
 
             # Check rate limits
-            rate_limit_response = await self.should_rate_limit(
-                descriptors=descriptors,
-                parent_otel_span=user_api_key_dict.parent_otel_span,
-                read_only=True,
-            )
+            # rate_limit_response = await self.should_rate_limit(
+            #     descriptors=descriptors,
+            #     parent_otel_span=user_api_key_dict.parent_otel_span,
+            #     read_only=True,
+            # )
 
-            # Update response headers
-            if hasattr(response, "_hidden_params"):
-                _hidden_params = getattr(response, "_hidden_params")
-            else:
-                _hidden_params = None
+            # # Update response headers
+            # if hasattr(response, "_hidden_params"):
+            #     _hidden_params = getattr(response, "_hidden_params")
+            # else:
+            #     _hidden_params = None
 
-            if _hidden_params is not None and (
-                isinstance(_hidden_params, BaseModel)
-                or isinstance(_hidden_params, dict)
-            ):
-                if isinstance(_hidden_params, BaseModel):
-                    _hidden_params = _hidden_params.model_dump()
+            # if _hidden_params is not None and (
+            #     isinstance(_hidden_params, BaseModel)
+            #     or isinstance(_hidden_params, dict)
+            # ):
+            #     if isinstance(_hidden_params, BaseModel):
+            #         _hidden_params = _hidden_params.model_dump()
 
-                _additional_headers = _hidden_params.get("additional_headers", {}) or {}
+            #     _additional_headers = _hidden_params.get("additional_headers", {}) or {}
 
-                # Add rate limit headers
-                for i, status in enumerate(rate_limit_response["statuses"]):
-                    descriptor = descriptors[i]
-                    prefix = f"x-ratelimit-{descriptor['key']}"
-                    _additional_headers[f"{prefix}-remaining-requests"] = status[
-                        "limit_remaining"
-                    ]
-                    _additional_headers[f"{prefix}-limit-requests"] = status[
-                        "current_limit"
-                    ]
+            #     # Add rate limit headers
+            #     for i, status in enumerate(rate_limit_response["statuses"]):
+            #         descriptor = descriptors[i]
+            #         prefix = f"x-ratelimit-{descriptor['key']}"
+            #         _additional_headers[f"{prefix}-remaining-requests"] = status[
+            #             "limit_remaining"
+            #         ]
+            #         _additional_headers[f"{prefix}-limit-requests"] = status[
+            #             "current_limit"
+            #         ]
 
-                setattr(
-                    response,
-                    "_hidden_params",
-                    {**_hidden_params, "additional_headers": _additional_headers},
-                )
+            #     setattr(
+            #         response,
+            #         "_hidden_params",
+            #         {**_hidden_params, "additional_headers": _additional_headers},
+            #     )
 
         except Exception as e:
             verbose_proxy_logger.exception(
