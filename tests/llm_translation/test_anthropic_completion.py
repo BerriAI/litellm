@@ -1273,3 +1273,24 @@ def test_anthropic_text_editor():
 
     assert response is not None
 
+
+def test_anthropic_mcp_server_tool_use():
+    litellm._turn_on_debug()
+    params = {
+        "model": "anthropic/claude-sonnet-4-20250514",
+        "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
+        "tools": [
+             {
+                "type": "url",
+                "url": "https://mcp.deepwiki.com/mcp",
+                "name": "deepwiki-mcp",
+            }
+        ]
+    }
+
+    try:
+        response = litellm.completion(**params)
+    except litellm.InternalServerError as e:
+        print(e)
+
+    assert response is not None
