@@ -258,3 +258,63 @@ async def test_rate_limit_headers_v3():
     assert "x-ratelimit-api_key-limit-requests" in headers
     assert headers["x-ratelimit-api_key-limit-requests"] == 2
     assert headers["x-ratelimit-api_key-remaining-requests"] == 1
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_script_return_values_v3(monkeypatch):
+    """
+    Test that the rate limiter script returns both counter and window values correctly
+    """
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "2")
+    _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, rpm_limit=2)
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    # Make first request
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
+    )
+
+    # Verify both counter and window values are stored in cache
+    window_key = f"{{api_key:{_api_key}}}:window"
+    counter_key = f"{{api_key:{_api_key}}}:requests"
+
+    window_value = await local_cache.async_get_cache(key=window_key)
+    counter_value = await local_cache.async_get_cache(key=counter_key)
+
+    assert window_value is not None, "Window value should be stored in cache"
+    assert counter_value is not None, "Counter value should be stored in cache"
+    assert counter_value == 1, "Counter should be 1 after first request"
+
+    # Make second request
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
+    )
+
+    # Verify counter increased but window stayed same
+    new_window_value = await local_cache.async_get_cache(key=window_key)
+    new_counter_value = await local_cache.async_get_cache(key=counter_key)
+
+    assert (
+        new_window_value == window_value
+    ), "Window value should not change within window"
+    assert new_counter_value == 2, "Counter should be 2 after second request"
+
+    # Wait for window to expire
+    await asyncio.sleep(3)
+
+    # Make request after window expiry
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
+    )
+
+    # Verify new window and reset counter
+    final_window_value = await local_cache.async_get_cache(key=window_key)
+    final_counter_value = await local_cache.async_get_cache(key=counter_key)
+
+    assert final_window_value != window_value, "Window value should change after expiry"
+    assert final_counter_value == 1, "Counter should reset to 1 after window expiry"

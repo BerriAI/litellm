@@ -42,11 +42,12 @@ if not window_start or (tonumber(now) - tonumber(window_start)) >= tonumber(wind
     redis.call('SET', counter_key, 0)
     redis.call('EXPIRE', window_key, window_size)
     redis.call('EXPIRE', counter_key, window_size)
-    return 1
+    return {1, now}
 end
 
 -- Increment counter
-return redis.call('INCR', counter_key)
+local counter = redis.call('INCR', counter_key)
+return {counter, window_start}
 """
 
 
@@ -94,21 +95,30 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         Update Redis
         Update in-memory cache
-        Return the new count
+        Return the new count and window value
         """
 
         if self.rate_limiter_script is not None:
             result = await self.rate_limiter_script(
                 keys=[window_key, counter_key], args=[now, window_size]
             )
+            counter_value, window_value = result
             # Update in-memory cache
             await self.internal_usage_cache.async_set_cache(
                 key=counter_key,
-                value=result,
+                value=counter_value,
                 ttl=window_size,
                 litellm_parent_otel_span=parent_otel_span,
                 local_only=True,
             )
+            await self.internal_usage_cache.async_set_cache(
+                key=window_key,
+                value=window_value,
+                ttl=window_size,
+                litellm_parent_otel_span=parent_otel_span,
+                local_only=True,
+            )
+            return counter_value
         else:  # in-memory only implementation
             current_window = await self.internal_usage_cache.async_get_cache(
                 key=window_key,
@@ -136,6 +146,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     await self.internal_usage_cache.async_increment_cache(
                         key=counter_key,
                         value=1,
+                        ttl=window_size,
                         litellm_parent_otel_span=parent_otel_span,
                     )
                     or 1
@@ -179,6 +190,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 current_window = await self.internal_usage_cache.async_get_cache(
                     key=window_key,
                     litellm_parent_otel_span=parent_otel_span,
+                    local_only=True,
                 )
 
                 # if not expired, check local cache
