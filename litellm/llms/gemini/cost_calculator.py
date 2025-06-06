@@ -30,7 +30,7 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
     from litellm.types.utils import PromptTokensDetailsWrapper
 
     # cost per web search request
-    cost_per_web_search_request = 3.5e-6
+    cost_per_web_search_request = 35e-3
 
     number_of_web_search_requests = 0
     # Get number of web search requests
