@@ -6,7 +6,7 @@ import { uiAuditLogsCall, keyListCall } from "../networking";
 import { AuditLogEntry, auditLogColumns } from "./columns";
 import { Text } from "@tremor/react";
 import { Team } from "../key_team_helpers/key_list";
-import _ReactDiffViewer from 'react-diff-viewer';
+import _ReactDiffViewer from 'react-diff-viewer-continued';
 import React from "react";
 import Image from 'next/image';
 import Prism from 'prismjs';
@@ -520,7 +520,7 @@ export default function AuditLogs({
         </Text>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img 
-          src="/ui/audit-logs-preview.png"
+          src="/audit-logs-preview.png"
           alt="Audit Logs Preview" 
           style={{ 
             maxWidth: '100%', 
