@@ -163,27 +163,18 @@ class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
         the Anthropic `/v1/messages` specification so callers receive a
         consistent response shape when streaming.
         """
-        if "usage" in chunk_data and isinstance(chunk_data["usage"], dict):
-            usage = chunk_data["usage"]
+        amazon_bedrock_invocation_metrics = chunk_data.pop(
+            "amazon-bedrock-invocationMetrics", {}
+        )
+        if amazon_bedrock_invocation_metrics:
             anthropic_usage = {}
-            if "inputTokens" in usage:
-                anthropic_usage["input_tokens"] = usage["inputTokens"]
-            if "outputTokens" in usage:
-                anthropic_usage["output_tokens"] = usage["outputTokens"]
-            if "cacheWriteInputTokens" in usage:
-                anthropic_usage["cache_creation_input_tokens"] = usage[
-                    "cacheWriteInputTokens"
+            if "inputTokenCount" in amazon_bedrock_invocation_metrics:
+                anthropic_usage["input_tokens"] = amazon_bedrock_invocation_metrics[
+                    "inputTokenCount"
                 ]
-            if "cacheReadInputTokens" in usage:
-                anthropic_usage["cache_read_input_tokens"] = usage[
-                    "cacheReadInputTokens"
+            if "outputTokenCount" in amazon_bedrock_invocation_metrics:
+                anthropic_usage["output_tokens"] = amazon_bedrock_invocation_metrics[
+                    "outputTokenCount"
                 ]
-                # match Anthropic's behaviour of including cached tokens in
-                # input_tokens
-                anthropic_usage["input_tokens"] = (
-                    anthropic_usage.get("input_tokens", 0)
-                    + usage["cacheReadInputTokens"]
-                )
             chunk_data["usage"] = anthropic_usage
-
         return chunk_data
