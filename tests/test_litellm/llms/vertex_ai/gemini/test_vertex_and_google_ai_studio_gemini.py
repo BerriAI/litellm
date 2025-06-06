@@ -1,13 +1,14 @@
 import asyncio
+import json
 from copy import deepcopy
 from typing import List, cast
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import BaseModel
 
 import litellm
-from litellm import ModelResponse
+from litellm import ModelResponse, completion
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
