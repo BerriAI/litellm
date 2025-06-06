@@ -3,6 +3,7 @@ This is a rate limiter implementation based on a similar one by Envoy proxy.
 
 This is currently in development and not yet ready for production.
 """
+import os
 import sys
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypedDict, Union
@@ -72,6 +73,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         else:
             self.rate_limiter_script = None
 
+        self.window_size = int(os.getenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", 60))
+
     def print_verbose(self, print_statement):
         try:
             verbose_proxy_logger.debug(print_statement)
@@ -93,6 +96,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Update in-memory cache
         Return the new count
         """
+
         if self.rate_limiter_script is not None:
             result = await self.rate_limiter_script(
                 keys=[window_key, counter_key], args=[now, window_size]
@@ -119,21 +123,22 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     litellm_parent_otel_span=parent_otel_span,
                 )
                 # Reset counter
-                await self.internal_usage_cache.async_set_cache(
+                result = await self.internal_usage_cache.async_increment_cache(
                     key=counter_key,
-                    value=0,
+                    value=1,
                     ttl=window_size,
                     litellm_parent_otel_span=parent_otel_span,
                 )
-                result = 0
+
             else:
                 # Get current count
                 result = (
-                    await self.internal_usage_cache.async_get_cache(
+                    await self.internal_usage_cache.async_increment_cache(
                         key=counter_key,
+                        value=1,
                         litellm_parent_otel_span=parent_otel_span,
                     )
-                    or 0
+                    or 1
                 )
 
         return result
@@ -142,6 +147,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         descriptors: List[RateLimitDescriptor],
         parent_otel_span: Optional[Span] = None,
+        read_only: bool = False,
     ) -> RateLimitResponse:
         """
         Check if any of the rate limit descriptors should be rate limited.
@@ -157,7 +163,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
             # Get the rate limit
             requests_limit = rate_limit.get("requests_per_unit", sys.maxsize)
-            window_size = rate_limit.get("window_size", 60)  # Default 60 second window
+            window_size = rate_limit.get(
+                "window_size", self.window_size
+            )  # Default 60 second window
 
             # Use atomic operations to check and increment in one go
             try:
@@ -167,17 +175,22 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
                 now = datetime.now().timestamp()
 
-                # Get current count - local only
-                current_count = (
-                    await self.internal_usage_cache.async_get_cache(
+                # Get current window
+                current_window = await self.internal_usage_cache.async_get_cache(
+                    key=window_key,
+                    litellm_parent_otel_span=parent_otel_span,
+                )
+
+                # if not expired, check local cache
+                current_count: Optional[int] = None
+                if current_window is not None and (now - current_window) < window_size:
+                    current_count = await self.internal_usage_cache.async_get_cache(
                         key=counter_key,
                         litellm_parent_otel_span=parent_otel_span,
                         local_only=True,
                     )
-                    or 0
-                )
 
-                if current_count >= requests_limit:
+                if current_count and current_count > requests_limit:
                     status = {
                         "code": "OVER_LIMIT",
                         "current_limit": requests_limit,
@@ -187,35 +200,46 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     statuses.append(status)
                     continue
 
-                # If we're under the limit, try to increment atomically
-                new_count = await self.rate_limiter_script_handler(
-                    window_key=window_key,
-                    counter_key=counter_key,
-                    now=now,
-                    window_size=window_size,
-                )
-
-                # Double check after increment
-                if new_count + 1 > requests_limit:
-                    # We went over the limit, decrement back
-                    await self.internal_usage_cache.async_increment_cache(
-                        key=counter_key,
-                        value=-1,
-                        ttl=window_size,
-                        litellm_parent_otel_span=parent_otel_span,
+                if not read_only:
+                    # If we're under the limit, try to increment atomically
+                    new_count = await self.rate_limiter_script_handler(
+                        window_key=window_key,
+                        counter_key=counter_key,
+                        now=now,
+                        window_size=window_size,
                     )
-                    status = {
-                        "code": "OVER_LIMIT",
-                        "current_limit": requests_limit,
-                        "limit_remaining": 0,
-                    }
-                    overall_code = "OVER_LIMIT"
+
+                    # Double check after increment
+                    if new_count > requests_limit:
+                        # We went over the limit, decrement back
+                        await self.internal_usage_cache.async_increment_cache(
+                            key=counter_key,
+                            value=-1,
+                            ttl=window_size,
+                            litellm_parent_otel_span=parent_otel_span,
+                        )
+                        status = {
+                            "code": "OVER_LIMIT",
+                            "current_limit": requests_limit,
+                            "limit_remaining": 0,
+                        }
+                        overall_code = "OVER_LIMIT"
+                    else:
+                        status = {
+                            "code": "OK",
+                            "current_limit": requests_limit,
+                            "limit_remaining": max(0, requests_limit - new_count),
+                        }
                 else:
+                    # Just read the current count, don't increment
                     status = {
                         "code": "OK",
                         "current_limit": requests_limit,
-                        "limit_remaining": max(0, requests_limit - new_count),
+                        "limit_remaining": max(
+                            0, requests_limit - (current_count or 0)
+                        ),
                     }
+
             except Exception as e:
                 verbose_proxy_logger.exception(f"Error in rate limit check: {str(e)}")
                 status = {
@@ -252,7 +276,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     value=user_api_key_dict.api_key,
                     rate_limit={
                         "requests_per_unit": user_api_key_dict.rpm_limit or sys.maxsize,
-                        "window_size": 60,  # 1 minute window
+                        "window_size": self.window_size,  # 1 minute window
                     },
                 )
             )
@@ -347,48 +371,51 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         rate_limit={
                             "requests_per_unit": user_api_key_dict.rpm_limit
                             or sys.maxsize,
-                            "window_size": 60,
+                            "window_size": self.window_size,
                         },
                     )
                 )
 
-            # # Get current limits
-            # response = await self.should_rate_limit(
-            #     descriptors=descriptors,
-            #     parent_otel_span=user_api_key_dict.parent_otel_span,
-            # )
+            # Check rate limits
+            rate_limit_response = await self.should_rate_limit(
+                descriptors=descriptors,
+                parent_otel_span=user_api_key_dict.parent_otel_span,
+                read_only=True,
+            )
 
-            # # Update response headers
-            # if hasattr(response, "_hidden_params"):
-            #     _hidden_params = getattr(response, "_hidden_params")
-            # else:
-            #     _hidden_params = None
+            # Update response headers
+            if hasattr(response, "_hidden_params"):
+                _hidden_params = getattr(response, "_hidden_params")
+            else:
+                _hidden_params = None
 
-            # if _hidden_params is not None and (
-            #     isinstance(_hidden_params, BaseModel)
-            #     or isinstance(_hidden_params, dict)
-            # ):
-            #     if isinstance(_hidden_params, BaseModel):
-            #         _hidden_params = _hidden_params.model_dump()
+            if _hidden_params is not None and (
+                isinstance(_hidden_params, BaseModel)
+                or isinstance(_hidden_params, dict)
+            ):
+                if isinstance(_hidden_params, BaseModel):
+                    _hidden_params = _hidden_params.model_dump()
 
-            #     _additional_headers = _hidden_params.get("additional_headers", {}) or {}
+                _additional_headers = _hidden_params.get("additional_headers", {}) or {}
 
-            #     # Add rate limit headers
-            #     for i, status in enumerate(response["statuses"]):
-            #         descriptor = descriptors[i]
-            #         prefix = f"x-ratelimit-{descriptor['key']}"
-            #         _additional_headers[f"{prefix}-remaining-requests"] = status[
-            #             "limit_remaining"
-            #         ]
-            #         _additional_headers[f"{prefix}-limit-requests"] = status[
-            #             "current_limit"
-            #         ]
+                # Add rate limit headers
+                for i, status in enumerate(rate_limit_response["statuses"]):
+                    descriptor = descriptors[i]
+                    prefix = f"x-ratelimit-{descriptor['key']}"
+                    _additional_headers[f"{prefix}-remaining-requests"] = status[
+                        "limit_remaining"
+                    ]
+                    _additional_headers[f"{prefix}-limit-requests"] = status[
+                        "current_limit"
+                    ]
 
-            #     setattr(
-            #         response,
-            #         "_hidden_params",
-            #         {**_hidden_params, "additional_headers": _additional_headers},
-            #     )
+                setattr(
+                    response,
+                    "_hidden_params",
+                    {**_hidden_params, "additional_headers": _additional_headers},
+                )
 
         except Exception as e:
-            self.print_verbose(f"Error in post-call hook: {str(e)}")
+            verbose_proxy_logger.exception(
+                f"Error in rate limit post-call hook: {str(e)}"
+            )

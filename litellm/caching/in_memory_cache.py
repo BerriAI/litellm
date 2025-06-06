@@ -140,7 +140,7 @@ class InMemoryCache(BaseCache):
         self.cache_dict[key] = value
         if self.allow_ttl_override(key):  # if ttl is not set, set it to default ttl
             if "ttl" in kwargs and kwargs["ttl"] is not None:
-                self.ttl_dict[key] = time.time() + kwargs["ttl"]
+                self.ttl_dict[key] = time.time() + float(kwargs["ttl"])
             else:
                 self.ttl_dict[key] = time.time() + self.default_ttl
 
