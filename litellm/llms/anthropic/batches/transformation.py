@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 from httpx import Response
 
 from litellm.types.llms.openai import AllMessageValues
-from litellm.utils import ModelResponse
+from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
