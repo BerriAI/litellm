@@ -1848,7 +1848,7 @@ class ModelResponseIterator:
             from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
             processed_chunk = GenerateContentResponseBody(**chunk)  # type: ignore
-            model_response = ModelResponseStream()
+            model_response = ModelResponseStream(choices=[])
             usage: Optional[Usage] = None
             _candidates: Optional[List[Candidates]] = processed_chunk.get("candidates")
             grounding_metadata: List[dict] = []

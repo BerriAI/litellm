@@ -198,6 +198,7 @@ def test_gemini_url_context():
 def test_gemini_with_grounding():
     from litellm import completion, Usage, stream_chunk_builder
     litellm._turn_on_debug()
+    litellm.set_verbose = True
     tools = [{"googleSearch": {}}]
 
     # response = completion(model="gemini/gemini-2.0-flash", messages=[{"role": "user", "content": "What is the capital of France?"}], tools=tools)
@@ -209,10 +210,11 @@ def test_gemini_with_grounding():
 
     ## Check streaming
 
-    response = completion(model="gemini/gemini-2.0-flash", messages=[{"role": "user", "content": "What is the capital of France?"}], tools=tools, stream=True)
+    response = completion(model="gemini/gemini-2.0-flash", messages=[{"role": "user", "content": "What is the capital of France?"}], tools=tools, stream=True, stream_options={"include_usage": True})
     chunks = []
     for chunk in response:
         chunks.append(chunk)
+    print(f"chunks before stream_chunk_builder: {chunks}")
     assert len(chunks) > 0
     complete_response = stream_chunk_builder(chunks)
     print(complete_response)
