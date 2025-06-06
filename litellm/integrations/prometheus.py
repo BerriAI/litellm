@@ -8,6 +8,7 @@ from typing import (
     Any,
     Awaitable,
     Callable,
+    Dict,
     List,
     Literal,
     Optional,
@@ -50,19 +51,22 @@ class PrometheusLogger(CustomLogger):
                 )
                 return
 
+            # Parse prometheus metrics configuration for label filtering
+            self.label_filters = self._parse_prometheus_config()
+
             self.litellm_proxy_failed_requests_metric = Counter(
                 name="litellm_proxy_failed_requests_metric",
                 documentation="Total number of failed responses from proxy - the client did not get a success response from litellm proxy",
-                labelnames=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_proxy_failed_requests_metric"
+                labelnames=self._get_metric_labels(
+                    "litellm_proxy_failed_requests_metric"
                 ),
             )
 
             self.litellm_proxy_total_requests_metric = Counter(
                 name="litellm_proxy_total_requests_metric",
                 documentation="Total number of requests made to the proxy server - track number of client side requests",
-                labelnames=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_proxy_total_requests_metric"
+                labelnames=self._get_metric_labels(
+                    "litellm_proxy_total_requests_metric"
                 ),
             )
 
@@ -70,8 +74,8 @@ class PrometheusLogger(CustomLogger):
             self.litellm_request_total_latency_metric = Histogram(
                 "litellm_request_total_latency_metric",
                 "Total latency (seconds) for a request to LiteLLM",
-                labelnames=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_request_total_latency_metric"
+                labelnames=self._get_metric_labels(
+                    "litellm_request_total_latency_metric"
                 ),
                 buckets=LATENCY_BUCKETS,
             )
@@ -79,9 +83,7 @@ class PrometheusLogger(CustomLogger):
             self.litellm_llm_api_latency_metric = Histogram(
                 "litellm_llm_api_latency_metric",
                 "Total latency (seconds) for a models LLM API call",
-                labelnames=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_llm_api_latency_metric"
-                ),
+                labelnames=self._get_metric_labels("litellm_llm_api_latency_metric"),
                 buckets=LATENCY_BUCKETS,
             )
 
@@ -117,33 +119,27 @@ class PrometheusLogger(CustomLogger):
             self.litellm_tokens_metric = Counter(
                 "litellm_total_tokens",
                 "Total number of input + output tokens from LLM requests",
-                labelnames=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_total_tokens_metric"
-                ),
+                labelnames=self._get_metric_labels("litellm_total_tokens_metric"),
             )
 
             self.litellm_input_tokens_metric = Counter(
                 "litellm_input_tokens",
                 "Total number of input tokens from LLM requests",
-                labelnames=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_input_tokens_metric"
-                ),
+                labelnames=self._get_metric_labels("litellm_input_tokens_metric"),
             )
 
             self.litellm_output_tokens_metric = Counter(
                 "litellm_output_tokens",
                 "Total number of output tokens from LLM requests",
-                labelnames=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_output_tokens_metric"
-                ),
+                labelnames=self._get_metric_labels("litellm_output_tokens_metric"),
             )
 
             # Remaining Budget for Team
             self.litellm_remaining_team_budget_metric = Gauge(
                 "litellm_remaining_team_budget_metric",
                 "Remaining budget for team",
-                labelnames=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_remaining_team_budget_metric"
+                labelnames=self._get_metric_labels(
+                    "litellm_remaining_team_budget_metric"
                 ),
             )
 
@@ -151,17 +147,15 @@ class PrometheusLogger(CustomLogger):
             self.litellm_team_max_budget_metric = Gauge(
                 "litellm_team_max_budget_metric",
                 "Maximum budget set for team",
-                labelnames=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_team_max_budget_metric"
-                ),
+                labelnames=self._get_metric_labels("litellm_team_max_budget_metric"),
             )
 
             # Team Budget Reset At
             self.litellm_team_budget_remaining_hours_metric = Gauge(
                 "litellm_team_budget_remaining_hours_metric",
                 "Remaining days for team budget to be reset",
-                labelnames=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_team_budget_remaining_hours_metric"
+                labelnames=self._get_metric_labels(
+                    "litellm_team_budget_remaining_hours_metric"
                 ),
             )
 
@@ -169,8 +163,8 @@ class PrometheusLogger(CustomLogger):
             self.litellm_remaining_api_key_budget_metric = Gauge(
                 "litellm_remaining_api_key_budget_metric",
                 "Remaining budget for api key",
-                labelnames=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_remaining_api_key_budget_metric"
+                labelnames=self._get_metric_labels(
+                    "litellm_remaining_api_key_budget_metric"
                 ),
             )
 
@@ -178,16 +172,14 @@ class PrometheusLogger(CustomLogger):
             self.litellm_api_key_max_budget_metric = Gauge(
                 "litellm_api_key_max_budget_metric",
                 "Maximum budget set for api key",
-                labelnames=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_api_key_max_budget_metric"
-                ),
+                labelnames=self._get_metric_labels("litellm_api_key_max_budget_metric"),
             )
 
             self.litellm_api_key_budget_remaining_hours_metric = Gauge(
                 "litellm_api_key_budget_remaining_hours_metric",
                 "Remaining hours for api key budget to be reset",
-                labelnames=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_api_key_budget_remaining_hours_metric"
+                labelnames=self._get_metric_labels(
+                    "litellm_api_key_budget_remaining_hours_metric"
                 ),
             )
 
@@ -289,15 +281,16 @@ class PrometheusLogger(CustomLogger):
             self.litellm_deployment_success_responses = Counter(
                 name="litellm_deployment_success_responses",
                 documentation="LLM Deployment Analytics - Total number of successful LLM API calls via litellm",
-                labelnames=[REQUESTED_MODEL] + _logged_llm_labels + team_and_key_labels,
+                labelnames=self._get_metric_labels(
+                    "litellm_deployment_success_responses"
+                ),
             )
             self.litellm_deployment_failure_responses = Counter(
                 name="litellm_deployment_failure_responses",
                 documentation="LLM Deployment Analytics - Total number of failed LLM API calls for a specific LLM deploymeny. exception_status is the status of the exception from the llm api",
-                labelnames=[REQUESTED_MODEL]
-                + _logged_llm_labels
-                + EXCEPTION_LABELS
-                + team_and_key_labels,
+                labelnames=self._get_metric_labels(
+                    "litellm_deployment_failure_responses"
+                ),
             )
             self.litellm_deployment_failure_by_tag_responses = Counter(
                 "litellm_deployment_failure_by_tag_responses",
@@ -312,7 +305,7 @@ class PrometheusLogger(CustomLogger):
             self.litellm_deployment_total_requests = Counter(
                 name="litellm_deployment_total_requests",
                 documentation="LLM Deployment Analytics - Total number of LLM API calls via litellm - success + failure",
-                labelnames=[REQUESTED_MODEL] + _logged_llm_labels + team_and_key_labels,
+                labelnames=self._get_metric_labels("litellm_deployment_total_requests"),
             )
 
             # Deployment Latency tracking
@@ -325,25 +318,21 @@ class PrometheusLogger(CustomLogger):
             self.litellm_deployment_latency_per_output_token = Histogram(
                 name="litellm_deployment_latency_per_output_token",
                 documentation="LLM Deployment Analytics - Latency per output token",
-                labelnames=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_deployment_latency_per_output_token"
+                labelnames=self._get_metric_labels(
+                    "litellm_deployment_latency_per_output_token"
                 ),
             )
 
             self.litellm_deployment_successful_fallbacks = Counter(
                 "litellm_deployment_successful_fallbacks",
                 "LLM Deployment Analytics - Number of successful fallback requests from primary model -> fallback model",
-                PrometheusMetricLabels.get_labels(
-                    "litellm_deployment_successful_fallbacks"
-                ),
+                self._get_metric_labels("litellm_deployment_successful_fallbacks"),
             )
 
             self.litellm_deployment_failed_fallbacks = Counter(
                 "litellm_deployment_failed_fallbacks",
                 "LLM Deployment Analytics - Number of failed fallback requests from primary model -> fallback model",
-                PrometheusMetricLabels.get_labels(
-                    "litellm_deployment_failed_fallbacks"
-                ),
+                self._get_metric_labels("litellm_deployment_failed_fallbacks"),
             )
 
             self.litellm_llm_api_failed_requests_metric = Counter(
@@ -363,13 +352,62 @@ class PrometheusLogger(CustomLogger):
             self.litellm_requests_metric = Counter(
                 name="litellm_requests_metric",
                 documentation="deprecated - use litellm_proxy_total_requests_metric. Total number of LLM calls to litellm - track total per API Key, team, user",
-                labelnames=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_requests_metric"
-                ),
+                labelnames=self._get_metric_labels("litellm_requests_metric"),
             )
         except Exception as e:
             print_verbose(f"Got exception on init prometheus client {str(e)}")
             raise e
+
+    def _parse_prometheus_config(self) -> Dict[str, List[str]]:
+        """Parse prometheus metrics configuration for label filtering only"""
+        import litellm
+        from litellm.types.integrations.prometheus import PrometheusMetricsConfig
+
+        config = litellm.prometheus_metrics_config
+
+        # If no config is provided, return empty dict (no filtering)
+        if not config:
+            return {}
+
+        label_filters = {}
+
+        # Parse each configuration group
+        for group_config in config:
+            # Validate configuration using Pydantic
+            if isinstance(group_config, dict):
+                parsed_config = PrometheusMetricsConfig(**group_config)
+            else:
+                parsed_config = group_config
+
+            # Set label filters for each metric in this group
+            for metric_name in parsed_config.metrics:
+                if parsed_config.include_labels:
+                    label_filters[metric_name] = parsed_config.include_labels
+
+        return label_filters
+
+    def _get_metric_labels(self, metric_name: str) -> List[str]:
+        """Get the labels for a metric, filtered if configured"""
+        # Get default labels for this metric from PrometheusMetricLabels
+        if hasattr(PrometheusMetricLabels, metric_name):
+            default_labels = getattr(PrometheusMetricLabels, metric_name)
+        else:
+            # Fallback for metrics that don't have defined labels
+            default_labels = []
+
+        # If no label filtering is configured for this metric, use default labels
+        if metric_name not in self.label_filters:
+            return default_labels
+
+        # Get configured labels for this metric
+        configured_labels = self.label_filters[metric_name]
+
+        # Return intersection of configured and default labels to ensure we only use valid labels
+        filtered_labels = [
+            label for label in default_labels if label in configured_labels
+        ]
+
+        return filtered_labels
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         # Define prometheus client
@@ -919,7 +957,7 @@ class PrometheusLogger(CustomLogger):
             model_group = standard_logging_payload.get("model_group", None)
             api_base = standard_logging_payload.get("api_base", None)
             model_id = standard_logging_payload.get("model_id", None)
-            exception: Exception = request_kwargs.get("exception", None)
+            exception = request_kwargs.get("exception", None)
 
             llm_provider = _litellm_params.get("custom_llm_provider", None)
 
@@ -928,51 +966,52 @@ class PrometheusLogger(CustomLogger):
             ["litellm_model_name", "model_id", "api_base", "api_provider"]
             """
             self.set_deployment_partial_outage(
-                litellm_model_name=litellm_model_name,
+                litellm_model_name=litellm_model_name or "",
                 model_id=model_id,
                 api_base=api_base,
-                api_provider=llm_provider,
+                api_provider=llm_provider or "",
             )
-            self.litellm_deployment_failure_responses.labels(
-                litellm_model_name=litellm_model_name,
-                model_id=model_id,
-                api_base=api_base,
-                api_provider=llm_provider,
-                exception_status=str(getattr(exception, "status_code", None)),
-                exception_class=self._get_exception_class_name(exception),
-                requested_model=model_group,
-                hashed_api_key=standard_logging_payload["metadata"][
-                    "user_api_key_hash"
-                ],
-                api_key_alias=standard_logging_payload["metadata"][
-                    "user_api_key_alias"
-                ],
-                team=standard_logging_payload["metadata"]["user_api_key_team_id"],
-                team_alias=standard_logging_payload["metadata"][
-                    "user_api_key_team_alias"
-                ],
-            ).inc()
+            if exception is not None:
+                self.litellm_deployment_failure_responses.labels(
+                    litellm_model_name=litellm_model_name,
+                    model_id=model_id,
+                    api_base=api_base,
+                    api_provider=llm_provider,
+                    exception_status=str(getattr(exception, "status_code", None)),
+                    exception_class=self._get_exception_class_name(exception),
+                    requested_model=model_group,
+                    hashed_api_key=standard_logging_payload["metadata"][
+                        "user_api_key_hash"
+                    ],
+                    api_key_alias=standard_logging_payload["metadata"][
+                        "user_api_key_alias"
+                    ],
+                    team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+                    team_alias=standard_logging_payload["metadata"][
+                        "user_api_key_team_alias"
+                    ],
+                ).inc()
 
-            # tag based tracking
-            if standard_logging_payload is not None and isinstance(
-                standard_logging_payload, dict
-            ):
-                _tags = standard_logging_payload["request_tags"]
-                for tag in _tags:
-                    self.litellm_deployment_failure_by_tag_responses.labels(
-                        **{
-                            UserAPIKeyLabelNames.REQUESTED_MODEL.value: model_group,
-                            UserAPIKeyLabelNames.TAG.value: tag,
-                            UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value: litellm_model_name,
-                            UserAPIKeyLabelNames.MODEL_ID.value: model_id,
-                            UserAPIKeyLabelNames.API_BASE.value: api_base,
-                            UserAPIKeyLabelNames.API_PROVIDER.value: llm_provider,
-                            UserAPIKeyLabelNames.EXCEPTION_CLASS.value: exception.__class__.__name__,
-                            UserAPIKeyLabelNames.EXCEPTION_STATUS.value: str(
-                                getattr(exception, "status_code", None)
-                            ),
-                        }
-                    ).inc()
+                # tag based tracking
+                if standard_logging_payload is not None and isinstance(
+                    standard_logging_payload, dict
+                ):
+                    _tags = standard_logging_payload["request_tags"]
+                    for tag in _tags:
+                        self.litellm_deployment_failure_by_tag_responses.labels(
+                            **{
+                                UserAPIKeyLabelNames.REQUESTED_MODEL.value: model_group,
+                                UserAPIKeyLabelNames.TAG.value: tag,
+                                UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value: litellm_model_name,
+                                UserAPIKeyLabelNames.MODEL_ID.value: model_id,
+                                UserAPIKeyLabelNames.API_BASE.value: api_base,
+                                UserAPIKeyLabelNames.API_PROVIDER.value: llm_provider,
+                                UserAPIKeyLabelNames.EXCEPTION_CLASS.value: exception.__class__.__name__,
+                                UserAPIKeyLabelNames.EXCEPTION_STATUS.value: str(
+                                    getattr(exception, "status_code", None)
+                                ),
+                            }
+                        ).inc()
 
             self.litellm_deployment_total_requests.labels(
                 litellm_model_name=litellm_model_name,
@@ -1010,9 +1049,9 @@ class PrometheusLogger(CustomLogger):
     ):
         try:
             verbose_logger.debug("setting remaining tokens requests metric")
-            standard_logging_payload: Optional[
-                StandardLoggingPayload
-            ] = request_kwargs.get("standard_logging_object")
+            standard_logging_payload: Optional[StandardLoggingPayload] = (
+                request_kwargs.get("standard_logging_object")
+            )
 
             if standard_logging_payload is None:
                 return
@@ -1085,10 +1124,10 @@ class PrometheusLogger(CustomLogger):
             ["litellm_model_name", "requested_model", model_id", "api_base", "api_provider"]
             """
             self.set_deployment_healthy(
-                litellm_model_name=litellm_model_name,
-                model_id=model_id,
-                api_base=api_base,
-                api_provider=llm_provider,
+                litellm_model_name=litellm_model_name or "",
+                model_id=model_id or "",
+                api_base=api_base or "",
+                api_provider=llm_provider or "",
             )
 
             self.litellm_deployment_success_responses.labels(
@@ -1782,10 +1821,10 @@ class PrometheusLogger(CustomLogger):
         from litellm.integrations.custom_logger import CustomLogger
         from litellm.integrations.prometheus import PrometheusLogger
 
-        prometheus_loggers: List[
-            CustomLogger
-        ] = litellm.logging_callback_manager.get_custom_loggers_for_type(
-            callback_type=PrometheusLogger
+        prometheus_loggers: List[CustomLogger] = (
+            litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=PrometheusLogger
+            )
         )
         # we need to get the initialized prometheus logger instance(s) and call logger.initialize_remaining_budget_metrics() on them
         verbose_logger.debug("found %s prometheus loggers", len(prometheus_loggers))
