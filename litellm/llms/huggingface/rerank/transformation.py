@@ -109,7 +109,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
                 elif k == "query" and v is not None:
                     optional_rerank_params["query"] = v
 
-        return OptionalRerankParams(**optional_rerank_params)
+        return OptionalRerankParams(**optional_rerank_params)  # type: ignore
 
     def validate_environment(
         self,
