@@ -4267,6 +4267,10 @@ def _check_provider_match(model_info: dict, custom_llm_provider: Optional[str]) 
             "litellm_provider"
         ].startswith("bedrock"):
             return True
+        elif (
+            custom_llm_provider == "litellm_proxy"
+        ):  # litellm_proxy is a special case, it's not a provider, it's a proxy for the provider
+            return True
         else:
             return False
 
@@ -6715,6 +6719,8 @@ class ProviderConfigManager:
             return litellm.InfinityRerankConfig()
         elif litellm.LlmProviders.JINA_AI == provider:
             return litellm.JinaAIRerankConfig()
+        elif litellm.LlmProviders.HUGGINGFACE == provider:
+            return litellm.HuggingFaceRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod

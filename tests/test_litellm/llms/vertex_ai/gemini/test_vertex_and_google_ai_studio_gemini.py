@@ -1,13 +1,14 @@
 import asyncio
+import json
 from copy import deepcopy
 from typing import List, cast
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import BaseModel
 
 import litellm
-from litellm import ModelResponse
+from litellm import ModelResponse, completion
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
@@ -389,11 +390,12 @@ def test_streaming_chunk_includes_reasoning_content():
 
 
 def test_check_finish_reason():
-    config = VertexGeminiConfig()
-    finish_reason_mappings = config.get_finish_reason_mapping()
+    finish_reason_mappings = VertexGeminiConfig.get_finish_reason_mapping()
     for k, v in finish_reason_mappings.items():
         assert (
-            config._check_finish_reason(chat_completion_message=None, finish_reason=k)
+            VertexGeminiConfig._check_finish_reason(
+                chat_completion_message=None, finish_reason=k
+            )
             == v
         )
 
@@ -554,3 +556,45 @@ def test_vertex_ai_streaming_usage_calculation():
         mock_calculate_usage.assert_called_once_with(
             completion_response=completion_response,
         )
+
+
+def test_vertex_ai_streaming_usage_web_search_calculation():
+    """
+    Ensure streaming usage calculation uses same function as non-streaming usage calculation
+    """
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+    usage_metadata = {
+        "promptTokenCount": 57,
+        "candidatesTokenCount": 10,
+        "totalTokenCount": 67,
+    }
+
+    # Create a streaming chunk
+    chunk = {
+        "candidates": [
+            {
+                "content": {"parts": [{"text": "Hello"}]},
+                "groundingMetadata": [
+                    {"webSearchQueries": ["What is the capital of France?"]}
+                ],
+            }
+        ],
+        "usageMetadata": usage_metadata,
+    }
+
+    # Create iterator and parse chunk
+    iterator = ModelResponseIterator(
+        streaming_response=[], sync_stream=True, logging_obj=MagicMock()
+    )
+    completed_response = iterator.chunk_parser(chunk)
+
+    usage: Usage = completed_response.usage
+    assert usage.prompt_tokens_details.web_search_requests is not None
+    assert usage.prompt_tokens_details.web_search_requests == 1

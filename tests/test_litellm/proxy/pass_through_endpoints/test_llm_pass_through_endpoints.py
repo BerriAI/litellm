@@ -220,17 +220,14 @@ class TestVertexAIPassThroughHandler:
         endpoint = f"/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/gemini-1.5-flash:generateContent"
 
         # Mock request
-        mock_request = Request(
-            scope={
-                "type": "http",
-                "method": "POST",
-                "path": endpoint,
-                "headers": [
-                    (b"Authorization", b"Bearer test-creds"),
-                    (b"Content-Type", b"application/json"),
-                ],
-            }
-        )
+        mock_request = Mock()
+        mock_request.method = "POST"
+        mock_request.headers = {
+            "Authorization": "Bearer test-creds",
+            "Content-Type": "application/json",
+        }
+        mock_request.url = Mock()
+        mock_request.url.path = endpoint
 
         # Mock response
         mock_response = Response()
@@ -246,16 +243,28 @@ class TestVertexAIPassThroughHandler:
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._get_token_and_url"
         ) as mock_get_token, mock.patch(
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
-        ) as mock_create_route:
+        ) as mock_create_route, mock.patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_litellm_virtual_key"
+        ) as mock_get_virtual_key, mock.patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth"
+        ) as mock_user_auth:
+            # Setup mocks
             mock_ensure_token.return_value = ("test-auth-header", test_project)
             mock_get_token.return_value = (test_token, "")
+            mock_get_virtual_key.return_value = "Bearer test-key"
+            mock_user_auth.return_value = {"api_key": "test-key"}
+            
+            # Mock create_pass_through_route to return a function that returns a mock response
+            mock_endpoint_func = AsyncMock(return_value={"status": "success"})
+            mock_create_route.return_value = mock_endpoint_func
 
             # Call the route
             try:
-                await vertex_proxy_route(
+                result = await vertex_proxy_route(
                     endpoint=endpoint,
                     request=mock_request,
                     fastapi_response=mock_response,
+                    user_api_key_dict={"api_key": "test-key"},
                 )
             except Exception as e:
                 print(f"Error: {e}")
@@ -492,17 +501,14 @@ class TestVertexAIDiscoveryPassThroughHandler:
         endpoint = f"/v1/projects/{vertex_project}/locations/{vertex_location}/dataStores/default/servingConfigs/default:search"
 
         # Mock request
-        mock_request = Request(
-            scope={
-                "type": "http",
-                "method": "POST",
-                "path": endpoint,
-                "headers": [
-                    (b"Authorization", b"Bearer test-creds"),
-                    (b"Content-Type", b"application/json"),
-                ],
-            }
-        )
+        mock_request = Mock()
+        mock_request.method = "POST"
+        mock_request.headers = {
+            "Authorization": "Bearer test-creds",
+            "Content-Type": "application/json",
+        }
+        mock_request.url = Mock()
+        mock_request.url.path = endpoint
 
         # Mock response
         mock_response = Response()
@@ -518,13 +524,24 @@ class TestVertexAIDiscoveryPassThroughHandler:
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._get_token_and_url"
         ) as mock_get_token, mock.patch(
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
-        ) as mock_create_route:
+        ) as mock_create_route, mock.patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_litellm_virtual_key"
+        ) as mock_get_virtual_key, mock.patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth"
+        ) as mock_user_auth:
+            # Setup mocks
             mock_ensure_token.return_value = ("test-auth-header", test_project)
             mock_get_token.return_value = (test_token, "")
+            mock_get_virtual_key.return_value = "Bearer test-key"
+            mock_user_auth.return_value = {"api_key": "test-key"}
+            
+            # Mock create_pass_through_route to return a function that returns a mock response
+            mock_endpoint_func = AsyncMock(return_value={"status": "success"})
+            mock_create_route.return_value = mock_endpoint_func
 
             # Call the route
             try:
-                await vertex_discovery_proxy_route(
+                result = await vertex_discovery_proxy_route(
                     endpoint=endpoint,
                     request=mock_request,
                     fastapi_response=mock_response,

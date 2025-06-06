@@ -2841,6 +2841,133 @@ response = await litellm.aimage_generation(
 
 
 
+## **Gemini TTS (Text-to-Speech) Audio Output**
+
+:::info
+
+LiteLLM supports Gemini TTS models on Vertex AI that can generate audio responses using the OpenAI-compatible `audio` parameter format.
+
+:::
+
+### Supported Models
+
+LiteLLM supports Gemini TTS models with audio capabilities on Vertex AI (e.g. `vertex_ai/gemini-2.5-flash-preview-tts` and `vertex_ai/gemini-2.5-pro-preview-tts`). For the complete list of available TTS models and voices, see the [official Gemini TTS documentation](https://ai.google.dev/gemini-api/docs/speech-generation).
+
+### Limitations
+
+:::warning
+
+**Important Limitations**:
+- Gemini TTS models only support the `pcm16` audio format
+- **Streaming support has not been added** to TTS models yet
+- The `modalities` parameter must be set to `['audio']` for TTS requests
+
+:::
+
+### Quick Start
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import json
+
+## GET CREDENTIALS
+file_path = 'path/to/vertex_ai_service_account.json'
+
+# Load the JSON file
+with open(file_path, 'r') as file:
+    vertex_credentials = json.load(file)
+
+# Convert to JSON string
+vertex_credentials_json = json.dumps(vertex_credentials)
+
+response = completion(
+    model="vertex_ai/gemini-2.5-flash-preview-tts",
+    messages=[{"role": "user", "content": "Say hello in a friendly voice"}],
+    modalities=["audio"],  # Required for TTS models
+    audio={
+        "voice": "Kore",
+        "format": "pcm16"  # Required: must be "pcm16"
+    },
+    vertex_credentials=vertex_credentials_json
+)
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: gemini-tts-flash
+    litellm_params:
+      model: vertex_ai/gemini-2.5-flash-preview-tts
+      vertex_project: "your-project-id"
+      vertex_location: "us-central1"
+      vertex_credentials: "/path/to/service_account.json"
+  - model_name: gemini-tts-pro
+    litellm_params:
+      model: vertex_ai/gemini-2.5-pro-preview-tts
+      vertex_project: "your-project-id"
+      vertex_location: "us-central1"
+      vertex_credentials: "/path/to/service_account.json"
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Make TTS request
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "gemini-tts-flash",
+    "messages": [{"role": "user", "content": "Say hello in a friendly voice"}],
+    "modalities": ["audio"],
+    "audio": {
+      "voice": "Kore",
+      "format": "pcm16"
+    }
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+### Advanced Usage
+
+You can combine TTS with other Gemini features:
+
+```python
+response = completion(
+    model="vertex_ai/gemini-2.5-pro-preview-tts",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant that speaks clearly."},
+        {"role": "user", "content": "Explain quantum computing in simple terms"}
+    ],
+    modalities=["audio"],
+    audio={
+        "voice": "Charon",
+        "format": "pcm16"
+    },
+    temperature=0.7,
+    max_tokens=150,
+    vertex_credentials=vertex_credentials_json
+)
+```
+
+For more information about Gemini's TTS capabilities and available voices, see the [official Gemini TTS documentation](https://ai.google.dev/gemini-api/docs/speech-generation).
+
 ## **Text to Speech APIs**
 
 :::info

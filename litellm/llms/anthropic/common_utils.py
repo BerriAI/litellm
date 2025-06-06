@@ -12,7 +12,6 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.openai import AllMessageValues
 
@@ -165,6 +164,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
+        from litellm.secret_managers.main import get_secret_str
+
         return (
             api_base
             or get_secret_str("ANTHROPIC_API_BASE")
@@ -173,6 +174,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+        from litellm.secret_managers.main import get_secret_str
+
         return api_key or get_secret_str("ANTHROPIC_API_KEY")
 
     @staticmethod
