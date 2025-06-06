@@ -436,8 +436,13 @@ async def acompletion(
             tools=tools,
             prompt_label=kwargs.get("prompt_label", None),
         )
-
-        # if the chat completion logging hook removed all tools, set tools to None
+        #########################################################
+        # if the chat completion logging hook removed all tools,
+        # set tools to None
+        # eg. in certain cases when users send vector stores as tools
+        # we don't want the tools to go to the upstream llm
+        # relevant issue: https://github.com/BerriAI/litellm/issues/11404
+        #########################################################
         if tools is not None and len(tools) == 0:
             tools = None
 
