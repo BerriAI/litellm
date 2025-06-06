@@ -843,7 +843,7 @@ def swagger_monkey_patch(*args, **kwargs):
     )
 
 
-# applications.get_swagger_ui_html = swagger_monkey_patch
+applications.get_swagger_ui_html = swagger_monkey_patch
 
 from typing import Dict
 
