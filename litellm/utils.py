@@ -4408,59 +4408,6 @@ def _is_potential_model_name_in_model_cost(
         for potential_model_name in potential_model_names.values()
     )
 
-def _handle_proxy_model_names(model):
-    try:
-        from litellm import get_llm_provider
-
-        # Extract the underlying model from litellm_proxy/provider/model format
-        proxy_parts = model.split("/", 1)  # Split on first /
-        if len(proxy_parts) > 1:
-            underlying_model = proxy_parts[1]  # Everything after litellm_proxy/
-
-            # Get the correct provider for the underlying model
-            try:
-                _, underlying_provider, _, _ = get_llm_provider(model=underlying_model)
-
-                # Try to get model info using the underlying model and its correct provider
-                fallback_model_info = _get_model_info_helper(
-                    model=underlying_model, custom_llm_provider=underlying_provider
-                )
-
-                # Convert ModelInfoBase to dict to use as _model_info
-                _model_info = {
-                    "key": fallback_model_info["key"],
-                    "max_tokens": fallback_model_info["max_tokens"],
-                    "max_input_tokens": fallback_model_info["max_input_tokens"],
-                    "max_output_tokens": fallback_model_info["max_output_tokens"],
-                    "input_cost_per_token": fallback_model_info["input_cost_per_token"],
-                    "output_cost_per_token": fallback_model_info["output_cost_per_token"],
-                    "litellm_provider": fallback_model_info["litellm_provider"],
-                    "mode": fallback_model_info["mode"],
-                    "supports_function_calling": fallback_model_info.get("supports_function_calling"),
-                    "supports_vision": fallback_model_info.get("supports_vision"),
-                    "supports_tool_choice": fallback_model_info.get("supports_tool_choice"),
-                    "supports_system_messages": fallback_model_info.get("supports_system_messages"),
-                    "supports_response_schema": fallback_model_info.get("supports_response_schema"),
-                    "supports_assistant_prefill": fallback_model_info.get("supports_assistant_prefill"),
-                    "supports_prompt_caching": fallback_model_info.get("supports_prompt_caching"),
-                    "supports_audio_input": fallback_model_info.get("supports_audio_input"),
-                    "supports_audio_output": fallback_model_info.get("supports_audio_output"),
-                    "supports_pdf_input": fallback_model_info.get("supports_pdf_input"),
-                    "supports_web_search": fallback_model_info.get("supports_web_search"),
-                    "supports_reasoning": fallback_model_info.get("supports_reasoning"),
-                    "supports_computer_use": fallback_model_info.get("supports_computer_use"),
-                }
-                key = fallback_model_info["key"]
-
-                return _model_info, key
-
-            except Exception:
-                # If we can't determine the provider or get model info, continue to raise the error
-                pass
-    except Exception:
-        # If any part of the fallback fails, continue to raise the error
-        pass
-
 def _get_model_info_helper(  # noqa: PLR0915
     model: str, custom_llm_provider: Optional[str] = None
 ) -> ModelInfoBase:
