@@ -1834,13 +1834,16 @@ class ModelResponseIterator:
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             check_is_function_call,
         )
-
+        # Removed: self.chunk_type, self.accumulated_json, self.sent_first_chunk
+        # These were for handling a single JSON array response, not SSE.
         self.streaming_response = streaming_response
-        self.chunk_type: Literal["valid_json", "accumulated_json"] = "valid_json"
-        self.accumulated_json = ""
-        self.sent_first_chunk = False
         self.logging_obj = logging_obj
         self.is_function_call = check_is_function_call(logging_obj)
+        # For sync iteration via __iter__ and __next__
+        self.response_iterator = None
+        # For async iteration via __aiter__ and __anext__
+        self.async_response_iterator = None
+
 
     def chunk_parser(self, chunk: dict) -> Optional["ModelResponseStream"]:
         try:
@@ -1889,100 +1892,132 @@ class ModelResponseIterator:
 
     # Sync iterator
     def __iter__(self):
-        self.response_iterator = self.streaming_response
+        # Ensure response_iterator is initialized for this iteration
+        if self.streaming_response is None:
+            raise ValueError("Streaming response not set for iterator.")
+        self.response_iterator = iter(self.streaming_response)
         return self
 
-    def handle_valid_json_chunk(self, chunk: str) -> Optional["ModelResponseStream"]:
-        chunk = chunk.strip()
-        try:
-            json_chunk = json.loads(chunk)
-
-        except json.JSONDecodeError as e:
-            if (
-                self.sent_first_chunk is False
-            ):  # only check for accumulated json, on first chunk, else raise error. Prevent real errors from being masked.
-                self.chunk_type = "accumulated_json"
-                return self.handle_accumulated_json_chunk(chunk=chunk)
-            raise e
-
-        if self.sent_first_chunk is False:
-            self.sent_first_chunk = True
-
-        return self.chunk_parser(chunk=json_chunk)
-
-    def handle_accumulated_json_chunk(
-        self, chunk: str
-    ) -> Optional["ModelResponseStream"]:
-        chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
-        message = chunk.replace("\n\n", "")
-
-        # Accumulate JSON data
-        self.accumulated_json += message
-
-        # Try to parse the accumulated JSON
-        try:
-            _data = json.loads(self.accumulated_json)
-            self.accumulated_json = ""  # reset after successful parsing
-            return self.chunk_parser(chunk=_data)
-        except json.JSONDecodeError:
-            # If it's not valid JSON yet, continue to the next event
-            return None
-
-    def _common_chunk_parsing_logic(
-        self, chunk: str
-    ) -> Optional["ModelResponseStream"]:
-        try:
-            chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
-            if len(chunk) > 0:
-                """
-                Check if initial chunk valid json
-                - if partial json -> enter accumulated json logic
-                - if valid - continue
-                """
-                if self.chunk_type == "valid_json":
-                    return self.handle_valid_json_chunk(chunk=chunk)
-                elif self.chunk_type == "accumulated_json":
-                    return self.handle_accumulated_json_chunk(chunk=chunk)
-
-            return None
-        except Exception:
-            raise
-
     def __next__(self):
-        try:
-            chunk = self.response_iterator.__next__()
-        except StopIteration:
-            if self.chunk_type == "accumulated_json" and self.accumulated_json:
-                return self.handle_accumulated_json_chunk(chunk="")
+        if self.response_iterator is None:
+            # This can happen if __iter__ was not called, or stream ended.
             raise StopIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error receiving chunk from stream: {e}")
 
-        try:
-            return self._common_chunk_parsing_logic(chunk=chunk)
-        except StopIteration:
-            raise StopIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+        while True: # Loop to skip non-data lines or empty data lines
+            try:
+                line = next(self.response_iterator)
+                verbose_logger.debug(f"Raw SSE line (sync): {line}")
+            except StopIteration:
+                raise  # End of stream
+            except Exception as e:
+                verbose_logger.error(f"Error fetching next line from sync stream: {e}")
+                raise RuntimeError(f"Error fetching next line from sync stream: {e}")
+
+            line = line.strip()
+            if not line:  # Skip empty lines (SSE keep-alive or separators)
+                continue
+
+            if line.startswith("data:"):
+                json_data_str = line[len("data:"):].strip()
+                verbose_logger.debug(f"Extracted JSON data string (sync): {json_data_str}")
+
+                if not json_data_str: # Skip if data field is empty after stripping
+                    continue
+                
+                # Handle potential [DONE] marker if Vertex uses it, though not standard for Gemini from docs
+                if json_data_str == "[DONE]":
+                    verbose_logger.debug("Received [DONE] marker, stopping sync iteration.")
+                    raise StopIteration
+
+                try:
+                    json_chunk_dict = json.loads(json_data_str)
+                    verbose_logger.debug(f"Parsed JSON chunk (sync): {json_chunk_dict}")
+                except json.JSONDecodeError as e:
+                    verbose_logger.error(
+                        f"JSONDecodeError for line (sync): '{json_data_str}'. Error: {e}"
+                    )
+                    # Skip malformed data line and try next
+                    continue
+
+                # chunk_parser processes the dict into a ModelResponseStream object
+                parsed_model_response = self.chunk_parser(chunk=json_chunk_dict)
+
+                if parsed_model_response:
+                    verbose_logger.debug(
+                        "Successfully parsed chunk into ModelResponseStream (sync)."
+                    )
+                    return parsed_model_response
+                else:
+                    # chunk_parser returned None, e.g. valid JSON but no actual content to yield (like only usage)
+                    verbose_logger.debug(
+                        f"chunk_parser returned None for chunk (sync): {json_chunk_dict}"
+                    )
+                    # Continue to the next SSE message
+                    continue
+            else:
+                # Not a data line, could be 'event:', 'id:', or a comment. Ignore.
+                verbose_logger.debug(f"Skipping non-data SSE line (sync): {line}")
+                continue
 
     # Async iterator
     def __aiter__(self):
+        if self.streaming_response is None:
+            raise ValueError("Streaming response not set for async iterator.")
+        # Ensure async_response_iterator is initialized for this iteration
         self.async_response_iterator = self.streaming_response.__aiter__()
         return self
 
     async def __anext__(self):
-        try:
-            chunk = await self.async_response_iterator.__anext__()
-        except StopAsyncIteration:
-            if self.chunk_type == "accumulated_json" and self.accumulated_json:
-                return self.handle_accumulated_json_chunk(chunk="")
-            raise StopAsyncIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+        if self.async_response_iterator is None:
+            raise StopAsyncIteration # Should have been set by __aiter__
 
-        try:
-            return self._common_chunk_parsing_logic(chunk=chunk)
-        except StopAsyncIteration:
-            raise StopAsyncIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+        while True: # Loop to skip non-data lines or empty data lines
+            try:
+                line = await self.async_response_iterator.__anext__()
+                verbose_logger.debug(f"Raw SSE line (async): {line}")
+            except StopAsyncIteration:
+                raise # End of stream
+            except Exception as e:
+                verbose_logger.error(f"Error fetching next line from async stream: {e}")
+                raise RuntimeError(f"Error fetching next line from async stream: {e}")
+
+            line = line.strip()
+            if not line:  # Skip empty lines
+                continue
+
+            if line.startswith("data:"):
+                json_data_str = line[len("data:"):].strip()
+                verbose_logger.debug(f"Extracted JSON data string (async): {json_data_str}")
+
+                if not json_data_str: # Skip if data field is empty after stripping
+                    continue
+
+                if json_data_str == "[DONE]":
+                    verbose_logger.debug("Received [DONE] marker, stopping async iteration.")
+                    raise StopAsyncIteration
+                
+                try:
+                    json_chunk_dict = json.loads(json_data_str)
+                    verbose_logger.debug(f"Parsed JSON chunk (async): {json_chunk_dict}")
+                except json.JSONDecodeError as e:
+                    verbose_logger.error(
+                        f"JSONDecodeError for line (async): '{json_data_str}'. Error: {e}"
+                    )
+                    # Skip malformed data line
+                    continue
+                
+                parsed_model_response = self.chunk_parser(chunk=json_chunk_dict)
+
+                if parsed_model_response:
+                    verbose_logger.debug(
+                        "Successfully parsed chunk into ModelResponseStream (async)."
+                    )
+                    return parsed_model_response
+                else:
+                    verbose_logger.debug(
+                        f"chunk_parser returned None for chunk (async): {json_chunk_dict}"
+                    )
+                    continue # Continue to next SSE message
+            else:
+                verbose_logger.debug(f"Skipping non-data SSE line (async): {line}")
+                continue

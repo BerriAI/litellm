@@ -84,24 +84,26 @@ def _get_vertex_url(
         endpoint = "generateContent"
         if stream is True:
             endpoint = "streamGenerateContent"
+        
+        # Construct base URL based on whether it's a published model or a fine-tuned endpoint
+        if model.isdigit(): # Fine-tuned model (endpoint ID)
+            base_url_path = f"/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}"
+        else: # Published model
             if vertex_location == "global":
-                url = f"https://aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/global/publishers/google/models/{model}:{endpoint}?alt=sse"
+                base_url_path = f"/{vertex_api_version}/projects/{vertex_project}/locations/global/publishers/google/models/{model}"
             else:
-                url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}?alt=sse"
-        else:
-            if vertex_location == "global":
-                url = f"https://aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/global/publishers/google/models/{model}:{endpoint}"
-            else:
-                url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+                base_url_path = f"/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}"
 
-        # if model is only numeric chars then it's a fine tuned gemini model
-        # model = 4965075652664360960
-        # send to this url: url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
-        if model.isdigit():
-            # It's a fine-tuned Gemini model
-            url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
-            if stream is True:
-                url += "?alt=sse"
+        # Determine hostname
+        if vertex_location == "global":
+            hostname = "aiplatform.googleapis.com"
+        else:
+            hostname = f"{vertex_location}-aiplatform.googleapis.com"
+        
+        url = f"https://{hostname}{base_url_path}:{endpoint}"
+
+        if stream is True:
+            url += "?alt=sse"
     elif mode == "embedding":
         endpoint = "predict"
         url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
