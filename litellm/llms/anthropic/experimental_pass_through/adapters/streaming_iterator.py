@@ -6,10 +6,6 @@ from typing import Any, Optional
 from litellm import verbose_logger
 from litellm.types.utils import AdapterCompletionStreamWrapper
 
-from .anthropic_experimental_passthrough_config import (
-    AnthropicExperimentalPassThroughConfig,
-)
-
 
 class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     """
@@ -25,6 +21,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     holding_chunk: Optional[Any] = None
 
     def __next__(self):
+        from .transformation import LiteLLMAnthropicMessagesAdapter
+
         try:
             if self.sent_first_chunk is False:
                 self.sent_first_chunk = True
@@ -53,7 +51,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if chunk == "None" or chunk is None:
                     raise Exception
 
-                processed_chunk = AnthropicExperimentalPassThroughConfig().translate_streaming_openai_response_to_anthropic(
+                processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk
                 )
                 if (
@@ -91,6 +89,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             )
 
     async def __anext__(self):
+        from .transformation import LiteLLMAnthropicMessagesAdapter
+
         try:
             if self.sent_first_chunk is False:
                 self.sent_first_chunk = True
@@ -117,7 +117,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             async for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
-                processed_chunk = AnthropicExperimentalPassThroughConfig().translate_streaming_openai_response_to_anthropic(
+                processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk
                 )
                 if (

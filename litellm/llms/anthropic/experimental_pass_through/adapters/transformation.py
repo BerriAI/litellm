@@ -10,16 +10,18 @@ from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
     AnthropicMessagesToolChoice,
     AnthropicMessagesUserMessageParam,
-    AnthropicResponse,
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockToolUse,
-    AnthropicResponseUsageBlock,
     ContentBlockDelta,
     ContentJsonBlockDelta,
     ContentTextBlockDelta,
     MessageBlockDelta,
     MessageDelta,
     UsageDelta,
+)
+from litellm.types.llms.anthropic_messages.anthropic_response import (
+    AnthropicMessagesResponse,
+    AnthropicUsage,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -58,7 +60,7 @@ class AnthropicAdapter:
         request_body = AnthropicMessagesRequest(**kwargs)
 
         translated_body = (
-            AnthropicExperimentalPassThroughConfig().translate_anthropic_to_openai(
+            LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
                 anthropic_message_request=request_body
             )
         )
@@ -67,9 +69,9 @@ class AnthropicAdapter:
 
     def translate_completion_output_params(
         self, response: ModelResponse
-    ) -> Optional[AnthropicResponse]:
+    ) -> Optional[AnthropicMessagesResponse]:
 
-        return AnthropicExperimentalPassThroughConfig().translate_openai_response_to_anthropic(
+        return LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
             response=response
         )
 
@@ -79,7 +81,7 @@ class AnthropicAdapter:
         return AnthropicStreamWrapper(completion_stream=completion_stream)
 
 
-class AnthropicExperimentalPassThroughConfig:
+class LiteLLMAnthropicMessagesAdapter:
     def __init__(self):
         pass
 
@@ -387,7 +389,7 @@ class AnthropicExperimentalPassThroughConfig:
 
     def translate_openai_response_to_anthropic(
         self, response: ModelResponse
-    ) -> AnthropicResponse:
+    ) -> AnthropicMessagesResponse:
         ## translate content block
         anthropic_content = self._translate_openai_content_to_anthropic(choices=response.choices)  # type: ignore
         ## extract finish reason
@@ -396,18 +398,18 @@ class AnthropicExperimentalPassThroughConfig:
         )
         # extract usage
         usage: Usage = getattr(response, "usage")
-        anthropic_usage = AnthropicResponseUsageBlock(
+        anthropic_usage = AnthropicUsage(
             input_tokens=usage.prompt_tokens or 0,
             output_tokens=usage.completion_tokens or 0,
         )
-        translated_obj = AnthropicResponse(
+        translated_obj = AnthropicMessagesResponse(
             id=response.id,
             type="message",
             role="assistant",
             model=response.model or "unknown-model",
             stop_sequence=None,
             usage=anthropic_usage,
-            content=anthropic_content,
+            content=anthropic_content,  # type: ignore
             stop_reason=anthropic_finish_reason,
         )
 
