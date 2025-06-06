@@ -43,6 +43,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
+    OpenAIMcpServerTool,
     OpenAIWebSearchOptions,
 )
 from litellm.types.utils import CompletionTokensDetailsWrapper
@@ -244,6 +245,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
         elif tool["type"] == "url":  # mcp server tool
             mcp_server = AnthropicMcpServerTool(**tool)  # type: ignore
+        elif tool["type"] == "mcp":
+            mcp_server = self._map_openai_mcp_server_tool(
+                cast(OpenAIMcpServerTool, tool)
+            )
         if returned_tool is None and mcp_server is None:
             raise ValueError(f"Unsupported tool type: {tool['type']}")
 
@@ -261,6 +266,37 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
 
         return returned_tool, mcp_server
+
+    def _map_openai_mcp_server_tool(
+        self, tool: OpenAIMcpServerTool
+    ) -> AnthropicMcpServerTool:
+        from litellm.types.llms.anthropic import AnthropicMcpServerToolConfiguration
+
+        allowed_tools = tool.get("allowed_tools", None)
+        tool_configuration: Optional[AnthropicMcpServerToolConfiguration] = None
+        if allowed_tools is not None:
+            tool_configuration = AnthropicMcpServerToolConfiguration(
+                allowed_tools=tool.get("allowed_tools", None),
+            )
+
+        headers = tool.get("headers", {})
+        authorization_token: Optional[str] = None
+        if headers is not None:
+            bearer_token = headers.get("Authorization", None)
+            if bearer_token is not None:
+                authorization_token = bearer_token.replace("Bearer ", "")
+
+        initial_tool = AnthropicMcpServerTool(
+            type="url",
+            url=tool["server_url"],
+            name=tool["server_label"],
+        )
+
+        if tool_configuration is not None:
+            initial_tool["tool_configuration"] = tool_configuration
+        if authorization_token is not None:
+            initial_tool["authorization_token"] = authorization_token
+        return initial_tool
 
     def _map_tools(
         self, tools: List
