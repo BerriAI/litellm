@@ -48,15 +48,6 @@ else:
     OpenTelemetry = Any
 
 
-def showwarning(message, category, filename, lineno, file=None, line=None):
-    traceback_info = f"{filename}:{lineno}: {category.__name__}: {message}\n"
-    if file is not None:
-        file.write(traceback_info)
-
-
-warnings.showwarning = showwarning
-warnings.filterwarnings("default", category=UserWarning)
-
 # Your client code here
 
 
@@ -75,89 +66,6 @@ try:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 except ImportError as e:
     raise ImportError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
-
-list_of_messages = [
-    "'The thing I wish you improved is...'",
-    "'A feature I really want is...'",
-    "'The worst thing about this product is...'",
-    "'This product would be better if...'",
-    "'I don't like how this works...'",
-    "'It would help me if you could add...'",
-    "'This feature doesn't meet my needs because...'",
-    "'I get frustrated when the product...'",
-]
-
-
-def generate_feedback_box():
-    try:
-        from rich.console import Console
-        from rich.panel import Panel
-        from rich.text import Text
-        from rich.align import Align
-        
-        console = Console()
-        
-        # Select a random message
-        message = random.choice(list_of_messages)
-        
-        # Create feedback panel with beautiful formatting
-        feedback_content = f"[yellow]{message}[/yellow]\n\n[cyan]https://github.com/BerriAI/litellm/issues/new[/cyan]"
-        
-        feedback_panel = Panel(
-            Align.center(feedback_content),
-            title="[bold blue]Feature Request[/bold blue]",
-            border_style="blue",
-            padding=(1, 2)
-        )
-        
-        # Create thank you message
-        thank_you_text = Text("Thank you for using LiteLLM! 🚄", style="bold green")
-        thank_you_subtitle = Text("- Krrish & Ishaan", style="italic cyan")
-        
-        # Create help panel
-        help_panel = Panel(
-            "[red]Give Feedback / Get Help:[/red] [cyan]https://github.com/BerriAI/litellm/issues/new[/cyan]",
-            title="[bold red]Need Help?[/bold red]",
-            border_style="red",
-            padding=(0, 2)
-        )
-        
-        console.print()
-        console.print(feedback_panel)
-        console.print()
-        console.print(Align.center(thank_you_text))
-        console.print(Align.center(thank_you_subtitle))
-        console.print()
-        console.print(help_panel)
-        console.print()
-        
-    except ImportError:
-        # Fallback to original implementation if rich is not available
-        box_width = 60
-
-        # Select a random message
-        message = random.choice(list_of_messages)
-
-        print()  # noqa
-        print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa
-        print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa
-        print("\033[1;37m" + "# {:^59} #\033[0m".format(message))  # noqa
-        print(  # noqa
-            "\033[1;37m"
-            + "# {:^59} #\033[0m".format("https://github.com/BerriAI/litellm/issues/new")
-        )  # noqa
-        print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa
-        print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa
-        print()  # noqa
-        print(" Thank you for using LiteLLM! - Krrish & Ishaan")  # noqa
-        print()  # noqa
-        print()  # noqa
-        print()  # noqa
-        print(  # noqa
-            "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"
-        )  # noqa
-        print()  # noqa
-        print()  # noqa
 
 
 from collections import defaultdict
@@ -354,6 +262,7 @@ from litellm.proxy.utils import (
     _get_redoc_url,
     _is_projected_spend_over_limit,
     _is_valid_team_configs,
+    generate_feedback_box,
     get_custom_url,
     get_error_message_str,
     get_server_root_path,
