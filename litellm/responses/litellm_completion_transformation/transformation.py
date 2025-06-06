@@ -405,14 +405,26 @@ class LiteLLMCompletionResponsesConfig:
                 if isinstance(item, str):
                     content_list.append(item)
                 elif isinstance(item, dict):
-                    content_list.append(
-                        {
-                            "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
-                                item.get("type") or "text"
-                            ),
-                            "text": item.get("text"),
+                    if item.get("type") == "input_file":
+                        new_item = {
+                            "type": "file",
+                            "file": {}
                         }
-                    )
+                        keys = ['file_id', 'file_data']
+                        for key in keys:
+                            if item.get(key):
+                                new_item["file"][key] = item.get(key)
+
+                        content_list.append(new_item)
+                    else:
+                        content_list.append(
+                            {
+                                "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
+                                    item.get("type") or "text"
+                                ),
+                                "text": item.get("text"),
+                            }
+                        )
             return content_list
         else:
             raise ValueError(f"Invalid content type: {type(content)}")
