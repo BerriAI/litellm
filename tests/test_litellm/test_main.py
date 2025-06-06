@@ -427,3 +427,45 @@ def test_bedrock_llama():
         request["raw_request_body"]["prompt"]
         == "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\nhi<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
     )
+
+
+@pytest.mark.asyncio
+async def test_ahealth_check_batch_mode():
+    """
+    Test that ahealth_check works correctly when mode is set to 'batch'.
+    This test verifies the fix for the missing batch mode handler.
+    """
+    from litellm.main import ahealth_check
+    
+    # Mock the acompletion function to avoid making actual API calls
+    with patch("litellm.acompletion") as mock_acompletion:
+        # Set up mock response with required attributes
+        mock_response = MagicMock()
+        mock_response._hidden_params = {"headers": {"x-ratelimit-remaining-requests": "100"}}
+        mock_acompletion.return_value = mock_response
+        
+        # Test parameters
+        model_params = {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "test"}]
+        }
+        
+        # Call ahealth_check with mode="batch"
+        result = await ahealth_check(
+            model_params=model_params,
+            mode="batch"
+        )
+        
+        # Verify that acompletion was called
+        mock_acompletion.assert_called_once()
+        
+        # Verify the call was made with correct parameters
+        call_args = mock_acompletion.call_args
+        assert call_args.kwargs["model"] == "gpt-4o-mini"
+        assert call_args.kwargs["messages"] == [{"role": "user", "content": "test"}]
+        assert call_args.kwargs["cache"] == {"no-cache": True}
+        
+        # Verify that the function returns a proper health check response
+        assert isinstance(result, dict)
+        # The exact structure depends on _create_health_check_response implementation
+        # but we can verify it doesn't throw an exception and returns a dict
