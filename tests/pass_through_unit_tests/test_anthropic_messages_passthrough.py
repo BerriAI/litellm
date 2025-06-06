@@ -24,7 +24,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.router import Router
 import importlib
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-from base_anthropic_messages_test import BaseAnthropicMessagesTest
+from base_anthropic_unified_messages_test import BaseAnthropicMessagesTest
 # Load environment variables
 load_dotenv()
 
@@ -79,15 +79,6 @@ class TestAnthropicDirectAPI(BaseAnthropicMessagesTest):
             "model": "claude-3-haiku-20240307",
             "api_key": os.getenv("ANTHROPIC_API_KEY"),
         }
-    
-    @pytest.mark.asyncio
-    async def test_non_streaming(self):
-        return await self._test_non_streaming_base()
-    
-    @pytest.mark.asyncio
-    async def test_streaming(self):
-        return await self._test_streaming_base()
-
 
 class TestAnthropicBedrockAPI(BaseAnthropicMessagesTest):
     """Tests for Anthropic via Bedrock"""
@@ -96,32 +87,17 @@ class TestAnthropicBedrockAPI(BaseAnthropicMessagesTest):
         return {
             "model": "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
         }
-    
-    @pytest.mark.asyncio
-    async def test_non_streaming(self):
-        return await self._test_non_streaming_base()
-    
-    @pytest.mark.asyncio
-    async def test_streaming(self):
-        return await self._test_streaming_base()
+
 
 
 class TestAnthropicOpenAIAPI(BaseAnthropicMessagesTest):
     """Tests for OpenAI via Anthropic messages interface"""
-    
     @property
     def model_config(self) -> Dict[str, Any]:
         return {
             "model": "openai/gpt-4o-mini",
         }
-    
-    @pytest.mark.asyncio
-    async def test_non_streaming(self):
-        return await self._test_non_streaming_base()
-    
-    @pytest.mark.asyncio
-    async def test_streaming(self):
-        return await self._test_streaming_base()
+
 
 @pytest.mark.asyncio
 async def test_anthropic_messages_streaming_with_bad_request():
@@ -684,4 +660,21 @@ async def test_anthropic_messages_bedrock_dynamic_region():
         mock_get_credentials.assert_called_once()
         credentials_args = mock_get_credentials.call_args.kwargs
         assert credentials_args.get('aws_region_name') == test_region
+
+
+def test_sync_openai_messages():
+    """
+    Test the anthropic_messages with sync request
+    """
+    litellm._turn_on_debug()
+    response = litellm.anthropic.messages.create(
+        messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
+        model="openai/gpt-4o-mini",
+        max_tokens=100,
+    )
+    print("response", response)
+
+    assert response is not None
+    assert isinstance(response, dict)
+    assert response.get("choices")[0].get("message").get("content") is not None
 

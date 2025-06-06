@@ -58,7 +58,7 @@ async def anthropic_messages(
     """
     local_vars = locals()
     loop = asyncio.get_event_loop()
-    kwargs["anthropic_messages"] = True
+    kwargs["is_async"] = True
 
     func = partial(
         anthropic_messages_handler,
@@ -113,13 +113,14 @@ def anthropic_messages_handler(
     **kwargs,
 ) -> Union[
     AnthropicMessagesResponse,
-    Coroutine[Any, Any, Union[AnthropicMessagesResponse, AsyncIterator]],
+    AsyncIterator[Any],
+    Coroutine[Any, Any, Union[AnthropicMessagesResponse, AsyncIterator[Any]]],
 ]:
     """
     Makes Anthropic `/v1/messages` API calls In the Anthropic API Spec
     """
-
     local_vars = locals()
+    is_async = kwargs.get("is_async", False)
     # Use provided client or create a new one
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
     litellm_params = GenericLiteLLMParams(**kwargs)
@@ -156,6 +157,7 @@ def anthropic_messages_handler(
             tools=tools,
             top_k=top_k,
             top_p=top_p,
+            _is_async=is_async,
             **kwargs,
         )
 
@@ -177,7 +179,7 @@ def anthropic_messages_handler(
         anthropic_messages_optional_request_params=dict(
             anthropic_messages_optional_request_params
         ),
-        _is_async=True,
+        _is_async=is_async,
         client=client,
         custom_llm_provider=custom_llm_provider,
         litellm_params=litellm_params,
