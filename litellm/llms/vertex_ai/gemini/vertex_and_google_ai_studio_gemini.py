@@ -1843,7 +1843,7 @@ class ModelResponseIterator:
 
     def chunk_parser(self, chunk: dict) -> Optional["ModelResponseStream"]:
         try:
-            from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+            from litellm.types.utils import ModelResponseStream
 
             processed_chunk = GenerateContentResponseBody(**chunk)  # type: ignore
             model_response = ModelResponseStream(choices=[])
