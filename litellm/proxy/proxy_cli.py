@@ -892,87 +892,87 @@ def run_server(  # noqa: PLR0915
                     "yaml needs to be imported. Run - `pip install 'litellm[proxy]'`"
                 )
 
-                proxy_config = ProxyConfig()
-                _config = asyncio.run(proxy_config.get_config(config_file_path=config))
+            proxy_config = ProxyConfig()
+            _config = asyncio.run(proxy_config.get_config(config_file_path=config))
 
-                ### LITELLM SETTINGS ###
-                litellm_settings = _config.get("litellm_settings", None)
+            ### LITELLM SETTINGS ###
+            litellm_settings = _config.get("litellm_settings", None)
+            if (
+                litellm_settings is not None
+                and "json_logs" in litellm_settings
+                and litellm_settings["json_logs"] is True
+            ):
+                import litellm
+
+                litellm.json_logs = True
+                litellm._turn_on_json()
+                
+            ### GENERAL SETTINGS ###
+            general_settings = _config.get("general_settings", {})
+            if general_settings is None:
+                general_settings = {}
+            if general_settings:
+                ### LOAD SECRET MANAGER ###
+                key_management_system = general_settings.get(
+                    "key_management_system", None
+                )
+                proxy_config.initialize_secret_manager(key_management_system)
+                
+            key_management_settings = general_settings.get(
+                "key_management_settings", None
+            )
+            if key_management_settings is not None:
+                import litellm
+
+                litellm._key_management_settings = KeyManagementSettings(
+                    **key_management_settings
+                )
+                
+            database_url = general_settings.get("database_url", None)
+            if database_url is None and os.getenv("DATABASE_URL") is None:
+                # Check if all required variables are provided
+                database_host = os.getenv("DATABASE_HOST")
+                database_username = os.getenv("DATABASE_USERNAME")
+                database_password = os.getenv("DATABASE_PASSWORD")
+                database_name = os.getenv("DATABASE_NAME")
+
                 if (
-                    litellm_settings is not None
-                    and "json_logs" in litellm_settings
-                    and litellm_settings["json_logs"] is True
+                    database_host
+                    and database_username
+                    and database_password
+                    and database_name
                 ):
-                    import litellm
+                    # Handle the problem of special character escaping in the database URL
+                    database_username_enc = urllib.parse.quote_plus(database_username)
+                    database_password_enc = urllib.parse.quote_plus(database_password)
+                    database_name_enc = urllib.parse.quote_plus(database_name)
 
-                    litellm.json_logs = True
-                    litellm._turn_on_json()
-                    
-                ### GENERAL SETTINGS ###
-                general_settings = _config.get("general_settings", {})
-                if general_settings is None:
-                    general_settings = {}
-                if general_settings:
-                    ### LOAD SECRET MANAGER ###
-                    key_management_system = general_settings.get(
-                        "key_management_system", None
-                    )
-                    proxy_config.initialize_secret_manager(key_management_system)
-                    
-                key_management_settings = general_settings.get(
-                    "key_management_settings", None
-                )
-                if key_management_settings is not None:
-                    import litellm
+                    # Construct DATABASE_URL from the provided variables
+                    database_url = f"postgresql://{database_username_enc}:{database_password_enc}@{database_host}/{database_name_enc}"
 
-                    litellm._key_management_settings = KeyManagementSettings(
-                        **key_management_settings
-                    )
-                    
-                database_url = general_settings.get("database_url", None)
-                if database_url is None and os.getenv("DATABASE_URL") is None:
-                    # Check if all required variables are provided
-                    database_host = os.getenv("DATABASE_HOST")
-                    database_username = os.getenv("DATABASE_USERNAME")
-                    database_password = os.getenv("DATABASE_PASSWORD")
-                    database_name = os.getenv("DATABASE_NAME")
-
-                    if (
-                        database_host
-                        and database_username
-                        and database_password
-                        and database_name
-                    ):
-                        # Handle the problem of special character escaping in the database URL
-                        database_username_enc = urllib.parse.quote_plus(database_username)
-                        database_password_enc = urllib.parse.quote_plus(database_password)
-                        database_name_enc = urllib.parse.quote_plus(database_name)
-
-                        # Construct DATABASE_URL from the provided variables
-                        database_url = f"postgresql://{database_username_enc}:{database_password_enc}@{database_host}/{database_name_enc}"
-
-                        os.environ["DATABASE_URL"] = database_url
-                        
-                db_connection_pool_limit = general_settings.get(
-                    "database_connection_pool_limit",
-                    LiteLLMDatabaseConnectionPool.database_connection_pool_limit.value,
-                )
-                db_connection_timeout = general_settings.get(
-                    "database_connection_pool_timeout",
-                    LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value,
-                )
-                if database_url and database_url.startswith("os.environ/"):
-                    original_dir = os.getcwd()
-                    # set the working directory to where this script is
-                    sys.path.insert(
-                        0, os.path.abspath("../..")
-                    )  # Adds the parent directory to the system path - for litellm local dev
-                    import litellm
-                    from litellm import get_secret_str
-
-                    database_url = get_secret_str(database_url, default_value=None)
-                    os.chdir(original_dir)
-                if database_url is not None and isinstance(database_url, str):
                     os.environ["DATABASE_URL"] = database_url
+                    
+            db_connection_pool_limit = general_settings.get(
+                "database_connection_pool_limit",
+                LiteLLMDatabaseConnectionPool.database_connection_pool_limit.value,
+            )
+            db_connection_timeout = general_settings.get(
+                "database_connection_pool_timeout",
+                LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value,
+            )
+            if database_url and database_url.startswith("os.environ/"):
+                original_dir = os.getcwd()
+                # set the working directory to where this script is
+                sys.path.insert(
+                    0, os.path.abspath("../..")
+                )  # Adds the parent directory to the system path - for litellm local dev
+                import litellm
+                from litellm import get_secret_str
+
+                database_url = get_secret_str(database_url, default_value=None)
+                os.chdir(original_dir)
+            if database_url is not None and isinstance(database_url, str):
+                os.environ["DATABASE_URL"] = database_url
 
         if (
             os.getenv("DATABASE_URL", None) is not None
