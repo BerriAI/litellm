@@ -267,7 +267,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         return Tools(googleSearch={})
 
-    def _map_function(self, value: List[dict]) -> List[Tools]: # noqa: PLR0915
+    def _map_function(self, value: List[dict]) -> List[Tools]:  # noqa: PLR0915
         gtool_func_declarations = []
         googleSearch: Optional[dict] = None
         googleSearchRetrieval: Optional[dict] = None
@@ -1106,7 +1106,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             model_response.choices.append(choice)
 
-        return grounding_metadata, url_context_metadata, safety_ratings, citation_metadata
+        return (
+            grounding_metadata,
+            url_context_metadata,
+            safety_ratings,
+            citation_metadata,
+        )
 
     def transform_response(
         self,
@@ -1172,7 +1177,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model_response.choices = []
 
         try:
-            grounding_metadata, safety_ratings, citation_metadata = [], [], []
+            (
+                grounding_metadata,
+                url_context_metadata,
+                safety_ratings,
+                citation_metadata,
+            ) = ([], [], [], [])
             if _candidates:
                 (
                     grounding_metadata,
@@ -1189,12 +1199,27 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             setattr(model_response, "usage", usage)
 
             ## ADD METADATA TO RESPONSE ##
+            web_search_requests: Optional[int] = 0
+            if (
+                grounding_metadata
+                and isinstance(grounding_metadata, list)
+                and len(grounding_metadata) > 0
+            ):
+                for grounding_metadata_item in grounding_metadata:
+                    web_search_queries = grounding_metadata_item.get("webSearchQueries")
+                    if web_search_queries:
+                        web_search_requests += len(web_search_queries)
+            cast(
+                PromptTokensDetailsWrapper, usage.prompt_tokens_details
+            ).web_search_requests = web_search_requests
             setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)
             model_response._hidden_params[
                 "vertex_ai_grounding_metadata"
             ] = grounding_metadata
 
-            setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)
+            setattr(
+                model_response, "vertex_ai_url_context_metadata", url_context_metadata
+            )
             model_response._hidden_params[
                 "vertex_ai_url_context_metadata"
             ] = url_context_metadata

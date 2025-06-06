@@ -193,3 +193,15 @@ def test_gemini_url_context():
     assert urlMetadata['retrievedUrl'] == url
     assert urlMetadata['urlRetrievalStatus'] == 'URL_RETRIEVAL_STATUS_SUCCESS'
 
+
+
+def test_gemini_with_grounding():
+    from litellm import completion, Usage
+    litellm._turn_on_debug()
+    tools = [{"googleSearch": {}}]
+
+    response = completion(model="gemini/gemini-2.0-flash", messages=[{"role": "user", "content": "What is the capital of France?"}], tools=tools)
+    print(response)
+    usage: Usage = response.usage
+    assert usage.prompt_tokens_details.web_search_requests is not None
+    assert usage.prompt_tokens_details.web_search_requests > 0
