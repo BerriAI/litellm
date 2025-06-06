@@ -129,6 +129,66 @@ async def test_anthropic_messages_non_streaming_bedrock_invoke():
     print(f"Non-streaming response: {json.dumps(response, indent=2)}")
     return response
 
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_non_streaming_openai():
+    """
+    Test the anthropic_messages with non-streaming request
+    """
+    litellm._turn_on_debug()
+
+    # Set up test parameters
+    messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
+
+    # Call the handler
+    response = await litellm.anthropic.messages.acreate(
+        messages=messages,
+        model="openai/gpt-4o-mini",
+        max_tokens=100,
+    )
+
+    print("non-streaming openai messages response: ", response)
+
+    # Verify response
+    assert "id" in response
+    assert "content" in response
+    assert "model" in response
+    assert response["role"] == "assistant"
+
+    print(f"Non-streaming response: {json.dumps(response, indent=2, default=str)}")
+    return response
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_streaming_openai():
+    """
+    Test the anthropic_messages with streaming request
+    """
+    # Get API key from environment
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        pytest.skip("ANTHROPIC_API_KEY not found in environment")
+
+    # Set up test parameters
+    messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
+
+    # Call the handler
+    async_httpx_client = AsyncHTTPHandler()
+    response = await litellm.anthropic.messages.acreate(
+        messages=messages,
+        api_key=api_key,
+        model="openai/gpt-4o-mini",
+        max_tokens=100,
+        stream=True,
+        client=async_httpx_client,
+    )
+    collected_chunks = []
+    if isinstance(response, AsyncIterator):
+        async for chunk in response:
+            print("chunk=", chunk)
+            collected_chunks.append(chunk)
+
+    print("collected_chunks=", collected_chunks)
+
 @pytest.mark.asyncio
 async def test_anthropic_messages_streaming():
     """
