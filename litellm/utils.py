@@ -4320,6 +4320,20 @@ def _get_potential_model_names(
             stripped_model_name,
         )
 
+    # we need to strip the litellm_proxy/ prefix to get the underlying model
+    if custom_llm_provider == "litellm_proxy":
+        # If model starts with litellm_proxy/, strip it
+        if model.startswith("litellm_proxy/"):
+            underlying_model = model.split("/", 1)[1]
+        else:
+            underlying_model = model
+        
+        # Use the underlying model for all lookups
+        split_model = underlying_model
+        stripped_model_name = underlying_model
+        combined_stripped_model_name = underlying_model
+
+
     return PotentialModelNamesAndCustomLLMProvider(
         split_model=split_model,
         combined_model_name=combined_model_name,
@@ -4557,15 +4571,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 if not _check_provider_match(
                     model_info=_model_info, custom_llm_provider=custom_llm_provider
                 ):
-                    _model_info = None
-            
-            if _model_info is None and custom_llm_provider == "litellm_proxy":
-                # For litellm_proxy models, try to get model info for the underlying model with its correct provider
-                # Always reconstruct the full proxy model name for _handle_proxy_model_names
-                proxy_model = f"litellm_proxy/{model}"
-                result = _handle_proxy_model_names(model=proxy_model)
-                if result:
-                    _model_info, key = result
+                    _model_info = None 
 
             if _model_info is None or key is None:
                 raise ValueError(
