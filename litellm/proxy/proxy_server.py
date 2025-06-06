@@ -830,7 +830,7 @@ app.add_middleware(
 app.add_middleware(PrometheusAuthMiddleware)
 
 swagger_path = os.path.join(current_dir, "swagger")
-router.mount("/swagger", StaticFiles(directory=swagger_path), name="swagger")
+app.mount("/swagger", StaticFiles(directory=swagger_path), name="swagger_static_app")
 
 
 def swagger_monkey_patch(*args, **kwargs):
