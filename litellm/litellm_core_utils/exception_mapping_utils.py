@@ -5,7 +5,7 @@ from typing import Any, Optional
 import httpx
 
 import litellm
-from litellm._logging import verbose_logger
+from litellm import verbose_logger
 
 from ..exceptions import (
     APIConnectionError,
@@ -42,8 +42,23 @@ class ExceptionCheckers:
         """
         if not isinstance(error_str, str):
             return False
-            
-        return "429" in error_str or "rate limit" in error_str.lower()
+        
+        # Simple regex patterns to match the most common rate limiting messages
+        rate_limit_patterns = [
+            r"429",  # HTTP 429 status code
+            r"rate[\s\-]?limit",  # "rate limit", "rate-limit", "ratelimit"
+            r"too.?many.?requests?",  # "too many requests", "too many request", "toomanyrequest", etc.
+        ]
+        
+        # Combine all patterns with case-insensitive matching
+        combined_pattern = r"|".join(rate_limit_patterns)
+        
+        try:
+            import re
+            return bool(re.search(combined_pattern, error_str, re.IGNORECASE))
+        except Exception:
+            # Fallback to original logic if regex fails
+            return "429" in error_str or "rate limit" in error_str.lower()
 
 
 def get_error_message(error_obj) -> Optional[str]:
