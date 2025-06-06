@@ -120,7 +120,7 @@ def anthropic_messages_handler(
     Makes Anthropic `/v1/messages` API calls In the Anthropic API Spec
     """
     local_vars = locals()
-    is_async = kwargs.get("is_async", False)
+    is_async = kwargs.pop("is_async", False)
     # Use provided client or create a new one
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
     litellm_params = GenericLiteLLMParams(**kwargs)
