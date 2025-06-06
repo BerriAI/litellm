@@ -1234,7 +1234,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         url_context_metadata: List[dict] = []
         try:
             grounding_metadata: List[dict] = []
-            url_context_metadata: List[dict] = []
             safety_ratings: List[dict] = []
             citation_metadata: List[dict] = []
             if _candidates:
