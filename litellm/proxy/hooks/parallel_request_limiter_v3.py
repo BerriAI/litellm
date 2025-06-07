@@ -96,7 +96,7 @@ return results
 class RateLimitDescriptor(TypedDict):
     key: str
     value: str
-    rate_limit: Optional[Dict[str, int]]
+    rate_limit: Optional[Dict[str, Optional[int]]]
 
 
 class RateLimitResponse(TypedDict):
@@ -229,8 +229,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             key = descriptor["key"]
             value = descriptor["value"]
             rate_limit = descriptor.get("rate_limit", {}) or {}
-            requests_limit = rate_limit.get("requests_per_unit", sys.maxsize)
-            window_size = rate_limit.get("window_size", self.window_size)
+            requests_limit = rate_limit.get("requests_per_unit")
+            if requests_limit is None:
+                continue
+            window_size = rate_limit.get("window_size") or self.window_size
 
             window_key = f"{{{key}:{value}}}:window"
             counter_key = f"{{{key}:{value}}}:requests"
@@ -304,7 +306,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     key="api_key",
                     value=user_api_key_dict.api_key,
                     rate_limit={
-                        "requests_per_unit": user_api_key_dict.rpm_limit or sys.maxsize,
+                        "requests_per_unit": user_api_key_dict.rpm_limit,
                         "window_size": self.window_size,  # 1 minute window
                     },
                 )
@@ -317,8 +319,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     key="user",
                     value=user_api_key_dict.user_id,
                     rate_limit={
-                        "requests_per_unit": user_api_key_dict.user_rpm_limit
-                        or sys.maxsize,
+                        "requests_per_unit": user_api_key_dict.user_rpm_limit,
                         "window_size": self.window_size,
                     },
                 )
@@ -331,8 +332,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     key="team",
                     value=user_api_key_dict.team_id,
                     rate_limit={
-                        "requests_per_unit": user_api_key_dict.team_rpm_limit
-                        or sys.maxsize,
+                        "requests_per_unit": user_api_key_dict.team_rpm_limit,
                         "window_size": self.window_size,
                     },
                 )
@@ -345,9 +345,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     key="end_user",
                     value=user_api_key_dict.end_user_id,
                     rate_limit={
-                        "requests_per_unit": getattr(
-                            user_api_key_dict, "end_user_rpm_limit", sys.maxsize
-                        ),
+                        "requests_per_unit": user_api_key_dict.end_user_rpm_limit,
                         "window_size": self.window_size,
                     },
                 )
@@ -379,8 +377,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         key="model_per_key",
                         value=f"{user_api_key_dict.api_key}:{requested_model}",
                         rate_limit={
-                            "requests_per_unit": model_specific_rpm_limit
-                            or sys.maxsize,
+                            "requests_per_unit": model_specific_rpm_limit,
                             "window_size": self.window_size,
                         },
                     )
