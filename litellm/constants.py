@@ -242,6 +242,7 @@ LITELLM_CHAT_PROVIDERS = [
     "meta_llama",
     "featherless_ai",
     "nscale",
+    "chat",
     "nebius",
 ]
 

@@ -111,6 +111,32 @@ print(response)
 
 Call any model supported by a provider, with `model=<provider_name>/<model_name>`. There might be provider-specific details here, so refer to [provider docs for more information](https://docs.litellm.ai/docs/providers)
 
+## 🆕 Chat Provider for OpenAI Responses API
+
+Access OpenAI's responses-only models through the familiar Chat Completions API. Perfect for legacy tools that need to use new models like `gpt-4o` with enhanced reasoning.
+
+```python
+# Use responses-only models through chat completions API
+response = completion(model="chat/gpt-4o", messages=messages)
+
+# Streaming with responses models
+response = completion(model="chat/gpt-4o", messages=messages, stream=True)
+for part in response:
+    print(part.choices[0].delta.content or "")
+
+# Function calling with responses models  
+tools = [{"type": "function", "function": {"name": "get_weather", ...}}]
+response = completion(model="chat/gpt-4o", messages=messages, tools=tools)
+```
+
+**Key Features:**
+- ✅ **Legacy Compatibility** - Existing tools work without modification
+- ✅ **Full Feature Support** - Streaming, function calling, system messages
+- ✅ **Session Management** - Multi-turn conversations with `previous_response_id`
+- ✅ **Transparent Operation** - Same API, enhanced models
+
+[📖 **Full Chat Provider Documentation**](docs/chat_provider_responses_api.md)
+
 ## Async ([Docs](https://docs.litellm.ai/docs/completion/stream#async-completion))
 
 ```python

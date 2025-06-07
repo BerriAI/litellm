@@ -1,0 +1,36 @@
+# LiteLLM Proxy Configuration for Testing Chat Provider with Responses API
+# This configuration sets up the chat provider to proxy requests to OpenAI's responses API
+
+model_list:
+  # Chat provider configuration - routes /chat/completions to OpenAI's /responses endpoint
+  - model_name: gpt-4o-responses
+    litellm_params:
+      model: chat/gpt-4o  # Use the "chat" provider prefix
+      api_base: https://api.openai.com/v1  # OpenAI API base
+      api_key: os.environ/OPENAI_API_KEY
+      custom_llm_provider: chat  # Explicitly use the chat provider
+
+  # For comparison - direct responses API access
+  - model_name: gpt-4o-direct-responses
+    litellm_params:
+      model: openai/gpt-4o
+      api_base: https://api.openai.com/v1/responses
+      api_key: os.environ/OPENAI_API_KEY
+      custom_llm_provider: openai
+
+  # Regular OpenAI chat completion for comparison
+  - model_name: gpt-4o-regular
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+# General settings
+general_settings:
+  master_key: sk-1234  # Change this to a secure key
+  database_url: sqlite:///litellm_test.db
+  
+# Enable verbose logging for debugging
+litellm_settings:
+  set_verbose: true
+  json_logs: true
+  log_level: DEBUG

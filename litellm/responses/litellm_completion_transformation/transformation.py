@@ -2,11 +2,15 @@
 Handles transforming from Responses API -> LiteLLM completion  (Chat Completion API)
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Literal
 
+from openai.types.responses import ResponseReasoningItem, ResponseOutputMessage, ResponseFunctionToolCall
 from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
 
+import litellm
+
+HAS_ENTERPRISE_DIRECTORY = False
 from litellm._logging import verbose_logger
 
 try:
@@ -51,7 +55,7 @@ from litellm.types.utils import (
     Function,
     Message,
     ModelResponse,
-    Usage,
+    Usage, StreamingChoices,
 )
 
 ########### Initialize Classes used for Responses API  ###########
@@ -712,3 +716,88 @@ class LiteLLMCompletionResponsesConfig:
             output_tokens=usage.completion_tokens,
             total_tokens=usage.total_tokens,
         )
+
+    @staticmethod
+    def _map_responses_status(status: Literal["in_progress", "completed", "incomplete"] | None) -> Literal["stop", "length", "tool_calls", "content_filter", "function_call"] | None:
+        if status == "in_progress":
+            return None
+        elif status == "completed":
+            return "stop"
+        elif status == "incomplete":
+            return None
+        elif status is None:
+            return None
+        else:
+            raise ValueError(f"Unknown status {status}")
+
+    @staticmethod
+    def transform_responses_api_response_to_chat_completion_response(
+        responses_api_response: ResponsesAPIResponse,
+        model_response: ModelResponse
+    ) -> ModelResponse:
+        """
+        Inverse of transform_chat_completion_response_to_responses_api_response.
+        """
+        # Reconstruct choices from ResponsesAPIResponse.output
+        choices: List[Union[litellm.Choices, StreamingChoices]] = []
+        index = 0
+        for item in responses_api_response.output:
+            if isinstance(item, ResponseReasoningItem):
+                pass # ignore for now.
+            elif isinstance(item, ResponseOutputMessage):
+                for content in item.content:
+                    msg = litellm.Message(
+                        role=item.role,
+                        content=content.text if content.text else ""
+                    )
+
+                    choices.append(litellm.Choices(
+                        message=msg,
+                        finish_reason="stop",
+                        index=index
+                    ))
+                    index += 1
+            elif isinstance(item, ResponseFunctionToolCall):
+                msg = litellm.Message(
+                    content=None,
+                    tool_calls=[
+                        {
+                            "id": item.call_id,
+                            "function": {
+                                "name": item.name,
+                                "arguments": item.arguments,
+                            },
+                            "type": "function",
+                        }
+                    ]
+                )
+
+                choices.append(litellm.Choices(
+                    message=msg,
+                    finish_reason="tool_calls",
+                    index=index
+                ))
+                index += 1
+            elif isinstance(item, GenericResponseOutputItem):
+                raise ValueError("GenericResponseOutputItem not supported")
+            elif isinstance(item, OutputFunctionToolCall):
+                # function/tool calls pass through as-is
+                raise ValueError("Function calling not supported yet.")
+            else:
+                raise ValueError(f"Unknown item type: {item}")
+
+        setattr(model_response, "choices", choices)
+
+
+        setattr(
+            model_response,
+            "usage",
+            litellm.Usage(
+                prompt_tokens=responses_api_response.usage.input_tokens,
+                completion_tokens=responses_api_response.usage.output_tokens,
+                reasoning_tokens=responses_api_response.usage.output_tokens_details.reasoning_tokens,
+                total_tokens=responses_api_response.usage.total_tokens,
+            ),
+        )
+        return model_response
+

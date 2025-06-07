@@ -6477,6 +6477,10 @@ class ProviderConfigManager:
         """
         Returns the provider config for a given provider.
         """
+        # Use responses-based chat provider
+        if provider == LlmProviders.CHAT:
+            from litellm.llms.chat.transformation import ChatConfig
+            return ChatConfig()
         if (
             provider == LlmProviders.OPENAI
             and litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
