@@ -314,7 +314,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             RedisPipelineSetOperation,
         )
 
-        statuses: List[Dict[str, Any]] = []
         overall_code = "OK"
         now = datetime.now().timestamp()
         now_int = int(now)  # Convert to integer for Redis Lua script
@@ -402,10 +401,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         rate_limit_response = self.is_cache_list_over_limit(
             keys_to_fetch, cache_values, key_metadata
         )
-        if rate_limit_response["overall_code"] == "OVER_LIMIT":
-            return rate_limit_response
-
-        return RateLimitResponse(overall_code=overall_code, statuses=statuses)
+        return rate_limit_response
 
     async def async_pre_call_hook(
         self,
