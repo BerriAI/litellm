@@ -461,31 +461,6 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
     cell: (info: any) => <TimeCell utcTime={info.getValue()} />,
   },
   {
-    header: "Action",
-    accessorKey: "action",
-    cell: (info: any) => <span>{getActionBadge(info.getValue())}</span>,
-  },
-  {
-    header: "Changed By",
-    accessorKey: "changed_by",
-    cell: (info: any) => {
-      const changedBy = info.row.original.changed_by;
-      const apiKey = info.row.original.changed_by_api_key;
-      return (
-        <div className="space-y-1">
-          <div className="font-medium">{changedBy}</div>
-          {apiKey && ( // Only show API key if it exists
-            <Tooltip title={apiKey}>
-              <div className="text-xs text-muted-foreground max-w-[15ch] truncate"> {/* Apply max-width and truncate */}
-                {apiKey}
-              </div>
-            </Tooltip>
-          )}
-        </div>
-      );
-    },
-  },
-  {
     header: "Table Name",
     accessorKey: "table_name",
     cell: (info: any) => {
@@ -511,6 +486,31 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
           displayValue = tableName;
       }
       return <span>{displayValue}</span>;
+    },
+  },
+  {
+    header: "Action",
+    accessorKey: "action",
+    cell: (info: any) => <span>{getActionBadge(info.getValue())}</span>,
+  },
+  {
+    header: "Changed By",
+    accessorKey: "changed_by",
+    cell: (info: any) => {
+      const changedBy = info.row.original.changed_by;
+      const apiKey = info.row.original.changed_by_api_key;
+      return (
+        <div className="space-y-1">
+          <div className="font-medium">{changedBy}</div>
+          {apiKey && ( // Only show API key if it exists
+            <Tooltip title={apiKey}>
+              <div className="text-xs text-muted-foreground max-w-[15ch] truncate"> {/* Apply max-width and truncate */}
+                {apiKey}
+              </div>
+            </Tooltip>
+          )}
+        </div>
+      );
     },
   },
   {
