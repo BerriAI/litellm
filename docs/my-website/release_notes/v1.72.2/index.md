@@ -19,6 +19,16 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
+
+:::info
+
+The release candidate is live now.
+
+The production release will be live on Wednesday.
+
+:::
+
+
 ## Deploy this version
 
 <Tabs>
