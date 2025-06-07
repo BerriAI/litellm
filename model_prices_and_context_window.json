@@ -14192,7 +14192,6 @@
         "input_cost_per_token": 0.0000005,
         "output_cost_per_token": 0.0000015,
         "litellm_provider": "nebius",
-        "supports_function_calling": true,
         "mode": "chat"
     },
     "nebius/deepseek-ai/DeepSeek-V3-0324-fast": {
@@ -14202,7 +14201,6 @@
         "input_cost_per_token": 0.000002,
         "output_cost_per_token": 0.000006,
         "litellm_provider": "nebius",
-        "supports_function_calling": true,
         "mode": "chat"
     },
     "nebius/deepseek-ai/DeepSeek-R1-0528": {
@@ -14212,7 +14210,6 @@
         "input_cost_per_token": 0.0000005,
         "output_cost_per_token": 0.0000015,
         "litellm_provider": "nebius",
-        "supports_function_calling": false,
         "mode": "chat"
     },
     "nebius/deepseek-ai/DeepSeek-R1-fast": {
@@ -14222,7 +14219,6 @@
         "input_cost_per_token": 0.000002,
         "output_cost_per_token": 0.000006,
         "litellm_provider": "nebius",
-        "supports_function_calling": false,
         "mode": "chat"
     },
     "nebius/meta-llama/Llama-3.3-70B-Instruct": {
@@ -14232,7 +14228,6 @@
         "input_cost_per_token": 0.00000013,
         "output_cost_per_token": 0.0000004,
         "litellm_provider": "nebius",
-        "supports_function_calling": true,
         "mode": "chat"
     },
     "nebius/Qwen/Qwen3-235B-A22B": {
@@ -14242,7 +14237,6 @@
         "input_cost_per_token": 0.0000002,
         "output_cost_per_token": 0.0000006,
         "litellm_provider": "nebius",
-        "supports_function_calling": true,
         "mode": "chat"
     },
     "nebius/Qwen/Qwen3-30B-A3B": {
@@ -14252,7 +14246,6 @@
         "input_cost_per_token": 0.0000001,
         "output_cost_per_token": 0.0000003,
         "litellm_provider": "nebius",
-        "supports_function_calling": true,
         "mode": "chat"
     },
     "nebius/Qwen/Qwen3-30B-A3B-fast": {
@@ -14262,7 +14255,6 @@
         "input_cost_per_token": 0.0000003,
         "output_cost_per_token": 0.0000009,
         "litellm_provider": "nebius",
-        "supports_function_calling": true,
         "mode": "chat"
     },
     "nebius/Qwen/Qwen3-32B-fast": {
@@ -14272,7 +14264,6 @@
         "input_cost_per_token": 0.0000001,
         "output_cost_per_token": 0.0000003,
         "litellm_provider": "nebius",
-        "supports_function_calling": true,
         "mode": "chat"
     },
     "nebius/Qwen/Qwen2.5-VL-72B-Instruct": {
@@ -14282,8 +14273,6 @@
         "input_cost_per_token": 0.00000025,
         "output_cost_per_token": 0.00000075,
         "litellm_provider": "nebius",
-        "supports_function_calling": true,
-        "supports_vision": true,
         "mode": "chat"
     },
     "nebius/google/gemma-3-27b-it-fast": {
@@ -14293,8 +14282,6 @@
         "input_cost_per_token": 0.0000002,
         "output_cost_per_token": 0.0000006,
         "litellm_provider": "nebius",
-        "supports_function_calling": true,
-        "supports_vision": true,
         "mode": "chat"
     },
     "nebius/BAAI/bge-en-icl": {
