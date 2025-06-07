@@ -1,5 +1,5 @@
 ---
-title: "v1.72.2-stable"
+title: "[Pre Release] v1.72.2-stable"
 slug: "v1-72-2-stable"
 date: 2025-06-07T10:00:00
 authors:
@@ -42,25 +42,7 @@ pip install litellm==1.72.2
 
 ## Key Highlights
 
-LiteLLM v1.72.2.rc introduces significant performance improvements, new model support, and enhanced monitoring capabilities:
 
-
----
-
-## Performance Improvements
-
-This release focuses heavily on performance optimizations and monitoring capabilities:
-
-### Async S3 Logging
-Introduced batched, asynchronous S3 logging to reduce blocking operations and improve throughput for high-volume deployments.
-
-### DataDog Integration Enhancements
-- Added CPU profiler monitoring to track Python performance metrics
-- Enhanced streaming chunks instrumentation for better observability
-- Improved debugging capabilities with asyncio task tracking endpoints
-
-### Authentication Optimizations
-Removed authentication overhead from health check endpoints (`/health/liveliness`) to improve monitoring performance.
 
 ---
 
@@ -94,7 +76,7 @@ Removed authentication overhead from health check endpoints (`/health/liveliness
 
 ## LLM API Endpoints
 
-- **[Audio/TTS API](../../docs/audio/speech)**
+- **[Images API](../../docs/image_generation)**
     - Azure endpoint support for image endpoints - [PR](https://github.com/BerriAI/litellm/pull/11482)
 - **[Anthropic Messages API](../../docs/completion/chat)**
     - Performance improvements for /v1/messages route - [PR](https://github.com/BerriAI/litellm/pull/11421)
