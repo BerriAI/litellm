@@ -25,7 +25,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     get_form_data,
     get_request_body,
 )
-from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key
+from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key, encode_bedrock_runtime_modelid_arn
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     create_pass_through_route,
 )
@@ -492,7 +492,11 @@ async def bedrock_proxy_route(
         )
     else:
         base_target_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
+    
     encoded_endpoint = httpx.URL(endpoint).path
+    # Additional custom logic to encode slashes in modelID when ARN values are passed
+    encoded_endpoint = encode_bedrock_runtime_modelid_arn(encoded_endpoint)
+    verbose_proxy_logger.debug("Encoded Bedrock Endpoint %s", encoded_endpoint)
 
     # Ensure endpoint starts with '/' for proper URL construction
     if not encoded_endpoint.startswith("/"):
