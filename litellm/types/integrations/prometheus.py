@@ -91,6 +91,9 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_remaining_api_key_budget_metric",
     "litellm_api_key_max_budget_metric",
     "litellm_api_key_budget_remaining_hours_metric",
+    "litellm_deployment_failure_responses",
+    "litellm_deployment_total_requests",
+    "litellm_deployment_success_responses",
 ]
 
 
@@ -237,6 +240,35 @@ class PrometheusMetricLabels:
         litellm_remaining_api_key_budget_metric
     )
 
+    # Add deployment metrics
+    litellm_deployment_failure_responses = [
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_BASE.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
+        UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+    ]
+
+    litellm_deployment_total_requests = [
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_BASE.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+    ]
+
+    litellm_deployment_success_responses = litellm_deployment_total_requests
+
     @staticmethod
     def get_labels(label_name: DEFINED_PROMETHEUS_METRICS) -> List[str]:
         default_labels = getattr(PrometheusMetricLabels, label_name)
@@ -310,3 +342,44 @@ class UserAPIKeyLabelValues(BaseModel):
     route: Annotated[
         Optional[str], Field(..., alias=UserAPIKeyLabelNames.ROUTE.value)
     ] = None
+
+
+class PrometheusMetricsConfig(BaseModel):
+    """Configuration for filtering Prometheus metrics"""
+
+    group: str = Field(..., description="Group name for this set of metrics")
+    metrics: List[str] = Field(
+        ..., description="List of metric names to include in this group"
+    )
+    include_labels: Optional[List[str]] = Field(
+        None,
+        description="List of labels to include for these metrics. If None, includes all default labels.",
+    )
+
+
+class PrometheusSettings(BaseModel):
+    """Settings for Prometheus metrics configuration"""
+
+    prometheus_metrics_config: Optional[List[PrometheusMetricsConfig]] = Field(
+        None,
+        description="Configuration for filtering Prometheus metrics by groups and labels",
+    )
+
+
+class NoOpMetric:
+    """A no-op metric that has the same interface as prometheus metrics but does nothing"""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def labels(self, *args, **kwargs):
+        return self
+
+    def inc(self, *args, **kwargs):
+        pass
+
+    def set(self, *args, **kwargs):
+        pass
+
+    def observe(self, *args, **kwargs):
+        pass

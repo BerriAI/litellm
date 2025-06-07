@@ -243,6 +243,104 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 ... "metadata_foo": "hello world" ...
 ```
 
+
+## Configuring Metrics and Labels
+
+You can selectively enable specific metrics and control which labels are included to optimize performance and reduce cardinality.
+
+### Enable Specific Metrics Only
+
+Configure which metrics to emit by specifying them in `prometheus_metrics_config`. Each configuration group needs a `group` name (for organization) and a list of `metrics` to enable:
+
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+
+litellm_settings:
+  callbacks: ["prometheus"]
+  prometheus_metrics_config:
+    - group: "core_metrics"
+      metrics:
+        - "litellm_spend_metric"
+        - "litellm_total_tokens"
+        - "litellm_proxy_total_requests_metric"
+```
+
+
+### Filter Labels Per Metric
+
+Control which labels are included for each metric to reduce cardinality:
+
+```yaml
+litellm_settings:
+  callbacks: ["prometheus"]
+  prometheus_metrics_config:
+    - group: "spend_and_tokens"
+      metrics:
+        - "litellm_spend_metric"
+        - "litellm_total_tokens"
+      include_labels:
+        - "model"
+        - "team"
+        - "hashed_api_key"
+    - group: "request_tracking"
+      metrics:
+        - "litellm_proxy_total_requests_metric"
+      include_labels:
+        - "status_code"
+        - "requested_model"
+```
+
+### Advanced Configuration
+
+You can create multiple configuration groups with different label sets:
+
+```yaml
+litellm_settings:
+  callbacks: ["prometheus"]
+  prometheus_metrics_config:
+    # High-cardinality metrics with minimal labels
+    - group: "deployment_health"
+      metrics:
+        - "litellm_deployment_success_responses"
+        - "litellm_deployment_failure_responses"
+      include_labels:
+        - "api_provider"
+        - "requested_model"
+    
+    # Budget metrics with full label set
+    - group: "budget_tracking"
+      metrics:
+        - "litellm_spend_metric"
+        - "litellm_remaining_team_budget_metric"
+      include_labels:
+        - "team"
+        - "team_alias"
+        - "hashed_api_key"
+        - "api_key_alias"
+        - "model"
+        - "end_user"
+    
+    # Latency metrics with performance-focused labels
+    - group: "performance"
+      metrics:
+        - "litellm_request_total_latency_metric"
+        - "litellm_llm_api_latency_metric"
+      include_labels:
+        - "model"
+        - "api_provider"
+        - "requested_model"
+```
+
+**Configuration Structure:**
+- `group`: A descriptive name for organizing related metrics
+- `metrics`: List of metric names to include in this group  
+- `include_labels`: (Optional) List of labels to include for these metrics
+
+**Default Behavior**: If no `prometheus_metrics_config` is specified, all metrics are enabled with their default labels (backward compatible).
+
 ## Monitor System Health
 
 To monitor the health of litellm adjacent services (redis / postgres), do:
