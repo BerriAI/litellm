@@ -564,16 +564,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             self.print_verbose("INSIDE parallel request limiter ASYNC SUCCESS LOGGING")
 
             # Get metadata from kwargs
-            user_api_key = kwargs["litellm_params"]["metadata"]["user_api_key"]
+            user_api_key = kwargs["litellm_params"]["metadata"].get("user_api_key")
             user_api_key_user_id = kwargs["litellm_params"]["metadata"].get(
-                "user_api_key_user_id", None
+                "user_api_key_user_id"
             )
             user_api_key_team_id = kwargs["litellm_params"]["metadata"].get(
-                "user_api_key_team_id", None
+                "user_api_key_team_id"
             )
             user_api_key_end_user_id = kwargs.get("user") or kwargs["litellm_params"][
                 "metadata"
-            ].get("user_api_key_end_user_id", None)
+            ].get("user_api_key_end_user_id")
             model_group = get_model_group_from_litellm_kwargs(kwargs)
 
             # Get total tokens from response
