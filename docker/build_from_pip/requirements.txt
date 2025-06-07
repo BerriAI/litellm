@@ -2,4 +2,4 @@ litellm[proxy]==1.67.4.dev1 # Specify the litellm version you want to use
 prometheus_client
 langfuse
 prisma
-ddtrace==3.7.0 # for advanced DD tracing / profiling
+ddtrace==3.9.0 # for advanced DD tracing / profiling

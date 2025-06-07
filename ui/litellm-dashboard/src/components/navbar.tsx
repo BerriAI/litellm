@@ -2,7 +2,7 @@ import Link from "next/link";
 import React, { useState, useEffect } from "react";
 import type { MenuProps } from "antd";
 import { Dropdown } from "antd";
-import { Organization } from "@/components/networking";
+import { getProxyBaseUrl, Organization } from "@/components/networking";
 import { defaultOrg } from "@/components/common_components/default_org";
 import { 
   UserOutlined,
@@ -30,8 +30,8 @@ const Navbar: React.FC<NavbarProps> = ({
   setProxySettings,
   accessToken,
 }) => {
-  const isLocal = process.env.NODE_ENV === "development";
-  const imageUrl = isLocal ? "http://localhost:4000/get_image" : "/get_image";
+  const baseUrl = getProxyBaseUrl();
+  const imageUrl = baseUrl + "/get_image";
   const [logoutUrl, setLogoutUrl] = useState("");
 
   useEffect(() => {

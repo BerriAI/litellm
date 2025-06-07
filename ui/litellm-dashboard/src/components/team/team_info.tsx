@@ -33,6 +33,9 @@ import MemberModal from "./edit_membership";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { isAdminRole } from "@/utils/roles";
+import ObjectPermissionsView from "../object_permissions_view";
+import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import PremiumVectorStoreSelector from "../common_components/PremiumVectorStoreSelector";
 
 export interface TeamData {
   team_id: string;
@@ -58,6 +61,11 @@ export interface TeamData {
       model_aliases: Record<string, string>;
     } | null;
     created_at: string;
+    object_permission?: {
+      object_permission_id: string;
+      mcp_servers: string[];
+      vector_stores: string[];
+    };
   };
   keys: any[];
   team_memberships: any[];
@@ -72,6 +80,7 @@ export interface TeamInfoProps {
   is_proxy_admin: boolean;
   userModels: string[];
   editTeam: boolean;
+  premiumUser?: boolean;
 }
 
 const TeamInfoView: React.FC<TeamInfoProps> = ({ 
@@ -81,7 +90,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   is_team_admin, 
   is_proxy_admin,
   userModels,
-  editTeam
+  editTeam,
+  premiumUser = false
 }) => {
   const [teamData, setTeamData] = useState<TeamData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -209,7 +219,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         return;
       }
 
-      const updateData = {
+      const updateData: any = {
         team_id: teamId,
         team_alias: values.team_alias,
         models: values.models,
@@ -223,6 +233,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         },
         organization_id: values.organization_id,
       };
+
+      // Handle object_permission updates
+      if (values.vector_stores !== undefined) {
+        updateData.object_permission = {
+          ...teamData?.team_info.object_permission,
+          vector_stores: values.vector_stores || []
+        };
+      }
       
       const response = await teamUpdateCall(accessToken, updateData);
       
@@ -295,13 +313,23 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               <Card>
                 <Text>Models</Text>
                 <div className="mt-2 flex flex-wrap gap-2">
-                  {info.models.map((model, index) => (
-                    <Badge key={index} color="red">
-                      {model}
-                    </Badge>
-                  ))}
+                  {info.models.length === 0 ? (
+                    <Badge color="red">All proxy models</Badge>
+                  ) : (
+                    info.models.map((model, index) => (
+                      <Badge key={index} color="red">
+                        {model}
+                      </Badge>
+                    ))
+                  )}
                 </div>
               </Card>
+
+              <ObjectPermissionsView 
+                objectPermission={info.object_permission} 
+                variant="card"
+                accessToken={accessToken}
+              />
             </Grid>
           </TabPanel>
 
@@ -330,7 +358,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
           {/* Settings Panel */}
           <TabPanel>
-            <Card>
+            <Card className="overflow-y-auto max-h-[65vh]">
               <div className="flex justify-between items-center mb-4">
                 <Title>Team Settings</Title>
                 {(canEditTeam && !isEditing) && (
@@ -357,6 +385,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     guardrails: info.metadata?.guardrails || [],
                     metadata: info.metadata ? JSON.stringify(info.metadata, null, 2) : "",
                     organization_id: info.organization_id,
+                    vector_stores: info.object_permission?.vector_stores || []
                   }}
                   layout="vertical"
                 >
@@ -428,6 +457,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       placeholder="Select or enter guardrails"
                     />
                   </Form.Item>
+
+                  <Form.Item label="Vector Stores" name="vector_stores">
+                    <VectorStoreSelector
+                      onChange={(values) => form.setFieldValue('vector_stores', values)}
+                      value={form.getFieldValue('vector_stores')}
+                      accessToken={accessToken || ""}
+                      placeholder="Select vector stores"
+                    />
+                  </Form.Item>
                   
                   <Form.Item label="Organization ID" name="organization_id">
                     <Input type=""/>
@@ -436,15 +474,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   <Form.Item label="Metadata" name="metadata">
                     <Input.TextArea rows={10} />
                   </Form.Item>
-
-
-                  <div className="flex justify-end gap-2 mt-6">
-                    <Button onClick={() => setIsEditing(false)}>
-                      Cancel
-                    </Button>
-                    <TremorButton>
-                      Save Changes
-                    </TremorButton>
+                  
+                  <div className="sticky z-10 bg-white p-4 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
+                    <div className="flex justify-end items-center gap-2">
+                      <Button htmlType="button" onClick={() => setIsEditing(false)}>
+                        Cancel
+                      </Button>
+                      <TremorButton type="submit">
+                        Save Changes
+                      </TremorButton>
+                    </div>
                   </div>
                 </Form>
               ) : (
@@ -491,6 +530,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       {info.blocked ? 'Blocked' : 'Active'}
                     </Badge>
                   </div>
+
+                  <ObjectPermissionsView 
+                    objectPermission={info.object_permission} 
+                    variant="inline"
+                    className="pt-4 border-t border-gray-200"
+                    accessToken={accessToken}
+                  />
                 </div>
               )}
             </Card>

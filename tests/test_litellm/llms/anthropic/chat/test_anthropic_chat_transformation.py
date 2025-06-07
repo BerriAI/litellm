@@ -185,3 +185,25 @@ def test_web_search_tool_transformation_with_search_context_size(
     assert anthropic_web_search_tool["user_location"]["type"] == "approximate"
     assert anthropic_web_search_tool["user_location"]["city"] == "San Francisco"
     assert anthropic_web_search_tool["max_uses"] == expected_max_uses
+
+
+def test_add_code_execution_tool():
+    config = AnthropicConfig()
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is in this sheet?"},
+                {
+                    "type": "container_upload",
+                    "file_id": "file_011CPd1KVEsbD8MjfZSwBd1u",
+                },
+            ],
+        }
+    ]
+    tools = []
+    tools = config.add_code_execution_tool(messages=messages, tools=tools)
+    assert tools is not None
+    assert len(tools) == 1
+    assert tools[0]["type"] == "code_execution_20250522"

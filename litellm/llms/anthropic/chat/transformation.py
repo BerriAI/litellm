@@ -1,4 +1,5 @@
 import json
+import re
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
@@ -14,11 +15,12 @@ from litellm.constants import (
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
+    AllAnthropicMessageValues,
     AllAnthropicToolsValues,
+    AnthropicCodeExecutionTool,
     AnthropicComputerTool,
     AnthropicHostedTools,
     AnthropicInputSchema,
@@ -530,6 +532,40 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return anthropic_system_message_list
 
+    def add_code_execution_tool(
+        self,
+        messages: List[AllAnthropicMessageValues],
+        tools: List[Union[AllAnthropicToolsValues, Dict]],
+    ) -> List[Union[AllAnthropicToolsValues, Dict]]:
+        """if 'container_upload' in messages, add code_execution tool"""
+        add_code_execution_tool = False
+        for message in messages:
+            message_content = message.get("content", None)
+            if message_content and isinstance(message_content, list):
+                for content in message_content:
+                    content_type = content.get("type", None)
+                    if content_type == "container_upload":
+                        add_code_execution_tool = True
+                        break
+
+        if add_code_execution_tool:
+            ## check if code_execution tool is already in tools
+            for tool in tools:
+                tool_type = tool.get("type", None)
+                if (
+                    tool_type
+                    and isinstance(tool_type, str)
+                    and tool_type.startswith("code_execution")
+                ):
+                    return tools
+            tools.append(
+                AnthropicCodeExecutionTool(
+                    name="code_execution",
+                    type="code_execution_20250522",
+                )
+            )
+        return tools
+
     def transform_request(
         self,
         model: str,
@@ -545,6 +581,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         """
         Anthropic doesn't support tool calling without `tools=` param specified.
         """
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            anthropic_messages_pt,
+        )
+
         if (
             "tools" not in optional_params
             and messages is not None
@@ -579,6 +619,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 message="{}\nReceived Messages={}".format(str(e), messages),
             )  # don't use verbose_logger.exception, if exception is raised
 
+        ## Add code_execution tool if container_upload is in messages
+        _tools = (
+            cast(
+                Optional[List[Union[AllAnthropicToolsValues, Dict]]],
+                optional_params.get("tools"),
+            )
+            or []
+        )
+        tools = self.add_code_execution_tool(messages=anthropic_messages, tools=_tools)
+        if len(tools) > 1:
+            optional_params["tools"] = tools
+
         ## Load Config
         config = litellm.AnthropicConfig.get_config()
         for k, v in config.items():
@@ -593,6 +645,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             _litellm_metadata
             and isinstance(_litellm_metadata, dict)
             and "user_id" in _litellm_metadata
+            and not _valid_user_id(_litellm_metadata.get("user_id", None))
         ):
             optional_params["metadata"] = {"user_id": _litellm_metadata["user_id"]}
 
@@ -736,44 +789,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         return usage
 
-    def transform_response(
+    def transform_parsed_response(
         self,
-        model: str,
+        completion_response: dict,
         raw_response: httpx.Response,
         model_response: ModelResponse,
-        logging_obj: LoggingClass,
-        request_data: Dict,
-        messages: List[AllMessageValues],
-        optional_params: Dict,
-        litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
-    ) -> ModelResponse:
+    ):
         _hidden_params: Dict = {}
         _hidden_params["additional_headers"] = process_anthropic_headers(
             dict(raw_response.headers)
         )
-        ## LOGGING
-        logging_obj.post_call(
-            input=messages,
-            api_key=api_key,
-            original_response=raw_response.text,
-            additional_args={"complete_input_dict": request_data},
-        )
-
-        ## RESPONSE OBJECT
-        try:
-            completion_response = raw_response.json()
-        except Exception as e:
-            response_headers = getattr(raw_response, "headers", None)
-            raise AnthropicError(
-                message="Unable to get json response - {}, Original Response: {}".format(
-                    str(e), raw_response.text
-                ),
-                status_code=raw_response.status_code,
-                headers=response_headers,
-            )
         if "error" in completion_response:
             response_headers = getattr(raw_response, "headers", None)
             raise AnthropicError(
@@ -842,6 +868,50 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model_response.model = completion_response["model"]
 
         model_response._hidden_params = _hidden_params
+
+        return model_response
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LoggingClass,
+        request_data: Dict,
+        messages: List[AllMessageValues],
+        optional_params: Dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
+        ## LOGGING
+        logging_obj.post_call(
+            input=messages,
+            api_key=api_key,
+            original_response=raw_response.text,
+            additional_args={"complete_input_dict": request_data},
+        )
+
+        ## RESPONSE OBJECT
+        try:
+            completion_response = raw_response.json()
+        except Exception as e:
+            response_headers = getattr(raw_response, "headers", None)
+            raise AnthropicError(
+                message="Unable to get json response - {}, Original Response: {}".format(
+                    str(e), raw_response.text
+                ),
+                status_code=raw_response.status_code,
+                headers=response_headers,
+            )
+
+        model_response = self.transform_parsed_response(
+            completion_response=completion_response,
+            raw_response=raw_response,
+            model_response=model_response,
+            json_mode=json_mode,
+        )
         return model_response
 
     @staticmethod
@@ -883,3 +953,19 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             message=error_message,
             headers=cast(httpx.Headers, headers),
         )
+
+
+def _valid_user_id(user_id: str) -> bool:
+    """
+    Validate that user_id is not an email or phone number.
+    Returns: bool: True if valid (not email or phone), False otherwise
+    """
+    email_pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+    phone_pattern = r"^\+?[\d\s\(\)-]{7,}$"
+
+    if re.match(email_pattern, user_id):
+        return False
+    if re.match(phone_pattern, user_id):
+        return False
+
+    return True

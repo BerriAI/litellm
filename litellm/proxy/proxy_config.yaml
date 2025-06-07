@@ -1,4 +1,9 @@
 model_list:
-  - model_name: openai/*
+  - model_name: gemini/*
     litellm_params:
-      model: openai/*
+      model: gemini/*
+      api_key: os.environ/GEMINI_API_KEY
+  - model_name: "anthropic/*"
+    litellm_params:
+      model: "anthropic/*"
+      api_key: os.environ/ANTHROPIC_API_KEY

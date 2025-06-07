@@ -5,8 +5,8 @@ import traceback
 import uuid
 from base64 import b64encode
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Union
-from urllib.parse import parse_qs, urlencode, urlparse
+from typing import List, Optional, Tuple, Union
+from urllib.parse import urlencode, urlparse
 
 import httpx
 from fastapi import (
@@ -28,6 +28,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.passthrough import BasePassthroughUtils
 from litellm.proxy._types import (
     ConfigFieldInfo,
     ConfigFieldUpdate,
@@ -278,27 +279,7 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
         )
 
 
-class HttpPassThroughEndpointHelpers:
-    @staticmethod
-    def forward_headers_from_request(
-        request: Request,
-        headers: dict,
-        forward_headers: Optional[bool] = False,
-    ):
-        """
-        Helper to forward headers from original request
-        """
-        if forward_headers is True:
-            request_headers = dict(request.headers)
-
-            # Header We Should NOT forward
-            request_headers.pop("content-length", None)
-            request_headers.pop("host", None)
-
-            # Combine request headers with custom headers
-            headers = {**request_headers, **headers}
-        return headers
-
+class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
     @staticmethod
     def get_response_headers(
         headers: httpx.Headers,
@@ -327,21 +308,6 @@ class HttpPassThroughEndpointHelpers:
         elif parsed_url.hostname == "api.anthropic.com":
             return EndpointType.ANTHROPIC
         return EndpointType.GENERIC
-
-    @staticmethod
-    def get_merged_query_parameters(
-        existing_url: httpx.URL, request_query_params: Dict[str, Union[str, list]]
-    ) -> Dict[str, Union[str, List[str]]]:
-        # Get the existing query params from the target URL
-        existing_query_string = existing_url.query.decode("utf-8")
-        existing_query_params = parse_qs(existing_query_string)
-
-        # parse_qs returns a dict where each value is a list, so let's flatten it
-        updated_existing_query_params = {
-            k: v[0] if len(v) == 1 else v for k, v in existing_query_params.items()
-        }
-        # Merge the query params, giving priority to the existing ones
-        return {**request_query_params, **updated_existing_query_params}
 
     @staticmethod
     async def _make_non_streaming_http_request(
@@ -541,7 +507,9 @@ async def pass_through_request(  # noqa: PLR0915
         url = httpx.URL(target)
         headers = custom_headers
         headers = HttpPassThroughEndpointHelpers.forward_headers_from_request(
-            request=request, headers=headers, forward_headers=forward_headers
+            request_headers=dict(request.headers),
+            headers=headers,
+            forward_headers=forward_headers,
         )
 
         if merge_query_params:

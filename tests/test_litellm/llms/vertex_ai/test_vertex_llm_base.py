@@ -242,3 +242,37 @@ class TestVertexBase:
 
             assert token == "refreshed-token"
             assert project == not_quota_project_id
+
+    @pytest.mark.parametrize(
+        "api_base, vertex_location, expected",
+        [
+            (None, "us-central1", "https://us-central1-aiplatform.googleapis.com"),
+            (None, "global", "https://aiplatform.googleapis.com"),
+            (
+                "https://us-central1-aiplatform.googleapis.com",
+                "us-central1",
+                "https://us-central1-aiplatform.googleapis.com",
+            ),
+            (
+                "https://aiplatform.googleapis.com",
+                "global",
+                "https://aiplatform.googleapis.com",
+            ),
+            (
+                "https://us-central1-aiplatform.googleapis.com",
+                "global",
+                "https://us-central1-aiplatform.googleapis.com",
+            ),
+            (
+                "https://aiplatform.googleapis.com",
+                "us-central1",
+                "https://aiplatform.googleapis.com",
+            ),
+        ],
+    )
+    def test_get_api_base(self, api_base, vertex_location, expected):
+        vertex_base = VertexBase()
+        assert (
+            vertex_base.get_api_base(api_base=api_base, vertex_location=vertex_location)
+            == expected
+        ), f"Expected {expected} with api_base {api_base} and vertex_location {vertex_location}"

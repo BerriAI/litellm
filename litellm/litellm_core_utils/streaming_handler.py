@@ -85,9 +85,9 @@ class CustomStreamWrapper:
 
         self.system_fingerprint: Optional[str] = None
         self.received_finish_reason: Optional[str] = None
-        self.intermittent_finish_reason: Optional[
-            str
-        ] = None  # finish reasons that show up mid-stream
+        self.intermittent_finish_reason: Optional[str] = (
+            None  # finish reasons that show up mid-stream
+        )
         self.special_tokens = [
             "<|assistant|>",
             "<|system|>",
@@ -549,41 +549,6 @@ class CustomStreamWrapper:
             )
             return ""
 
-    def handle_ollama_chat_stream(self, chunk):
-        # for ollama_chat/ provider
-        try:
-            if isinstance(chunk, dict):
-                json_chunk = chunk
-            else:
-                json_chunk = json.loads(chunk)
-            if "error" in json_chunk:
-                raise Exception(f"Ollama Error - {json_chunk}")
-
-            text = ""
-            is_finished = False
-            finish_reason = None
-            if json_chunk["done"] is True:
-                text = ""
-                is_finished = True
-                finish_reason = "stop"
-                return {
-                    "text": text,
-                    "is_finished": is_finished,
-                    "finish_reason": finish_reason,
-                }
-            elif "message" in json_chunk:
-                print_verbose(f"delta content: {json_chunk}")
-                text = json_chunk["message"]["content"]
-                return {
-                    "text": text,
-                    "is_finished": is_finished,
-                    "finish_reason": finish_reason,
-                }
-            else:
-                raise Exception(f"Ollama Error - {json_chunk}")
-        except Exception as e:
-            raise e
-
     def handle_triton_stream(self, chunk):
         try:
             if isinstance(chunk, dict):
@@ -654,8 +619,6 @@ class CustomStreamWrapper:
         model_response = ModelResponseStream(**args)
         if self.response_id is not None:
             model_response.id = self.response_id
-        else:
-            self.response_id = model_response.id  # type: ignore
         if self.system_fingerprint is not None:
             model_response.system_fingerprint = self.system_fingerprint
         if hidden_params is not None:
@@ -1142,12 +1105,6 @@ class CustomStreamWrapper:
                 new_chunk = self.completion_stream[:chunk_size]
                 completion_obj["content"] = new_chunk
                 self.completion_stream = self.completion_stream[chunk_size:]
-            elif self.custom_llm_provider == "ollama_chat":
-                response_obj = self.handle_ollama_chat_stream(chunk)
-                completion_obj["content"] = response_obj["text"]
-                print_verbose(f"completion obj content: {completion_obj['content']}")
-                if response_obj["is_finished"]:
-                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "triton":
                 response_obj = self.handle_triton_stream(chunk)
                 completion_obj["content"] = response_obj["text"]
@@ -1198,6 +1155,7 @@ class CustomStreamWrapper:
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "cached_response":
+                chunk = cast(ModelResponseStream, chunk)
                 response_obj = {
                     "text": chunk.choices[0].delta.content,
                     "is_finished": True,
@@ -1225,7 +1183,7 @@ class CustomStreamWrapper:
                 if self.custom_llm_provider == "azure":
                     if isinstance(chunk, BaseModel) and hasattr(chunk, "model"):
                         # for azure, we need to pass the model from the orignal chunk
-                        self.model = chunk.model
+                        self.model = getattr(chunk, "model", self.model)
                 response_obj = self.handle_openai_chat_completion_chunk(chunk)
                 if response_obj is None:
                     return
@@ -1273,6 +1231,12 @@ class CustomStreamWrapper:
                                 )
                                 or None,
                             ),
+                        )
+                    elif isinstance(response_obj["usage"], Usage):
+                        setattr(
+                            model_response,
+                            "usage",
+                            response_obj["usage"],
                         )
                     elif isinstance(response_obj["usage"], BaseModel):
                         setattr(
@@ -1345,9 +1309,9 @@ class CustomStreamWrapper:
                             _json_delta = delta.model_dump()
                             print_verbose(f"_json_delta: {_json_delta}")
                             if "role" not in _json_delta or _json_delta["role"] is None:
-                                _json_delta[
-                                    "role"
-                                ] = "assistant"  # mistral's api returns role as None
+                                _json_delta["role"] = (
+                                    "assistant"  # mistral's api returns role as None
+                                )
                             if "tool_calls" in _json_delta and isinstance(
                                 _json_delta["tool_calls"], list
                             ):
@@ -1399,6 +1363,7 @@ class CustomStreamWrapper:
             print_verbose(f"self.sent_first_chunk: {self.sent_first_chunk}")
 
             ## CHECK FOR TOOL USE
+
             if "tool_calls" in completion_obj and len(completion_obj["tool_calls"]) > 0:
                 if self.is_function_call is True:  # user passed in 'functions' param
                     completion_obj["function_call"] = completion_obj["tool_calls"][0][
@@ -1673,7 +1638,8 @@ class CustomStreamWrapper:
             if is_async_iterable(self.completion_stream):
                 async for chunk in self.completion_stream:
                     if chunk == "None" or chunk is None:
-                        raise Exception
+                        continue  # skip None chunks
+
                     elif (
                         self.custom_llm_provider == "gemini"
                         and hasattr(chunk, "parts")
@@ -1682,7 +1648,9 @@ class CustomStreamWrapper:
                         continue
                     # chunk_creator() does logging/stream chunk building. We need to let it know its being called in_async_func, so we don't double add chunks.
                     # __anext__ also calls async_success_handler, which does logging
-                    print_verbose(f"PROCESSED ASYNC CHUNK PRE CHUNK CREATOR: {chunk}")
+                    verbose_logger.debug(
+                        f"PROCESSED ASYNC CHUNK PRE CHUNK CREATOR: {chunk}"
+                    )
 
                     processed_chunk: Optional[ModelResponseStream] = self.chunk_creator(
                         chunk=chunk
@@ -1733,9 +1701,9 @@ class CustomStreamWrapper:
                         chunk = next(self.completion_stream)
                     if chunk is not None and chunk != b"":
                         print_verbose(f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}")
-                        processed_chunk: Optional[
-                            ModelResponseStream
-                        ] = self.chunk_creator(chunk=chunk)
+                        processed_chunk: Optional[ModelResponseStream] = (
+                            self.chunk_creator(chunk=chunk)
+                        )
                         print_verbose(
                             f"PROCESSED CHUNK POST CHUNK CREATOR: {processed_chunk}"
                         )
