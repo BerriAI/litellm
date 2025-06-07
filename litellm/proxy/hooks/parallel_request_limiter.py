@@ -222,7 +222,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             )
             # check if below limit
             if current_global_requests is None:
-                current_global_requests = 1
+                current_global_requests = 0
             # if above -> raise error
             if current_global_requests >= global_max_parallel_requests:
                 return self.raise_rate_limit_error(
