@@ -3585,6 +3585,7 @@ async def model_list(
 async def chat_completion(  # noqa: PLR0915
     request: Request,
     fastapi_response: Response,
+    completion_data: ProxyChatCompletionRequest,
     model: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
@@ -3613,7 +3614,7 @@ async def chat_completion(  # noqa: PLR0915
     """
     global general_settings, user_debug, proxy_logging_obj, llm_model_list
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
-    data = await _read_request_body(request=request)
+    data = completion_data.model_dump(exclude_unset=True)
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await base_llm_response_processor.base_process_llm_request(
@@ -3699,6 +3700,7 @@ async def chat_completion(  # noqa: PLR0915
 async def completion(  # noqa: PLR0915
     request: Request,
     fastapi_response: Response,
+    completion_data: ProxyTextCompletionRequest,
     model: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
@@ -3721,9 +3723,8 @@ async def completion(  # noqa: PLR0915
     ```
     """
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
-    data = {}
+    data = completion_data.model_dump(exclude_unset=True)
     try:
-        data = await _read_request_body(request=request)
         base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
         return await base_llm_response_processor.base_process_llm_request(
             request=request,
