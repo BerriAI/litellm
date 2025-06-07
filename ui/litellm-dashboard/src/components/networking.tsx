@@ -5464,7 +5464,7 @@ export const uiAuditLogsCall = async (
     const data = await response.json();
     return data;
   } catch (error) {
-    console.error("Failed to fetch audit logs:", error);
+    console.error("Failed to fetch spend logs:", error);
     throw error;
   }
 };
