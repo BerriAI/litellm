@@ -564,6 +564,35 @@
             "search_context_size_high": 50.0
         }
     },
+    "codex-mini-latest": {
+        "max_tokens": 100000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 1.5e-06,
+        "output_cost_per_token": 6e-06,
+        "cache_read_input_token_cost": 0.375e-06,
+        "litellm_provider": "openai",
+        "mode": "responses",
+        "supports_pdf_input": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supported_endpoints": [
+            "/v1/responses"
+        ]
+    },
     "o1-pro": {
         "max_tokens": 100000,
         "max_input_tokens": 200000,
@@ -2515,6 +2544,35 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_tool_choice": true
+    },
+    "azure/codex-mini-latest": {
+        "max_tokens": 100000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 1.5e-06,
+        "output_cost_per_token": 6e-06,
+        "cache_read_input_token_cost": 0.375e-06,
+        "litellm_provider": "azure",
+        "mode": "responses",
+        "supports_pdf_input": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supported_endpoints": [
+            "/v1/responses"
+        ]
     },
     "azure/o1-preview": {
         "max_tokens": 32768,
@@ -6705,6 +6763,48 @@
         "supports_parallel_function_calling": true,
         "supports_web_search": true
     },
+    "gemini-2.5-pro-preview-06-05": {
+        "max_tokens": 65535,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65535,
+        "max_images_per_prompt": 3000,
+        "max_videos_per_prompt": 10,
+        "max_video_length": 1,
+        "max_audio_length_hours": 8.4,
+        "max_audio_per_prompt": 1,
+        "max_pdf_size_mb": 30,
+        "input_cost_per_audio_token": 1.25e-06,
+        "input_cost_per_token": 1.25e-06,
+        "input_cost_per_token_above_200k_tokens": 2.5e-06,
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_above_200k_tokens": 1.5e-05,
+        "litellm_provider": "vertex_ai-language-models",
+        "mode": "chat",
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_response_schema": true,
+        "supports_audio_output": false,
+        "supports_tool_choice": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "source": "https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-preview",
+        "supports_parallel_function_calling": true,
+        "supports_web_search": true
+    },
     "gemini-2.5-pro-preview-05-06": {
         "max_tokens": 65535,
         "max_input_tokens": 1048576,
@@ -7075,6 +7175,44 @@
         ],
         "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-2.5-pro-preview",
         "supports_web_search": true
+    },
+    "gemini/gemini-2.5-pro-preview-06-05": {
+        "max_tokens": 65535,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65535,
+        "max_images_per_prompt": 3000,
+        "max_videos_per_prompt": 10,
+        "max_video_length": 1,
+        "max_audio_length_hours": 8.4,
+        "max_audio_per_prompt": 1,
+        "max_pdf_size_mb": 30,
+        "input_cost_per_audio_token": 7e-07,
+        "input_cost_per_token": 1.25e-06,
+        "input_cost_per_token_above_200k_tokens": 2.5e-06,
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_above_200k_tokens": 1.5e-05,
+        "litellm_provider": "gemini",
+        "mode": "chat",
+        "rpm": 10000,
+        "tpm": 10000000,
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_response_schema": true,
+        "supports_audio_output": false,
+        "supports_tool_choice": true,
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-2.5-pro-preview",
+        "supports_web_search": true,
+        "supports_url_context": true
     },
     "gemini/gemini-2.5-pro-preview-05-06": {
         "max_tokens": 65535,
@@ -9983,9 +10121,9 @@
         "supports_tool_choice": true
     },
     "amazon.nova-micro-v1:0": {
-        "max_tokens": 4096,
+        "max_tokens": 10000,
         "max_input_tokens": 300000,
-        "max_output_tokens": 4096,
+        "max_output_tokens": 10000,
         "input_cost_per_token": 3.5e-08,
         "output_cost_per_token": 1.4e-07,
         "litellm_provider": "bedrock_converse",
@@ -9995,9 +10133,9 @@
         "supports_response_schema": true
     },
     "us.amazon.nova-micro-v1:0": {
-        "max_tokens": 4096,
+        "max_tokens": 10000,
         "max_input_tokens": 300000,
-        "max_output_tokens": 4096,
+        "max_output_tokens": 10000,
         "input_cost_per_token": 3.5e-08,
         "output_cost_per_token": 1.4e-07,
         "litellm_provider": "bedrock_converse",
@@ -10007,9 +10145,9 @@
         "supports_response_schema": true
     },
     "eu.amazon.nova-micro-v1:0": {
-        "max_tokens": 4096,
+        "max_tokens": 10000,
         "max_input_tokens": 300000,
-        "max_output_tokens": 4096,
+        "max_output_tokens": 10000,
         "input_cost_per_token": 4.6e-08,
         "output_cost_per_token": 1.84e-07,
         "litellm_provider": "bedrock_converse",
@@ -10019,9 +10157,9 @@
         "supports_response_schema": true
     },
     "amazon.nova-lite-v1:0": {
-        "max_tokens": 4096,
+        "max_tokens": 10000,
         "max_input_tokens": 128000,
-        "max_output_tokens": 4096,
+        "max_output_tokens": 10000,
         "input_cost_per_token": 6e-08,
         "output_cost_per_token": 2.4e-07,
         "litellm_provider": "bedrock_converse",
@@ -10033,9 +10171,9 @@
         "supports_response_schema": true
     },
     "us.amazon.nova-lite-v1:0": {
-        "max_tokens": 4096,
+        "max_tokens": 10000,
         "max_input_tokens": 128000,
-        "max_output_tokens": 4096,
+        "max_output_tokens": 10000,
         "input_cost_per_token": 6e-08,
         "output_cost_per_token": 2.4e-07,
         "litellm_provider": "bedrock_converse",
@@ -10047,9 +10185,9 @@
         "supports_response_schema": true
     },
     "eu.amazon.nova-lite-v1:0": {
-        "max_tokens": 4096,
+        "max_tokens": 10000,
         "max_input_tokens": 128000,
-        "max_output_tokens": 4096,
+        "max_output_tokens": 10000,
         "input_cost_per_token": 7.8e-08,
         "output_cost_per_token": 3.12e-07,
         "litellm_provider": "bedrock_converse",
@@ -10061,9 +10199,9 @@
         "supports_response_schema": true
     },
     "amazon.nova-pro-v1:0": {
-        "max_tokens": 4096,
+        "max_tokens": 10000,
         "max_input_tokens": 300000,
-        "max_output_tokens": 4096,
+        "max_output_tokens": 10000,
         "input_cost_per_token": 8e-07,
         "output_cost_per_token": 3.2e-06,
         "litellm_provider": "bedrock_converse",
@@ -10075,9 +10213,9 @@
         "supports_response_schema": true
     },
     "us.amazon.nova-pro-v1:0": {
-        "max_tokens": 4096,
+        "max_tokens": 10000,
         "max_input_tokens": 300000,
-        "max_output_tokens": 4096,
+        "max_output_tokens": 10000,
         "input_cost_per_token": 8e-07,
         "output_cost_per_token": 3.2e-06,
         "litellm_provider": "bedrock_converse",
@@ -10095,9 +10233,9 @@
         "mode": "image_generation"
     },
     "eu.amazon.nova-pro-v1:0": {
-        "max_tokens": 4096,
+        "max_tokens": 10000,
         "max_input_tokens": 300000,
-        "max_output_tokens": 4096,
+        "max_output_tokens": 10000,
         "input_cost_per_token": 1.05e-06,
         "output_cost_per_token": 4.2e-06,
         "litellm_provider": "bedrock_converse",
@@ -10110,9 +10248,9 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.amazon.nova-premier-v1:0": {
-        "max_tokens": 4096,
+        "max_tokens": 10000,
         "max_input_tokens": 1000000,
-        "max_output_tokens": 4096,
+        "max_output_tokens": 10000,
         "input_cost_per_token": 2.5e-06,
         "output_cost_per_token": 1.25e-05,
         "litellm_provider": "bedrock_converse",

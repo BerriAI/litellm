@@ -1,6 +1,6 @@
 ---
-title: v1.72.0-stable
-slug: v1.72.0-stable
+title: "v1.72.0-stable"
+slug: "v1-72-0-stable"
 date: 2025-05-31T10:00:00
 authors:
   - name: Krrish Dholakia
@@ -37,7 +37,7 @@ The production release will be live on Wednesday.
 docker run
 -e STORE_MODEL_IN_DB=True
 -p 4000:4000
-ghcr.io/berriai/litellm:main-v1.72.0.rc
+ghcr.io/berriai/litellm:main-v1.72.0-stable
 ```
 </TabItem>
 

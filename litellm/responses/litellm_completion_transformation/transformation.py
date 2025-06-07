@@ -208,9 +208,9 @@ class LiteLLMCompletionResponsesConfig:
             _messages = litellm_completion_request.get("messages") or []
             session_messages = chat_completion_session.get("messages") or []
             litellm_completion_request["messages"] = session_messages + _messages
-            litellm_completion_request[
-                "litellm_trace_id"
-            ] = chat_completion_session.get("litellm_session_id")
+            litellm_completion_request["litellm_trace_id"] = (
+                chat_completion_session.get("litellm_session_id")
+            )
         return litellm_completion_request
 
     @staticmethod
@@ -390,6 +390,26 @@ class LiteLLMCompletionResponsesConfig:
         return [tool_output_message]
 
     @staticmethod
+    def _transform_input_file_item_to_file_item(item: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Transform a Responses API input_file item to a Chat Completion file item
+
+        Args:
+            item: Dictionary containing input_file type with file_id and/or file_data
+
+        Returns:
+            Dictionary with transformed file structure for Chat Completion
+        """
+        file_dict: Dict[str, Any] = {}
+        keys = ["file_id", "file_data"]
+        for key in keys:
+            if item.get(key):
+                file_dict[key] = item.get(key)
+
+        new_item: Dict[str, Any] = {"type": "file", "file": file_dict}
+        return new_item
+
+    @staticmethod
     def _transform_responses_api_content_to_chat_completion_content(
         content: Any,
     ) -> Union[str, List[Union[str, Dict[str, Any]]]]:
@@ -405,14 +425,21 @@ class LiteLLMCompletionResponsesConfig:
                 if isinstance(item, str):
                     content_list.append(item)
                 elif isinstance(item, dict):
-                    content_list.append(
-                        {
-                            "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
-                                item.get("type") or "text"
-                            ),
-                            "text": item.get("text"),
-                        }
-                    )
+                    if item.get("type") == "input_file":
+                        content_list.append(
+                            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
+                                item
+                            )
+                        )
+                    else:
+                        content_list.append(
+                            {
+                                "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
+                                    item.get("type") or "text"
+                                ),
+                                "text": item.get("text"),
+                            }
+                        )
             return content_list
         else:
             raise ValueError(f"Invalid content type: {type(content)}")

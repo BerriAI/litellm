@@ -66,6 +66,7 @@ interface AllKeysTableProps {
     sortBy: string;
     sortOrder: 'asc' | 'desc';
   };
+  premiumUser: boolean;
 }
 
 // Define columns similar to our logs table
@@ -140,6 +141,7 @@ export function AllKeysTable({
   refresh,
   onSortChange,
   currentSort,
+  premiumUser,
 }: AllKeysTableProps) {
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
   const [userList, setUserList] = useState<UserResponse[]>([]);
@@ -606,6 +608,7 @@ export function AllKeysTable({
           userID={userID}
           userRole={userRole}
           teams={allTeams}
+          premiumUser={premiumUser}
         />
       ) : (
         <div className="border-b py-4 flex-1 overflow-hidden">

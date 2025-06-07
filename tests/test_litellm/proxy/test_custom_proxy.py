@@ -27,14 +27,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+custom_path = "/my-custom-path"
+
 # Mount LiteLLM app at /litellm
-app.mount("/litellm", litellm_app)
+app.mount(custom_path, litellm_app)
 
 
 # Default route at /
 @app.get("/")
 async def root():
-    return {"message": "Welcome to the API Gateway", "litellm_endpoint": "/litellm"}
+    return {
+        "message": "Welcome to the API Gateway",
+        "litellm_endpoint": f"{custom_path}",
+    }
 
 
 # Health check endpoint

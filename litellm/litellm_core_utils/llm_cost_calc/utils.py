@@ -4,7 +4,7 @@
 from typing import Literal, Optional, Tuple, cast
 
 import litellm
-from litellm import verbose_logger
+from litellm._logging import verbose_logger
 from litellm.types.utils import CallTypes, ModelInfo, PassthroughCallTypes, Usage
 from litellm.utils import get_model_info
 
