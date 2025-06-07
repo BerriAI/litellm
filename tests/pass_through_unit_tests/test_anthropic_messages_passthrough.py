@@ -672,9 +672,9 @@ def test_sync_openai_messages():
         model="openai/gpt-4o-mini",
         max_tokens=100,
     )
-    print("response", response)
+    print("ANT response", response)
 
     assert response is not None
     assert isinstance(response, dict)
-    assert response.get("choices")[0].get("message").get("content") is not None
+    assert response["content"][0].text is not None
 
