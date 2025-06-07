@@ -340,7 +340,14 @@ const sidebars = {
         "providers/codestral",
         "providers/cohere",
         "providers/anyscale",
-        "providers/huggingface",
+        {
+          type: "category",
+          label: "HuggingFace",
+          items: [
+            "providers/huggingface",
+            "providers/huggingface_rerank",
+          ]
+        },
         "providers/databricks",
         "providers/deepgram",
         "providers/watsonx",
