@@ -311,9 +311,9 @@ class RedisCache(BaseCache):
             if hasattr(_redis_client, "register_script"):
                 return _redis_client.register_script(script)  # type: ignore
             # For Redis Cluster
-            else:
+            elif hasattr(_redis_client, "script_load"):
                 # Load the script and get its SHA
-                script_sha = _redis_client.script_load(script)
+                script_sha = _redis_client.script_load(script)  # type: ignore
 
                 # Return a callable that uses evalsha
                 async def script_callable(keys: List[str], args: List[Any]) -> Any:

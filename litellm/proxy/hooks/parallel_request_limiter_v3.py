@@ -314,7 +314,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             RedisPipelineSetOperation,
         )
 
-        statuses = []
+        statuses: List[Dict[str, Any]] = []
         overall_code = "OK"
         now = datetime.now().timestamp()
         now_int = int(now)  # Convert to integer for Redis Lua script
