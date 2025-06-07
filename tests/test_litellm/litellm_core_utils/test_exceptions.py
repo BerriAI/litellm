@@ -391,35 +391,6 @@ def test_completion_openai_exception():
 # test_completion_openai_exception()
 
 
-
-
-
-def test_completion_mistral_exception():
-    # test if mistral/mistral-tiny raises openai.AuthenticationError
-    try:
-        import openai
-
-        print("Testing mistral ai exception mapping")
-        litellm.set_verbose = True
-        ## Test azure call
-        old_azure_key = os.environ["MISTRAL_API_KEY"]
-        os.environ["MISTRAL_API_KEY"] = "good morning"
-        response = completion(
-            model="mistral/mistral-tiny",
-            messages=[{"role": "user", "content": "hello"}],
-        )
-        print(f"response: {response}")
-        print(response)
-    except openai.AuthenticationError as e:
-        os.environ["MISTRAL_API_KEY"] = old_azure_key
-        print("good job got the correct error for openai when key not set")
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_mistral_exception()
-
-
 def test_completion_bedrock_invalid_role_exception():
     """
     Test if litellm raises a BadRequestError for an invalid role on Bedrock
