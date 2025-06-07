@@ -15,7 +15,6 @@ from litellm.constants import (
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
@@ -631,6 +630,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         """
         Anthropic doesn't support tool calling without `tools=` param specified.
         """
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            anthropic_messages_pt,
+        )
+
         if (
             "tools" not in optional_params
             and messages is not None
