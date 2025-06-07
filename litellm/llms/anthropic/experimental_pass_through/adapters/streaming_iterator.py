@@ -2,7 +2,7 @@
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import json
 import traceback
-from typing import Any, AsyncIterator, Iterator, Optional, Union
+from typing import Any, AsyncIterator, Iterator, Optional
 
 from litellm import verbose_logger
 from litellm.types.utils import AdapterCompletionStreamWrapper
