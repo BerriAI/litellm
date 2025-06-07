@@ -1,5 +1,5 @@
 ---
-title: "[Pre Release] v1.72.2-stable"
+title: "v1.72.2-stable"
 slug: "v1-72-2-stable"
 date: 2025-06-07T10:00:00
 authors:
@@ -19,26 +19,16 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-
-:::info
-
-The release candidate is live now.
-
-The production release will be live on Wednesday.
-
-:::
-
-
 ## Deploy this version
 
 <Tabs>
 <TabItem value="docker" label="Docker">
 
 ``` showLineNumbers title="docker run litellm"
-docker run
--e STORE_MODEL_IN_DB=True
--p 4000:4000
-ghcr.io/berriai/litellm:main-v1.72.2.rc
+docker run \
+-e STORE_MODEL_IN_DB=True \
+-p 4000:4000 \
+ghcr.io/berriai/litellm:main-v1.72.2-stable
 ```
 </TabItem>
 
@@ -52,9 +42,14 @@ pip install litellm==1.72.2
 
 ## Key Highlights
 
+LiteLLM v1.72.2-stable brings important improvements and new integrations. Here are the key highlights of this release:
 
+- **DataRobot Integration**: New provider support for enterprise AI workflows, expanding LiteLLM's reach into enterprise environments.
+- **Claude 4 Support**: Full support for Anthropic's Claude 4 family across multiple providers (Anthropic, Bedrock, Vertex AI) with document content type and token tracking improvements.
+- **Performance Enhancements**: Async and batched S3 logging, improved /v1/messages route performance, and better resource management with controllable batch sizes for spend logs.
+- **DeepSeek R1 Models**: Support for the DeepSeek R1 family via Together AI with proper pricing and context window configuration.
+- **SSO & Authentication**: Enhanced SSO configuration with persistent settings, custom root path support, and improved user validation.
 
----
 
 ## New Models / Updated Models
 
@@ -68,13 +63,13 @@ pip install litellm==1.72.2
     - DeepSeek R1 family model configuration via Together AI - [PR](https://github.com/BerriAI/litellm/pull/11394)
     - DeepSeek R1 pricing and context window configuration - [PR](https://github.com/BerriAI/litellm/pull/11339)
 - **[Google AI Studio](../../docs/providers/gemini)**
-    - Google Gemini 2.5 Pro Preview 06-05 support - [PR](https://github.com/BerriAI/litellm/pull/11447)
+    - Gemini 2.5 Pro Preview 06-05 support - [PR](https://github.com/BerriAI/litellm/pull/11447)
     - Gemini streaming thinking content parsing with `reasoning_content` - [PR](https://github.com/BerriAI/litellm/pull/11298)
     - Support for no reasoning option for Gemini models - [PR](https://github.com/BerriAI/litellm/pull/11393)
     - URL context support for Gemini models - [PR](https://github.com/BerriAI/litellm/pull/11351)
     - Gemini embeddings-001 model prices and context window - [PR](https://github.com/BerriAI/litellm/pull/11332)
 - **[Cerebras](../../docs/providers/cerebras)**
-    - Cerebras/qwen-3-32b model pricing and context window - [PR](https://github.com/BerriAI/litellm/pull/11373)
+    - cerebras/qwen-3-32b model pricing and context window - [PR](https://github.com/BerriAI/litellm/pull/11373)
 - **[OpenAI](../../docs/providers/openai)**
     - codex-mini-latest model support - [PR](https://github.com/BerriAI/litellm/pull/11492)
 - **[Vertex AI](../../docs/providers/vertex)**
@@ -116,7 +111,7 @@ pip install litellm==1.72.2
 ## Logging / Guardrails Integrations
 
 #### Logging
-- **[S3](../../docs/proxy/logging#s3)**
+- **[S3](../../docs/proxy/logging#s3-buckets-logging)**
     - Async + Batched S3 Logging for improved performance - [PR](https://github.com/BerriAI/litellm/pull/11340)
 - **[DataDog](../../docs/observability/datadog_integration)**
     - Add instrumentation for streaming chunks - [PR](https://github.com/BerriAI/litellm/pull/11338)
@@ -124,7 +119,7 @@ pip install litellm==1.72.2
     - Bump DD trace version - [PR](https://github.com/BerriAI/litellm/pull/11426)
 - **[Prometheus](../../docs/proxy/prometheus)**
     - Pass custom metadata labels in litellm_total_token metrics - [PR](https://github.com/BerriAI/litellm/pull/11414)
-- **[GCS](../../docs/proxy/logging#google-cloud-storage)**
+- **[GCS](../../docs/proxy/logging#google-cloud-storage-buckets-logging)**
     - Update GCSBucketBase to handle GSM project ID if passed - [PR](https://github.com/BerriAI/litellm/pull/11409)
 
 #### Guardrails
