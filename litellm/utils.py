@@ -5867,7 +5867,7 @@ def trim_messages(
 
         # Do nothing if current tokens under messages
         if current_tokens < max_tokens:
-            return messages
+            return messages + tool_messages
 
         #### Trimming messages if current_tokens > max_tokens
         print_verbose(
