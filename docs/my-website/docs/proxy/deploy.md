@@ -41,12 +41,12 @@ Example `litellm_config.yaml`
 
 ```yaml
 model_list:
-  - model_name: azure-gpt-3.5
+  - model_name: azure-gpt-4o
     litellm_params:
       model: azure/<your-azure-model-deployment>
       api_base: os.environ/AZURE_API_BASE # runs os.getenv("AZURE_API_BASE")
       api_key: os.environ/AZURE_API_KEY # runs os.getenv("AZURE_API_KEY")
-      api_version: "2023-07-01-preview"
+      api_version: "2025-01-01-preview"
 ```
 
 
@@ -67,13 +67,13 @@ Get Latest Image 👉 [here](https://github.com/berriai/litellm/pkgs/container/l
 
 #### Step 3. TEST Request
 
-  Pass `model=azure-gpt-3.5` this was set on step 1
+  Pass `model=azure-gpt-4o` this was set on step 1
 
   ```shell
   curl --location 'http://0.0.0.0:4000/chat/completions' \
       --header 'Content-Type: application/json' \
       --data '{
-      "model": "azure-gpt-3.5",
+      "model": "azure-gpt-4o",
       "messages": [
           {
           "role": "user",
@@ -205,9 +205,9 @@ metadata:
 data:
   config.yaml: |
       model_list: 
-        - model_name: gpt-3.5-turbo
+        - model_name: gpt-4o
           litellm_params:
-            model: azure/gpt-turbo-small-ca
+            model: azure/gpt-4o-ca
             api_base: https://my-endpoint-canada-berri992.openai.azure.com/
             api_key: os.environ/CA_AZURE_OPENAI_API_KEY
 ---
@@ -544,15 +544,15 @@ LiteLLM Proxy supports sharing rpm/tpm shared across multiple litellm instances,
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/<your-deployment-name>
       api_base: <your-azure-endpoint>
       api_key: <your-azure-api-key>
       rpm: 6      # Rate limit for this deployment: in requests per minute (rpm)
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: azure/gpt-turbo-small-ca
+      model: azure/gpt-4o-ca
       api_base: https://my-endpoint-canada-berri992.openai.azure.com/
       api_key: <your-azure-api-key>
       rpm: 6
@@ -576,15 +576,15 @@ LiteLLM Proxy supports sharing rpm/tpm shared across multiple litellm instances,
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/<your-deployment-name>
       api_base: <your-azure-endpoint>
       api_key: <your-azure-api-key>
       rpm: 6      # Rate limit for this deployment: in requests per minute (rpm)
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: azure/gpt-turbo-small-ca
+      model: azure/gpt-4o-ca
       api_base: https://my-endpoint-canada-berri992.openai.azure.com/
       api_key: <your-azure-api-key>
       rpm: 6
@@ -849,7 +849,7 @@ https://litellm-7yjrj3ha2q-uc.a.run.app is our example proxy, substitute it with
 curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-     "model": "gpt-3.5-turbo",
+     "model": "gpt-4o",
      "messages": [{"role": "user", "content": "Say this is a test!"}],
      "temperature": 0.7
    }'
