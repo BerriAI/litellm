@@ -441,15 +441,7 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
     },
   },
   {
-    header: "Created At",
-    accessorKey: "before_value.created_at",
-    cell: (info: any) => {
-      const createdAt = info.row.original.before_value?.created_at;
-      return createdAt ? <TimeCell utcTime={createdAt} /> : "-";
-    },
-  },
-  {
-    header: "Updated At",
+    header: "Timestamp",
     accessorKey: "updated_at",
     cell: (info: any) => <TimeCell utcTime={info.getValue()} />,
   },
