@@ -364,3 +364,22 @@ class PrometheusSettings(BaseModel):
         None,
         description="Configuration for filtering Prometheus metrics by groups and labels",
     )
+
+
+class NoOpMetric:
+    """A no-op metric that has the same interface as prometheus metrics but does nothing"""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def labels(self, *args, **kwargs):
+        return self
+
+    def inc(self, *args, **kwargs):
+        pass
+
+    def set(self, *args, **kwargs):
+        pass
+
+    def observe(self, *args, **kwargs):
+        pass
