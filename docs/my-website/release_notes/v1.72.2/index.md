@@ -66,6 +66,16 @@ pip install litellm==1.72.2
 
 ---
 
+## `/v1/messages` Performance Improvements
+
+This release brings significant performance improvements to the `/v1/messages` API. For large streaming requests LiteLLM overhead latency is now 50ms and can handle 250 RPS per instance.
+
+<Image 
+  img={require('../../img/release_notes/v1_messages_perf.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+
 ## New Models / Updated Models
 
 **Newly Added Models**
