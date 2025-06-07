@@ -248,6 +248,10 @@ def test_trimming_with_tool_calls():
     assert len(result) == num_tool_calls
     assert result == messages[-num_tool_calls:]
 
+    result = trim_messages(messages=messages, max_tokens=999)
+    # message length is below max_tokens, so output should match input
+    assert messages == result
+
 
 def test_trimming_should_not_change_original_messages():
     messages = [
