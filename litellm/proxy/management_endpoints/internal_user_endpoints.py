@@ -234,9 +234,9 @@ async def new_user(
             try:
                 await team_member_add(
                     data=team_member_add_request,
-                    http_request=Request(
-                        scope={"type": "http", "path": "/user/new"},
-                    ),
+                    # http_request=Request(
+                    #     scope={"type": "http", "path": "/user/new"},
+                    # ),
                     user_api_key_dict=user_api_key_dict,
                 )
             except HTTPException as e:
