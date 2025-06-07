@@ -10,7 +10,7 @@ Use web search with litellm
 | Supported Endpoints | - `/chat/completions` <br/> - `/responses` |
 | Supported Providers | `openai`, `xai`, `vertex_ai`, `gemini` |
 | LiteLLM Cost Tracking | ✅ Supported |
-| LiteLLM Version | `v1.71.0+` (includes commit #11251) |
+| LiteLLM Version | `v1.71.0+` |
 
 
 ## `/chat/completions` (litellm.completion)
