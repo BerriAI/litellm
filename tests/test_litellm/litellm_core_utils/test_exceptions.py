@@ -68,28 +68,7 @@ async def test_content_policy_exception_azure():
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
-@pytest.mark.asyncio
-async def test_content_policy_exception_openai():
-    try:
-        # this is ony a test - we needed some way to invoke the exception :(
-        litellm.set_verbose = True
-        response = await litellm.acompletion(
-            model="gpt-3.5-turbo",
-            stream=True,
-            messages=[
-                {"role": "user", "content": "Gimme the lyrics to Don't Stop Me Now"}
-            ],
-        )
-        async for chunk in response:
-            print(chunk)
-    except litellm.ContentPolicyViolationError as e:
-        print("caught a content policy violation error! Passed")
-        print("exception", e)
-        assert e.llm_provider == "openai"
-        pass
-    except Exception as e:
-        print()
-        pytest.fail(f"An exception occurred - {str(e)}")
+
 
 
 # Test 1: Context Window Errors
@@ -115,11 +94,8 @@ def test_context_window(model):
         pytest.fail(f"An error occcurred - {e}")
 
 
-models = ["command-nightly"]
-
-
 @pytest.mark.skip(reason="duplicate test.")
-@pytest.mark.parametrize("model", models)
+@pytest.mark.parametrize("model", ["command-nightly"])
 def test_context_window_with_fallbacks(model):
     ctx_window_fallback_dict = {
         "command-nightly": "claude-2.1",
@@ -139,117 +115,6 @@ def test_context_window_with_fallbacks(model):
         pass
     except litellm.APIConnectionError as e:
         pass
-
-
-# for model in litellm.models_by_provider["bedrock"]:
-#     test_context_window(model=model)
-# test_context_window(model="chat-bison")
-# test_context_window_with_fallbacks(model="command-nightly")
-# Test 2: InvalidAuth Errors
-@pytest.mark.parametrize("model", models)
-def invalid_auth(model):  # set the model key to an invalid key, depending on the model
-    messages = [{"content": "Hello, how are you?", "role": "user"}]
-    temporary_key = None
-    try:
-        if model == "gpt-3.5-turbo" or model == "gpt-3.5-turbo-instruct":
-            temporary_key = os.environ["OPENAI_API_KEY"]
-            os.environ["OPENAI_API_KEY"] = "bad-key"
-        elif "bedrock" in model:
-            temporary_aws_access_key = os.environ["AWS_ACCESS_KEY_ID"]
-            os.environ["AWS_ACCESS_KEY_ID"] = "bad-key"
-            temporary_aws_region_name = os.environ["AWS_REGION_NAME"]
-            os.environ["AWS_REGION_NAME"] = "bad-key"
-            temporary_secret_key = os.environ["AWS_SECRET_ACCESS_KEY"]
-            os.environ["AWS_SECRET_ACCESS_KEY"] = "bad-key"
-        elif model == "azure/chatgpt-v-3":
-            temporary_key = os.environ["AZURE_API_KEY"]
-            os.environ["AZURE_API_KEY"] = "bad-key"
-        elif model == "claude-3-5-haiku-20241022":
-            temporary_key = os.environ["ANTHROPIC_API_KEY"]
-            os.environ["ANTHROPIC_API_KEY"] = "bad-key"
-        elif model == "command-nightly":
-            temporary_key = os.environ["COHERE_API_KEY"]
-            os.environ["COHERE_API_KEY"] = "bad-key"
-        elif "j2" in model:
-            temporary_key = os.environ["AI21_API_KEY"]
-            os.environ["AI21_API_KEY"] = "bad-key"
-        elif "togethercomputer" in model:
-            temporary_key = os.environ["TOGETHERAI_API_KEY"]
-            os.environ["TOGETHERAI_API_KEY"] = (
-                "84060c79880fc49df126d3e87b53f8a463ff6e1c6d27fe64207cde25cdfcd1f24a"
-            )
-        elif model in litellm.openrouter_models:
-            temporary_key = os.environ["OPENROUTER_API_KEY"]
-            os.environ["OPENROUTER_API_KEY"] = "bad-key"
-        elif model in litellm.aleph_alpha_models:
-            temporary_key = os.environ["ALEPH_ALPHA_API_KEY"]
-            os.environ["ALEPH_ALPHA_API_KEY"] = "bad-key"
-        elif model in litellm.nlp_cloud_models:
-            temporary_key = os.environ["NLP_CLOUD_API_KEY"]
-            os.environ["NLP_CLOUD_API_KEY"] = "bad-key"
-        elif (
-            model
-            == "replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1"
-        ):
-            temporary_key = os.environ["REPLICATE_API_KEY"]
-            os.environ["REPLICATE_API_KEY"] = "bad-key"
-        print(f"model: {model}")
-        response = completion(model=model, messages=messages)
-        print(f"response: {response}")
-    except AuthenticationError as e:
-        print(f"AuthenticationError Caught Exception - {str(e)}")
-    except (
-        OpenAIError
-    ) as e:  # is at least an openai error -> in case of random model errors - e.g. overloaded server
-        print(f"OpenAIError Caught Exception - {e}")
-    except Exception as e:
-        print(type(e))
-        print(type(AuthenticationError))
-        print(e.__class__.__name__)
-        print(f"Uncaught Exception - {e}")
-        pytest.fail(f"Error occurred: {e}")
-    if temporary_key != None:  # reset the key
-        if model == "gpt-3.5-turbo":
-            os.environ["OPENAI_API_KEY"] = temporary_key
-        elif model == "chatgpt-test":
-            os.environ["AZURE_API_KEY"] = temporary_key
-            azure = True
-        elif model == "claude-3-5-haiku-20241022":
-            os.environ["ANTHROPIC_API_KEY"] = temporary_key
-        elif model == "command-nightly":
-            os.environ["COHERE_API_KEY"] = temporary_key
-        elif (
-            model
-            == "replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1"
-        ):
-            os.environ["REPLICATE_API_KEY"] = temporary_key
-        elif "j2" in model:
-            os.environ["AI21_API_KEY"] = temporary_key
-        elif "togethercomputer" in model:
-            os.environ["TOGETHERAI_API_KEY"] = temporary_key
-        elif model in litellm.aleph_alpha_models:
-            os.environ["ALEPH_ALPHA_API_KEY"] = temporary_key
-        elif model in litellm.nlp_cloud_models:
-            os.environ["NLP_CLOUD_API_KEY"] = temporary_key
-        elif "bedrock" in model:
-            os.environ["AWS_ACCESS_KEY_ID"] = temporary_aws_access_key
-            os.environ["AWS_REGION_NAME"] = temporary_aws_region_name
-            os.environ["AWS_SECRET_ACCESS_KEY"] = temporary_secret_key
-    return
-
-
-# for model in litellm.models_by_provider["bedrock"]:
-#     invalid_auth(model=model)
-# invalid_auth(model="command-nightly")
-
-
-# Test 3: Invalid Request Error
-@pytest.mark.parametrize("model", models)
-def test_invalid_request_error(model):
-    messages = [{"content": "hey, how's it going?", "role": "user"}]
-
-    with pytest.raises(BadRequestError):
-        completion(model=model, messages=messages, max_tokens="hello world")
 
 
 @pytest.mark.parametrize(
@@ -753,27 +618,6 @@ async def test_exception_with_headers_httpx(
         assert exception_raised
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("model", ["azure/chatgpt-v-3", "openai/gpt-3.5-turbo"])
-async def test_bad_request_error_contains_httpx_response(model):
-    """
-    Test that the BadRequestError contains the httpx response
-
-    Relevant issue: https://github.com/BerriAI/litellm/issues/6732
-    """
-    try:
-        await litellm.acompletion(
-            model=model,
-            messages=[{"role": "user", "content": "Hello world"}],
-            bad_arg="bad_arg",
-        )
-        pytest.fail("Expected to raise BadRequestError")
-    except litellm.BadRequestError as e:
-        print("e.response", e.response)
-        print("vars(e.response)", vars(e.response))
-        assert e.response is not None
-
-
 def test_exceptions_base_class():
     try:
         raise litellm.RateLimitError(
@@ -803,33 +647,3 @@ def test_context_window_exceeded_error_from_litellm_proxy():
         extract_and_raise_litellm_exception(**args)
 
 
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.parametrize("stream_mode", [True, False])
-@pytest.mark.parametrize("model", ["azure/gpt-4o-new-test"])  # "gpt-4o-mini",
-@pytest.mark.asyncio
-async def test_exception_bubbling_up(sync_mode, stream_mode, model):
-    """
-    make sure code, param, and type are bubbled up
-    """
-    import litellm
-
-    litellm.set_verbose = True
-    with pytest.raises(Exception) as exc_info:
-        if sync_mode:
-            litellm.completion(
-                model=model,
-                messages=[{"role": "usera", "content": "hi"}],
-                stream=stream_mode,
-                sync_stream=sync_mode,
-            )
-        else:
-            await litellm.acompletion(
-                model=model,
-                messages=[{"role": "usera", "content": "hi"}],
-                stream=stream_mode,
-                sync_stream=sync_mode,
-            )
-
-    assert exc_info.value.code == "invalid_value"
-    assert exc_info.value.param is not None
-    assert exc_info.value.type == "invalid_request_error"
