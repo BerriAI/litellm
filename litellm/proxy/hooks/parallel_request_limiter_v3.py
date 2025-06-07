@@ -254,20 +254,22 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         else:
             raise ValueError("Batch rate limiter script is not initialized")
 
+        overall_code = "OK"
         for i in range(0, len(cache_values), 2):
+            item_code = "OK"
             window_key = keys_to_fetch[i]
             counter_key = keys_to_fetch[i + 1]
             window_value = cache_values[i]
             counter_value = cache_values[i + 1]
             requests_limit = key_metadata[window_key]["requests_limit"]
 
-            if counter_value + 1 > requests_limit:
+            if int(counter_value) + 1 > requests_limit:
                 overall_code = "OVER_LIMIT"
-            else:
-                overall_code = "OK"
+                item_code = "OVER_LIMIT"
+
             statuses.append(
                 {
-                    "code": overall_code,
+                    "code": item_code,
                     "current_limit": requests_limit,
                     "limit_remaining": requests_limit - counter_value,
                 }
@@ -303,48 +305,48 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
             )
 
-        # # User rate limits
-        # if user_api_key_dict.user_id:
-        #     descriptors.append(
-        #         RateLimitDescriptor(
-        #             key="user",
-        #             value=user_api_key_dict.user_id,
-        #             rate_limit={
-        #                 "requests_per_unit": user_api_key_dict.user_rpm_limit
-        #                 or sys.maxsize,
-        #                 "window_size": 60,
-        #             },
-        #         )
-        #     )
+        # User rate limits
+        if user_api_key_dict.user_id:
+            descriptors.append(
+                RateLimitDescriptor(
+                    key="user",
+                    value=user_api_key_dict.user_id,
+                    rate_limit={
+                        "requests_per_unit": user_api_key_dict.user_rpm_limit
+                        or sys.maxsize,
+                        "window_size": self.window_size,
+                    },
+                )
+            )
 
-        # # Team rate limits
-        # if user_api_key_dict.team_id:
-        #     descriptors.append(
-        #         RateLimitDescriptor(
-        #             key="team",
-        #             value=user_api_key_dict.team_id,
-        #             rate_limit={
-        #                 "requests_per_unit": user_api_key_dict.team_rpm_limit
-        #                 or sys.maxsize,
-        #                 "window_size": 60,
-        #             },
-        #         )
-        #     )
+        # Team rate limits
+        if user_api_key_dict.team_id:
+            descriptors.append(
+                RateLimitDescriptor(
+                    key="team",
+                    value=user_api_key_dict.team_id,
+                    rate_limit={
+                        "requests_per_unit": user_api_key_dict.team_rpm_limit
+                        or sys.maxsize,
+                        "window_size": self.window_size,
+                    },
+                )
+            )
 
-        # # End user rate limits
-        # if user_api_key_dict.end_user_id:
-        #     descriptors.append(
-        #         RateLimitDescriptor(
-        #             key="end_user",
-        #             value=user_api_key_dict.end_user_id,
-        #             rate_limit={
-        #                 "requests_per_unit": getattr(
-        #                     user_api_key_dict, "end_user_rpm_limit", sys.maxsize
-        #                 ),
-        #                 "window_size": 60,
-        #             },
-        #         )
-        #     )
+        # End user rate limits
+        if user_api_key_dict.end_user_id:
+            descriptors.append(
+                RateLimitDescriptor(
+                    key="end_user",
+                    value=user_api_key_dict.end_user_id,
+                    rate_limit={
+                        "requests_per_unit": getattr(
+                            user_api_key_dict, "end_user_rpm_limit", sys.maxsize
+                        ),
+                        "window_size": self.window_size,
+                    },
+                )
+            )
 
         # Check rate limits
         response = await self.should_rate_limit(
@@ -360,7 +362,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     raise HTTPException(
                         status_code=429,
                         detail=f"Rate limit exceeded for {descriptor['key']}: {descriptor['value']}. Remaining: {status['limit_remaining']}",
-                        headers={"retry-after": str(60)},  # Retry after 1 minute
+                        headers={
+                            "retry-after": str(self.window_size)
+                        },  # Retry after 1 minute
                     )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
