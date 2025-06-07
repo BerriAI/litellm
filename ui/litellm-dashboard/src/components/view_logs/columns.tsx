@@ -400,16 +400,9 @@ export type AuditLogEntry = {
 
 
 const getActionBadge = (action: string) => {
-  const actionColors = {
-    created: "blue",
-    updated: "slate",
-    deleted: "red",
-    rotated: "amber",
-  } as const;
-
   return (
     <Badge 
-      color={actionColors[action as keyof typeof actionColors] || "gray"} 
+      color="gray"
       className="flex items-center gap-1"
     >
       <span className="whitespace-nowrap text-xs">{action}</span>
