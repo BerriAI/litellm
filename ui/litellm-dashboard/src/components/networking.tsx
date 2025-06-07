@@ -36,8 +36,8 @@ const updateServerRootPath = (receivedServerRootPath: string) => {
   serverRootPath = receivedServerRootPath;
 };
 
-export const getProxyBaseUrl = () => {
-  return proxyBaseUrl;
+export const getProxyBaseUrl = (): string => {
+  return proxyBaseUrl ? proxyBaseUrl : window.location.origin;  
 };
 
 const HTTP_REQUEST = {
