@@ -258,7 +258,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const dropdownRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<TableInstance<any>>(null);
 
-const addModelTabRef = useRef<HTMLButtonElement>(null);
+  const [isAddModelModalVisible, setIsAddModelModalVisible] = useState<boolean>(false);
+
   const setProviderModelsFn = (provider: Providers) => {
     const _providerModels = getProviderModels(provider, modelMap);
     setProviderModels(_providerModels);
@@ -1057,13 +1058,11 @@ const addModelTabRef = useRef<HTMLButtonElement>(null);
         />
       ) : (
         <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
-        <div className="mb-4">
-          {isAdminRole(userRole) && (
+         <div className="mb-4">
+            {isAdminRole(userRole) && (
               <Button
                 className="mx-auto"
-                onClick={() => {
-            addModelTabRef.current?.click();
-          }}
+                onClick={() => setIsAddModelModalVisible(true)}
               >
                 + Create New Model
               </Button>
@@ -1072,14 +1071,12 @@ const addModelTabRef = useRef<HTMLButtonElement>(null);
           <TabList className="flex justify-between mt-2 w-full items-center">
             <div className="flex">
               {all_admin_roles.includes(userRole) ? <Tab>All Models</Tab> : <Tab>Your Models</Tab>}
-              <Tab  ref={addModelTabRef}>Add Model</Tab>
               {all_admin_roles.includes(userRole) && <Tab>LLM Credentials</Tab>}
               {all_admin_roles.includes(userRole) && <Tab>
                 <pre>/health Models</pre>
               </Tab>}
               {all_admin_roles.includes(userRole) && <Tab>Model Analytics</Tab>}
               {all_admin_roles.includes(userRole) && <Tab>Model Retry Settings</Tab>}
-
             </div>
 
             <div className="flex items-center space-x-2">
@@ -1239,22 +1236,34 @@ const addModelTabRef = useRef<HTMLButtonElement>(null);
               </Grid>
             </TabPanel>
             <TabPanel className="h-full">
-              <AddModelTab
-                form={form}
-                handleOk={handleOk}
-                selectedProvider={selectedProvider}
-                setSelectedProvider={setSelectedProvider}
-                providerModels={providerModels}
-                setProviderModelsFn={setProviderModelsFn}
-                getPlaceholder={getPlaceholder}
-                uploadProps={uploadProps}
-                showAdvancedSettings={showAdvancedSettings}
-                setShowAdvancedSettings={setShowAdvancedSettings}
-                teams={teams}
-                credentials={credentialsList}
-                accessToken={accessToken}
-                userRole={userRole}
-              />
+              <Modal
+                title="Create New Model"
+                open={isAddModelModalVisible}
+                onCancel={() => setIsAddModelModalVisible(false)}
+                footer={null}
+                width={800}
+                style={{ top: 20 }}
+              >
+                <AddModelTab
+                  form={form}
+                  handleOk={() => {
+                    handleOk();
+                    setIsAddModelModalVisible(false);
+                  }}
+                  selectedProvider={selectedProvider}
+                  setSelectedProvider={setSelectedProvider}
+                  providerModels={providerModels}
+                  setProviderModelsFn={setProviderModelsFn}
+                  getPlaceholder={getPlaceholder}
+                  uploadProps={uploadProps}
+                  showAdvancedSettings={showAdvancedSettings}
+                  setShowAdvancedSettings={setShowAdvancedSettings}
+                  teams={teams}
+                  credentials={credentialsList}
+                  accessToken={accessToken}
+                  userRole={userRole}
+                />
+              </Modal>
             </TabPanel>
             <TabPanel>
               <CredentialsPanel accessToken={accessToken} uploadProps={uploadProps} credentialList={credentialsList} fetchCredentials={fetchCredentials} />
