@@ -244,7 +244,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         now = datetime.now().timestamp()
 
         # Collect all keys and their metadata upfront
-        keys_to_fetch = []
+        keys_to_fetch: List[str] = []
         key_metadata = {}  # Store metadata for each key
         for descriptor in descriptors:
             key = descriptor["key"]
@@ -259,13 +259,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
             if requests_limit is not None:
                 key = self.create_rate_limit_keys(key, value, "requests")
-                keys_to_fetch.extend([window_key, key, 1])
+                keys_to_fetch.extend([window_key, key])
             elif tokens_limit is not None:
                 key = self.create_rate_limit_keys(key, value, "tokens")
-                keys_to_fetch.extend([window_key, key, 0])
+                keys_to_fetch.extend([window_key, key])
             elif max_parallel_requests_limit is not None:
                 key = self.create_rate_limit_keys(key, value, "max_parallel_requests")
-                keys_to_fetch.extend([window_key, key, 1])
+                keys_to_fetch.extend([window_key, key])
             else:
                 continue
 
@@ -301,6 +301,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             ]
             tokens_limit = key_metadata[window_key]["tokens_limit"]
 
+            # Determine which limit to use for current_limit and limit_remaining
+            if counter_key.endswith(":requests"):
+                current_limit = requests_limit
+            elif counter_key.endswith(":max_parallel_requests"):
+                current_limit = max_parallel_requests_limit
+            elif counter_key.endswith(":tokens"):
+                current_limit = tokens_limit
+            else:
+                current_limit = None
+
             if (
                 counter_key.endswith(":requests")
                 and requests_limit is not None
@@ -323,11 +333,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 overall_code = "OVER_LIMIT"
                 item_code = "OVER_LIMIT"
 
+            # Only compute limit_remaining if current_limit is not None
+            limit_remaining = (
+                current_limit - counter_value if current_limit is not None else None
+            )
+
             statuses.append(
                 {
                     "code": item_code,
-                    "current_limit": requests_limit,
-                    "limit_remaining": requests_limit - counter_value,
+                    "current_limit": current_limit,
+                    "limit_remaining": limit_remaining,
                 }
             )
 
@@ -476,7 +491,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         pipeline_operations: List[RedisPipelineIncrementOperation] = []
         counter_key = self.create_rate_limit_keys(
-            key="api_key",
+            key=key,
             value=value,
             rate_limit_type="tokens",
         )
