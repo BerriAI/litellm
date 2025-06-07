@@ -6,6 +6,14 @@ import { uiAuditLogsCall, keyListCall } from "../networking";
 import { AuditLogEntry, auditLogColumns } from "./columns";
 import { Text } from "@tremor/react";
 import { Team } from "../key_team_helpers/key_list";
+import _ReactDiffViewer from 'react-diff-viewer-continued';
+import React from "react";
+import Image from 'next/image';
+import Prism from 'prismjs';
+import 'prismjs/components/prism-json';
+import 'prismjs/themes/prism-tomorrow.css';
+
+const ReactDiffViewer = (_ReactDiffViewer as any).default || _ReactDiffViewer;
 
 interface AuditLogsProps {
   accessToken: string | null;
@@ -17,6 +25,259 @@ interface AuditLogsProps {
   allTeams: Team[];
 }
 
+// Define AuditLogRowExpansionPanel as a standalone, memoized component
+const AuditLogRowExpansionPanel = React.memo(({ rowData }: { rowData: AuditLogEntry }) => {
+  const { before_value, updated_values, table_name, action } = rowData;
+
+  // CSS overrides
+  const prismStyleOverride = `
+    .token.property {
+      color: #4A90E2 !important; /* Dark blue for JSON keys */
+    }
+    .token.string,
+    .token.number,
+    .token.boolean,
+    .token.null {
+      color: #578043 !important; /* Darker green for JSON values */
+    }
+  `;
+
+  // Style overrides for ReactDiffViewer line highlights
+  const diffViewerStyles = {
+    variables: {
+      light: {
+        addedBackground: '#D5F5E3', // Darker green for added lines
+        removedBackground: '#FADBD8', // Darker red for removed lines
+      },
+    },
+  };
+    
+  // Helper function to recursively mask sk- keys
+  const maskSKKeys = (data: any): any => {
+    if (typeof data === 'string') {
+      // Mask if: starts with sk-, length > 10 (our mask length), and not already in sk-...XXXX format
+      if (data.startsWith('sk-') && data.length > 10 && data.substring(3, 6) !== '...') {
+        return `${data.substring(0, 3)}...${data.substring(data.length - 4)}`;
+      }
+      return data;
+    }
+
+    if (Array.isArray(data)) {
+      return data.map(item => maskSKKeys(item));
+    }
+
+    if (typeof data === 'object' && data !== null) {
+      const maskedObject: Record<string, any> = {};
+      for (const key in data) {
+        if (Object.prototype.hasOwnProperty.call(data, key)) {
+          maskedObject[key] = maskSKKeys(data[key]);
+        }
+      }
+      return maskedObject;
+    }
+    
+    return data; // Return primitives other than strings, and null, as is
+  };
+
+  const getDisplayString = (value: Record<string, any> | string | undefined | null) => {
+    if (value === undefined || value === null) return "N/A";
+    // If it's already a string (e.g. our "N/A" messages), return it directly.
+    // Otherwise, it's an object that needs masking and stringifying.
+    if (typeof value === 'string') return value;
+    
+    const maskedValue = maskSKKeys(value);
+    return JSON.stringify(maskedValue, null, 2);
+  };
+
+  // Syntax highlighting function for JSON
+  const highlightSyntax = (jsonString: string) => {
+    // Prism.highlight can throw if language not found, though 'json' should be safe
+    try {
+      // Check if the string is one of our special "N/A" or "Comment" messages
+      if (jsonString === "N/A" || 
+          jsonString === "N/A (New Record)" || 
+          jsonString === "N/A (Record Deleted)" ||
+          jsonString.includes("No fields changed") ||
+          jsonString.includes("Updated values were not provided")) {
+        // Don't highlight plain text messages, return them as is within a pre for consistency
+        return <pre style={{ display: 'inline' }}>{jsonString}</pre>;
+      }
+      const html = Prism.highlight(jsonString, Prism.languages.json, 'json');
+      return <pre style={{ display: 'inline' }} dangerouslySetInnerHTML={{ __html: html }} />;
+    } catch (e) {
+      console.error("Prism highlighting error:", e);
+      // Fallback to plain text if highlighting fails
+      return <pre style={{ display: 'inline' }}>{jsonString}</pre>;
+    }
+  };
+
+  let beforeString = "";
+  let updatedString = "";
+
+  if (action === "updated" || action === "rotated") {
+    if (before_value && typeof before_value === 'object' && updated_values && typeof updated_values === 'object') {
+      // Mask before_value before creating newFullState to ensure diff is on masked data if needed
+      const masked_before_value = maskSKKeys(before_value);
+      // updated_values might only contain changes, so merge with masked_before_value
+      const newFullState = { ...masked_before_value, ...maskSKKeys(updated_values) }; 
+      
+      const stringifiedOld = getDisplayString(masked_before_value); // getDisplayString will re-mask then stringify
+      const stringifiedNew = getDisplayString(newFullState);     // getDisplayString will re-mask then stringify
+                                                                 // (maskSKKeys is idempotent for already masked keys)
+
+      if (stringifiedOld === stringifiedNew && JSON.stringify(before_value) === JSON.stringify({ ...before_value, ...updated_values })) {
+        beforeString = getDisplayString({ "No fields changed": "N/A" });
+        updatedString = getDisplayString({ "No fields changed": "N/A" });
+      } else {
+        // Pass original unmasked data to getDisplayString, which will handle masking internally
+        beforeString = getDisplayString(before_value); 
+        updatedString = getDisplayString({ ...before_value, ...updated_values });
+      }
+    } else if (before_value && !updated_values) { 
+        beforeString = getDisplayString(before_value); 
+        updatedString = getDisplayString({ "Comment": "Updated values were not provided or were null." });
+    } else { 
+      beforeString = getDisplayString(before_value); 
+      updatedString = getDisplayString(updated_values); 
+    }
+  } else if (action === "created") {
+    beforeString = "N/A (New Record)";
+    updatedString = getDisplayString(updated_values); 
+  } else if (action === "deleted") {
+    beforeString = getDisplayString(before_value);
+    updatedString = "N/A (Record Deleted)";
+  } else {
+     beforeString = getDisplayString(before_value);
+     updatedString = getDisplayString(updated_values);
+  }
+  
+  const shouldUseDiffViewer = 
+    (action === "updated" || action === "rotated") &&
+    beforeString !== updatedString && 
+    !(beforeString.includes("No fields changed") && updatedString.includes("No fields changed")) &&
+    !(beforeString === "N/A (New Record)" && updatedString === "N/A") && 
+    !(beforeString === "N/A" && updatedString === "N/A (Record Deleted)");
+
+  const renderLegacyValue = (rawValue: Record<string, any> | string | undefined | null, isKeyTable: boolean) => {
+    let displayValue: any;
+    
+    if (rawValue === null || rawValue === undefined) {
+        return <Text>N/A</Text>;
+    }
+
+    // If rawValue is a string that looks like JSON, parse it. Otherwise, use as is.
+    // This step should happen BEFORE masking if we expect to mask contents of a JSON string.
+    // However, our primary data `before_value`, `updated_values` are objects.
+    // `getDisplayString` handles string inputs like "N/A" by returning them.
+    // For `renderLegacyValue`, it's safer to assume `rawValue` is either an object or a non-JSON string.
+    
+    try {
+        // If rawValue is a string that represents an object (e.g. "N/A", "No fields changed")
+        // it won't parse as JSON and will be handled later.
+        // If it's a string that IS JSON, it will be parsed.
+        // If it's an object, it remains an object.
+        displayValue = (typeof rawValue === 'string' && (rawValue.startsWith('{') || rawValue.startsWith('['))) 
+                       ? JSON.parse(rawValue) 
+                       : rawValue;
+    } catch (e) {
+        displayValue = rawValue; 
+    }
+
+    // Now, apply masking to the processed displayValue
+    const maskedDisplayValue = maskSKKeys(displayValue);
+
+    // If maskedDisplayValue is a string (e.g. "N/A", or a simple string that was passed through maskSKKeys)
+    // and it's one of our special messages, render as Text.
+    if (typeof maskedDisplayValue === 'string') {
+        if (maskedDisplayValue.startsWith("N/A") || maskedDisplayValue.includes("No fields changed") || maskedDisplayValue.includes("Comment")) {
+            return <Text>{maskedDisplayValue}</Text>;
+        }
+         // If it's some other string that's not an object after masking, render it as text
+        if (!(maskedDisplayValue.startsWith('{') || maskedDisplayValue.startsWith('['))) {
+             return <Text>{maskedDisplayValue}</Text>;
+        }
+        // If it's a string that still looks like JSON (shouldn't happen if maskSKKeys returned an object), try parsing again
+        // This path is unlikely given maskSKKeys behavior.
+        try {
+            displayValue = JSON.parse(maskedDisplayValue); // Re-assign to displayValue for object checks
+        } catch (e) {
+            return <Text>{maskedDisplayValue}</Text>; // Render as text if reparsing fails
+        }
+    } else {
+      displayValue = maskedDisplayValue; // It was an object, use the masked version
+    }
+
+
+    if (typeof displayValue !== 'object' || displayValue === null || Object.keys(displayValue).length === 0) {
+        return <Text>{typeof displayValue === 'string' ? displayValue : "N/A"}</Text>;
+    }
+
+    if (isKeyTable) {
+      const changedKeys = Object.keys(displayValue); // use the (potentially) masked displayValue
+      const knownKeyFields = ['token', 'spend', 'max_budget'];
+      
+      const onlyKnownFieldsChanged = changedKeys.every(key => knownKeyFields.includes(key) || displayValue[key] === "N/A");
+
+      if (onlyKnownFieldsChanged && changedKeys.length > 0 && !displayValue["No differing fields detected in 'before' state"] && !displayValue["No differing fields detected in 'updated' state"] && !displayValue["No fields changed"] && !displayValue["Comment"]) {
+        return (
+          <div>
+            {/* Access properties from the (potentially) masked displayValue */}
+            {changedKeys.includes('token') && <p><strong>Token:</strong> {displayValue.token || 'N/A'}</p>}
+            {changedKeys.includes('spend') && <p><strong>Spend:</strong> {displayValue.spend !== undefined ? `$${Number(displayValue.spend).toFixed(6)}` : 'N/A'}</p>}
+            {changedKeys.includes('max_budget') && <p><strong>Max Budget:</strong> {displayValue.max_budget !== undefined ? `$${Number(displayValue.max_budget).toFixed(6)}` : 'N/A'}</p>}
+          </div>
+        );
+      } else {
+        const specialMessageKey = Object.keys(displayValue).find(key => 
+            key === "No differing fields detected in 'before' state" || 
+            key === "No differing fields detected in 'updated' state" || 
+            key === "No fields changed" || 
+            key === "Comment"
+        );
+        if (specialMessageKey) {
+           return <Text>{displayValue[specialMessageKey]}</Text>;
+        }
+        // Stringify the (potentially) masked displayValue
+        return <pre className="p-2 bg-gray-50 border rounded text-xs overflow-auto max-h-60">{JSON.stringify(displayValue, null, 2)}</pre>;
+      }
+    }
+    // Stringify the (potentially) masked displayValue
+    return <pre className="p-2 bg-gray-50 border rounded text-xs overflow-auto max-h-60">{JSON.stringify(displayValue, null, 2)}</pre>;
+  };
+
+  return (
+    <>
+      <style>{prismStyleOverride}</style>
+      <div className="-mx-4 p-4 bg-slate-100 border-y border-slate-300">
+        {shouldUseDiffViewer ? (
+          <ReactDiffViewer
+            oldValue={beforeString} // These are already stringified outputs of getDisplayString
+            newValue={updatedString} // which internally called maskSKKeys
+            splitView={false}
+            showDiffOnly={true} 
+            hideLineNumbers={false}
+            disableWordDiff={true}
+            renderContent={highlightSyntax}
+            styles={diffViewerStyles}
+          />
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <h4 className="font-semibold mb-2 text-sm text-slate-700">Before Value:</h4>
+              {renderLegacyValue(action === "deleted" ? (before_value) : before_value, table_name === "LiteLLM_VerificationToken")}
+            </div>
+            <div>
+              <h4 className="font-semibold mb-2 text-sm text-slate-700">Updated Value:</h4>
+              {renderLegacyValue(action === "created" ? (updated_values) : updated_values, table_name === "LiteLLM_VerificationToken")}
+            </div>
+          </div>
+        )}
+      </div>
+    </>
+  );
+});
+AuditLogRowExpansionPanel.displayName = 'AuditLogRowExpansionPanel'; // Optional: for better debugging
+
 export default function AuditLogs({
   userID,
   userRole,
@@ -24,7 +285,6 @@ export default function AuditLogs({
   accessToken,
   isActive,
   premiumUser,
-  allTeams,
 }: AuditLogsProps) {
   const [startTime, setStartTime] = useState<string>(
     moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm")
@@ -87,20 +347,6 @@ export default function AuditLogs({
 
   const handleRefresh = () => {
     allLogsQuery.refetch();
-  };
-  
-  const handleFilterChange = (newFilters: Record<string, string>) => {
-    setFilters(newFilters);
-  };
-
-  const handleFilterReset = () => {
-    setFilters({});
-    setSelectedTeamId("");
-    setSelectedKeyHash("");
-    setObjectIdSearch("");
-    setSelectedActionFilter("all");
-    setSelectedTableFilter("all");
-    setClientCurrentPage(1);
   };
 
   const fetchKeyHashForAlias = useCallback(async (keyAlias: string) => {
@@ -258,106 +504,33 @@ export default function AuditLogs({
     return completeFilteredLogs.slice(start, end);
   }, [completeFilteredLogs, clientCurrentPage, pageSize]);
 
+  // renderSubComponent now simply instantiates the memoized component
   const renderSubComponent = useCallback(({ row }: { row: any }) => {
-    const AuditLogRowExpansionPanel = ({ rowData }: { rowData: AuditLogEntry }) => {
-      const { before_value, updated_values, table_name, action } = rowData;
-    
-      const renderValue = (value: Record<string, any>, isKeyTable: boolean) => {
-        if (!value || Object.keys(value).length === 0) return <Text>N/A</Text>;
-
-        if (isKeyTable) {
-          const changedKeys = Object.keys(value);
-          const knownKeyFields = ['token', 'spend', 'max_budget'];
-          
-          const onlyKnownFieldsChanged = changedKeys.every(key => knownKeyFields.includes(key));
-
-          if (onlyKnownFieldsChanged && changedKeys.length > 0) {
-            return (
-              <div>
-                {changedKeys.includes('token') && <p><strong>Token:</strong> {value.token || 'N/A'}</p>}
-                {changedKeys.includes('spend') && <p><strong>Spend:</strong> {value.spend !== undefined ? `$${Number(value.spend).toFixed(6)}` : 'N/A'}</p>}
-                {changedKeys.includes('max_budget') && <p><strong>Max Budget:</strong> {value.max_budget !== undefined ? `$${Number(value.max_budget).toFixed(6)}` : 'N/A'}</p>}
-              </div>
-            );
-          } else {
-            if (value["No differing fields detected in 'before' state"] || value["No differing fields detected in 'updated' state"] || value["No fields changed"]) {
-               return <Text>{value[Object.keys(value)[0]]}</Text> // Display the N/A message string
-            }
-            return <pre className="p-2 bg-gray-50 border rounded text-xs overflow-auto max-h-60">{JSON.stringify(value, null, 2)}</pre>;
-          }
-        }
-        
-        return <pre className="p-2 bg-gray-50 border rounded text-xs overflow-auto max-h-60">{JSON.stringify(value, null, 2)}</pre>;
-      };
-
-      let displayBeforeValue = before_value;
-      let displayUpdatedValue = updated_values;
-
-      if ((action === "updated" || action === "rotated") && before_value && updated_values) {
-        if (table_name === "LiteLLM_TeamTable" || table_name === "LiteLLM_UserTable" || table_name === "LiteLLM_VerificationToken") {
-
-          const changedBefore: Record<string, any> = {};
-          const changedUpdated: Record<string, any> = {};
-          const allKeys = new Set([...Object.keys(before_value), ...Object.keys(updated_values)]);
-
-          allKeys.forEach(key => {
-            const beforeValStr = JSON.stringify(before_value[key]);
-            const updatedValStr = JSON.stringify(updated_values[key]);
-            if (beforeValStr !== updatedValStr) {
-              if (before_value.hasOwnProperty(key)) {
-                 changedBefore[key] = before_value[key];
-              }
-              if (updated_values.hasOwnProperty(key)) {
-                changedUpdated[key] = updated_values[key];
-              }
-            }
-          });
-          
-          Object.keys(before_value).forEach(key => {
-            if (!updated_values.hasOwnProperty(key) && !changedBefore.hasOwnProperty(key)) {
-                changedBefore[key] = before_value[key];
-                changedUpdated[key] = undefined; 
-            }
-          });
-
-          Object.keys(updated_values).forEach(key => {
-            if (!before_value.hasOwnProperty(key) && !changedUpdated.hasOwnProperty(key)) {
-                changedUpdated[key] = updated_values[key];
-                changedBefore[key] = undefined; 
-            }
-          });
-
-          displayBeforeValue = Object.keys(changedBefore).length > 0 ? changedBefore : { "No differing fields detected in 'before' state": "N/A" };
-          displayUpdatedValue = Object.keys(changedUpdated).length > 0 ? changedUpdated : { "No differing fields detected in 'updated' state": "N/A" };
-          
-          if (Object.keys(changedBefore).length === 0 && Object.keys(changedUpdated).length === 0) {
-             displayBeforeValue = {"No fields changed": "N/A"};
-             displayUpdatedValue = {"No fields changed": "N/A"};
-          }
-        }
-      }
-    
-      return (
-        <div className="-mx-4 p-4 bg-slate-100 border-y border-slate-300 grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <h4 className="font-semibold mb-2 text-sm text-slate-700">Before Value:</h4>
-            {renderValue(displayBeforeValue, table_name === "LiteLLM_VerificationToken")}
-          </div>
-          <div>
-            <h4 className="font-semibold mb-2 text-sm text-slate-700">Updated Value:</h4>
-            {renderValue(displayUpdatedValue, table_name === "LiteLLM_VerificationToken")}
-          </div>
-        </div>
-      );
-    };
-
     return <AuditLogRowExpansionPanel rowData={row.original as AuditLogEntry} />;
-  }, []);
+  }, []); // Empty dependency array means this callback itself is stable
 
   if (!premiumUser) {
     return (
-      <div>
-        <Text>This is a LiteLLM Enterprise feature, and requires a valid key to use. Get a trial key <a href="https://litellm.ai/pricing" target="_blank" rel="noopener noreferrer">here</a>.</Text>
+      <div style={{ textAlign: 'center', marginTop: '20px' }}>
+        <Text style={{ display: 'block', marginBottom: '10px' }}>
+          This is a LiteLLM Enterprise feature, and requires a valid key to use. 
+        </Text>
+        <Text style={{ display: 'block', marginBottom: '20px', fontStyle: 'italic' }}>
+          Here&apos;s a preview of what Audit Logs offer:
+        </Text>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img 
+          src="/audit-logs-preview.png"
+          alt="Audit Logs Preview" 
+          style={{ 
+            maxWidth: '100%', 
+            maxHeight: '700px',
+            border: '1px solid #ccc', 
+            borderRadius: '8px',
+            boxShadow: '0 4px 8px rgba(0,0,0,0.1)',
+            margin: '0 auto'
+          }} 
+        />
       </div>
     );
   }
@@ -384,10 +557,10 @@ export default function AuditLogs({
                 <div className="flex items-center">
                   <input
                     type="text"
-                    placeholder="Search by Object ID..."
+                    placeholder="Search by modified key hash..."
                     value={objectIdSearch}
                     onChange={(e) => setObjectIdSearch(e.target.value)}
-                    className="px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    className="w-80 px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   />
                 </div>
                 
