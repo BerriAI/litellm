@@ -640,7 +640,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             and has_tool_call_blocks(messages)
         ):
             if litellm.modify_params:
-                optional_params["tools"] = self._map_tools(
+                optional_params["tools"], _ = self._map_tools(
                     add_dummy_tool(custom_llm_provider="anthropic")
                 )
             else:
