@@ -5857,6 +5857,7 @@ def trim_messages(
             if message["role"] != "tool":
                 break
             tool_messages.append(message)
+        tool_messages.reverse()
         # # Remove the collected tool messages from the original list
         if len(tool_messages):
             messages = messages[: -len(tool_messages)]
