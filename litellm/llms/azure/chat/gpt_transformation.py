@@ -19,6 +19,8 @@ from ....types.llms.openai import AllMessageValues
 from ...base_llm.chat.transformation import BaseConfig
 from ..common_utils import AzureOpenAIError
 
+import re
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
@@ -152,6 +154,14 @@ class AzureOpenAIConfig(BaseConfig):
         api_version: str = "",
     ) -> dict:
         supported_openai_params = self.get_supported_openai_params(model)
+
+        # Check that api_version has a valid format (e.g. 2025-01-01-preview)
+        print("helllo")
+        if not self.is_valid_api_version(api_version):
+            raise UnsupportedParamsError(
+                status_code=400,
+                message=f"Invalid API version format: '{api_version}'. Expected format is 'YYYY-MM-DD-preview' (e.g., 2025-01-01-preview)."
+            )
 
         api_version_times = api_version.split("-")
         api_version_year = api_version_times[0]
@@ -310,3 +320,13 @@ class AzureOpenAIConfig(BaseConfig):
         raise NotImplementedError(
             "Azure OpenAI has custom logic for validating environment, as it uses the OpenAI SDK."
         )
+
+    @staticmethod
+    def is_valid_api_version(api_version: str) -> bool:
+        """
+        Validates that the API version string matches the format: YYYY-MM-DD-preview
+        Example of a valid version: 2025-01-01-preview
+        """
+        pattern = r"^\d{4}-\d{2}-\d{2}-preview$"
+        return re.match(pattern, api_version) is not None
+
