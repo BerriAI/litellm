@@ -52,13 +52,13 @@ pip install litellm==1.72.2
 
 ## TLDR
 
-* **Why upgrade?**
+* **Why Upgrade**
     - /v1/messages API performance improvements (lower latency, higher RPS)
     - Multi instance rate limiting support
     - Full Claude-4 cost tracking & Gemini 2.5 Pro preview
-* **Who must read?**
+* **Who Should Read**
     - Teams using `/v1/messages` API (Claude Code), LiteLLM Rate Limiting
-* **Risk level**
+* **Risk of Upgrade**
     - **Medium**
         - Upgraded `ddtrace==3.8.0`, if you use DataDog tracing this is a medium level risk. We recommend monitoring logs for any issues.
 
