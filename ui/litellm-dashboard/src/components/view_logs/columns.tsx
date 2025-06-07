@@ -431,10 +431,25 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
             aria-label={localExpanded ? "Collapse row" : "Expand row"}
             className="w-6 h-6 flex items-center justify-center focus:outline-none"
           >
-            {localExpanded ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            <svg
+              className={`w-4 h-4 transform transition-transform ${
+                localExpanded ? 'rotate-90' : ''
+              }`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M9 5l7 7-7 7"
+              />
+            </svg>
           </button>
         ) : (
-          <span className="w-6 h-6 flex items-center justify-center text-gray-300">●</span>
+          <span className="w-6 h-6 flex items-center justify-center">●</span>
         );
       };
       return <ExpanderCell />;
