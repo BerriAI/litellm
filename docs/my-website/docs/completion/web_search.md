@@ -24,7 +24,7 @@ Use web search with litellm
 from litellm import completion
 
 response = completion(
-    model="openai/gpt-4o-search-preview",  # See other models in tabs below
+    model="openai/gpt-4o-search-preview",
     messages=[
         {
             "role": "user",
