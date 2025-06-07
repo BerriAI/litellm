@@ -40,7 +40,7 @@ Once the Team is created, you can invite Users to the Team. You can read more ab
 
 Navigate to [http://localhost:4000/ui](http://localhost:4000/ui) and create a new team.
 
-<Image img={require('../../img/litellm_create_team.gif')} />
+<Image img={require('../img/litellm_create_team.gif')} />
 
 ### 2.2 Create a Virtual Key on LiteLLM
 
@@ -48,7 +48,7 @@ Navigate to [http://localhost:4000/ui](http://localhost:4000/ui) and create a ne
 
 LiteLLM allows you to specify what models are available on Open WebUI (by specifying the models the key will have access to).
 
-<Image img={require('../../img/create_key_in_team_oweb.gif')} />
+<Image img={require('../img/create_key_in_team_oweb.gif')} />
 
 ## 3. Connect Open WebUI to LiteLLM
 
@@ -58,7 +58,7 @@ Enter the following details:
 - URL: `http://localhost:4000` (your litellm proxy base url)
 - Key: `your-virtual-key` (the key you created in the previous step)
 
-<Image img={require('../../img/litellm_setup_openweb.gif')} />
+<Image img={require('../img/litellm_setup_openweb.gif')} />
 
 ### 3.1 Test Request
 
@@ -66,7 +66,7 @@ On the top left corner, select models you should only see the models you gave th
 
 Once you selected a model, enter your message content and click on `Submit`
 
-<Image img={require('../../img/basic_litellm.gif')} />
+<Image img={require('../img/basic_litellm.gif')} />
 
 ### 3.2 Tracking Usage & Spend
 
@@ -131,7 +131,7 @@ model_list:
 
 On the models dropdown select `thinking-anthropic-claude-3-7-sonnet`
 
-<Image img={require('../../img/litellm_thinking_openweb.gif')} />
+<Image img={require('../img/litellm_thinking_openweb.gif')} />
 
 ## Additional Resources
 - Running LiteLLM and Open WebUI on Windows Localhost: A Comprehensive Guide [https://www.tanyongsheng.com/note/running-litellm-and-openwebui-on-windows-localhost-a-comprehensive-guide/](https://www.tanyongsheng.com/note/running-litellm-and-openwebui-on-windows-localhost-a-comprehensive-guide/)

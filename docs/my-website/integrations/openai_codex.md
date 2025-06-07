@@ -10,7 +10,7 @@ This guide walks you through connecting OpenAI Codex to LiteLLM. Using LiteLLM w
 - Track spend and usage with LiteLLM's built-in analytics
 - Control model access with virtual keys
 
-<Image img={require('../../img/litellm_codex.gif')} />
+<Image img={require('../img/litellm_codex.gif')} />
 
 ## Quickstart
 
@@ -114,7 +114,7 @@ With everything configured, you can now run Codex with Gemini:
 codex --model gemini-2.0-flash --full-auto
 ```
 
-<Image img={require('../../img/litellm_codex.gif')} />
+<Image img={require('../img/litellm_codex.gif')} />
 
 The `--full-auto` flag allows Codex to automatically generate code without additional prompting.
 
