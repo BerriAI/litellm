@@ -202,13 +202,21 @@ def generic_cost_per_token(
     character_count = 0
     image_count = 0
     video_length_seconds = 0
+    
+    # First, check for provider-specific cache tokens (e.g., Anthropic)
+    provider_cache_read_tokens = getattr(usage, "_cache_read_input_tokens", None)
+    if provider_cache_read_tokens is not None:
+        cache_hit_tokens = provider_cache_read_tokens
+    
     if usage.prompt_tokens_details:
-        cache_hit_tokens = (
-            cast(
-                Optional[int], getattr(usage.prompt_tokens_details, "cached_tokens", 0)
+        # Only use generic cached_tokens if provider-specific ones are not available
+        if cache_hit_tokens == 0:
+            cache_hit_tokens = (
+                cast(
+                    Optional[int], getattr(usage.prompt_tokens_details, "cached_tokens", 0)
+                )
+                or 0
             )
-            or 0
-        )
         text_tokens = (
             cast(
                 Optional[int], getattr(usage.prompt_tokens_details, "text_tokens", None)

@@ -26,6 +26,60 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_toke
 from litellm.types.utils import Usage
 
 
+def test_anthropic_provider_cache_token_priority_over_generic():
+    """
+    Test that provider-specific cache tokens (_cache_read_input_tokens) 
+    are prioritized over generic cached_tokens in prompt_tokens_details.
+    
+    Without the fix, this test would fail because it would use generic cache tokens
+    instead of provider-specific ones.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    
+    model = "claude-3-5-sonnet-20240620"
+    custom_llm_provider = "anthropic"
+    
+    # Create usage object with BOTH provider-specific and generic cache tokens
+    # The provider-specific ones should take priority
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=100,
+        total_tokens=1100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=800,
+            cached_tokens=50,  # Generic cache tokens (should be ignored)
+        ),
+        _cache_read_input_tokens=200,  # Provider-specific cache tokens (should be used)
+        _cache_creation_input_tokens=0,
+    )
+    
+    # Get the cost calculation
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+    
+    # Get model info for expected cost calculation
+    model_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    
+    # Calculate expected costs using provider-specific cache tokens (200, not 50)
+    expected_text_tokens = usage.prompt_tokens - usage._cache_read_input_tokens  # 1000 - 200 = 800
+    expected_prompt_cost = (
+        expected_text_tokens * model_info["input_cost_per_token"] +
+        usage._cache_read_input_tokens * model_info["cache_read_input_token_cost"]
+    )
+    expected_completion_cost = usage.completion_tokens * model_info["output_cost_per_token"]
+    
+    # Assert the costs match expectations (using provider-specific cache tokens)
+    assert round(prompt_cost, 10) == round(expected_prompt_cost, 10), \
+        f"Expected prompt cost {expected_prompt_cost}, got {prompt_cost}. Should use provider-specific cache tokens (200), not generic ones (50)."
+    assert round(completion_cost, 10) == round(expected_completion_cost, 10), \
+        f"Expected completion cost {expected_completion_cost}, got {completion_cost}"
+
+
+
 def test_reasoning_tokens_no_price_set():
     model = "o1-mini"
     custom_llm_provider = "openai"
