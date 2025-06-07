@@ -93,10 +93,17 @@ return results
 """
 
 
+class RateLimitDescriptorRateLimitObject(TypedDict, total=False):
+    requests_per_unit: Optional[int]
+    tokens_per_unit: Optional[int]
+    max_parallel_requests: Optional[int]
+    window_size: Optional[int]
+
+
 class RateLimitDescriptor(TypedDict):
     key: str
     value: str
-    rate_limit: Optional[Dict[str, Optional[int]]]
+    rate_limit: Optional[RateLimitDescriptorRateLimitObject]
 
 
 class RateLimitResponse(TypedDict):
@@ -202,6 +209,22 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return int(result)
 
+    def create_rate_limit_keys(
+        self,
+        key: str,
+        value: str,
+        rate_limit_type: Literal["requests", "tokens"],
+        window_key: str,
+        keys_to_fetch: List[str],
+    ) -> List[str]:
+        """
+        Create the rate limit keys for the given key and value.
+        """
+        counter_key = f"{{{key}:{value}}}:{rate_limit_type}"
+
+        keys_to_fetch.extend([window_key, counter_key])
+        return keys_to_fetch
+
     async def should_rate_limit(
         self,
         descriptors: List[RateLimitDescriptor],
@@ -230,22 +253,29 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             value = descriptor["value"]
             rate_limit = descriptor.get("rate_limit", {}) or {}
             requests_limit = rate_limit.get("requests_per_unit")
-            if requests_limit is None:
-                continue
+            tokens_limit = rate_limit.get("tokens_per_unit")
             window_size = rate_limit.get("window_size") or self.window_size
 
             window_key = f"{{{key}:{value}}}:window"
-            counter_key = f"{{{key}:{value}}}:requests"
 
-            keys_to_fetch.extend([window_key, counter_key])
+            if requests_limit is not None:
+                keys_to_fetch = self.create_rate_limit_keys(
+                    key, value, "requests", window_key, keys_to_fetch
+                )
+            elif tokens_limit is not None:
+                keys_to_fetch = self.create_rate_limit_keys(
+                    key, value, "tokens", window_key, keys_to_fetch
+                )
+            else:
+                continue
+
             key_metadata[window_key] = {
-                "key": key,
-                "value": value,
-                "requests_limit": int(requests_limit),
+                "requests_limit": int(requests_limit)
+                if requests_limit is not None
+                else None,
+                "tokens_limit": int(tokens_limit) if tokens_limit is not None else None,
                 "window_size": int(window_size),
-                "counter_key": counter_key,
             }
-            key_metadata[counter_key] = key_metadata[window_key]
 
         # Batch get all values
         if self.batch_rate_limiter_script is not None:
@@ -260,8 +290,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         for i in range(0, len(cache_values), 2):
             item_code = "OK"
             window_key = keys_to_fetch[i]
-            counter_key = keys_to_fetch[i + 1]
-            window_value = cache_values[i]
             counter_value = cache_values[i + 1]
             requests_limit = key_metadata[window_key]["requests_limit"]
 
