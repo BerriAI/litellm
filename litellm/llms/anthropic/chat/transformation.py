@@ -24,6 +24,7 @@ from litellm.types.llms.anthropic import (
     AnthropicComputerTool,
     AnthropicHostedTools,
     AnthropicInputSchema,
+    AnthropicMcpServerTool,
     AnthropicMessagesTool,
     AnthropicMessagesToolChoice,
     AnthropicSystemMessageContent,
@@ -41,6 +42,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
+    OpenAIMcpServerTool,
     OpenAIWebSearchOptions,
 )
 from litellm.types.utils import CompletionTokensDetailsWrapper
@@ -175,8 +177,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     def _map_tool_helper(
         self, tool: ChatCompletionToolParam
-    ) -> AllAnthropicToolsValues:
+    ) -> Tuple[Optional[AllAnthropicToolsValues], Optional[AnthropicMcpServerTool]]:
         returned_tool: Optional[AllAnthropicToolsValues] = None
+        mcp_server: Optional[AnthropicMcpServerTool] = None
 
         if tool["type"] == "function" or tool["type"] == "custom":
             _input_schema: dict = tool["function"].get(
@@ -239,33 +242,77 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             returned_tool = AnthropicHostedTools(
                 type=tool["type"], name=function_name, **additional_tool_params  # type: ignore
             )
-        if returned_tool is None:
+        elif tool["type"] == "url":  # mcp server tool
+            mcp_server = AnthropicMcpServerTool(**tool)  # type: ignore
+        elif tool["type"] == "mcp":
+            mcp_server = self._map_openai_mcp_server_tool(
+                cast(OpenAIMcpServerTool, tool)
+            )
+        if returned_tool is None and mcp_server is None:
             raise ValueError(f"Unsupported tool type: {tool['type']}")
 
         ## check if cache_control is set in the tool
         _cache_control = tool.get("cache_control", None)
         _cache_control_function = tool.get("function", {}).get("cache_control", None)
-        if _cache_control is not None:
-            returned_tool["cache_control"] = _cache_control
-        elif _cache_control_function is not None and isinstance(
-            _cache_control_function, dict
-        ):
-            returned_tool["cache_control"] = ChatCompletionCachedContent(
-                **_cache_control_function  # type: ignore
+        if returned_tool is not None:
+            if _cache_control is not None:
+                returned_tool["cache_control"] = _cache_control
+            elif _cache_control_function is not None and isinstance(
+                _cache_control_function, dict
+            ):
+                returned_tool["cache_control"] = ChatCompletionCachedContent(
+                    **_cache_control_function  # type: ignore
+                )
+
+        return returned_tool, mcp_server
+
+    def _map_openai_mcp_server_tool(
+        self, tool: OpenAIMcpServerTool
+    ) -> AnthropicMcpServerTool:
+        from litellm.types.llms.anthropic import AnthropicMcpServerToolConfiguration
+
+        allowed_tools = tool.get("allowed_tools", None)
+        tool_configuration: Optional[AnthropicMcpServerToolConfiguration] = None
+        if allowed_tools is not None:
+            tool_configuration = AnthropicMcpServerToolConfiguration(
+                allowed_tools=tool.get("allowed_tools", None),
             )
 
-        return returned_tool
+        headers = tool.get("headers", {})
+        authorization_token: Optional[str] = None
+        if headers is not None:
+            bearer_token = headers.get("Authorization", None)
+            if bearer_token is not None:
+                authorization_token = bearer_token.replace("Bearer ", "")
 
-    def _map_tools(self, tools: List) -> List[AllAnthropicToolsValues]:
+        initial_tool = AnthropicMcpServerTool(
+            type="url",
+            url=tool["server_url"],
+            name=tool["server_label"],
+        )
+
+        if tool_configuration is not None:
+            initial_tool["tool_configuration"] = tool_configuration
+        if authorization_token is not None:
+            initial_tool["authorization_token"] = authorization_token
+        return initial_tool
+
+    def _map_tools(
+        self, tools: List
+    ) -> Tuple[List[AllAnthropicToolsValues], List[AnthropicMcpServerTool]]:
         anthropic_tools = []
+        mcp_servers = []
         for tool in tools:
             if "input_schema" in tool:  # assume in anthropic format
                 anthropic_tools.append(tool)
             else:  # assume openai tool call
-                new_tool = self._map_tool_helper(tool)
+                new_tool, mcp_server_tool = self._map_tool_helper(tool)
 
-                anthropic_tools.append(new_tool)
-        return anthropic_tools
+                if new_tool is not None:
+                    anthropic_tools.append(new_tool)
+                if mcp_server_tool is not None:
+                    mcp_servers.append(mcp_server_tool)
+        return anthropic_tools, mcp_servers
 
     def _map_stop_sequences(
         self, stop: Optional[Union[str, List[str]]]
@@ -389,10 +436,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 optional_params["max_tokens"] = value
             if param == "tools":
                 # check if optional params already has tools
-                tool_value = self._map_tools(value)
+                anthropic_tools, mcp_servers = self._map_tools(value)
                 optional_params = self._add_tools_to_optional_params(
-                    optional_params=optional_params, tools=tool_value
+                    optional_params=optional_params, tools=anthropic_tools
                 )
+                if mcp_servers:
+                    optional_params["mcp_servers"] = mcp_servers
             if param == "tool_choice" or param == "parallel_tool_calls":
                 _tool_choice: Optional[
                     AnthropicMessagesToolChoice
@@ -591,7 +640,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             and has_tool_call_blocks(messages)
         ):
             if litellm.modify_params:
-                optional_params["tools"] = self._map_tools(
+                optional_params["tools"], _ = self._map_tools(
                     add_dummy_tool(custom_llm_provider="anthropic")
                 )
             else:

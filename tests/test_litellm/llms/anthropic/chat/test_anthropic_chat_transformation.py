@@ -118,7 +118,7 @@ def test_map_tool_helper():
 
     tool = {"type": "web_search_20250305", "name": "web_search", "max_uses": 5}
 
-    result = config._map_tool_helper(tool)
+    result, _ = config._map_tool_helper(tool)
     assert result is not None
     assert result["name"] == "web_search"
     assert result["max_uses"] == 5

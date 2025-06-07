@@ -1641,3 +1641,12 @@ class OpenAIRealtimeTurnDetection(TypedDict, total=False):
     silence_duration_ms: int
     threshold: int
     type: str
+
+
+class OpenAIMcpServerTool(TypedDict, total=False):
+    type: Required[Literal["mcp"]]
+    server_label: Required[str]
+    server_url: Required[str]
+    require_approval: str
+    allowed_tools: Optional[List[str]]
+    headers: Optional[Dict[str, str]]
