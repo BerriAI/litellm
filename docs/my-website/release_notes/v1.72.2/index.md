@@ -68,6 +68,22 @@ pip install litellm==1.72.2
 
 ## New Models / Updated Models
 
+### Newly Added Models
+
+| Provider    | Model                                | Context Window | \$ / 1M Input | \$ / 1M Output |
+| ----------- | ------------------------------------ | -------------- | ------------- | -------------- |
+| Anthropic   | claude-4-opus-20250514               | 200K           | \$15.00       | \$75.00        |
+| Anthropic   | claude-4-sonnet-20250514             | 200K           | \$3.00        | \$15.00        |
+| Google      | gemini-2.5-pro-preview-06-05         | 1M             | \$1.25        | \$10.00        |
+| OpenAI      | codex-mini-latest                    | 200K           | \$1.50        | \$6.00         |
+| Cerebras    | qwen-3-32b                           | 128K           | \$0.40        | \$0.80         |
+| SambaNova   | DeepSeek-R1                          | 32K            | \$5.00        | \$7.00         |
+| SambaNova   | DeepSeek-R1-Distill-Llama-70B       | 131K           | \$0.70        | \$1.40         |
+
+
+
+### Model Updates
+
 - **[Anthropic](../../docs/providers/anthropic)**
     - Cost tracking added for new Claude models - [PR](https://github.com/BerriAI/litellm/pull/11339)
         - `claude-4-opus-20250514`
@@ -87,7 +103,6 @@ pip install litellm==1.72.2
     - Cerebras/qwen-3-32b model pricing and context window - [PR](https://github.com/BerriAI/litellm/pull/11373)
 - **[HuggingFace](../../docs/providers/huggingface)**
     - Fixed embeddings using non-default `input_type` - [PR](https://github.com/BerriAI/litellm/pull/11452)
-    - New HuggingFace rerank provider support - [PR](https://github.com/BerriAI/litellm/pull/11438)
 - **[DataRobot](../../docs/providers/datarobot)**
     - New provider integration for enterprise AI workflows - [PR](https://github.com/BerriAI/litellm/pull/10385)
 - **[DeepSeek](../../docs/providers/together_ai)**
@@ -105,6 +120,8 @@ pip install litellm==1.72.2
 - **[Embeddings API](../../docs/embedding/supported_embedding)**
     - Provider-specific optional params handling for embedding calls - [PR](https://github.com/BerriAI/litellm/pull/11346)
     - Proper Sagemaker request attribute usage for embeddings - [PR](https://github.com/BerriAI/litellm/pull/11362)
+- **[Rerank API](../../docs/rerank/supported_rerank)**
+    - New HuggingFace rerank provider support - [PR](https://github.com/BerriAI/litellm/pull/11438)
 
 
 
