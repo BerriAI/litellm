@@ -66,11 +66,7 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                         + CommonProxyErrors.missing_enterprise_package.value
                     )
 
-                if premium_user is not True:
-                    raise Exception(
-                        "Trying to use Llama Guard"
-                        + CommonProxyErrors.not_premium_user.value
-                    )
+                # Premium user checks removed - Llama Guard now available for all users
 
                 llama_guard_object = _ENTERPRISE_LlamaGuard()
                 imported_list.append(llama_guard_object)
@@ -85,11 +81,7 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                         + CommonProxyErrors.missing_enterprise_package.value
                     )
 
-                if premium_user is not True:
-                    raise Exception(
-                        "Trying to use secret hiding"
-                        + CommonProxyErrors.not_premium_user.value
-                    )
+                # Premium user checks removed - secret hiding now available for all users
 
                 _secret_detection_object = _ENTERPRISE_SecretDetection()
                 imported_list.append(_secret_detection_object)
@@ -104,11 +96,7 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                         + CommonProxyErrors.missing_enterprise_package_docker.value
                     )
 
-                if premium_user is not True:
-                    raise Exception(
-                        "Trying to use OpenAI Moderations Check"
-                        + CommonProxyErrors.not_premium_user.value
-                    )
+                # Premium user checks removed - OpenAI Moderations Check now available for all users
 
                 openai_moderations_object = _ENTERPRISE_OpenAI_Moderation()
                 imported_list.append(openai_moderations_object)
@@ -140,11 +128,7 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                         + CommonProxyErrors.missing_enterprise_package_docker.value
                     )
 
-                if premium_user is not True:
-                    raise Exception(
-                        "Trying to use Google Text Moderation"
-                        + CommonProxyErrors.not_premium_user.value
-                    )
+                # Premium user checks removed - Google Text Moderation now available for all users
 
                 google_text_moderation_obj = _ENTERPRISE_GoogleTextModeration()
                 imported_list.append(google_text_moderation_obj)
@@ -159,11 +143,7 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                         + CommonProxyErrors.missing_enterprise_package.value
                     )
 
-                if premium_user is not True:
-                    raise Exception(
-                        "Trying to use Llm Guard"
-                        + CommonProxyErrors.not_premium_user.value
-                    )
+                # Premium user checks removed - LLM Guard now available for all users
 
                 llm_guard_moderation_obj = _ENTERPRISE_LLMGuard()
                 imported_list.append(llm_guard_moderation_obj)
@@ -178,11 +158,7 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                         + CommonProxyErrors.missing_enterprise_package_docker.value
                     )
 
-                if premium_user is not True:
-                    raise Exception(
-                        "Trying to use ENTERPRISE BlockedUser"
-                        + CommonProxyErrors.not_premium_user.value
-                    )
+                # Premium user checks removed - ENTERPRISE BlockedUser now available for all users
 
                 blocked_user_list = _ENTERPRISE_BlockedUserList(
                     prisma_client=prisma_client
@@ -199,11 +175,7 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                         + CommonProxyErrors.missing_enterprise_package_docker.value
                     )
 
-                if premium_user is not True:
-                    raise Exception(
-                        "Trying to use ENTERPRISE BannedKeyword"
-                        + CommonProxyErrors.not_premium_user.value
-                    )
+                # Premium user checks removed - ENTERPRISE BannedKeyword now available for all users
 
                 banned_keywords_obj = _ENTERPRISE_BannedKeywords()
                 imported_list.append(banned_keywords_obj)

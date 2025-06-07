@@ -165,8 +165,7 @@ class CustomGuardrail(CustomLogger):
                 guardrail_config: DynamicGuardrailParams = DynamicGuardrailParams(
                     **guardrail[self.guardrail_name]
                 )
-                if self._validate_premium_user() is not True:
-                    return {}
+                # Premium user checks removed - dynamic guardrail params now available for all users
 
                 # Return the extra_body if it exists, otherwise empty dict
                 return guardrail_config.get("extra_body", {})
@@ -175,15 +174,8 @@ class CustomGuardrail(CustomLogger):
 
     def _validate_premium_user(self) -> bool:
         """
-        Returns True if the user is a premium user
+        Premium user checks removed - always returns True
         """
-        from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
-
-        if premium_user is not True:
-            verbose_logger.warning(
-                f"Trying to use premium guardrail without premium user {CommonProxyErrors.not_premium_user.value}"
-            )
-            return False
         return True
 
     def add_standard_logging_guardrail_information_to_request_data(

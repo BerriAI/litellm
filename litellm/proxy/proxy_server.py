@@ -416,7 +416,7 @@ except ImportError:
 
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
 _license_check = LicenseCheck()
-premium_user: bool = _license_check.is_premium()
+premium_user: bool = True  # Premium user checks removed
 global_max_parallel_request_retries_env: Optional[str] = os.getenv(
     "LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES"
 )
@@ -446,15 +446,11 @@ ui_message += "\n\n💸 [```LiteLLM Model Cost Map```](https://models.litellm.ai
 custom_swagger_message = "[**Customize Swagger Docs**](https://docs.litellm.ai/docs/proxy/enterprise#swagger-docs---custom-routes--branding)"
 
 ### CUSTOM BRANDING [ENTERPRISE FEATURE] ###
-_title = os.getenv("DOCS_TITLE", "LiteLLM API") if premium_user else "LiteLLM API"
-_description = (
-    os.getenv(
-        "DOCS_DESCRIPTION",
-        f"Enterprise Edition \n\nProxy Server to call 100+ LLMs in the OpenAI format. {custom_swagger_message}\n\n{ui_message}",
-    )
-    if premium_user
-    else f"Proxy Server to call 100+ LLMs in the OpenAI format. {custom_swagger_message}\n\n{ui_message}"
-)
+_title = os.getenv("DOCS_TITLE", "LiteLLM API")  # Premium user checks removed - custom branding now available for all users
+_description = os.getenv(
+    "DOCS_DESCRIPTION",
+    f"Enterprise Edition \n\nProxy Server to call 100+ LLMs in the OpenAI format. {custom_swagger_message}\n\n{ui_message}",
+)  # Premium user checks removed - enterprise description now available for all users
 
 
 def cleanup_router_config_variables():
@@ -516,8 +512,7 @@ async def proxy_startup_event(app: FastAPI):
             premium_user
         )
     )
-    if premium_user is False:
-        premium_user = _license_check.is_premium()
+    # Premium user checks removed - always True
 
     ## CHECK MASTER KEY IN ENVIRONMENT ##
     master_key = get_secret_str("LITELLM_MASTER_KEY")
@@ -1624,10 +1619,7 @@ class ProxyConfig:
             for key, value in environment_variables.items():
                 os.environ[key] = str(get_secret(secret_name=key, default_value=value))
 
-            # check if litellm_license in general_settings
-            if "LITELLM_LICENSE" in environment_variables:
-                _license_check.license_str = os.getenv("LITELLM_LICENSE", None)
-                premium_user = _license_check.is_premium()
+            # Premium user checks removed - always True
 
         ## Callback settings
         callback_settings = config.get("callback_settings", None)
@@ -1931,10 +1923,7 @@ class ProxyConfig:
             )  # can be either ["admin_only" or "all"]
             ### ALLOWED IP ###
             allowed_ips = general_settings.get("allowed_ips", None)
-            if allowed_ips is not None and premium_user is False:
-                raise ValueError(
-                    "allowed_ips is an Enterprise Feature. Please add a valid LITELLM_LICENSE to your envionment."
-                )
+            # Premium user checks removed - allowed_ips now available for all users
             ## BUDGET RESCHEDULER ##
             proxy_budget_rescheduler_min_time = general_settings.get(
                 "proxy_budget_rescheduler_min_time", proxy_budget_rescheduler_min_time
@@ -1968,20 +1957,9 @@ class ProxyConfig:
                     for role_permission in rbac_role_permissions
                 ]
 
-            ## check if user has set a premium feature in general_settings
-            if (
-                general_settings.get("enforced_params") is not None
-                and premium_user is not True
-            ):
-                raise ValueError(
-                    "Trying to use `enforced_params`"
-                    + CommonProxyErrors.not_premium_user.value
-                )
+            # Premium user checks removed - enforced_params now available for all users
 
-            # check if litellm_license in general_settings
-            if "litellm_license" in general_settings:
-                _license_check.license_str = general_settings["litellm_license"]
-                premium_user = _license_check.is_premium()
+            # Premium user checks removed - always True
 
         router_params: dict = {
             "cache_responses": litellm.cache
@@ -2200,12 +2178,11 @@ class ProxyConfig:
             model.model_info["id"] = _id
             model.model_info["db_model"] = True
 
-        if premium_user is True:
-            # seeing "created_at", "updated_at", "created_by", "updated_by" is a LiteLLM Enterprise Feature
-            model.model_info["created_at"] = getattr(model, "created_at", None)
-            model.model_info["updated_at"] = getattr(model, "updated_at", None)
-            model.model_info["created_by"] = getattr(model, "created_by", None)
-            model.model_info["updated_by"] = getattr(model, "updated_by", None)
+        # Premium user checks removed - model metadata now available for all users
+        model.model_info["created_at"] = getattr(model, "created_at", None)
+        model.model_info["updated_at"] = getattr(model, "updated_at", None)
+        model.model_info["created_by"] = getattr(model, "created_by", None)
+        model.model_info["updated_by"] = getattr(model, "updated_by", None)
 
         if model.model_info is not None and isinstance(model.model_info, dict):
             if "id" not in model.model_info:

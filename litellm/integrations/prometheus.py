@@ -38,17 +38,7 @@ class PrometheusLogger(CustomLogger):
         try:
             from prometheus_client import Counter, Gauge, Histogram
 
-            from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
-
-            if premium_user is not True:
-                verbose_logger.warning(
-                    f"🚨🚨🚨 Prometheus Metrics is on LiteLLM Enterprise\n🚨 {CommonProxyErrors.not_premium_user.value}"
-                )
-                self.litellm_not_a_premium_user_metric = Counter(
-                    name="litellm_not_a_premium_user_metric",
-                    documentation=f"🚨🚨🚨 Prometheus Metrics is on LiteLLM Enterprise. 🚨 {CommonProxyErrors.not_premium_user.value}",
-                )
-                return
+            # Premium user checks removed - Prometheus metrics now available for all users
 
             self.litellm_proxy_failed_requests_metric = Counter(
                 name="litellm_proxy_failed_requests_metric",
@@ -1817,10 +1807,7 @@ class PrometheusLogger(CustomLogger):
         from litellm.proxy._types import CommonProxyErrors
         from litellm.proxy.proxy_server import app
 
-        if premium_user is not True:
-            verbose_proxy_logger.warning(
-                f"Prometheus metrics are only available for premium users. {CommonProxyErrors.not_premium_user.value}"
-            )
+        # Premium user checks removed - Prometheus metrics now available for all users
 
         # Create metrics ASGI app
         metrics_app = make_asgi_app()

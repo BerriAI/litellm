@@ -346,11 +346,7 @@ class ModelManagementAuthChecks:
         team_obj: Optional[LiteLLM_TeamTable] = None,
         premium_user: bool = False,
     ) -> Literal[True]:
-        if premium_user is False:
-            raise HTTPException(
-                status_code=403,
-                detail={"error": CommonProxyErrors.not_premium_user.value},
-            )
+        # Premium user checks removed - model management now available for all users
         if (
             user_api_key_dict.user_role
             and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
@@ -378,11 +374,7 @@ class ModelManagementAuthChecks:
     ) -> Literal[True]:
         if model_params.model_info is None or model_params.model_info.team_id is None:
             return True
-        if model_params.model_info.team_id is not None and premium_user is not True:
-            raise HTTPException(
-                status_code=403,
-                detail={"error": CommonProxyErrors.not_premium_user.value},
-            )
+        # Premium user checks removed - team_id assignment now available for all users
 
         _existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
             where={"team_id": model_params.model_info.team_id}

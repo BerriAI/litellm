@@ -166,11 +166,7 @@ class RouteChecks:
         from litellm.proxy.proxy_server import general_settings, premium_user
 
         if "admin_only_routes" in general_settings:
-            if premium_user is not True:
-                verbose_proxy_logger.error(
-                    f"Trying to use 'admin_only_routes' this is an Enterprise only feature. {CommonProxyErrors.not_premium_user.value}"
-                )
-                return
+            # Premium user checks removed - admin_only_routes now available for all users
             if route in general_settings["admin_only_routes"]:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,

@@ -677,25 +677,24 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     ## [Enterprise Only]
     # Add User-IP Address
     requester_ip_address = ""
-    if premium_user is True:
-        # Only set the IP Address for Enterprise Users
+    # Premium user checks removed - IP address tracking now available for all users
 
-        # logic for tracking IP Address
-        if (
-            general_settings is not None
-            and general_settings.get("use_x_forwarded_for") is True
-            and request is not None
-            and hasattr(request, "headers")
-            and "x-forwarded-for" in request.headers
-        ):
-            requester_ip_address = request.headers["x-forwarded-for"]
-        elif (
-            request is not None
-            and hasattr(request, "client")
-            and hasattr(request.client, "host")
-            and request.client is not None
-        ):
-            requester_ip_address = request.client.host
+    # logic for tracking IP Address
+    if (
+        general_settings is not None
+        and general_settings.get("use_x_forwarded_for") is True
+        and request is not None
+        and hasattr(request, "headers")
+        and "x-forwarded-for" in request.headers
+    ):
+        requester_ip_address = request.headers["x-forwarded-for"]
+    elif (
+        request is not None
+        and hasattr(request, "client")
+        and hasattr(request.client, "host")
+        and request.client is not None
+    ):
+        requester_ip_address = request.client.host
     data[_metadata_variable_name]["requester_ip_address"] = requester_ip_address
 
     # Check if using tag based routing
@@ -839,10 +838,7 @@ def _enforced_params_check(
     )
     if enforced_params is None:
         return True
-    if enforced_params is not None and premium_user is not True:
-        raise ValueError(
-            f"Enforced Params is an Enterprise feature. Enforced Params: {enforced_params}. {CommonProxyErrors.not_premium_user.value}"
-        )
+    # Premium user checks removed - enforced params now available for all users
 
     for enforced_param in enforced_params:
         _enforced_params = enforced_param.split(".")
@@ -880,12 +876,10 @@ def _add_guardrails_from_key_or_team_metadata(
         metadata_variable_name: The name of the metadata field in data
 
     """
-    from litellm.proxy.utils import _premium_user_check
+    # Premium user checks removed - guardrails now available for all users
 
     for _management_object_metadata in [key_metadata, team_metadata]:
         if _management_object_metadata and "guardrails" in _management_object_metadata:
-            if len(_management_object_metadata["guardrails"]) > 0:
-                _premium_user_check()
 
             data[metadata_variable_name]["guardrails"] = _management_object_metadata[
                 "guardrails"

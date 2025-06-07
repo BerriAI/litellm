@@ -890,12 +890,7 @@ async def initialize_pass_through_endpoints(pass_through_endpoints: list):
         _auth = endpoint.get("auth", None)
         _dependencies = None
         if _auth is not None and str(_auth).lower() == "true":
-            if premium_user is not True:
-                raise ValueError(
-                    "Error Setting Authentication on Pass Through Endpoint: {}".format(
-                        CommonProxyErrors.not_premium_user.value
-                    )
-                )
+            # Premium user checks removed - authentication on pass through endpoints now available for all users
             _dependencies = [Depends(user_api_key_auth)]
             LiteLLMRoutes.openai_routes.value.append(_path)
 

@@ -67,8 +67,7 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
 
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
-    if premium_user is not True:
-        return
+    # Premium user checks removed - audit logs now available for all users
 
     if litellm.store_audit_logs is not True:
         return

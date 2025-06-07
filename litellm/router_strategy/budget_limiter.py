@@ -797,12 +797,7 @@ class RouterBudgetLimiting(CustomLogger):
     def _init_tag_budgets(self):
         if litellm.tag_budget_config is None:
             return
-        from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
-
-        if premium_user is not True:
-            raise ValueError(
-                f"Tag budgets are an Enterprise only feature, {CommonProxyErrors.not_premium_user}"
-            )
+        # Premium user checks removed - tag budgets now available for all users
 
         if self.tag_budget_config is None:
             self.tag_budget_config = {}

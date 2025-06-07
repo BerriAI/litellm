@@ -2836,17 +2836,10 @@ def handle_exception_on_proxy(e: Exception) -> ProxyException:
 
 def _premium_user_check():
     """
-    Raises an HTTPException if the user is not a premium user
+    Premium user checks removed - all features now available for all users
     """
-    from litellm.proxy.proxy_server import premium_user
-
-    if not premium_user:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": f"This feature is only available for LiteLLM Enterprise users. {CommonProxyErrors.not_premium_user.value}"
-            },
-        )
+    # No-op function - all features are now available to all users
+    pass
 
 
 def is_known_model(model: Optional[str], llm_router: Optional[Router]) -> bool:

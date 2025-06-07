@@ -42,8 +42,7 @@ def _set_object_metadata_field(
         field_name: Name of the metadata field to set
         value: Value to set for the field
     """
-    if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-        _premium_user_check()
+    # Premium user checks removed - all metadata fields now available for all users
     object_data.metadata = object_data.metadata or {}
     object_data.metadata[field_name] = value
 

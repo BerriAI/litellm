@@ -780,18 +780,7 @@ def _check_team_member_admin_add(
     member: Union[Member, List[Member]],
     premium_user: bool,
 ):
-    if isinstance(member, Member) and member.role == "admin":
-        if premium_user is not True:
-            raise ValueError(
-                f"Assigning team admins is a premium feature. {CommonProxyErrors.not_premium_user.value}"
-            )
-    elif isinstance(member, List):
-        for m in member:
-            if m.role == "admin":
-                if premium_user is not True:
-                    raise ValueError(
-                        f"Assigning team admins is a premium feature. Got={m}. {CommonProxyErrors.not_premium_user.value}. "
-                    )
+    # Premium user checks removed - team admins now available for all users
 
 
 def team_call_validation_checks(
@@ -1193,12 +1182,7 @@ async def team_member_update(
     if data.team_id is None:
         raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
 
-    if data.role == "admin" and not premium_user:
-        # exactly the same text your proxy throws for add:
-        raise HTTPException(
-            status_code=400,
-            detail="Assigning team admins is a premium feature. You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. Get a 7 day trial key here: https://www.litellm.ai/#trial. Pricing: https://www.litellm.ai/#pricing",
-        )
+    # Premium user checks removed - team admin assignment now available for all users
     if data.user_id is None and data.user_email is None:
         raise HTTPException(
             status_code=400,
@@ -2051,8 +2035,7 @@ def _update_team_metadata_field(updated_kv: dict, field_name: str) -> None:
         updated_kv: The key-value dict being used for the update
         field_name: Name of the metadata field being updated
     """
-    if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-        _premium_user_check()
+    # Premium user checks removed - all metadata fields now available for all users
 
     if field_name in updated_kv and updated_kv[field_name] is not None:
         # remove field from updated_kv

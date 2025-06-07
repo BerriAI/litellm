@@ -22,7 +22,7 @@ else:
 
 class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
     def __init__(self, bucket_name: Optional[str] = None) -> None:
-        from litellm.proxy.proxy_server import premium_user
+        # Premium user checks removed - GCS bucket logging now available for all users
 
         super().__init__(bucket_name=bucket_name)
 
@@ -41,19 +41,9 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         )
         AdditionalLoggingUtils.__init__(self)
 
-        if premium_user is not True:
-            raise ValueError(
-                f"GCS Bucket logging is a premium feature. Please upgrade to use it. {CommonProxyErrors.not_premium_user.value}"
-            )
-
     #### ASYNC ####
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        from litellm.proxy.proxy_server import premium_user
-
-        if premium_user is not True:
-            raise ValueError(
-                f"GCS Bucket logging is a premium feature. Please upgrade to use it. {CommonProxyErrors.not_premium_user.value}"
-            )
+        # Premium user checks removed - GCS bucket logging now available for all users
         try:
             verbose_logger.debug(
                 "GCS Logger: async_log_success_event logging kwargs: %s, response_obj: %s",

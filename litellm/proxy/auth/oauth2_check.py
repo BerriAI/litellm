@@ -26,11 +26,7 @@ async def check_oauth2_token(token: str) -> UserAPIKeyAuth:
     from litellm.proxy._types import CommonProxyErrors
     from litellm.proxy.proxy_server import premium_user
 
-    if premium_user is not True:
-        raise ValueError(
-            "Oauth2 token validation is only available for premium users"
-            + CommonProxyErrors.not_premium_user.value
-        )
+    # Premium user checks removed - OAuth2 token validation now available for all users
 
     verbose_proxy_logger.debug("Oauth2 token validation for token=%s", token)
     # Get the token info endpoint from environment variable

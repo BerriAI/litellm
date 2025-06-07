@@ -562,10 +562,7 @@ async def generate_key_fn(  # noqa: PLR0915
         if "tags" in data_json:
             from litellm.proxy.proxy_server import premium_user
 
-            if premium_user is not True and data_json["tags"] is not None:
-                raise ValueError(
-                    f"Only premium users can add tags to keys. {CommonProxyErrors.not_premium_user.value}"
-                )
+            # Premium user checks removed - tags on keys now available for all users
 
             _metadata = data_json.get("metadata")
             if not _metadata:
@@ -1280,15 +1277,7 @@ def _check_model_access_group(
         if llm_router._is_model_access_group_for_wildcard_route(
             model_access_group=model
         ):
-            if not premium_user:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={
-                        "error": "Setting a model access group on a wildcard model is only available for LiteLLM Enterprise users.{}".format(
-                            CommonProxyErrors.not_premium_user.value
-                        )
-                    },
-                )
+            # Premium user checks removed - model access groups on wildcard models now available for all users
 
     return True
 
@@ -1469,13 +1458,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
         if isinstance(saved_token["metadata"], str):
             saved_token["metadata"] = json.loads(saved_token["metadata"])
         if isinstance(saved_token["permissions"], str):
-            if (
-                "get_spend_routes" in saved_token["permissions"]
-                and premium_user is not True
-            ):
-                raise ValueError(
-                    "get_spend_routes permission is only available for LiteLLM Enterprise users"
-                )
+            # Premium user checks removed - get_spend_routes permission now available for all users
 
             saved_token["permissions"] = json.loads(saved_token["permissions"])
         if isinstance(saved_token["model_max_budget"], str):
@@ -1897,12 +1880,7 @@ async def regenerate_key_fn(
 
         is_master_key_regeneration = data and data.new_master_key is not None
 
-        if (
-            premium_user is not True and not is_master_key_regeneration
-        ):  # allow master key regeneration for non-premium users
-            raise ValueError(
-                f"Regenerating Virtual Keys is an Enterprise feature, {CommonProxyErrors.not_premium_user.value}"
-            )
+        # Premium user checks removed - regenerating virtual keys now available for all users
 
         # Check if key exists, raise exception if key is not in the DB
         key = data.key if data and data.key else key
@@ -2914,10 +2892,7 @@ def validate_model_max_budget(model_max_budget: Optional[Dict]) -> None:
         if model_max_budget is not None:
             from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
 
-            if premium_user is not True:
-                raise ValueError(
-                    f"You must have an enterprise license to set model_max_budget. {CommonProxyErrors.not_premium_user.value}"
-                )
+            # Premium user checks removed - model_max_budget now available for all users
             for _model, _budget_info in model_max_budget.items():
                 assert isinstance(_model, str)
 
