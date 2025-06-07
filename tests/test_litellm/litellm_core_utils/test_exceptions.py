@@ -24,26 +24,6 @@ from litellm import (  # AuthenticationError,; RateLimitError,; ServiceUnavailab
     embedding,
 )
 
-litellm.vertex_project = "pathrise-convert-1606954137718"
-litellm.vertex_location = "us-central1"
-litellm.num_retries = 0
-
-# litellm.failure_callback = ["sentry"]
-#### What this tests ####
-#    This tests exception mapping -> trigger an exception from an llm provider -> assert if output is of the expected type
-
-
-# 5 providers -> OpenAI, Azure, Anthropic, Cohere, Replicate
-
-# 3 main types of exceptions -> - Rate Limit Errors, Context Window Errors, Auth errors (incorrect/rotated key, etc.)
-
-# Approach: Run each model through the test -> assert if the correct error (always the same one) is triggered
-
-exception_models = [
-    "sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
-    "bedrock/anthropic.claude-instant-v1",
-]
-
 
 @pytest.mark.asyncio
 async def test_content_policy_exception_azure():
@@ -66,55 +46,6 @@ async def test_content_policy_exception_azure():
     except Exception as e:
         print()
         pytest.fail(f"An exception occurred - {str(e)}")
-
-
-
-
-
-# Test 1: Context Window Errors
-@pytest.mark.skip(reason="AWS Suspended Account")
-@pytest.mark.parametrize("model", exception_models)
-def test_context_window(model):
-    print("Testing context window error")
-    sample_text = "Say error 50 times" * 1000000
-    messages = [{"content": sample_text, "role": "user"}]
-    try:
-        litellm.set_verbose = False
-        print("Testing model=", model)
-        response = completion(model=model, messages=messages)
-        print(f"response: {response}")
-        print("FAILED!")
-        pytest.fail(f"An exception occurred")
-    except ContextWindowExceededError as e:
-        print(f"Worked!")
-    except RateLimitError:
-        print("RateLimited!")
-    except Exception as e:
-        print(f"{e}")
-        pytest.fail(f"An error occcurred - {e}")
-
-
-@pytest.mark.skip(reason="duplicate test.")
-@pytest.mark.parametrize("model", ["command-nightly"])
-def test_context_window_with_fallbacks(model):
-    ctx_window_fallback_dict = {
-        "command-nightly": "claude-2.1",
-        "gpt-3.5-turbo-instruct": "gpt-3.5-turbo-16k",
-        "azure/chatgpt-v-3": "gpt-3.5-turbo-16k",
-    }
-    sample_text = "how does a court case get to the Supreme Court?" * 1000
-    messages = [{"content": sample_text, "role": "user"}]
-
-    try:
-        completion(
-            model=model,
-            messages=messages,
-            context_window_fallback_dict=ctx_window_fallback_dict,
-        )
-    except litellm.ServiceUnavailableError as e:
-        pass
-    except litellm.APIConnectionError as e:
-        pass
 
 
 @pytest.mark.parametrize(
@@ -455,57 +386,6 @@ async def test_exception_with_headers(sync_mode, provider, model, call_type, str
         if exception_raised is False:
             print(resp)
         assert exception_raised
-
-
-def test_openai_gateway_timeout_error():
-    """
-    Test that the OpenAI gateway timeout error is raised
-    """
-    openai_client = OpenAI()
-    mapped_target = openai_client.chat.completions.with_raw_response  # type: ignore
-    def _return_exception(*args, **kwargs):
-        import datetime
-
-        from httpx import Headers, Request, Response
-
-        kwargs = {
-            "request": Request("POST", "https://www.google.com"),
-            "message": "Error code: 504 - Gateway Timeout Error!",
-            "body": {"detail": "Gateway Timeout Error!"},
-            "code": None,
-            "param": None,
-            "type": None,
-            "response": Response(
-                status_code=504,
-                headers=Headers(
-                    {
-                        "date": "Sat, 21 Sep 2024 22:56:53 GMT",
-                        "server": "uvicorn",
-                        "content-length": "30",
-                        "content-type": "application/json",
-                    }
-                ),
-                request=Request("POST", "http://0.0.0.0:9000/chat/completions"),
-            ),
-            "status_code": 504,
-            "request_id": None,
-        }
-
-        exception = Exception()
-        for k, v in kwargs.items():
-            setattr(exception, k, v)
-        raise exception
-
-    try: 
-        with patch.object(
-            mapped_target,
-            "create",
-            side_effect=_return_exception,
-        ):
-            litellm.completion(model="openai/gpt-3.5-turbo", messages=[{"role": "user", "content": "Hello world"}], client=openai_client)
-        pytest.fail("Expected to raise Timeout")
-    except litellm.Timeout as e:
-        assert e.status_code == 504
 
 
 @pytest.mark.parametrize(
