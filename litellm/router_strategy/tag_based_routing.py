@@ -33,13 +33,6 @@ def is_valid_deployment_tag(
             request_tags,
         )
         return True
-    elif "default" in deployment_tags:
-        verbose_logger.debug(
-            "adding default deployment with tags: %s, request tags: %s",
-            deployment_tags,
-            request_tags,
-        )
-        return True
     return False
 
 
@@ -76,6 +69,7 @@ async def get_deployments_for_tag(
         request_tags = metadata.get("tags")
 
         new_healthy_deployments = []
+        default_deployments = []
         if request_tags:
             verbose_logger.debug(
                 "get_deployments_for_tag routing: router_keys: %s", request_tags
@@ -98,12 +92,15 @@ async def get_deployments_for_tag(
                 if is_valid_deployment_tag(deployment_tags, request_tags):
                     new_healthy_deployments.append(deployment)
 
-            if len(new_healthy_deployments) == 0:
+                if "default" in deployment_tags:
+                    default_deployments.append(deployment)
+
+            if len(new_healthy_deployments) == 0 and len(default_deployments) == 0:
                 raise ValueError(
                     f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={model} and tags={request_tags}"
                 )
 
-            return new_healthy_deployments
+            return new_healthy_deployments if len(new_healthy_deployments) > 0 else default_deployments
 
     # for Untagged requests use default deployments if set
     _default_deployments_with_tags = []
