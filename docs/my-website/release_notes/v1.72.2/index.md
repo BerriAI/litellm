@@ -58,31 +58,31 @@ pip install litellm==1.72.2
 
 ## New Models / Updated Models
 
-- **[DataRobot](../../docs/providers/datarobot)**
-    - New provider integration for enterprise AI workflows - [PR](https://github.com/BerriAI/litellm/pull/10385)
 - **[Anthropic](../../docs/providers/anthropic)**
-    - Claude 4 Sonnet & Opus model support - [PR](https://github.com/BerriAI/litellm/pull/11339)
-    - Document content type support for file URLs - [PR](https://github.com/BerriAI/litellm/pull/11387)
-    - Token tracking for Passthrough Batch API calls - [PR](https://github.com/BerriAI/litellm/pull/11388)
-- **[DeepSeek](../../docs/providers/together_ai)**
-    - DeepSeek R1 family model configuration via Together AI - [PR](https://github.com/BerriAI/litellm/pull/11394)
-    - DeepSeek R1 pricing and context window configuration - [PR](https://github.com/BerriAI/litellm/pull/11339)
+    - Cost tracking added for new Claude models - [PR](https://github.com/BerriAI/litellm/pull/11339)
+        - `claude-4-opus-20250514`
+        - `claude-4-sonnet-20250514`
 - **[Google AI Studio](../../docs/providers/gemini)**
     - Google Gemini 2.5 Pro Preview 06-05 support - [PR](https://github.com/BerriAI/litellm/pull/11447)
     - Gemini streaming thinking content parsing with `reasoning_content` - [PR](https://github.com/BerriAI/litellm/pull/11298)
     - Support for no reasoning option for Gemini models - [PR](https://github.com/BerriAI/litellm/pull/11393)
     - URL context support for Gemini models - [PR](https://github.com/BerriAI/litellm/pull/11351)
     - Gemini embeddings-001 model prices and context window - [PR](https://github.com/BerriAI/litellm/pull/11332)
-- **[Cerebras](../../docs/providers/cerebras)**
-    - Cerebras/qwen-3-32b model pricing and context window - [PR](https://github.com/BerriAI/litellm/pull/11373)
 - **[OpenAI](../../docs/providers/openai)**
     - codex-mini-latest model support - [PR](https://github.com/BerriAI/litellm/pull/11492)
 - **[Vertex AI](../../docs/providers/vertex)**
     - Cache token tracking on streaming calls - [PR](https://github.com/BerriAI/litellm/pull/11387)
     - Return response_id matching upstream response ID for stream and non-stream - [PR](https://github.com/BerriAI/litellm/pull/11456)
+- **[Cerebras](../../docs/providers/cerebras)**
+    - Cerebras/qwen-3-32b model pricing and context window - [PR](https://github.com/BerriAI/litellm/pull/11373)
 - **[HuggingFace](../../docs/providers/huggingface)**
     - Fixed embeddings using non-default `input_type` - [PR](https://github.com/BerriAI/litellm/pull/11452)
     - New HuggingFace rerank provider support - [PR](https://github.com/BerriAI/litellm/pull/11438)
+- **[DataRobot](../../docs/providers/datarobot)**
+    - New provider integration for enterprise AI workflows - [PR](https://github.com/BerriAI/litellm/pull/10385)
+- **[DeepSeek](../../docs/providers/together_ai)**
+    - DeepSeek R1 family model configuration via Together AI - [PR](https://github.com/BerriAI/litellm/pull/11394)
+    - DeepSeek R1 pricing and context window configuration - [PR](https://github.com/BerriAI/litellm/pull/11339)
 
 ## LLM API Endpoints
 
@@ -95,6 +95,12 @@ pip install litellm==1.72.2
 - **[Embeddings API](../../docs/embedding/supported_embedding)**
     - Provider-specific optional params handling for embedding calls - [PR](https://github.com/BerriAI/litellm/pull/11346)
     - Proper Sagemaker request attribute usage for embeddings - [PR](https://github.com/BerriAI/litellm/pull/11362)
+
+
+
+## Spend Tracking
+
+- Added token tracking for anthropic batch calls via /anthropic passthrough route- [PR](https://github.com/BerriAI/litellm/pull/11388)
 
 ## Management Endpoints / UI
 
@@ -145,6 +151,8 @@ pip install litellm==1.72.2
 ## Bug Fixes
 
 - **LLM API Fixes**
+    - Anthropic: Fix regression when passing file url's to the 'file_id' parameter - [PR](https://github.com/BerriAI/litellm/pull/11387)
+    - Vertex AI: Fix Vertex AI any_of issues for Description and Default. - [PR](https://github.com/BerriAI/litellm/issues/11383) 
     - Fix transcription model name mapping - [PR](https://github.com/BerriAI/litellm/pull/11333)
     - Fix None values in usage field for gpt-image-1 model responses - [PR](https://github.com/BerriAI/litellm/pull/11448)
     - Fix _transform_responses_api_content_to_chat_completion_content doesn't support file content type - [PR](https://github.com/BerriAI/litellm/pull/11494)
