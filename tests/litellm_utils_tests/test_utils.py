@@ -1,4 +1,5 @@
 import copy
+import logging
 import sys
 import time
 from datetime import datetime
@@ -280,6 +281,53 @@ def test_trimming_with_model_cost_max_input_tokens(model):
         get_token_count(trimmed_messages, model=model)
         < litellm.model_cost[model]["max_input_tokens"]
     )
+
+
+def test_trimming_with_untokenizable_field(caplog: pytest.LogCaptureFixture) -> None:
+    from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
+
+    messages = [
+        {
+            "role": "system",
+            "content": "You are a helpful assistant.",
+        },
+        {
+            "role": "user",
+            "content": "What's the weather like in San Francisco?",
+            # non-string values will cause the tokenizer to raise an exception
+            "user_id": 123,
+        },
+        Message(
+            content=None,
+            role="assistant",
+            tool_calls=[
+                ChatCompletionMessageToolCall(
+                    function=Function(
+                        arguments='{"location": "San Francisco, CA", "unit": "celsius"}',
+                        name="get_current_weather",
+                    ),
+                    id="call_G11shFcS024xEKjiAOSt6Tc9",
+                    type="function",
+                ),
+            ],
+            function_call=None,
+        ),
+        {
+            "tool_call_id": "call_G11shFcS024xEKjiAOSt6Tc9",
+            "role": "tool",
+            "name": "get_current_weather",
+            "content": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}',
+        },
+    ]
+
+    # trim_messages() catches the exception raised by the tokenizer and logs an error
+    with caplog.at_level(level=logging.ERROR, logger="LiteLLM"):
+        trimmed_messages = trim_messages(messages, max_tokens=999)
+
+    assert trimmed_messages == messages
+
+    assert len(caplog.records) >= 1
+    assert "Got exception while token trimming" in caplog.text
 
 
 def test_aget_valid_models():
