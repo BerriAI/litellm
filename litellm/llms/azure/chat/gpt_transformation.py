@@ -20,6 +20,7 @@ from ...base_llm.chat.transformation import BaseConfig
 from ..common_utils import AzureOpenAIError
 
 import re
+from datetime import datetime
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -156,11 +157,10 @@ class AzureOpenAIConfig(BaseConfig):
         supported_openai_params = self.get_supported_openai_params(model)
 
         # Check that api_version has a valid format (e.g. 2025-01-01-preview)
-        print("helllo")
         if not self.is_valid_api_version(api_version):
             raise UnsupportedParamsError(
                 status_code=400,
-                message=f"Invalid API version format: '{api_version}'. Expected format is 'YYYY-MM-DD-preview' (e.g., 2025-01-01-preview)."
+                message=f"Invalid API version format: '{api_version}'. Expected format is 'YYYY-MM-DD' at the beginning (e.g., 2025-01-01-preview)."
             )
 
         api_version_times = api_version.split("-")
@@ -324,9 +324,16 @@ class AzureOpenAIConfig(BaseConfig):
     @staticmethod
     def is_valid_api_version(api_version: str) -> bool:
         """
-        Validates that the API version string matches the format: YYYY-MM-DD-preview
-        Example of a valid version: 2025-01-01-preview
+        Validates that the API version starts with a valid date in the format: YYYY-MM-DD.
+        Any trailing suffix after the date is allowed.
         """
-        pattern = r"^\d{4}-\d{2}-\d{2}-preview$"
-        return re.match(pattern, api_version) is not None
+        pattern = r"^(\d{4}-\d{2}-\d{2})"
+        match = re.match(pattern, api_version)
+        if not match:
+            return False
+        try:
+            datetime.strptime(match.group(1), "%Y-%m-%d")
+            return True
+        except ValueError:
+            return False
 
