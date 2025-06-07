@@ -161,8 +161,8 @@ Before adding a model you can test the connection to the LLM provider to verify 
 ## General Improvements
 
 1. OpenWebUI Integration - display `thinking` tokens
-- Guide on getting started with LiteLLM x OpenWebUI. [Getting Started](https://docs.litellm.ai/docs/tutorials/openweb_ui)
-- Display `thinking` tokens on OpenWebUI (Bedrock, Anthropic, Deepseek) [Getting Started](https://docs.litellm.ai/docs/tutorials/openweb_ui#render-thinking-content-on-openweb-ui)
+- Guide on getting started with LiteLLM x OpenWebUI. [Getting Started](https://docs.litellm.ai/integrations/openweb_ui)
+- Display `thinking` tokens on OpenWebUI (Bedrock, Anthropic, Deepseek) [Getting Started](https://docs.litellm.ai/integrations/openweb_ui#render-thinking-content-on-openweb-ui)
 
 <Image img={require('../../img/litellm_thinking_openweb.gif')} />
 

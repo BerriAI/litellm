@@ -52,6 +52,15 @@ const config = {
         include: ['**/*.{md,mdx}'],
       },
     ],
+    [
+      '@docusaurus/plugin-content-docs',
+      {
+        id: 'integrations',
+        path: './integrations',
+        routeBasePath: 'integrations',
+        sidebarPath: require.resolve('./integrationsSidebar.js'),
+      },
+    ],
 
     () => ({
       name: 'cripchat',
@@ -132,6 +141,12 @@ const config = {
             to: "docs/hosted"
           },
           { to: '/release_notes', label: 'Release Notes', position: 'left' },
+          {
+            type: 'docSidebar',
+            sidebarId: 'integrationsSidebar',
+            position: 'left',
+            label: 'Integrations',
+          },
           {
             href: 'https://models.litellm.ai/',
             label: '💸 LLM Model Cost Map',

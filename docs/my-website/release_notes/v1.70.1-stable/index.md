@@ -208,8 +208,7 @@ This release brings improvements to our Presidio PII Integration. As a Proxy Adm
     - Handle Bearer $LITELLM_API_KEY in x-litellm-api-key custom header [PR](https://github.com/BerriAI/litellm/pull/10776)
 - **New Enterprise pip package** - `litellm-enterprise` - fixes issue where `enterprise` folder was not found when using pip package  
 - **[Proxy CLI](../../docs/proxy/management_cli)**
-    - Add `models import` command - [PR](https://github.com/BerriAI/litellm/pull/10581)
-- **[OpenWebUI](../../docs/tutorials/openweb_ui#per-user-tracking)**
+- **[OpenWebUI](../../integrations/openweb_ui#per-user-tracking)**
     - Configure LiteLLM to Parse User Headers from Open Web UI
 - **[LiteLLM Proxy w/ LiteLLM SDK](../../docs/providers/litellm_proxy#send-all-sdk-requests-to-litellm-proxy)**
     - Option to force/always use the litellm proxy when calling via LiteLLM SDK
