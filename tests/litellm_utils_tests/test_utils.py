@@ -238,11 +238,15 @@ def test_trimming_with_tool_calls():
             "content": '{"location": "Paris", "temperature": "22", "unit": "celsius"}',
         },
     ]
-    result = trim_messages(messages=messages, max_tokens=1, return_response_tokens=True)
+    num_tool_calls = 3
+
+    result = trim_messages(messages=messages, max_tokens=1)
 
     print(result)
 
-    assert len(result[0]) == 3  # final 3 messages are tool calls
+    # only trailing tool calls are returned
+    assert len(result) == num_tool_calls
+    assert result == messages[-num_tool_calls:]
 
 
 def test_trimming_should_not_change_original_messages():
