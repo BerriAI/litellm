@@ -69,7 +69,7 @@ pip install litellm==1.72.2
     - URL context support for Gemini models - [PR](https://github.com/BerriAI/litellm/pull/11351)
     - Gemini embeddings-001 model prices and context window - [PR](https://github.com/BerriAI/litellm/pull/11332)
 - **[OpenAI](../../docs/providers/openai)**
-    - codex-mini-latest model support - [PR](https://github.com/BerriAI/litellm/pull/11492)
+    - Cost tracking for `codex-mini-latest` - [PR](https://github.com/BerriAI/litellm/pull/11492)
 - **[Vertex AI](../../docs/providers/vertex)**
     - Cache token tracking on streaming calls - [PR](https://github.com/BerriAI/litellm/pull/11387)
     - Return response_id matching upstream response ID for stream and non-stream - [PR](https://github.com/BerriAI/litellm/pull/11456)
@@ -89,9 +89,9 @@ pip install litellm==1.72.2
 - **[Images API](../../docs/image_generation)**
     - Azure endpoint support for image endpoints - [PR](https://github.com/BerriAI/litellm/pull/11482)
 - **[Anthropic Messages API](../../docs/completion/chat)**
+    - Support for ALL LiteLLM Providers (OpenAI, Azure, Bedrock, Vertex, DeepSeek, etc.) on /v1/messages API Spec - [PR](https://github.com/BerriAI/litellm/pull/11502)
     - Performance improvements for /v1/messages route - [PR](https://github.com/BerriAI/litellm/pull/11421)
     - Return streaming usage statistics when using LiteLLM with Bedrock models - [PR](https://github.com/BerriAI/litellm/pull/11469)
-    - Allow using litellm.completion with /v1/messages API Spec - [PR](https://github.com/BerriAI/litellm/pull/11502)
 - **[Embeddings API](../../docs/embedding/supported_embedding)**
     - Provider-specific optional params handling for embedding calls - [PR](https://github.com/BerriAI/litellm/pull/11346)
     - Proper Sagemaker request attribute usage for embeddings - [PR](https://github.com/BerriAI/litellm/pull/11362)
@@ -151,12 +151,13 @@ pip install litellm==1.72.2
 ## Bug Fixes
 
 - **LLM API Fixes**
-    - Anthropic: Fix regression when passing file url's to the 'file_id' parameter - [PR](https://github.com/BerriAI/litellm/pull/11387)
-    - Vertex AI: Fix Vertex AI any_of issues for Description and Default. - [PR](https://github.com/BerriAI/litellm/issues/11383) 
+    - **Anthropic**: Fix regression when passing file url's to the 'file_id' parameter - [PR](https://github.com/BerriAI/litellm/pull/11387)
+    - **Vertex AI**: Fix Vertex AI any_of issues for Description and Default. - [PR](https://github.com/BerriAI/litellm/issues/11383) 
     - Fix transcription model name mapping - [PR](https://github.com/BerriAI/litellm/pull/11333)
-    - Fix None values in usage field for gpt-image-1 model responses - [PR](https://github.com/BerriAI/litellm/pull/11448)
-    - Fix _transform_responses_api_content_to_chat_completion_content doesn't support file content type - [PR](https://github.com/BerriAI/litellm/pull/11494)
-    - Fix Fireworks AI rate limit exception mapping - detect "rate limit" text in error messages - [PR](https://github.com/BerriAI/litellm/pull/11455)
+    - **Image Generation**: Fix None values in usage field for gpt-image-1 model responses - [PR](https://github.com/BerriAI/litellm/pull/11448)
+    - **Responses API**: Fix _transform_responses_api_content_to_chat_completion_content doesn't support file content type - [PR](https://github.com/BerriAI/litellm/pull/11494)
+    - **Fireworks AI**: Fix rate limit exception mapping - detect "rate limit" text in error messages - [PR](https://github.com/BerriAI/litellm/pull/11455)
+- **Spend Tracking/Budgets**
     - Respect user_header_name property for budget selection and user identification - [PR](https://github.com/BerriAI/litellm/pull/11419)
 - **MCP Server**
     - Remove duplicate server_id MCP config servers - [PR](https://github.com/BerriAI/litellm/pull/11327)
