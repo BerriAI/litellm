@@ -57,7 +57,27 @@ class AnthropicAdapter:
         - translate params, where needed
         - pass rest, as is
         """
-        request_body = AnthropicMessagesRequest(**kwargs)
+
+        #########################################################
+        # Validate required params
+        #########################################################
+        model = kwargs.pop("model")
+        messages = kwargs.pop("messages")
+        if not model:
+            raise ValueError(
+                "Bad Request: model is required for Anthropic Messages Request"
+            )
+        if not messages:
+            raise ValueError(
+                "Bad Request: messages is required for Anthropic Messages Request"
+            )
+
+        #########################################################
+        # Created Typed Request Body
+        #########################################################
+        request_body = AnthropicMessagesRequest(
+            model=model, messages=messages, **kwargs
+        )
 
         translated_body = (
             LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(

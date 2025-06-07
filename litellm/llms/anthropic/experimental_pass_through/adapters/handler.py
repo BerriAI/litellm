@@ -15,7 +15,7 @@ ANTHROPIC_ADAPTER = AnthropicAdapter()
 ########################################################
 
 
-class LiteLLMCompletionTransformationHandler:
+class LiteLLMMessagesToCompletionTransformationHandler:
     @staticmethod
     def _prepare_completion_kwargs(
         *,
@@ -105,7 +105,7 @@ class LiteLLMCompletionTransformationHandler:
         """Handle non-Anthropic models asynchronously using the adapter"""
 
         completion_kwargs = (
-            LiteLLMCompletionTransformationHandler._prepare_completion_kwargs(
+            LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
                 max_tokens=max_tokens,
                 messages=messages,
                 model=model,
@@ -173,27 +173,25 @@ class LiteLLMCompletionTransformationHandler:
     ]:
         """Handle non-Anthropic models using the adapter."""
         if _is_async is True:
-            return (
-                LiteLLMCompletionTransformationHandler.async_anthropic_messages_handler(
-                    max_tokens=max_tokens,
-                    messages=messages,
-                    model=model,
-                    metadata=metadata,
-                    stop_sequences=stop_sequences,
-                    stream=stream,
-                    system=system,
-                    temperature=temperature,
-                    thinking=thinking,
-                    tool_choice=tool_choice,
-                    tools=tools,
-                    top_k=top_k,
-                    top_p=top_p,
-                    **kwargs,
-                )
+            return LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
+                max_tokens=max_tokens,
+                messages=messages,
+                model=model,
+                metadata=metadata,
+                stop_sequences=stop_sequences,
+                stream=stream,
+                system=system,
+                temperature=temperature,
+                thinking=thinking,
+                tool_choice=tool_choice,
+                tools=tools,
+                top_k=top_k,
+                top_p=top_p,
+                **kwargs,
             )
 
         completion_kwargs = (
-            LiteLLMCompletionTransformationHandler._prepare_completion_kwargs(
+            LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
                 max_tokens=max_tokens,
                 messages=messages,
                 model=model,

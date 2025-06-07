@@ -23,7 +23,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
-from ..adapters.handler import LiteLLMCompletionTransformationHandler
+from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler
 from .utils import AnthropicMessagesRequestUtils
 
 ####### ENVIRONMENT VARIABLES ###################
@@ -143,22 +143,24 @@ def anthropic_messages_handler(
     )
     if anthropic_messages_provider_config is None:
         # Handle non-Anthropic models using the adapter
-        return LiteLLMCompletionTransformationHandler.anthropic_messages_handler(
-            max_tokens=max_tokens,
-            messages=messages,
-            model=model,
-            metadata=metadata,
-            stop_sequences=stop_sequences,
-            stream=stream,
-            system=system,
-            temperature=temperature,
-            thinking=thinking,
-            tool_choice=tool_choice,
-            tools=tools,
-            top_k=top_k,
-            top_p=top_p,
-            _is_async=is_async,
-            **kwargs,
+        return (
+            LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
+                max_tokens=max_tokens,
+                messages=messages,
+                model=model,
+                metadata=metadata,
+                stop_sequences=stop_sequences,
+                stream=stream,
+                system=system,
+                temperature=temperature,
+                thinking=thinking,
+                tool_choice=tool_choice,
+                tools=tools,
+                top_k=top_k,
+                top_p=top_p,
+                _is_async=is_async,
+                **kwargs,
+            )
         )
 
     if custom_llm_provider is None:
