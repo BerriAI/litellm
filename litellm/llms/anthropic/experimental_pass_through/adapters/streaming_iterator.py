@@ -1,7 +1,8 @@
 # What is this?
 ## Translates OpenAI call to Anthropic `/v1/messages` format
+import json
 import traceback
-from typing import Any, Optional
+from typing import Any, AsyncIterator, Iterator, Optional, Union
 
 from litellm import verbose_logger
 from litellm.types.utils import AdapterCompletionStreamWrapper
@@ -87,6 +88,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             verbose_logger.error(
                 "Anthropic Adapter - {}\n{}".format(e, traceback.format_exc())
             )
+            raise StopAsyncIteration
 
     async def __anext__(self):
         from .transformation import LiteLLMAnthropicMessagesAdapter
@@ -149,3 +151,33 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 self.sent_last_message = True
                 return {"type": "message_stop"}
             raise StopAsyncIteration
+
+    def anthropic_sse_wrapper(self) -> Iterator[bytes]:
+        """
+        Convert AnthropicStreamWrapper dict chunks to Server-Sent Events format.
+        Similar to the Bedrock bedrock_sse_wrapper implementation.
+
+        This wrapper ensures dict chunks are SSE formatted with both event and data lines.
+        """
+        for chunk in self:
+            if isinstance(chunk, dict):
+                event_type: str = str(chunk.get("type", "message"))
+                payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
+                yield payload.encode()
+            else:
+                # For non-dict chunks, forward the original value unchanged
+                yield chunk
+
+    async def async_anthropic_sse_wrapper(self) -> AsyncIterator[bytes]:
+        """
+        Async version of anthropic_sse_wrapper.
+        Convert AnthropicStreamWrapper dict chunks to Server-Sent Events format.
+        """
+        async for chunk in self:
+            if isinstance(chunk, dict):
+                event_type: str = str(chunk.get("type", "message"))
+                payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
+                yield payload.encode()
+            else:
+                # For non-dict chunks, forward the original value unchanged
+                yield chunk

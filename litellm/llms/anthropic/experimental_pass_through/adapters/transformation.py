@@ -1,5 +1,5 @@
 import json
-from typing import Any, List, Literal, Optional, Tuple, Union, cast
+from typing import Any, AsyncIterator, List, Literal, Optional, Tuple, Union, cast
 
 from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
@@ -77,8 +77,10 @@ class AnthropicAdapter:
 
     def translate_completion_output_params_streaming(
         self, completion_stream: Any
-    ) -> Union[AnthropicStreamWrapper, None]:
-        return AnthropicStreamWrapper(completion_stream=completion_stream)
+    ) -> Union[AsyncIterator[bytes], None]:
+        anthropic_wrapper = AnthropicStreamWrapper(completion_stream=completion_stream)
+        # Return the SSE-wrapped version for proper event formatting
+        return anthropic_wrapper.async_anthropic_sse_wrapper()
 
 
 class LiteLLMAnthropicMessagesAdapter:
