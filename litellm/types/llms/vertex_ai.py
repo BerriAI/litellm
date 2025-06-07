@@ -377,6 +377,7 @@ class GenerateContentResponseBody(TypedDict, total=False):
     candidates: List[Candidates]
     promptFeedback: PromptFeedback
     usageMetadata: Required[UsageMetadata]
+    responseId: str
 
 
 class FineTuneHyperparameters(TypedDict, total=False):
