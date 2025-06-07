@@ -6,20 +6,9 @@ This is currently in development and not yet ready for production.
 import os
 import sys
 from datetime import datetime
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    TypedDict,
-    Union,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, TypedDict, Union
 
 from fastapi import HTTPException
-from pydantic import BaseModel
 
 import litellm
 from litellm import DualCache
@@ -309,12 +298,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Returns a RateLimitResponse with the overall code and status for each descriptor.
         Uses batch operations for Redis to improve performance.
         """
-        from litellm.types.caching import (
-            RedisPipelineIncrementOperation,
-            RedisPipelineSetOperation,
-        )
 
-        overall_code = "OK"
         now = datetime.now().timestamp()
         now_int = int(now)  # Convert to integer for Redis Lua script
 
