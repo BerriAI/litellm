@@ -81,3 +81,10 @@ def convert_url_to_base64(url: str) -> str:
     raise Exception(
         f"Error: Unable to fetch image from URL after 3 attempts. url={url}"
     )
+
+
+def convert_file_to_base64(file_path: str) -> str:
+    with open(file_path, "rb") as file:
+        encoded_image = base64.b64encode(file.read()).decode("utf-8")
+        extension = file_path.split(".")[-1]
+        return f"data:image/{extension};base64,{encoded_image}"

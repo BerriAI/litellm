@@ -1,5 +1,6 @@
 import copy
 import json
+import os
 import re
 import uuid
 import xml.etree.ElementTree as ET
@@ -36,7 +37,7 @@ from litellm.types.llms.vertex_ai import PartType as VertexPartType
 from litellm.types.utils import GenericImageParsingChunk
 
 from .common_utils import convert_content_list_to_str, is_non_content_values_set
-from .image_handling import convert_url_to_base64
+from .image_handling import convert_url_to_base64, convert_file_to_base64
 
 
 def default_pt(messages):
@@ -155,6 +156,8 @@ def convert_to_ollama_image(openai_image_url: str):
     try:
         if openai_image_url.startswith("http"):
             openai_image_url = convert_url_to_base64(url=openai_image_url)
+        elif os.path.exists(openai_image_url):
+            openai_image_url = convert_file_to_base64(file_path=openai_image_url)
 
         if openai_image_url.startswith("data:image/"):
             # Extract the base64 image data
@@ -738,6 +741,8 @@ def convert_to_anthropic_image_obj(
     try:
         if openai_image_url.startswith("http"):
             openai_image_url = convert_url_to_base64(url=openai_image_url)
+        elif os.path.exists(openai_image_url):
+            openai_image_url = convert_file_to_base64(file_path=openai_image_url)
         # Extract the media type and base64 data
         media_type, base64_data = openai_image_url.split("data:")[1].split(";base64,")
 
