@@ -1,7 +1,7 @@
 import asyncio
 import contextlib
 import typing
-from typing import Callable, Dict, Union
+from typing import Callable, Dict, List, Union
 
 import aiohttp
 import aiohttp.client_exceptions
@@ -102,8 +102,13 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
                 raise
 
     async def aclose(self) -> None:
-        with map_aiohttp_exceptions():
-            await self._aiohttp_response.__aexit__(None, None, None)
+        try:
+            with map_aiohttp_exceptions():
+                # Close the response properly if it's not already closed
+                if not self._aiohttp_response.closed:
+                    self._aiohttp_response.close()
+        except Exception as e:
+            verbose_logger.debug(f"Error closing aiohttp response: {e}")
 
 
 class AiohttpTransport(httpx.AsyncBaseTransport):
@@ -131,6 +136,8 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         # Store the client factory for recreating sessions when needed
         if callable(client):
             self._client_factory = client
+        # Track created sessions for cleanup
+        self._created_sessions: List[ClientSession] = []
 
     def _get_valid_client_session(self) -> ClientSession:
         """
@@ -139,14 +146,15 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         This handles the case where the session was created in a different
         event loop that may have been closed (common in CI/CD environments).
         """
-        from aiohttp.client import ClientSession
-
         # If we don't have a client or it's not a ClientSession, create one
         if not isinstance(self.client, ClientSession):
             if hasattr(self, "_client_factory") and callable(self._client_factory):
                 self.client = self._client_factory()
             else:
                 self.client = ClientSession()
+            # Track the new session for cleanup
+            if isinstance(self.client, ClientSession):
+                self._created_sessions.append(self.client)
             return self.client
 
         # Check if the existing session is still valid for the current event loop
@@ -158,22 +166,17 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             if (
                 session_loop is None
                 or session_loop != current_loop
-                or session_loop.is_closed()
+                or (session_loop is not None and session_loop.is_closed())
             ):
-                # Clean up the old session
-                try:
-                    # Note: not awaiting close() here as it might be from a different loop
-                    # The session will be garbage collected
-                    pass
-                except Exception as e:
-                    verbose_logger.debug(f"Error closing old session: {e}")
-                    pass
-
                 # Create a new session in the current event loop
+                # Don't try to close the old session here since we're in a sync method
                 if hasattr(self, "_client_factory") and callable(self._client_factory):
                     self.client = self._client_factory()
                 else:
                     self.client = ClientSession()
+                # Track the new session for cleanup
+                if isinstance(self.client, ClientSession):
+                    self._created_sessions.append(self.client)
 
         except (RuntimeError, AttributeError):
             # If we can't check the loop or session is invalid, recreate it
@@ -181,8 +184,48 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 self.client = self._client_factory()
             else:
                 self.client = ClientSession()
+            # Track the new session for cleanup
+            if isinstance(self.client, ClientSession):
+                self._created_sessions.append(self.client)
 
         return self.client
+
+    def __del__(self):
+        """Cleanup any remaining sessions when the transport is garbage collected"""
+        if hasattr(self, "_created_sessions"):
+            for session in self._created_sessions:
+                try:
+                    if isinstance(session, ClientSession) and not session.closed:
+                        # Use the sync close method since we can't await in __del__
+                        if hasattr(session, '_connector') and session._connector:
+                            session._connector.close()
+                except Exception as e:
+                    verbose_logger.debug(f"Error in __del__ cleanup: {e}")
+
+    async def aclose(self) -> None:
+        """Override parent aclose to ensure proper session cleanup"""
+        # Close the current client session
+        if isinstance(self.client, ClientSession):
+            try:
+                if not self.client.closed:
+                    await self.client.close()
+            except Exception as e:
+                verbose_logger.debug(
+                    f"Error closing current client session in aclose: {e}"
+                )
+
+        # Close all tracked sessions that were created during operation
+        if hasattr(self, "_created_sessions"):
+            for session in self._created_sessions:
+                try:
+                    if isinstance(session, ClientSession) and not session.closed:
+                        await session.close()
+                except Exception as e:
+                    verbose_logger.debug(
+                        f"Error closing tracked session in aclose: {e}"
+                    )
+            # Clear the list after cleanup
+            self._created_sessions.clear()
 
     async def handle_async_request(
         self,
@@ -204,7 +247,8 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 data = request.stream  # type: ignore
                 request.headers.pop("transfer-encoding", None)  # handled by aiohttp
 
-            response = await client_session.request(
+            # Create the request context manager properly
+            request_context = client_session.request(
                 method=request.method,
                 url=YarlURL(str(request.url), encoded=True),
                 headers=request.headers,
@@ -217,7 +261,10 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                     connect=timeout.get("pool"),
                 ),
                 server_hostname=sni_hostname,
-            ).__aenter__()
+            )
+            
+            # Enter the context and get the response
+            response = await request_context.__aenter__()
 
         return httpx.Response(
             status_code=response.status,
