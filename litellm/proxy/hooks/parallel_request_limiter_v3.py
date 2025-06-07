@@ -287,7 +287,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         Pre-call hook to check rate limits before making the API call.
         """
-        self.print_verbose("Inside Rate Limit Pre-Call Hook")
+        from litellm.proxy.auth.auth_utils import (
+            get_key_model_rpm_limit,
+            get_key_model_tpm_limit,
+        )
+
+        verbose_proxy_logger.debug("Inside Rate Limit Pre-Call Hook")
 
         # Create rate limit descriptors
         descriptors = []
@@ -347,6 +352,39 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     },
                 )
             )
+
+        # Model rate limits
+        requested_model = data.get("model", None)
+        if requested_model and (
+            get_key_model_tpm_limit(user_api_key_dict) is not None
+            or get_key_model_rpm_limit(user_api_key_dict) is not None
+        ):
+            _tpm_limit_for_key_model = get_key_model_tpm_limit(user_api_key_dict) or {}
+            _rpm_limit_for_key_model = get_key_model_rpm_limit(user_api_key_dict) or {}
+            should_check_rate_limit = False
+            if requested_model in _tpm_limit_for_key_model:
+                should_check_rate_limit = True
+            elif requested_model in _rpm_limit_for_key_model:
+                should_check_rate_limit = True
+
+            if should_check_rate_limit:
+                model_specific_tpm_limit: Optional[int] = None
+                model_specific_rpm_limit: Optional[int] = None
+                if requested_model in _tpm_limit_for_key_model:
+                    model_specific_tpm_limit = _tpm_limit_for_key_model[requested_model]
+                if requested_model in _rpm_limit_for_key_model:
+                    model_specific_rpm_limit = _rpm_limit_for_key_model[requested_model]
+                descriptors.append(
+                    RateLimitDescriptor(
+                        key="model_per_key",
+                        value=f"{user_api_key_dict.api_key}:{requested_model}",
+                        rate_limit={
+                            "requests_per_unit": model_specific_rpm_limit
+                            or sys.maxsize,
+                            "window_size": self.window_size,
+                        },
+                    )
+                )
 
         # Check rate limits
         response = await self.should_rate_limit(
