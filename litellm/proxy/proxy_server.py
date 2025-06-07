@@ -3126,11 +3126,14 @@ async def async_data_generator(
         done_message = "[DONE]"
         yield f"data: {done_message}\n\n"
     except Exception as e:
+        # Use consistent error logging format - no need to duplicate retryable logic here
+        # since this is proxy-level error handling, not router-level retries
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.async_data_generator(): Exception occurred - {}".format(
                 str(e)
             )
         )
+        
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
@@ -3145,8 +3148,10 @@ async def async_data_generator(
         elif isinstance(e, StreamingCallbackError):
             error_msg = str(e)
         else:
-            error_traceback = traceback.format_exc()
-            error_msg = f"{str(e)}\n\n{error_traceback}"
+            # Use simpler error message format for proxy-level error handling
+            error_msg = str(e)
+            if hasattr(e, 'message'):
+                error_msg = e.message
 
         proxy_exception = ProxyException(
             message=getattr(e, "message", error_msg),

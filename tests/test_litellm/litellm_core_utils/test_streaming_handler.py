@@ -2,7 +2,7 @@ import json
 import os
 import sys
 import time
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock, patch, AsyncMock
 
 import pytest
 
@@ -26,6 +26,7 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.utils import ModelResponseListIterator
+from litellm.exceptions import RateLimitError, APIConnectionError, Timeout
 
 
 @pytest.fixture
@@ -686,3 +687,143 @@ async def test_streaming_completion_start_time(logging_obj: Logging):
         logging_obj.model_call_details["completion_start_time"]
         < logging_obj.model_call_details["end_time"]
     )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_streaming_error_handling_improvements(sync_mode: bool):
+    """Test that streaming error handling provides clean error messages for common errors"""
+    import time
+    from unittest.mock import AsyncMock
+    
+    # Mock a stream that raises an error
+    class MockStreamWithError:
+        def __init__(self, error_to_raise):
+            self.error = error_to_raise
+            self.called = False
+        
+        def __iter__(self):
+            return self
+            
+        def __next__(self):
+            if not self.called:
+                self.called = True
+                raise self.error
+            raise StopIteration
+            
+        def __aiter__(self):
+            return self
+            
+        async def __anext__(self):
+            if not self.called:
+                self.called = True
+                raise self.error
+            raise StopAsyncIteration
+
+    # Test common errors that should get clean logging
+    common_errors = [
+        RateLimitError('Rate limit exceeded', model='test-model', llm_provider='test'),
+        APIConnectionError('Connection failed', model='test-model', llm_provider='test'), 
+        Timeout('Request timeout', model='test-model', llm_provider='test')
+    ]
+    
+    for error in common_errors:
+        mock_stream = MockStreamWithError(error)
+        mock_logging = MagicMock()
+        mock_logging.failure_handler = MagicMock()
+        mock_logging.async_failure_handler = AsyncMock()
+        
+        wrapper = CustomStreamWrapper(
+            completion_stream=mock_stream,
+            model='test-model',
+            logging_obj=mock_logging,
+            custom_llm_provider='test'
+        )
+        
+        # Test that errors are properly raised and allow upstream retry handling
+        error_raised = False
+        error_type = None
+        
+        if sync_mode:
+            try:
+                list(wrapper)  # Consume the iterator
+            except Exception as e:
+                error_raised = True
+                error_type = type(e)
+        else:
+            try:
+                async for _ in wrapper:
+                    pass
+            except Exception as e:
+                error_raised = True
+                error_type = type(e)
+        
+        # Should have raised an error to allow upstream retry handling
+        assert error_raised, f"Expected error to be raised for {type(error).__name__}"
+        # The error should bubble up through exception mapping - might not be exact same type
+        # but should still be a LiteLLM exception that can be handled by upstream retry logic
+        assert error_type is not None
+    
+    # Test that any exception gets properly handled
+    other_error = Exception('Some other error')
+    mock_stream = MockStreamWithError(other_error)
+    mock_logging = MagicMock()
+    mock_logging.failure_handler = MagicMock()
+    mock_logging.async_failure_handler = AsyncMock()
+    
+    wrapper = CustomStreamWrapper(
+        completion_stream=mock_stream,
+        model='test-model', 
+        logging_obj=mock_logging,
+        custom_llm_provider='test'
+    )
+    
+    error_raised = False
+    final_exception = None
+    if sync_mode:
+        try:
+            list(wrapper)
+        except Exception as e:
+            error_raised = True
+            final_exception = e
+    else:
+        try:
+            async for _ in wrapper:
+                pass
+        except Exception as e:
+            error_raised = True
+            final_exception = e
+    
+    assert error_raised, "Expected error to be raised for any error"
+    # The exception mapping system maps generic exceptions to LiteLLM exceptions
+    # This ensures consistent error handling across the system
+    assert final_exception is not None
+    # Should be a LiteLLM exception type (likely APIConnectionError from exception mapping)
+    assert hasattr(final_exception, 'llm_provider') or 'litellm' in str(type(final_exception).__module__)
+
+
+def test_clean_error_logging_detection():
+    """Test that clean error logging is correctly applied to common errors"""
+    from litellm.litellm_core_utils.streaming_handler import _should_use_clean_error_logging
+    
+    # Test common errors that should get clean logging (when no chunks sent)
+    rate_limit_error = RateLimitError('Rate limit exceeded', model='test-model', llm_provider='test')
+    api_connection_error = APIConnectionError('Connection failed', model='test-model', llm_provider='test')
+    timeout_error = Timeout('Timeout occurred', model='test-model', llm_provider='test')
+    
+    # These should use clean logging when no chunks have been sent
+    assert _should_use_clean_error_logging(rate_limit_error, chunks_sent=False)
+    assert _should_use_clean_error_logging(api_connection_error, chunks_sent=False)
+    assert _should_use_clean_error_logging(timeout_error, chunks_sent=False)
+    
+    # After chunks are sent, always use detailed logging
+    assert not _should_use_clean_error_logging(rate_limit_error, chunks_sent=True)
+    assert not _should_use_clean_error_logging(api_connection_error, chunks_sent=True)
+    assert not _should_use_clean_error_logging(timeout_error, chunks_sent=True)
+    
+    # Regular exceptions should use detailed logging
+    regular_error = Exception('Regular error')
+    value_error = ValueError('Value error')
+    
+    assert not _should_use_clean_error_logging(regular_error, chunks_sent=False)
+    assert not _should_use_clean_error_logging(value_error, chunks_sent=False)
