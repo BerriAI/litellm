@@ -504,6 +504,9 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
         case "LiteLLM_UserTable":
           displayValue = "Users";
           break;
+        case "LiteLLM_ProxyModelTable":
+          displayValue = "Models";
+          break;
         default:
           displayValue = tableName;
       }
