@@ -112,7 +112,7 @@ import ModelInfoView from "./model_info_view";
 import AddModelTab from "./add_model/add_model_tab";
 import { ModelDataTable } from "./model_dashboard/table";
 import { columns } from "./model_dashboard/columns";
-import { all_admin_roles } from "@/utils/roles";
+import { all_admin_roles, isAdminRole } from "@/utils/roles";
 import { Table as TableInstance } from '@tanstack/react-table';
 
 interface ModelDashboardProps {
@@ -257,6 +257,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<TableInstance<any>>(null);
+
+  const [isAddModelModalVisible, setIsAddModelModalVisible] = useState<boolean>(false);
 
   const setProviderModelsFn = (provider: Providers) => {
     const _providerModels = getProviderModels(provider, modelMap);
@@ -1056,18 +1058,25 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         />
       ) : (
         <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
-          
+         <div className="mb-4">
+            {isAdminRole(userRole) && (
+              <Button
+                className="mx-auto"
+                onClick={() => setIsAddModelModalVisible(true)}
+              >
+                + Create New Model
+              </Button>
+            )}
+          </div>
           <TabList className="flex justify-between mt-2 w-full items-center">
             <div className="flex">
               {all_admin_roles.includes(userRole) ? <Tab>All Models</Tab> : <Tab>Your Models</Tab>}
-              <Tab>Add Model</Tab>
               {all_admin_roles.includes(userRole) && <Tab>LLM Credentials</Tab>}
               {all_admin_roles.includes(userRole) && <Tab>
                 <pre>/health Models</pre>
               </Tab>}
               {all_admin_roles.includes(userRole) && <Tab>Model Analytics</Tab>}
               {all_admin_roles.includes(userRole) && <Tab>Model Retry Settings</Tab>}
-              
             </div>
 
             <div className="flex items-center space-x-2">
@@ -1227,22 +1236,34 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               </Grid>
             </TabPanel>
             <TabPanel className="h-full">
-              <AddModelTab
-                form={form}
-                handleOk={handleOk}
-                selectedProvider={selectedProvider}
-                setSelectedProvider={setSelectedProvider}
-                providerModels={providerModels}
-                setProviderModelsFn={setProviderModelsFn}
-                getPlaceholder={getPlaceholder}
-                uploadProps={uploadProps}
-                showAdvancedSettings={showAdvancedSettings}
-                setShowAdvancedSettings={setShowAdvancedSettings}
-                teams={teams}
-                credentials={credentialsList}
-                accessToken={accessToken}
-                userRole={userRole}
-              />
+              <Modal
+                title="Create New Model"
+                open={isAddModelModalVisible}
+                onCancel={() => setIsAddModelModalVisible(false)}
+                footer={null}
+                width={800}
+                style={{ top: 20 }}
+              >
+                <AddModelTab
+                  form={form}
+                  handleOk={() => {
+                    handleOk();
+                    setIsAddModelModalVisible(false);
+                  }}
+                  selectedProvider={selectedProvider}
+                  setSelectedProvider={setSelectedProvider}
+                  providerModels={providerModels}
+                  setProviderModelsFn={setProviderModelsFn}
+                  getPlaceholder={getPlaceholder}
+                  uploadProps={uploadProps}
+                  showAdvancedSettings={showAdvancedSettings}
+                  setShowAdvancedSettings={setShowAdvancedSettings}
+                  teams={teams}
+                  credentials={credentialsList}
+                  accessToken={accessToken}
+                  userRole={userRole}
+                />
+              </Modal>
             </TabPanel>
             <TabPanel>
               <CredentialsPanel accessToken={accessToken} uploadProps={uploadProps} credentialList={credentialsList} fetchCredentials={fetchCredentials} />

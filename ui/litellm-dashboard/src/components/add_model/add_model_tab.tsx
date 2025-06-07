@@ -12,7 +12,7 @@ import { CredentialItem } from "../networking";
 import ConnectionErrorDisplay from "./model_connection_test";
 import { TEST_MODES } from "./add_model_modes";
 import { Row, Col } from "antd";
-import { Text, TextInput } from "@tremor/react";
+import { Text, TextInput,Title } from "@tremor/react";
 import TeamDropdown from "../common_components/team_dropdown";
 import { all_admin_roles } from "@/utils/roles";
 
@@ -33,7 +33,7 @@ interface AddModelTabProps {
   userRole: string;
 }
 
-const { Title, Link } = Typography;
+const { Link } = Typography;
 
 const AddModelTab: React.FC<AddModelTabProps> = ({
   form,
@@ -72,7 +72,6 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
 
   return (
     <>
-      <Title level={2}>Add new model</Title>
       <Card>
         <Form
           form={form}
