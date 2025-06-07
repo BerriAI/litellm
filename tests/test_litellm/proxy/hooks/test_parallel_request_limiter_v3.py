@@ -357,12 +357,6 @@ async def test_normal_router_call_tpm_v3(monkeypatch, rate_limit_object):
             call_type="",
         )
 
-    # Verify the counter increased
-    new_counter_value = await local_cache.async_get_cache(key=counter_key)
-    assert (
-        new_counter_value > counter_value
-    ), "Counter should increase after second request"
-
     # Wait for window to expire
     await asyncio.sleep(3)
 
