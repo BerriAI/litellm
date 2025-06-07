@@ -64,24 +64,24 @@ return {counter, window_start}
 
 BATCH_RATE_LIMITER_SCRIPT = """
 local results = {}
-local now = ARGV[1]
-local window_size = ARGV[2]
+local now = tonumber(ARGV[1])
+local window_size = tonumber(ARGV[2])
 
 -- Process each window/counter pair
 for i = 1, #KEYS, 2 do
     local window_key = KEYS[i]
     local counter_key = KEYS[i + 1]
-    local increment_value = KEYS[i + 2]
+    local increment_value = tonumber(KEYS[i + 2]) or 1
 
     -- Check if window exists and is valid
     local window_start = redis.call('GET', window_key)
-    if not window_start or (tonumber(now) - tonumber(window_start)) >= tonumber(window_size) then
+    if not window_start or (now - tonumber(window_start)) >= window_size then
         -- Reset window and counter
-        redis.call('SET', window_key, now)
+        redis.call('SET', window_key, tostring(now))
         redis.call('SET', counter_key, increment_value)
         redis.call('EXPIRE', window_key, window_size)
         redis.call('EXPIRE', counter_key, window_size)
-        table.insert(results, now) -- window_start
+        table.insert(results, tostring(now)) -- window_start
         table.insert(results, increment_value) -- counter
     else
         local counter = redis.call('INCR', counter_key)
@@ -223,6 +223,81 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return counter_key
 
+    def is_cache_list_over_limit(
+        self,
+        keys_to_fetch: List[str],
+        cache_values: List[Any],
+        key_metadata: Dict[str, Any],
+    ) -> RateLimitResponse:
+        """
+        Check if the cache values are over the limit.
+        """
+        statuses = []
+        overall_code = "OK"
+        for i in range(0, len(cache_values), 2):
+            item_code = "OK"
+            window_key = keys_to_fetch[i]
+            counter_key = keys_to_fetch[i + 1]
+            counter_value = cache_values[i + 1]
+            requests_limit = key_metadata[window_key]["requests_limit"]
+            max_parallel_requests_limit = key_metadata[window_key][
+                "max_parallel_requests_limit"
+            ]
+            tokens_limit = key_metadata[window_key]["tokens_limit"]
+
+            # Determine which limit to use for current_limit and limit_remaining
+            if counter_key.endswith(":requests"):
+                current_limit = requests_limit
+            elif counter_key.endswith(":max_parallel_requests"):
+                current_limit = max_parallel_requests_limit
+            elif counter_key.endswith(":tokens"):
+                current_limit = tokens_limit
+            else:
+                current_limit = None
+
+            if (
+                counter_key.endswith(":requests")
+                and requests_limit is not None
+                and counter_value is not None
+                and int(counter_value) + 1 > requests_limit
+            ):
+                overall_code = "OVER_LIMIT"
+                item_code = "OVER_LIMIT"
+            elif (
+                counter_key.endswith(":max_parallel_requests")
+                and max_parallel_requests_limit is not None
+                and counter_value is not None
+                and int(counter_value) + 1 > max_parallel_requests_limit
+            ):
+                overall_code = "OVER_LIMIT"
+                item_code = "OVER_LIMIT"
+            elif (
+                counter_key.endswith(":tokens")
+                and tokens_limit is not None
+                and counter_value is not None
+                and int(counter_value) + 1 > tokens_limit
+            ):
+                overall_code = "OVER_LIMIT"
+                item_code = "OVER_LIMIT"
+
+            # Only compute limit_remaining if current_limit is not None
+            if current_limit is None:
+                limit_remaining = None
+            elif counter_value is None:
+                limit_remaining = current_limit
+            else:
+                limit_remaining = current_limit - counter_value
+
+            statuses.append(
+                {
+                    "code": item_code,
+                    "current_limit": current_limit,
+                    "limit_remaining": limit_remaining,
+                }
+            )
+
+        return RateLimitResponse(overall_code=overall_code, statuses=statuses)
+
     async def should_rate_limit(
         self,
         descriptors: List[RateLimitDescriptor],
@@ -242,6 +317,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         statuses = []
         overall_code = "OK"
         now = datetime.now().timestamp()
+        now_int = int(now)  # Convert to integer for Redis Lua script
 
         # Collect all keys and their metadata upfront
         keys_to_fetch: List[str] = []
@@ -280,71 +356,54 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 "window_size": int(window_size),
             }
 
-        # Batch get all values
+        ## CHECK IN-MEMORY CACHE
+        cache_values = await self.internal_usage_cache.async_batch_get_cache(
+            keys=keys_to_fetch,
+            parent_otel_span=parent_otel_span,
+            local_only=True,
+        )
+
+        if cache_values is not None:
+            rate_limit_response = self.is_cache_list_over_limit(
+                keys_to_fetch, cache_values, key_metadata
+            )
+            if rate_limit_response["overall_code"] == "OVER_LIMIT":
+                return rate_limit_response
+
+        ## IF under limit, check Redis
         if self.batch_rate_limiter_script is not None:
             cache_values = await self.batch_rate_limiter_script(
                 keys=keys_to_fetch,
-                args=[now, self.window_size],
+                args=[now_int, self.window_size],  # Use integer timestamp
             )
+            # update in-memory cache with new values
+            for i in range(0, len(cache_values), 2):
+                window_key = keys_to_fetch[i]
+                counter_key = keys_to_fetch[i + 1]
+                window_value = cache_values[i]
+                counter_value = cache_values[i + 1]
+                await self.internal_usage_cache.async_set_cache(
+                    key=counter_key,
+                    value=counter_value,
+                    ttl=self.window_size,
+                    litellm_parent_otel_span=parent_otel_span,
+                    local_only=True,
+                )
+                await self.internal_usage_cache.async_set_cache(
+                    key=window_key,
+                    value=window_value,
+                    ttl=self.window_size,
+                    litellm_parent_otel_span=parent_otel_span,
+                    local_only=True,
+                )
         else:
             raise ValueError("Batch rate limiter script is not initialized")
 
-        overall_code = "OK"
-        for i in range(0, len(cache_values), 2):
-            item_code = "OK"
-            window_key = keys_to_fetch[i]
-            counter_key = keys_to_fetch[i + 1]
-            counter_value = cache_values[i + 1]
-            requests_limit = key_metadata[window_key]["requests_limit"]
-            max_parallel_requests_limit = key_metadata[window_key][
-                "max_parallel_requests_limit"
-            ]
-            tokens_limit = key_metadata[window_key]["tokens_limit"]
-
-            # Determine which limit to use for current_limit and limit_remaining
-            if counter_key.endswith(":requests"):
-                current_limit = requests_limit
-            elif counter_key.endswith(":max_parallel_requests"):
-                current_limit = max_parallel_requests_limit
-            elif counter_key.endswith(":tokens"):
-                current_limit = tokens_limit
-            else:
-                current_limit = None
-
-            if (
-                counter_key.endswith(":requests")
-                and requests_limit is not None
-                and int(counter_value) + 1 > requests_limit
-            ):
-                overall_code = "OVER_LIMIT"
-                item_code = "OVER_LIMIT"
-            elif (
-                counter_key.endswith(":max_parallel_requests")
-                and max_parallel_requests_limit is not None
-                and int(counter_value) + 1 > max_parallel_requests_limit
-            ):
-                overall_code = "OVER_LIMIT"
-                item_code = "OVER_LIMIT"
-            elif (
-                counter_key.endswith(":tokens")
-                and tokens_limit is not None
-                and int(counter_value) + 1 > tokens_limit
-            ):
-                overall_code = "OVER_LIMIT"
-                item_code = "OVER_LIMIT"
-
-            # Only compute limit_remaining if current_limit is not None
-            limit_remaining = (
-                current_limit - counter_value if current_limit is not None else None
-            )
-
-            statuses.append(
-                {
-                    "code": item_code,
-                    "current_limit": current_limit,
-                    "limit_remaining": limit_remaining,
-                }
-            )
+        rate_limit_response = self.is_cache_list_over_limit(
+            keys_to_fetch, cache_values, key_metadata
+        )
+        if rate_limit_response["overall_code"] == "OVER_LIMIT":
+            return rate_limit_response
 
         return RateLimitResponse(overall_code=overall_code, statuses=statuses)
 
