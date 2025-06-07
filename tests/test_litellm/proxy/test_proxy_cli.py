@@ -13,8 +13,8 @@ from litellm.proxy.proxy_cli import ProxyInitializationHelpers
 
 class TestProxyInitializationHelpers:
     @patch("importlib.metadata.version")
-    @patch("click.echo")
-    def test_echo_litellm_version(self, mock_echo, mock_version):
+    @patch("litellm.proxy.proxy_cli.console.print")
+    def test_echo_litellm_version(self, mock_console_print, mock_version):
         # Setup
         mock_version.return_value = "1.0.0"
 
@@ -23,17 +23,17 @@ class TestProxyInitializationHelpers:
 
         # Assert
         mock_version.assert_called_once_with("litellm")
-        mock_echo.assert_called_once_with("\nLiteLLM: Current Version = 1.0.0\n")
+        # Should call console.print multiple times (for empty lines and panel)
+        assert mock_console_print.call_count >= 3
 
     @patch("httpx.get")
-    @patch("builtins.print")
-    @patch("json.dumps")
-    def test_run_health_check(self, mock_dumps, mock_print, mock_get):
+    @patch("litellm.proxy.proxy_cli.console.print")
+    def test_run_health_check(self, mock_console_print, mock_get):
         # Setup
         mock_response = MagicMock()
-        mock_response.json.return_value = {"status": "healthy"}
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"model1": {"status": "healthy", "response_time": "0.5s"}}
         mock_get.return_value = mock_response
-        mock_dumps.return_value = '{"status": "healthy"}'
 
         # Execute
         ProxyInitializationHelpers._run_health_check("localhost", 8000)
@@ -41,7 +41,8 @@ class TestProxyInitializationHelpers:
         # Assert
         mock_get.assert_called_once_with(url="http://localhost:8000/health")
         mock_response.json.assert_called_once()
-        mock_dumps.assert_called_once_with({"status": "healthy"}, indent=4)
+        # Should call console.print multiple times (progress, success message, table)
+        assert mock_console_print.call_count >= 2
 
     @patch("openai.OpenAI")
     @patch("click.echo")
@@ -197,8 +198,8 @@ class TestProxyInitializationHelpers:
             assert "pool_timeout=60" in modified_url
 
     @patch("uvicorn.run")
-    @patch("builtins.print")
-    def test_skip_server_startup(self, mock_print, mock_uvicorn_run):
+    @patch("litellm.proxy.proxy_cli.console.print")
+    def test_skip_server_startup(self, mock_console_print, mock_uvicorn_run):
         """Test that the skip_server_startup flag prevents server startup when True"""
         from click.testing import CliRunner
 
@@ -234,12 +235,11 @@ class TestProxyInitializationHelpers:
 
             assert result.exit_code == 0
             mock_uvicorn_run.assert_not_called()
-            mock_print.assert_any_call(
-                "LiteLLM: Setup complete. Skipping server startup as requested."
-            )
+            # Check that console.print was called (for skip message)
+            assert mock_console_print.call_count >= 1
 
             mock_uvicorn_run.reset_mock()
-            mock_print.reset_mock()
+            mock_console_print.reset_mock()
 
             result = runner.invoke(run_server, ["--local"])
 

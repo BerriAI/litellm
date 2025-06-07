@@ -12,12 +12,21 @@ import click
 import httpx
 from dotenv import load_dotenv
 import urllib.parse
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.align import Align
+
 if TYPE_CHECKING:
     from fastapi import FastAPI
 else:
     FastAPI = Any
 
 sys.path.append(os.getcwd())
+
+# Initialize Rich console
+console = Console()
 
 config_filename = "litellm.secrets"
 
@@ -50,14 +59,64 @@ def append_query_params(url, params) -> str:
 class ProxyInitializationHelpers:
     @staticmethod
     def _echo_litellm_version():
-        pkg_version = importlib.metadata.version("litellm")  # type: ignore
-        click.echo(f"\nLiteLLM: Current Version = {pkg_version}\n")
+        """Display LiteLLM version with rich formatting"""
+        try:
+            pkg_version = importlib.metadata.version("litellm")  # type: ignore
+            
+            # Create a beautiful version display
+            version_panel = Panel(
+                Align.center(f"[bold cyan]LiteLLM[/bold cyan]\n[green]Version: {pkg_version}[/green]"),
+                title="[bold blue]LiteLLM Proxy[/bold blue]",
+                border_style="cyan",
+                padding=(1, 2)
+            )
+            console.print()
+            console.print(version_panel)
+            console.print()
+        except Exception as e:
+            console.print(f"[red]Error getting version: {e}[/red]")
 
     @staticmethod
     def _run_health_check(host, port):
-        print("\nLiteLLM: Health Testing models in config")  # noqa
-        response = httpx.get(url=f"http://{host}:{port}/health")
-        print(json.dumps(response.json(), indent=4))  # noqa
+        """Run health check with rich progress indicators"""
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Running health check...", total=None)
+            
+            try:
+                response = httpx.get(url=f"http://{host}:{port}/health")
+                progress.update(task, completed=True)
+                
+                if response.status_code == 200:
+                    console.print("[green]✅ Health check passed![/green]")
+                    
+                    # Create a formatted table for health check results
+                    health_data = response.json()
+                    
+                    if isinstance(health_data, dict):
+                        table = Table(title="Health Check Results", show_header=True, header_style="bold magenta")
+                        table.add_column("Model", style="cyan")
+                        table.add_column("Status", style="green")
+                        table.add_column("Response Time", style="yellow")
+                        
+                        for model, details in health_data.items():
+                            if isinstance(details, dict):
+                                status = "✅ Healthy" if details.get("status") == "healthy" else "❌ Unhealthy"
+                                response_time = details.get("response_time", "N/A")
+                                table.add_row(model, status, str(response_time))
+                        
+                        console.print(table)
+                    else:
+                        console.print_json(data=health_data)
+                else:
+                    console.print(f"[red]❌ Health check failed with status {response.status_code}[/red]")
+                    
+            except Exception as e:
+                progress.update(task, completed=True)
+                console.print(f"[red]❌ Health check failed: {e}[/red]")
 
     @staticmethod
     def _run_test_chat_completion(
@@ -66,10 +125,17 @@ class ProxyInitializationHelpers:
         model: str,
         test: Union[bool, str],
     ):
+        """Run test chat completion with rich formatting and progress"""
         request_model = model or "gpt-3.5-turbo"
-        click.echo(
-            f"\nLiteLLM: Making a test ChatCompletions request to your proxy. Model={request_model}"
+        
+        # Create test info panel
+        test_panel = Panel(
+            f"[cyan]Model:[/cyan] {request_model}\n[cyan]Endpoint:[/cyan] http://{host}:{port}",
+            title="[bold yellow]Test Configuration[/bold yellow]",
+            border_style="yellow"
         )
+        console.print(test_panel)
+        
         import openai
 
         api_base = f"http://{host}:{port}"
@@ -77,41 +143,91 @@ class ProxyInitializationHelpers:
             api_base = test
         else:
             raise ValueError("Invalid test value")
+            
         client = openai.OpenAI(api_key="My API Key", base_url=api_base)
 
-        response = client.chat.completions.create(
-            model=request_model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": "this is a test request, write a short poem",
-                }
-            ],
-            max_tokens=256,
-        )
-        click.echo(f"\nLiteLLM: response from proxy {response}")
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            # Test 1: Regular completion
+            task1 = progress.add_task("Testing chat completion...", total=None)
+            try:
+                response = client.chat.completions.create(
+                    model=request_model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": "this is a test request, write a short poem",
+                        }
+                    ],
+                    max_tokens=256,
+                )
+                progress.update(task1, completed=True)
+                console.print("[green]✅ Chat completion test passed![/green]")
+                
+                # Display response in a nice format
+                if response.choices and response.choices[0].message:
+                    response_panel = Panel(
+                        response.choices[0].message.content or "No content",
+                        title="[bold green]Response[/bold green]",
+                        border_style="green"
+                    )
+                    console.print(response_panel)
+                    
+            except Exception as e:
+                progress.update(task1, completed=True)
+                console.print(f"[red]❌ Chat completion test failed: {e}[/red]")
 
-        print(  # noqa
-            f"\n LiteLLM: Making a test ChatCompletions + streaming r equest to proxy. Model={request_model}"
-        )
+            # Test 2: Streaming completion
+            task2 = progress.add_task("Testing streaming completion...", total=None)
+            try:
+                stream_response = client.chat.completions.create(
+                    model=request_model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": "this is a test request, write a short poem",
+                        }
+                    ],
+                    stream=True,
+                )
+                
+                console.print("[cyan]Streaming response:[/cyan]")
+                for chunk in stream_response:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        console.print(chunk.choices[0].delta.content, end="")
+                
+                progress.update(task2, completed=True)
+                console.print("\n[green]✅ Streaming completion test passed![/green]")
+                
+            except Exception as e:
+                progress.update(task2, completed=True)
+                console.print(f"[red]❌ Streaming completion test failed: {e}[/red]")
 
-        stream_response = client.chat.completions.create(
-            model=request_model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": "this is a test request, write a short poem",
-                }
-            ],
-            stream=True,
-        )
-        for chunk in stream_response:
-            click.echo(f"LiteLLM: streaming response from proxy {chunk}")
-        print("\n making completion request to proxy")  # noqa
-        completion_response = client.completions.create(
-            model=request_model, prompt="this is a test request, write a short poem"
-        )
-        print(completion_response)  # noqa
+            # Test 3: Legacy completion
+            task3 = progress.add_task("Testing legacy completion...", total=None)
+            try:
+                completion_response = client.completions.create(
+                    model=request_model, 
+                    prompt="this is a test request, write a short poem"
+                )
+                progress.update(task3, completed=True)
+                console.print("[green]✅ Legacy completion test passed![/green]")
+                
+                # Display response in a nice format
+                if completion_response.choices and completion_response.choices[0].text:
+                    legacy_response_panel = Panel(
+                        completion_response.choices[0].text or "No content",
+                        title="[bold green]Legacy Response[/bold green]",
+                        border_style="green"
+                    )
+                    console.print(legacy_response_panel)
+                
+            except Exception as e:
+                progress.update(task3, completed=True)
+                console.print(f"[red]❌ Legacy completion test failed: {e}[/red]")
 
     @staticmethod
     def _get_default_unvicorn_init_args(
@@ -130,10 +246,10 @@ class ProxyInitializationHelpers:
             "port": port,
         }
         if log_config is not None:
-            print(f"Using log_config: {log_config}")  # noqa
+            console.print(f"[cyan]Using log_config:[/cyan] {log_config}")
             uvicorn_args["log_config"] = log_config
         elif litellm.json_logs:
-            print("Using json logs. Setting log_config to None.")  # noqa
+            console.print("[cyan]Using JSON logs. Setting log_config to None.[/cyan]")
             uvicorn_args["log_config"] = None
         return uvicorn_args
 
@@ -153,16 +269,28 @@ class ProxyInitializationHelpers:
         from hypercorn.asyncio import serve
         from hypercorn.config import Config
 
-        print(  # noqa
-            f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} using Hypercorn\033[0m\n"  # noqa
-        )  # noqa
+        # Display server start message with rich formatting
+        server_panel = Panel(
+            f"[green]Starting LiteLLM Proxy Server[/green]\n"
+            f"[cyan]Server:[/cyan] Hypercorn\n"
+            f"[cyan]Host:[/cyan] {host}\n"
+            f"[cyan]Port:[/cyan] {port}",
+            title="[bold blue]Server Configuration[/bold blue]",
+            border_style="blue"
+        )
+        console.print(server_panel)
+        
         config = Config()
         config.bind = [f"{host}:{port}"]
 
         if ssl_certfile_path is not None and ssl_keyfile_path is not None:
-            print(  # noqa
-                f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"  # noqa
+            ssl_panel = Panel(
+                f"[cyan]Certificate:[/cyan] {ssl_certfile_path}\n"
+                f"[cyan]Key File:[/cyan] {ssl_keyfile_path}",
+                title="[bold green]SSL Configuration[/bold green]",
+                border_style="green"
             )
+            console.print(ssl_panel)
             config.certfile = ssl_certfile_path
             config.keyfile = ssl_keyfile_path
 
@@ -193,38 +321,46 @@ class ProxyInitializationHelpers:
                 self.application = app  # FastAPI app
                 super().__init__()
 
-                _endpoint_str = (
-                    f"curl --location 'http://0.0.0.0:{port}/chat/completions' \\"
+                # Create beautiful server info display
+                server_info = Panel(
+                    f"[green]LiteLLM Proxy Server Starting[/green]\n"
+                    f"[cyan]Server:[/cyan] Gunicorn\n"
+                    f"[cyan]Host:[/cyan] {host}\n"
+                    f"[cyan]Port:[/cyan] {port}\n"
+                    f"[cyan]Workers:[/cyan] {num_workers}",
+                    title="[bold blue]Server Configuration[/bold blue]",
+                    border_style="blue"
                 )
-                curl_command = (
-                    _endpoint_str
-                    + """
-                --header 'Content-Type: application/json' \\
-                --data ' {
-                "model": "gpt-3.5-turbo",
-                "messages": [
-                    {
-                    "role": "user",
-                    "content": "what llm are you"
-                    }
-                ]
-                }'
-                \n
-                """
+                console.print(server_info)
+
+                # Create testing instructions
+                curl_command = f"""curl --location 'http://0.0.0.0:{port}/chat/completions' \\
+--header 'Content-Type: application/json' \\
+--data '{{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {{
+            "role": "user",
+            "content": "what llm are you"
+        }}
+    ]
+}}'"""
+
+                test_panel = Panel(
+                    f"[yellow]Quick Test:[/yellow] litellm --test\n\n"
+                    f"[yellow]cURL Test:[/yellow]\n{curl_command}",
+                    title="[bold yellow]Testing Instructions[/bold yellow]",
+                    border_style="yellow"
                 )
-                print()  # noqa
-                print(  # noqa
-                    '\033[1;34mLiteLLM: Test your local proxy with: "litellm --test" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab]\033[0m\n'
+                console.print(test_panel)
+
+                links_panel = Panel(
+                    f"[blue]Documentation:[/blue] https://docs.litellm.ai/docs/simple_proxy\n"
+                    f"[blue]Swagger UI:[/blue] http://0.0.0.0:{port}",
+                    title="[bold blue]Useful Links[/bold blue]",
+                    border_style="blue"
                 )
-                print(  # noqa
-                    f"\033[1;34mLiteLLM: Curl Command Test for your local proxy\n {curl_command} \033[0m\n"
-                )
-                print(  # noqa
-                    "\033[1;34mDocs: https://docs.litellm.ai/docs/simple_proxy\033[0m\n"
-                )  # noqa
-                print(  # noqa
-                    f"\033[1;34mSee all Router/Swagger docs on http://0.0.0.0:{port} \033[0m\n"
-                )  # noqa
+                console.print(links_panel)
 
             def load_config(self):
                 # note: This Loads the gunicorn config - has nothing to do with LiteLLM Proxy config
@@ -244,9 +380,6 @@ class ProxyInitializationHelpers:
                 # gunicorn app function
                 return self.application
 
-        print(  # noqa
-            f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} with {num_workers} workers\033[0m\n"  # noqa
-        )
         gunicorn_options = {
             "bind": f"{host}:{port}",
             "workers": num_workers,  # default is 1
@@ -258,9 +391,13 @@ class ProxyInitializationHelpers:
         }
 
         if ssl_certfile_path is not None and ssl_keyfile_path is not None:
-            print(  # noqa
-                f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"  # noqa
+            ssl_panel = Panel(
+                f"[cyan]Certificate:[/cyan] {ssl_certfile_path}\n"
+                f"[cyan]Key File:[/cyan] {ssl_keyfile_path}",
+                title="[bold green]SSL Configuration[/bold green]",
+                border_style="green"
             )
+            console.print(ssl_panel)
             gunicorn_options["certfile"] = ssl_certfile_path
             gunicorn_options["keyfile"] = ssl_keyfile_path
 
@@ -273,12 +410,15 @@ class ProxyInitializationHelpers:
 
             with open(os.devnull, "w") as devnull:
                 subprocess.Popen(command, stdout=devnull, stderr=devnull)
+                console.print("[green]✅ Ollama serve started successfully[/green]")
         except Exception as e:
-            print(  # noqa
-                f"""
-                LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
-            """
-            )  # noqa
+            console.print(Panel(
+                f"[red]Failed to start Ollama serve[/red]\n"
+                f"[yellow]Error:[/yellow] {e}\n"
+                f"[yellow]Please ensure Ollama is installed and run:[/yellow] ollama serve",
+                title="[bold red]Ollama Warning[/bold red]",
+                border_style="red"
+            ))
 
     @staticmethod
     def _is_port_in_use(port):
@@ -294,176 +434,272 @@ class ProxyInitializationHelpers:
             return None  # Let uvicorn choose the default loop on Windows
         return "uvloop"
 
+    @staticmethod
+    def _display_startup_banner(host: str, port: int, config_path: Optional[str] = None):
+        """Display a beautiful startup banner"""
+        # Create configuration info
+        config_info = f"[cyan]Host:[/cyan] {host}\n[cyan]Port:[/cyan] {port}"
+        if config_path:
+            config_info += f"\n[cyan]Config:[/cyan] {config_path}"
+        
+        # Create startup panel
+        startup_panel = Panel(
+            Align.center(f"[bold cyan]🚄 LiteLLM Proxy[/bold cyan]\n\n{config_info}"),
+            title="[bold green]Starting Server[/bold green]",
+            border_style="green",
+            padding=(1, 2)
+        )
+        
+        console.print()
+        console.print(startup_panel)
+        console.print()
 
-@click.command()
+
+def create_help_panel():
+    """Create a beautiful help panel with grouped options"""
+    help_content = """
+[bold cyan]Server Options:[/bold cyan]
+  --host, --port          Server binding configuration
+  --num_workers          Number of worker processes
+  --config, -c           Configuration file path
+  
+[bold cyan]Model Options:[/bold cyan]
+  --model, -m            Model name
+  --alias                Model alias
+  --api_base             API base URL
+  
+[bold cyan]Logging & Debug:[/bold cyan]
+  --debug                Enable debug mode
+  --detailed_debug       Enable detailed debugging
+  --log_config           Logging configuration file
+  
+[bold cyan]Testing:[/bold cyan]
+  --test                 Run test completion
+  --health               Run health check
+  --version, -v          Show version
+  
+[bold cyan]Security:[/bold cyan]
+  --ssl_certfile_path    SSL certificate file
+  --ssl_keyfile_path     SSL key file
+"""
+    
+    help_panel = Panel(
+        help_content.strip(),
+        title="[bold blue]LiteLLM Proxy CLI Help[/bold blue]",
+        border_style="blue",
+        padding=(1, 2)
+    )
+    return help_panel
+
+
+# Enhanced click command with rich help
+class RichCommand(click.Command):
+    def format_help(self, ctx, formatter):
+        console.print(create_help_panel())
+
+
+@click.command(cls=RichCommand)
 @click.option(
-    "--host", default="0.0.0.0", help="Host for the server to listen on.", envvar="HOST"
+    "--host", 
+    default="0.0.0.0", 
+    help="🌐 Host for the server to listen on", 
+    envvar="HOST",
+    show_default=True
 )
-@click.option("--port", default=4000, help="Port to bind the server to.", envvar="PORT")
+@click.option(
+    "--port", 
+    default=4000, 
+    help="🔌 Port to bind the server to", 
+    envvar="PORT",
+    show_default=True
+)
 @click.option(
     "--num_workers",
     default=1,
-    help="Number of uvicorn / gunicorn workers to spin up. By default, 1 uvicorn is used.",
+    help="👥 Number of uvicorn/gunicorn workers",
     envvar="NUM_WORKERS",
+    show_default=True
 )
-@click.option("--api_base", default=None, help="API base URL.")
+@click.option("--api_base", default=None, help="🔗 API base URL")
 @click.option(
     "--api_version",
     default="2024-07-01-preview",
-    help="For azure - pass in the api version.",
+    help="📅 Azure API version",
+    show_default=True
 )
 @click.option(
-    "--model", "-m", default=None, help="The model name to pass to litellm expects"
+    "--model", "-m", 
+    default=None, 
+    help="🤖 Model name to use"
 )
 @click.option(
     "--alias",
     default=None,
-    help='The alias for the model - use this to give a litellm model name (e.g. "huggingface/codellama/CodeLlama-7b-Instruct-hf") a more user-friendly name ("codellama")',
+    help='📝 Model alias (e.g., "codellama" for long model names)',
 )
 @click.option(
-    "--add_key", default=None, help="The model name to pass to litellm expects"
+    "--add_key", 
+    default=None, 
+    help="🔑 Add API key"
 )
-@click.option("--headers", default=None, help="headers for the API call")
-@click.option("--save", is_flag=True, type=bool, help="Save the model-specific config")
+@click.option("--headers", default=None, help="📋 Headers for API calls")
+@click.option(
+    "--save", 
+    is_flag=True, 
+    help="💾 Save model-specific configuration"
+)
 @click.option(
     "--debug",
     default=False,
     is_flag=True,
-    type=bool,
-    help="To debug the input",
+    help="🐛 Enable debug mode",
     envvar="DEBUG",
 )
 @click.option(
     "--detailed_debug",
     default=False,
     is_flag=True,
-    type=bool,
-    help="To view detailed debug logs",
+    help="🔍 Enable detailed debug logs",
     envvar="DETAILED_DEBUG",
 )
 @click.option(
     "--use_queue",
     default=False,
     is_flag=True,
-    type=bool,
-    help="To use celery workers for async endpoints",
+    help="⚡ Use celery workers for async endpoints",
 )
 @click.option(
-    "--temperature", default=None, type=float, help="Set temperature for the model"
+    "--temperature", 
+    default=None, 
+    type=float, 
+    help="🌡️  Model temperature"
 )
 @click.option(
-    "--max_tokens", default=None, type=int, help="Set max tokens for the model"
+    "--max_tokens", 
+    default=None, 
+    type=int, 
+    help="📏 Maximum tokens"
 )
 @click.option(
     "--request_timeout",
     default=None,
     type=int,
-    help="Set timeout in seconds for completion calls",
+    help="⏱️  Request timeout (seconds)",
 )
-@click.option("--drop_params", is_flag=True, help="Drop any unmapped params")
+@click.option(
+    "--drop_params", 
+    is_flag=True, 
+    help="🗑️  Drop unmapped parameters"
+)
 @click.option(
     "--add_function_to_prompt",
     is_flag=True,
-    help="If function passed but unsupported, pass it as prompt",
+    help="🔧 Add unsupported functions to prompt",
 )
 @click.option(
     "--config",
     "-c",
     default=None,
-    help="Path to the proxy configuration file (e.g. config.yaml). Usage `litellm --config config.yaml`",
+    help="⚙️  Configuration file path (e.g., config.yaml)",
 )
 @click.option(
     "--max_budget",
     default=None,
     type=float,
-    help="Set max budget for API calls - works for hosted models like OpenAI, TogetherAI, Anthropic, etc.`",
+    help="💰 Maximum budget for API calls",
 )
 @click.option(
     "--telemetry",
     default=True,
     type=bool,
-    help="Helps us know if people are using this feature. Turn this off by doing `--telemetry False`",
+    help="📊 Enable telemetry (helps improve LiteLLM)",
+    show_default=True
 )
 @click.option(
     "--log_config",
     default=None,
     type=str,
-    help="Path to the logging configuration file",
+    help="📝 Logging configuration file path",
 )
 @click.option(
     "--version",
     "-v",
     default=False,
     is_flag=True,
-    type=bool,
-    help="Print LiteLLM version",
+    help="📋 Show LiteLLM version",
 )
 @click.option(
     "--health",
     flag_value=True,
-    help="Make a chat/completions request to all llms in config.yaml",
+    help="🏥 Run health check on all models",
 )
 @click.option(
     "--test",
     flag_value=True,
-    help="proxy chat completions url to make a test request to",
+    help="🧪 Run test chat completion",
 )
 @click.option(
     "--test_async",
     default=False,
     is_flag=True,
-    help="Calls async endpoints /queue/requests and /queue/response",
+    help="⚡ Test async endpoints",
 )
 @click.option(
     "--iam_token_db_auth",
     default=False,
     is_flag=True,
-    help="Connects to RDS DB with IAM token",
+    help="🔐 Use IAM token for database authentication",
 )
 @click.option(
     "--num_requests",
     default=10,
     type=int,
-    help="Number of requests to hit async endpoint with",
+    help="🔢 Number of requests for async testing",
+    show_default=True
 )
 @click.option(
     "--run_gunicorn",
     default=False,
     is_flag=True,
-    help="Starts proxy via gunicorn, instead of uvicorn (better for managing multiple workers)",
+    help="🦄 Use Gunicorn instead of Uvicorn",
 )
 @click.option(
     "--run_hypercorn",
     default=False,
     is_flag=True,
-    help="Starts proxy via hypercorn, instead of uvicorn (supports HTTP/2)",
+    help="🚄 Use Hypercorn (HTTP/2 support)",
 )
 @click.option(
     "--ssl_keyfile_path",
     default=None,
     type=str,
-    help="Path to the SSL keyfile. Use this when you want to provide SSL certificate when starting proxy",
+    help="🔐 SSL private key file path",
     envvar="SSL_KEYFILE_PATH",
 )
 @click.option(
     "--ssl_certfile_path",
     default=None,
     type=str,
-    help="Path to the SSL certfile. Use this when you want to provide SSL certificate when starting proxy",
+    help="📜 SSL certificate file path",
     envvar="SSL_CERTFILE_PATH",
 )
 @click.option(
     "--use_prisma_migrate",
     is_flag=True,
     default=False,
-    help="Use prisma migrate instead of prisma db push for database schema updates",
+    help="🗃️  Use Prisma migrate for schema updates",
 )
-@click.option("--local", is_flag=True, default=False, help="for local debugging")
+@click.option(
+    "--local", 
+    is_flag=True, 
+    default=False, 
+    help="🏠 Local debugging mode"
+)
 @click.option(
     "--skip_server_startup",
     is_flag=True,
     default=False,
-    help="Skip starting the server after setup (useful for migrations only)",
+    help="⏭️  Skip server startup (migrations only)",
 )
 def run_server(  # noqa: PLR0915
     host,
@@ -502,7 +738,14 @@ def run_server(  # noqa: PLR0915
     use_prisma_migrate,
     skip_server_startup,
 ):
+    """
+    🚄 LiteLLM Proxy Server - A unified interface for 100+ LLMs
+    
+    Start a proxy server that provides OpenAI-compatible endpoints for various LLM providers.
+    """
     args = locals()
+    
+    # Handle imports
     if local:
         from proxy_server import (
             KeyManagementSettings,
@@ -521,6 +764,12 @@ def run_server(  # noqa: PLR0915
         except ImportError as e:
             if "litellm[proxy]" in str(e):
                 # user is missing a proxy dependency, ask them to pip install litellm[proxy]
+                console.print(Panel(
+                    "[red]Missing proxy dependencies![/red]\n\n"
+                    "Please install with: [cyan]pip install 'litellm[proxy]'[/cyan]",
+                    title="[bold red]Installation Error[/bold red]",
+                    border_style="red"
+                ))
                 raise e
             else:
                 # this is just a local/relative import error, user git cloned litellm
@@ -530,20 +779,34 @@ def run_server(  # noqa: PLR0915
                     app,
                     save_worker_config,
                 )
+    
+    # Handle version display
     if version is True:
         ProxyInitializationHelpers._echo_litellm_version()
         return
+    
+    # Handle Ollama setup
     if model and "ollama" in model and api_base is None:
         ProxyInitializationHelpers._run_ollama_serve()
+    
+    # Handle health check
     if health is True:
         ProxyInitializationHelpers._run_health_check(host, port)
         return
+    
+    # Handle test completion
     if test is True:
         ProxyInitializationHelpers._run_test_chat_completion(host, port, model, test)
         return
+    
+    # Main server startup flow
     else:
+        # Display startup banner
+        ProxyInitializationHelpers._display_startup_banner(host, port, config)
+        
         if headers:
             headers = json.loads(headers)
+            
         save_worker_config(
             model=model,
             alias=alias,
@@ -563,9 +826,16 @@ def run_server(  # noqa: PLR0915
             config=config,
             use_queue=use_queue,
         )
+        
         try:
             import uvicorn
         except Exception:
+            console.print(Panel(
+                "[red]Missing server dependencies![/red]\n\n"
+                "Please install with: [cyan]pip install 'litellm[proxy]'[/cyan]",
+                title="[bold red]Import Error[/bold red]",
+                border_style="red"
+            ))
             raise ImportError(
                 "uvicorn, gunicorn needs to be imported. Run - `pip install 'litellm[proxy]'`"
             )
@@ -573,8 +843,8 @@ def run_server(  # noqa: PLR0915
         db_connection_pool_limit = 100
         db_connection_timeout = 60
         general_settings = {}
+        
         ### GET DB TOKEN FOR IAM AUTH ###
-
         if iam_token_db_auth:
             from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
 
@@ -588,7 +858,6 @@ def run_server(  # noqa: PLR0915
                 db_host=db_host, db_port=db_port, db_user=db_user
             )
 
-            # print(f"token: {token}")
             _db_url = f"postgresql://{db_user}:{token}@{db_host}:{db_port}/{db_name}"
             if db_schema:
                 _db_url += f"?schema={db_schema}"
@@ -597,7 +866,6 @@ def run_server(  # noqa: PLR0915
             os.environ["IAM_TOKEN_DB_AUTH"] = "True"
 
         ### DECRYPT ENV VAR ###
-
         from litellm.secret_managers.aws_secret_manager import decrypt_env_var
 
         if (
@@ -637,8 +905,8 @@ def run_server(  # noqa: PLR0915
                 import litellm
 
                 litellm.json_logs = True
-
                 litellm._turn_on_json()
+                
             ### GENERAL SETTINGS ###
             general_settings = _config.get("general_settings", {})
             if general_settings is None:
@@ -649,6 +917,7 @@ def run_server(  # noqa: PLR0915
                     "key_management_system", None
                 )
                 proxy_config.initialize_secret_manager(key_management_system)
+                
             key_management_settings = general_settings.get(
                 "key_management_settings", None
             )
@@ -658,6 +927,7 @@ def run_server(  # noqa: PLR0915
                 litellm._key_management_settings = KeyManagementSettings(
                     **key_management_settings
                 )
+                
             database_url = general_settings.get("database_url", None)
             if database_url is None and os.getenv("DATABASE_URL") is None:
                 # Check if all required variables are provided
@@ -681,6 +951,7 @@ def run_server(  # noqa: PLR0915
                     database_url = f"postgresql://{database_username_enc}:{database_password_enc}@{database_host}/{database_name_enc}"
 
                     os.environ["DATABASE_URL"] = database_url
+                    
             db_connection_pool_limit = general_settings.get(
                 "database_connection_pool_limit",
                 LiteLLMDatabaseConnectionPool.database_connection_pool_limit.value,
@@ -707,6 +978,14 @@ def run_server(  # noqa: PLR0915
             os.getenv("DATABASE_URL", None) is not None
             or os.getenv("DIRECT_URL", None) is not None
         ):
+            # Display a nice message before database setup
+            db_setup_panel = Panel(
+                "[cyan]Setting up database connection and schema...[/cyan]",
+                title="[bold blue]Database Setup[/bold blue]",
+                border_style="blue"
+            )
+            console.print(db_setup_panel)
+            
             try:
                 from litellm.secret_managers.main import get_secret
 
@@ -751,41 +1030,62 @@ def run_server(  # noqa: PLR0915
                 else:
                     PrismaManager.setup_database(use_migrate=use_prisma_migrate)
             else:
-                print(  # noqa
-                    f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa
-                )
+                console.print("[yellow]⚠️  Unable to connect to DB. DATABASE_URL found but Prisma not available.[/yellow]")
+                
+        # Check port availability
         if port == 4000 and ProxyInitializationHelpers._is_port_in_use(port):
+            old_port = port
             port = random.randint(1024, 49152)
+            console.print(f"[yellow]⚠️  Port {old_port} is in use. Using port {port} instead.[/yellow]")
 
         import litellm
 
         if detailed_debug is True:
             litellm._turn_on_debug()
+            console.print("[cyan]🔍 Detailed debugging enabled[/cyan]")
 
         # DO NOT DELETE - enables global variables to work across files
         from litellm.proxy.proxy_server import app  # noqa
 
         # Skip server startup if requested (after all setup is done)
         if skip_server_startup:
-            print("LiteLLM: Setup complete. Skipping server startup as requested.")  # noqa
+            console.print("[yellow]⏭️  Setup complete. Skipping server startup as requested.[/yellow]")
             return
 
+        # Final server startup
         uvicorn_args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
             host=host,
             port=port,
             log_config=log_config,
         )
+        
         if run_gunicorn is False and run_hypercorn is False:
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
-                print(  # noqa
-                    f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"  # noqa
+                ssl_panel = Panel(
+                    f"[cyan]Certificate:[/cyan] {ssl_certfile_path}\n"
+                    f"[cyan]Key File:[/cyan] {ssl_keyfile_path}",
+                    title="[bold green]SSL Configuration[/bold green]",
+                    border_style="green"
                 )
+                console.print(ssl_panel)
                 uvicorn_args["ssl_keyfile"] = ssl_keyfile_path
                 uvicorn_args["ssl_certfile"] = ssl_certfile_path
 
             loop_type = ProxyInitializationHelpers._get_loop_type()
             if loop_type:
                 uvicorn_args["loop"] = loop_type
+
+            # Final startup message
+            startup_msg = Panel(
+                f"[green]🚄 Starting LiteLLM Proxy Server[/green]\n"
+                f"[cyan]Server:[/cyan] Uvicorn\n"
+                f"[cyan]Host:[/cyan] {host}\n"
+                f"[cyan]Port:[/cyan] {port}\n"
+                f"[cyan]Workers:[/cyan] {num_workers}",
+                title="[bold blue]Server Starting[/bold blue]",
+                border_style="blue"
+            )
+            console.print(startup_msg)
 
             uvicorn.run(
                 **uvicorn_args,
@@ -811,4 +1111,10 @@ def run_server(  # noqa: PLR0915
 
 
 if __name__ == "__main__":
-    run_server()
+    try:
+        run_server()
+    except KeyboardInterrupt:
+        console.print("\n[yellow]👋 Server stopped by user[/yellow]")
+    except Exception as e:
+        console.print(f"\n[red]❌ Error: {e}[/red]")
+        raise

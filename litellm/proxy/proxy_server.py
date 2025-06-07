@@ -48,15 +48,6 @@ else:
     OpenTelemetry = Any
 
 
-def showwarning(message, category, filename, lineno, file=None, line=None):
-    traceback_info = f"{filename}:{lineno}: {category.__name__}: {message}\n"
-    if file is not None:
-        file.write(traceback_info)
-
-
-warnings.showwarning = showwarning
-warnings.filterwarnings("default", category=UserWarning)
-
 # Your client code here
 
 
@@ -75,45 +66,6 @@ try:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 except ImportError as e:
     raise ImportError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
-
-list_of_messages = [
-    "'The thing I wish you improved is...'",
-    "'A feature I really want is...'",
-    "'The worst thing about this product is...'",
-    "'This product would be better if...'",
-    "'I don't like how this works...'",
-    "'It would help me if you could add...'",
-    "'This feature doesn't meet my needs because...'",
-    "'I get frustrated when the product...'",
-]
-
-
-def generate_feedback_box():
-    box_width = 60
-
-    # Select a random message
-    message = random.choice(list_of_messages)
-
-    print()  # noqa
-    print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa
-    print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa
-    print("\033[1;37m" + "# {:^59} #\033[0m".format(message))  # noqa
-    print(  # noqa
-        "\033[1;37m"
-        + "# {:^59} #\033[0m".format("https://github.com/BerriAI/litellm/issues/new")
-    )  # noqa
-    print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa
-    print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa
-    print()  # noqa
-    print(" Thank you for using LiteLLM! - Krrish & Ishaan")  # noqa
-    print()  # noqa
-    print()  # noqa
-    print()  # noqa
-    print(  # noqa
-        "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"
-    )  # noqa
-    print()  # noqa
-    print()  # noqa
 
 
 from collections import defaultdict
@@ -310,6 +262,8 @@ from litellm.proxy.utils import (
     _get_redoc_url,
     _is_projected_spend_over_limit,
     _is_valid_team_configs,
+    display_model_initialization,
+    generate_feedback_box,
     get_custom_url,
     get_error_message_str,
     get_server_root_path,
@@ -1991,15 +1945,12 @@ class ProxyConfig:
         model_list = config.get("model_list", None)
         if model_list:
             router_params["model_list"] = model_list
-            print(  # noqa
-                "\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m"
-            )  # noqa
+            
+            # Display beautiful model initialization using utils function
+            display_model_initialization(model_list, get_secret)
+            
+            # Check for Ollama models that need local server
             for model in model_list:
-                ### LOAD FROM os.environ/ ###
-                for k, v in model["litellm_params"].items():
-                    if isinstance(v, str) and v.startswith("os.environ/"):
-                        model["litellm_params"][k] = get_secret(v)
-                print(f"\033[32m    {model.get('model_name', '')}\033[0m")  # noqa
                 litellm_model_name = model["litellm_params"]["model"]
                 litellm_model_api_base = model["litellm_params"].get("api_base", None)
                 if "ollama" in litellm_model_name and litellm_model_api_base is None:

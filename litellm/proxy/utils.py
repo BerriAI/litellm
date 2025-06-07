@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 import os
+import random
 import smtplib
 import threading
 import time
@@ -93,6 +94,191 @@ if TYPE_CHECKING:
     Span = Union[_Span, Any]
 else:
     Span = Any
+
+
+### CLI DISPLAY FUNCTIONS ###
+
+# List of random feedback messages for the feedback box
+list_of_messages = [
+    "'The thing I wish you improved is...'",
+    "'A feature I really want is...'",
+    "'The worst thing about this product is...'",
+    "'This product would be better if...'",
+    "'I don't like how this works...'",
+    "'It would help me if you could add...'",
+    "'This feature doesn't meet my needs because...'",
+    "'I get frustrated when the product...'",
+]
+
+
+def showwarning(message, category, filename, lineno, file=None, line=None):
+    """
+    Custom warning handler for CLI display.
+    
+    Args:
+        message: Warning message
+        category: Warning category
+        filename: File where warning occurred
+        lineno: Line number where warning occurred
+        file: Optional file object to write to
+        line: Optional line content
+    """
+    traceback_info = f"{filename}:{lineno}: {category.__name__}: {message}\n"
+    if file is not None:
+        file.write(traceback_info)
+
+
+def display_model_initialization(model_list: List[dict], get_secret_function):
+    """
+    Display beautiful model initialization information using Rich console.
+    
+    This function displays a formatted table of configured models with provider 
+    information using rich formatting if available, with a fallback to basic 
+    logging for environments without rich.
+    
+    Args:
+        model_list: List of model configuration dictionaries
+        get_secret_function: Function to retrieve secrets from environment variables
+    """
+    try:
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.table import Table
+        from rich.align import Align
+        from litellm import get_llm_provider
+        
+        console = Console()
+        
+        # Create a beautiful table for models
+        models_table = Table(title="🤖 Configured Models", show_header=True, header_style="bold cyan")
+        models_table.add_column("Model Name", style="green", min_width=25)
+        models_table.add_column("Provider", style="blue", min_width=15)
+        
+        for model in model_list:
+            ### LOAD FROM os.environ/ ###
+            for k, v in model["litellm_params"].items():
+                if isinstance(v, str) and v.startswith("os.environ/"):
+                    model["litellm_params"][k] = get_secret_function(v)
+            
+            model_name = model.get('model_name', 'Unknown')
+            litellm_model = model["litellm_params"].get("model", "Unknown")
+            
+            # Extract provider using get_llm_provider utility with try/except
+            provider = "OpenAI"  # default
+            try:
+                _, custom_llm_provider, _, _ = get_llm_provider(model=litellm_model)
+                if custom_llm_provider:
+                    provider = custom_llm_provider.replace("_", " ").title()
+            except Exception:
+                # Fallback to default provider if get_llm_provider fails
+                provider = "OpenAI"
+            
+            models_table.add_row(model_name, provider)
+        
+        # Create initialization panel
+        init_panel = Panel(
+            Align.center(models_table),
+            title="[bold green]LiteLLM Proxy Initialized[/bold green]",
+            border_style="green",
+            padding=(1, 2)
+        )
+        
+        console.print()
+        console.print(init_panel)
+        console.print()
+        
+    except ImportError:
+        # Fallback to original formatting if Rich is not available
+        from litellm import get_llm_provider
+        
+        verbose_proxy_logger.info("LiteLLM: Proxy initialized with Config, Set models:")
+        for model in model_list:
+            ### LOAD FROM os.environ/ ###
+            for k, v in model["litellm_params"].items():
+                if isinstance(v, str) and v.startswith("os.environ/"):
+                    model["litellm_params"][k] = get_secret_function(v)
+            verbose_proxy_logger.info("    %s", model.get('model_name', ''))
+
+
+
+
+
+def generate_feedback_box():
+    """
+    Generate and display a beautiful feedback box with random message prompts.
+    
+    This function displays a formatted feedback request box using rich formatting
+    if available, with a fallback to ASCII art for environments without rich.
+    """
+    try:
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.text import Text
+        from rich.align import Align
+        
+        console = Console()
+        
+        # Select a random message
+        message = random.choice(list_of_messages)
+        
+        # Create feedback panel with beautiful formatting
+        feedback_content = f"[yellow]{message}[/yellow]\n\n[cyan]https://github.com/BerriAI/litellm/issues/new[/cyan]"
+        
+        feedback_panel = Panel(
+            Align.center(feedback_content),
+            title="[bold blue]Feature Request[/bold blue]",
+            border_style="blue",
+            padding=(1, 2)
+        )
+        
+        # Create thank you message
+        thank_you_text = Text("Thank you for using LiteLLM! 🚄", style="bold green")
+        thank_you_subtitle = Text("- Krrish & Ishaan", style="italic cyan")
+        
+        # Create help panel
+        help_panel = Panel(
+            "[red]Give Feedback / Get Help:[/red] [cyan]https://github.com/BerriAI/litellm/issues/new[/cyan]",
+            title="[bold red]Need Help?[/bold red]",
+            border_style="red",
+            padding=(0, 2)
+        )
+        
+        console.print()
+        console.print(feedback_panel)
+        console.print()
+        console.print(Align.center(thank_you_text))
+        console.print(Align.center(thank_you_subtitle))
+        console.print()
+        console.print(help_panel)
+        console.print()
+        
+    except ImportError:
+        # Fallback to original implementation if rich is not available
+        box_width = 60
+
+        # Select a random message
+        message = random.choice(list_of_messages)
+
+        print()  # noqa
+        print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa
+        print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa
+        print("\033[1;37m" + "# {:^59} #\033[0m".format(message))  # noqa
+        print(  # noqa
+            "\033[1;37m"
+            + "# {:^59} #\033[0m".format("https://github.com/BerriAI/litellm/issues/new")
+        )  # noqa
+        print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa
+        print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa
+        print()  # noqa
+        print(" Thank you for using LiteLLM! - Krrish & Ishaan")  # noqa
+        print()  # noqa
+        print()  # noqa
+        print()  # noqa
+        print(  # noqa
+            "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"
+        )  # noqa
+        print()  # noqa
+        print()  # noqa
 
 
 def print_verbose(print_statement):
