@@ -122,6 +122,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_parallel_function_calling: Optional[bool]
     supports_web_search: Optional[bool]
     supports_reasoning: Optional[bool]
+    supports_url_context: Optional[bool]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -2207,6 +2208,7 @@ class LlmProviders(str, Enum):
     HUGGINGFACE = "huggingface"
     TOGETHER_AI = "together_ai"
     OPENROUTER = "openrouter"
+    DATAROBOT = "datarobot"
     VERTEX_AI = "vertex_ai"
     VERTEX_AI_BETA = "vertex_ai_beta"
     GEMINI = "gemini"

@@ -73,12 +73,6 @@ import { AllKeysTable } from "./all_keys_table";
 import { Team } from "./key_team_helpers/key_list";
 import { Setter } from "@/types";
 
-const isLocal = process.env.NODE_ENV === "development";
-const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
-if (isLocal != true) {
-  console.log = function () {};
-}
-
 interface EditKeyModalProps {
   visible: boolean;
   onCancel: () => void;
@@ -399,6 +393,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         refresh={refresh}
         selectedKeyAlias={selectedKeyAlias}
         setSelectedKeyAlias={setSelectedKeyAlias}
+        premiumUser={premiumUser}
       />
 
       {isDeleteModalOpen && (

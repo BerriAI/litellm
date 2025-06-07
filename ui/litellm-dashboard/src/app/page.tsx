@@ -26,7 +26,7 @@ import ChatUI from "@/components/chat_ui";
 import Sidebar from "@/components/leftnav";
 import Usage from "@/components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
-import { proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
+import { getUiConfig, proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
 import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
 import TransformRequestPanel from "@/components/transform_request";
@@ -149,8 +149,11 @@ export default function CreateKeyPage() {
 
   useEffect(() => {
     const token = getCookie("token");
-    setToken(token);
-    setAuthLoading(false);
+    getUiConfig().then((data) => { // get the information for constructing the proxy base url, and then set the token and auth loading
+      console.log("ui config in page.tsx:", data);
+      setToken(token);
+      setAuthLoading(false);
+    });
   }, []);
 
   useEffect(() => {
@@ -164,6 +167,7 @@ export default function CreateKeyPage() {
       return;
     }
 
+ 
     const decoded = jwtDecode(token) as { [key: string]: any };
     if (decoded) {
       // cast decoded to dictionary
@@ -214,8 +218,12 @@ export default function CreateKeyPage() {
       if (decoded.user_id) {
         setUserID(decoded.user_id);
       }
+
     }
+
+    
   }, [token]);
+
   
   useEffect(() => {
     if (accessToken && userID && userRole) {
@@ -327,6 +335,7 @@ export default function CreateKeyPage() {
                   userID={userID}
                   userRole={userRole}
                   organizations={organizations}
+                  premiumUser={premiumUser}
                 />
               ) : page == "organizations" ? (
                 <Organizations
@@ -396,7 +405,8 @@ export default function CreateKeyPage() {
                   userRole={userRole}
                   token={token}
                   accessToken={accessToken}
-                  allTeams={(teams as Team[]) ?? []}
+                  allTeams={teams as Team[] ?? []}
+                  premiumUser={premiumUser}
                 />
               ) : page == "mcp-servers" ? (
                 <MCPServers
@@ -422,6 +432,7 @@ export default function CreateKeyPage() {
                   userRole={userRole}
                   accessToken={accessToken}
                   teams={(teams as Team[]) ?? []}
+                  premiumUser={premiumUser}
                 />
               ) : (
                 <Usage

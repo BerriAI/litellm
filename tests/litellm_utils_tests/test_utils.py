@@ -1058,7 +1058,7 @@ def test_async_http_handler_force_ipv4(mock_async_client):
 
     # Set force_ipv4 to True
     litellm.force_ipv4 = True
-    litellm.use_aiohttp_transport = False
+    litellm.disable_aiohttp_transport = True
 
     try:
         timeout = 120

@@ -1,13 +1,14 @@
 import asyncio
+import json
 from copy import deepcopy
 from typing import List, cast
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import BaseModel
 
 import litellm
-from litellm import ModelResponse
+from litellm import ModelResponse, completion
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
@@ -309,7 +310,10 @@ def test_vertex_ai_candidate_token_count_inclusive(
     Test that the candidate token count is inclusive of the thinking token count
     """
     v = VertexGeminiConfig()
-    assert v.is_candidate_token_count_inclusive(usage_metadata) is inclusive
+    assert (
+        VertexGeminiConfig.is_candidate_token_count_inclusive(usage_metadata)
+        is inclusive
+    )
 
     usage = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
     assert usage.prompt_tokens == expected_usage.prompt_tokens
@@ -322,6 +326,8 @@ def test_streaming_chunk_includes_reasoning_tokens():
         ModelResponseIterator,
     )
 
+    litellm_logging = MagicMock()
+
     # Simulate a streaming chunk as would be received from Gemini
     chunk = {
         "candidates": [{"content": {"parts": [{"text": "Hello"}]}}],
@@ -332,23 +338,64 @@ def test_streaming_chunk_includes_reasoning_tokens():
             "thoughtsTokenCount": 3,
         },
     }
-    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True)
+    iterator = ModelResponseIterator(
+        streaming_response=[], sync_stream=True, logging_obj=litellm_logging
+    )
     streaming_chunk = iterator.chunk_parser(chunk)
-    assert streaming_chunk["usage"] is not None
-    assert streaming_chunk["usage"]["prompt_tokens"] == 5
-    assert streaming_chunk["usage"]["completion_tokens"] == 7
-    assert streaming_chunk["usage"]["total_tokens"] == 12
+    assert streaming_chunk.usage is not None
+    assert streaming_chunk.usage.prompt_tokens == 5
+    assert streaming_chunk.usage.completion_tokens == 7
+    assert streaming_chunk.usage.total_tokens == 12
+    assert streaming_chunk.usage.completion_tokens_details.reasoning_tokens == 3
+
+
+def test_streaming_chunk_includes_reasoning_content():
+    """
+    Ensure that when Gemini returns a chunk with `thought=True`, the parser maps it to `reasoning_content`.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    litellm_logging = MagicMock()
+
+    # Simulate a streaming chunk from Gemini which contains reasoning (thought) content
+    chunk = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "text": "I'm thinking through the problem...",
+                            "thought": True,
+                        }
+                    ]
+                }
+            }
+        ],
+        "usageMetadata": {},
+    }
+
+    iterator = ModelResponseIterator(
+        streaming_response=[], sync_stream=True, logging_obj=litellm_logging
+    )
+    streaming_chunk = iterator.chunk_parser(chunk)
+
+    # The text content should be empty and reasoning_content should be populated
+    assert streaming_chunk.choices[0].delta.content is None
     assert (
-        streaming_chunk["usage"]["completion_tokens_details"]["reasoning_tokens"] == 3
+        streaming_chunk.choices[0].delta.reasoning_content
+        == "I'm thinking through the problem..."
     )
 
 
 def test_check_finish_reason():
-    config = VertexGeminiConfig()
-    finish_reason_mappings = config.get_finish_reason_mapping()
+    finish_reason_mappings = VertexGeminiConfig.get_finish_reason_mapping()
     for k, v in finish_reason_mappings.items():
         assert (
-            config._check_finish_reason(chat_completion_message=None, finish_reason=k)
+            VertexGeminiConfig._check_finish_reason(
+                chat_completion_message=None, finish_reason=k
+            )
             == v
         )
 
@@ -392,6 +439,7 @@ def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
         "includeThoughts": True,
         "thinkingBudget": 100,
     }
+
 
 def test_vertex_ai_map_tools():
     v = VertexGeminiConfig()
@@ -447,3 +495,106 @@ def test_vertex_ai_map_tool_with_anyof():
         "anyOf": [{"type": "string", "nullable": True, "title": "Base Branch"}]
     }, f"Expected only anyOf field and its contents to be kept, but got {tools[0]['function_declarations'][0]['parameters']['properties']['base_branch']}"
 
+
+def test_vertex_ai_streaming_usage_calculation():
+    """
+    Ensure streaming usage calculation uses same function as non-streaming usage calculation
+    """
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+    usage_metadata = {
+        "promptTokenCount": 57,
+        "candidatesTokenCount": 10,
+        "totalTokenCount": 67,
+    }
+
+    # Test streaming chunk parsing
+    with patch.object(VertexGeminiConfig, "_calculate_usage") as mock_calculate_usage:
+        # Create a streaming chunk
+        chunk = {
+            "candidates": [{"content": {"parts": [{"text": "Hello"}]}}],
+            "usageMetadata": usage_metadata,
+        }
+
+        # Create iterator and parse chunk
+        iterator = ModelResponseIterator(
+            streaming_response=[], sync_stream=True, logging_obj=MagicMock()
+        )
+        iterator.chunk_parser(chunk)
+
+        # Verify _calculate_usage was called with correct parameters
+        mock_calculate_usage.assert_called_once_with(completion_response=chunk)
+
+    # Test non-streaming response parsing
+    with patch.object(VertexGeminiConfig, "_calculate_usage") as mock_calculate_usage:
+        # Create a completion response
+        completion_response = {
+            "candidates": [{"content": {"parts": [{"text": "Hello"}]}}],
+            "usageMetadata": usage_metadata,
+        }
+
+        # Parse completion response
+        v.transform_response(
+            model="gemini-pro",
+            raw_response=MagicMock(json=lambda: completion_response),
+            model_response=ModelResponse(),
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        # Verify _calculate_usage was called with correct parameters
+        mock_calculate_usage.assert_called_once_with(
+            completion_response=completion_response,
+        )
+
+
+def test_vertex_ai_streaming_usage_web_search_calculation():
+    """
+    Ensure streaming usage calculation uses same function as non-streaming usage calculation
+    """
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+    usage_metadata = {
+        "promptTokenCount": 57,
+        "candidatesTokenCount": 10,
+        "totalTokenCount": 67,
+    }
+
+    # Create a streaming chunk
+    chunk = {
+        "candidates": [
+            {
+                "content": {"parts": [{"text": "Hello"}]},
+                "groundingMetadata": [
+                    {"webSearchQueries": ["What is the capital of France?"]}
+                ],
+            }
+        ],
+        "usageMetadata": usage_metadata,
+    }
+
+    # Create iterator and parse chunk
+    iterator = ModelResponseIterator(
+        streaming_response=[], sync_stream=True, logging_obj=MagicMock()
+    )
+    completed_response = iterator.chunk_parser(chunk)
+
+    usage: Usage = completed_response.usage
+    assert usage.prompt_tokens_details.web_search_requests is not None
+    assert usage.prompt_tokens_details.web_search_requests == 1

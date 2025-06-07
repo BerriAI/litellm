@@ -41,12 +41,12 @@ Example `litellm_config.yaml`
 
 ```yaml
 model_list:
-  - model_name: azure-gpt-3.5
+  - model_name: azure-gpt-4o
     litellm_params:
       model: azure/<your-azure-model-deployment>
       api_base: os.environ/AZURE_API_BASE # runs os.getenv("AZURE_API_BASE")
       api_key: os.environ/AZURE_API_KEY # runs os.getenv("AZURE_API_KEY")
-      api_version: "2023-07-01-preview"
+      api_version: "2025-01-01-preview"
 ```
 
 
@@ -67,13 +67,13 @@ Get Latest Image 👉 [here](https://github.com/berriai/litellm/pkgs/container/l
 
 #### Step 3. TEST Request
 
-  Pass `model=azure-gpt-3.5` this was set on step 1
+  Pass `model=azure-gpt-4o` this was set on step 1
 
   ```shell
   curl --location 'http://0.0.0.0:4000/chat/completions' \
       --header 'Content-Type: application/json' \
       --data '{
-      "model": "azure-gpt-3.5",
+      "model": "azure-gpt-4o",
       "messages": [
           {
           "role": "user",
@@ -205,9 +205,9 @@ metadata:
 data:
   config.yaml: |
       model_list: 
-        - model_name: gpt-3.5-turbo
+        - model_name: gpt-4o
           litellm_params:
-            model: azure/gpt-turbo-small-ca
+            model: azure/gpt-4o-ca
             api_base: https://my-endpoint-canada-berri992.openai.azure.com/
             api_key: os.environ/CA_AZURE_OPENAI_API_KEY
 ---
@@ -544,15 +544,15 @@ LiteLLM Proxy supports sharing rpm/tpm shared across multiple litellm instances,
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/<your-deployment-name>
       api_base: <your-azure-endpoint>
       api_key: <your-azure-api-key>
       rpm: 6      # Rate limit for this deployment: in requests per minute (rpm)
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: azure/gpt-turbo-small-ca
+      model: azure/gpt-4o-ca
       api_base: https://my-endpoint-canada-berri992.openai.azure.com/
       api_key: <your-azure-api-key>
       rpm: 6
@@ -576,15 +576,15 @@ LiteLLM Proxy supports sharing rpm/tpm shared across multiple litellm instances,
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/<your-deployment-name>
       api_base: <your-azure-endpoint>
       api_key: <your-azure-api-key>
       rpm: 6      # Rate limit for this deployment: in requests per minute (rpm)
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: azure/gpt-turbo-small-ca
+      model: azure/gpt-4o-ca
       api_base: https://my-endpoint-canada-berri992.openai.azure.com/
       api_key: <your-azure-api-key>
       rpm: 6
@@ -619,101 +619,8 @@ docker pull ghcr.io/berriai/litellm-non_root:main-stable
 
 ### 1. Custom server root path (Proxy base url)
 
-💥 Use this when you want to serve LiteLLM on a custom base url path like `https://localhost:4000/api/v1` 
+Refer to [Custom Root Path](./custom_root_ui) for more details.
 
-:::info
-
-In a Kubernetes deployment, it's possible to utilize a shared DNS to host multiple applications by modifying the virtual service
-
-:::
-
-Customize the root path to eliminate the need for employing multiple DNS configurations during deployment.
-
-Step 1.
-👉 Set `SERVER_ROOT_PATH` in your .env and this will be set as your server root path
-```
-export SERVER_ROOT_PATH="/api/v1"
-```
-
-**Step 2** (If you want the Proxy Admin UI to work with your root path you need to use this dockerfile)
-- Use the dockerfile below (it uses litellm as a base image)
-- 👉 Set `UI_BASE_PATH=$SERVER_ROOT_PATH/ui` in the Dockerfile, example `UI_BASE_PATH=/api/v1/ui`
-
-Dockerfile
-
-```shell
-# Use the provided base image
-FROM ghcr.io/berriai/litellm:main-latest
-
-# Set the working directory to /app
-WORKDIR /app
-
-# Install Node.js and npm (adjust version as needed)
-RUN apt-get update && apt-get install -y nodejs npm
-
-# Copy the UI source into the container
-COPY ./ui/litellm-dashboard /app/ui/litellm-dashboard
-
-# Set an environment variable for UI_BASE_PATH
-# This can be overridden at build time
-# set UI_BASE_PATH to "<your server root path>/ui"
-# 👇👇 Enter your UI_BASE_PATH here
-ENV UI_BASE_PATH="/api/v1/ui" 
-
-# Build the UI with the specified UI_BASE_PATH
-WORKDIR /app/ui/litellm-dashboard
-RUN npm install
-RUN UI_BASE_PATH=$UI_BASE_PATH npm run build
-
-# Create the destination directory
-RUN mkdir -p /app/litellm/proxy/_experimental/out
-
-# Move the built files to the appropriate location
-# Assuming the build output is in ./out directory
-RUN rm -rf /app/litellm/proxy/_experimental/out/* && \
-    mv ./out/* /app/litellm/proxy/_experimental/out/
-
-# Switch back to the main app directory
-WORKDIR /app
-
-# Make sure your entrypoint.sh is executable
-RUN chmod +x ./docker/entrypoint.sh
-
-# Expose the necessary port
-EXPOSE 4000/tcp
-
-# Override the CMD instruction with your desired command and arguments
-# only use --detailed_debug for debugging
-CMD ["--port", "4000", "--config", "config.yaml"]
-```
-
-**Step 3** build this Dockerfile
-
-```shell
-docker build -f Dockerfile -t litellm-prod-build . --progress=plain
-```
-
-**Step 4. Run Proxy with `SERVER_ROOT_PATH` set in your env **
-
-```shell
-docker run \
-    -v $(pwd)/proxy_config.yaml:/app/config.yaml \
-    -p 4000:4000 \
-    -e LITELLM_LOG="DEBUG"\
-    -e SERVER_ROOT_PATH="/api/v1"\
-    -e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
-    -e LITELLM_MASTER_KEY="sk-1234"\
-    litellm-prod-build \
-    --config /app/config.yaml
-```
-
-After running the proxy you can access it on `http://0.0.0.0:4000/api/v1/` (since we set `SERVER_ROOT_PATH="/api/v1"`)
-
-**Step 5. Verify Running on correct path**
-
-<Image img={require('../../img/custom_root_path.png')} />
-
-**That's it**, that's all you need to run the proxy on a custom root path
 
 ### 2. SSL Certification 
 
@@ -942,7 +849,7 @@ https://litellm-7yjrj3ha2q-uc.a.run.app is our example proxy, substitute it with
 curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-     "model": "gpt-3.5-turbo",
+     "model": "gpt-4o",
      "messages": [{"role": "user", "content": "Say this is a test!"}],
      "temperature": 0.7
    }'

@@ -45,6 +45,9 @@ from litellm.proxy.management_endpoints.common_utils import (
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
 )
+from litellm.proxy.management_helpers.object_permission_utils import (
+    handle_update_object_permission_common,
+)
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
@@ -673,8 +676,9 @@ async def _set_object_permission(
     return data_json
 
 
-def prepare_key_update_data(
-    data: Union[UpdateKeyRequest, RegenerateKeyRequest], existing_key_row
+async def prepare_key_update_data(
+    data: Union[UpdateKeyRequest, RegenerateKeyRequest],
+    existing_key_row: LiteLLM_VerificationToken,
 ):
     data_json: dict = data.model_dump(exclude_unset=True)
     data_json.pop("key", None)
@@ -704,6 +708,12 @@ def prepare_key_update_data(
             non_default_values["budget_reset_at"] = key_reset_at
             non_default_values["budget_duration"] = budget_duration
 
+    if "object_permission" in non_default_values:
+        non_default_values = await _handle_update_object_permission(
+            data_json=non_default_values,
+            existing_key_row=existing_key_row,
+        )
+
     _metadata = existing_key_row.metadata or {}
 
     # validate model_max_budget
@@ -715,6 +725,32 @@ def prepare_key_update_data(
     )
 
     return non_default_values
+
+
+async def _handle_update_object_permission(
+    data_json: dict,
+    existing_key_row: LiteLLM_VerificationToken,
+) -> dict:
+    """
+    Handle the update of object permission.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    # Use the common helper to handle the object permission update
+    object_permission_id = await handle_update_object_permission_common(
+        data_json=data_json,
+        existing_object_permission_id=existing_key_row.object_permission_id,
+        prisma_client=prisma_client,
+    )
+
+    # Add the object_permission_id to data_json if one was created/updated
+    if object_permission_id is not None:
+        data_json["object_permission_id"] = object_permission_id
+        verbose_proxy_logger.debug(
+            f"updated object_permission_id: {object_permission_id}"
+        )
+
+    return data_json
 
 
 def is_different_team(
@@ -853,7 +889,7 @@ async def update_key_fn(
                 change_initiated_by=user_api_key_dict,
                 llm_router=llm_router,
             )
-        non_default_values = prepare_key_update_data(
+        non_default_values = await prepare_key_update_data(
             data=data, existing_key_row=existing_key_row
         )
 
@@ -1490,9 +1526,6 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             key_data["litellm_budget_table"] = getattr(
                 create_key_response, "litellm_budget_table", None
             )
-            key_data["object_permission"] = getattr(
-                create_key_response, "object_permission", None
-            )
             key_data["created_at"] = getattr(create_key_response, "created_at", None)
             key_data["updated_at"] = getattr(create_key_response, "updated_at", None)
     except Exception as e:
@@ -1948,7 +1981,7 @@ async def regenerate_key_fn(
         non_default_values = {}
         if data is not None:
             # Update with any provided parameters from GenerateKeyRequest
-            non_default_values = prepare_key_update_data(
+            non_default_values = await prepare_key_update_data(
                 data=data, existing_key_row=_key_in_db
             )
             verbose_proxy_logger.debug("non_default_values: %s", non_default_values)
@@ -2375,6 +2408,7 @@ async def _list_key_helper(
             {"created_at": "desc"},
             {"token": "desc"},  # fallback sort
         ],
+        include={"object_permission": True},
     )
 
     verbose_proxy_logger.debug(f"Fetched {len(keys)} keys")

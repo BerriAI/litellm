@@ -73,13 +73,13 @@ async def get_mcp_servers_by_verificationtoken(
         )
     )
 
-    mcp_servers = []
+    mcp_servers: Optional[List[str]] = []
     if (
         verification_token_record is not None
         and verification_token_record.object_permission is not None
     ):
         mcp_servers = verification_token_record.object_permission.mcp_servers
-    return mcp_servers
+    return mcp_servers or []
 
 
 async def get_mcp_servers_by_team(
@@ -99,10 +99,10 @@ async def get_mcp_servers_by_team(
         )
     )
 
-    mcp_servers = []
+    mcp_servers: Optional[List[str]] = []
     if team_record is not None and team_record.object_permission is not None:
         mcp_servers = team_record.object_permission.mcp_servers
-    return mcp_servers
+    return mcp_servers or []
 
 
 async def get_all_mcp_servers_for_user(

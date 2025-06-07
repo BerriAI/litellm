@@ -23,8 +23,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     get_models_from_unified_file_id,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import is_known_model
-from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.proxy.utils import handle_exception_on_proxy, is_known_model
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest
 
 router = APIRouter()

@@ -1,4 +1,4 @@
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -50,7 +50,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             api_base = f"{api_base}/v1/messages"
         return api_base
 
-    def validate_environment(
+    def validate_anthropic_messages_environment(
         self,
         headers: dict,
         model: str,
@@ -59,14 +59,14 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-    ) -> dict:
-        if "x-api-key" not in headers:
+    ) -> Tuple[dict, Optional[str]]:
+        if "x-api-key" not in headers and api_key:
             headers["x-api-key"] = api_key
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION
         if "content-type" not in headers:
             headers["content-type"] = "application/json"
-        return headers
+        return headers, api_base
 
     def transform_anthropic_messages_request(
         self,
