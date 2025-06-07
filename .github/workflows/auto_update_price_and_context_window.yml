@@ -2,11 +2,12 @@ name: Updates model_prices_and_context_window.json and Create Pull Request
 
 on:
   schedule:
-    - cron: "0 0 * * 0"  # Run every Sundays at midnight
+    - cron: "0 0 * * 0" # Run every Sundays at midnight
     #- cron: "0 0 * * *" # Run daily at midnight
 
 jobs:
   auto_update_price_and_context_window:
+    if: github.repository == 'BerriAI/litellm' && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
