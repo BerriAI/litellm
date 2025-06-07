@@ -55,6 +55,9 @@ class VertexAIBatchTransformation:
             created_at=_convert_vertex_datetime_to_openai_datetime(
                 vertex_datetime=response.get("createTime", "")
             ),
+            completed_at=_convert_vertex_datetime_to_openai_datetime(
+                vertex_datetime=response.get("endTime", "")
+            ),
             endpoint="",
             input_file_id=cls._get_input_file_id_from_vertex_ai_batch_response(
                 response
@@ -124,7 +127,15 @@ class VertexAIBatchTransformation:
             return output_file_id
 
         output_uri_prefix = gcs_destination.get("outputUriPrefix", "")
-        return output_uri_prefix
+        # return output_uri_prefix
+        output_info = response.get("outputInfo")
+        if output_info is None:
+            return output_file_id
+        output_directory = output_info.get("gcsOutputDirectory")
+        if output_directory is None:
+            return output_file_id
+
+        return output_directory
 
     @classmethod
     def _get_batch_job_status_from_vertex_ai_batch_response(
