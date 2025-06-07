@@ -54,6 +54,7 @@ class BedrockImageGeneration(BaseAWSLLM):
         api_base: Optional[str] = None,
         extra_headers: Optional[dict] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        api_key: Optional[str] = None,
     ):
         prepared_request = self._prepare_request(
             model=model,
@@ -62,6 +63,7 @@ class BedrockImageGeneration(BaseAWSLLM):
             extra_headers=extra_headers,
             logging_obj=logging_obj,
             prompt=prompt,
+            api_key=api_key
         )
 
         if aimg_generation is True:
@@ -148,6 +150,7 @@ class BedrockImageGeneration(BaseAWSLLM):
         extra_headers: Optional[dict],
         logging_obj: LitellmLogging,
         prompt: str,
+        api_key: Optional[str],
     ) -> BedrockImagePreparedRequest:
         """
         Prepare the request body, headers, and endpoint URL for the Bedrock Image Generation API
@@ -196,20 +199,20 @@ class BedrockImageGeneration(BaseAWSLLM):
 
         # Make POST Request
         body = json.dumps(data).encode("utf-8")
-
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
-            headers = {"Content-Type": "application/json", **extra_headers}
-        request = AWSRequest(
-            method="POST", url=proxy_endpoint_url, data=body, headers=headers
-        )
-        sigv4.add_auth(request)
-        if (
-            extra_headers is not None and "Authorization" in extra_headers
-        ):  # prevent sigv4 from overwriting the auth header
-            request.headers["Authorization"] = extra_headers["Authorization"]
-        prepped = request.prepare()
+            headers = {"Content-Type": "application/json", **extra_headers} 
 
+        prepped = self.get_request_headers(
+            credentials=boto3_credentials_info.credentials,
+            aws_region_name=boto3_credentials_info.aws_region_name,
+            extra_headers=extra_headers,
+            endpoint_url=proxy_endpoint_url,
+            data=body,
+            headers=headers,
+            api_key=api_key,
+        )
+            
         ## LOGGING
         logging_obj.pre_call(
             input=prompt,
