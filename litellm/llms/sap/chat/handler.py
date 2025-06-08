@@ -154,7 +154,7 @@ class GenAIHubOrchestration(BaseLLM):
             with temporary_headers_addition(extra_headers or {}):
                 response = await self.orchestration_client.astream(
                     config=config,
-                    timeout=int(timeout) if isinstance(timeout, (float)) else timeout
+                    # timeout=int(timeout) if isinstance(timeout, (float)) else timeout
                 )
         except OrchestrationError as err:
             raise GenAIHubOrchestrationError(status_code=err.code, message=err.message)
@@ -186,7 +186,7 @@ class GenAIHubOrchestration(BaseLLM):
             with temporary_headers_addition(extra_headers or {}):
                 response = await self.orchestration_client.arun(
                     config=config,
-                    timeout=int(timeout) if isinstance(timeout, (float)) else timeout
+                    # timeout=int(timeout) if isinstance(timeout, (float)) else timeout
                 )
         except OrchestrationError as err:
             raise GenAIHubOrchestrationError(status_code=err.code, message=err.message)
@@ -220,7 +220,7 @@ class GenAIHubOrchestration(BaseLLM):
             with temporary_headers_addition(extra_headers or {}):
                 response = self.orchestration_client.stream(
                     config=config,
-                    timeout=int(timeout) if isinstance(timeout, (float)) else timeout
+                    # timeout=int(timeout) if isinstance(timeout, (float)) else timeout
                 )
         except OrchestrationError as err:
             raise GenAIHubOrchestrationError(status_code=err.code, message=err.message)
@@ -252,7 +252,7 @@ class GenAIHubOrchestration(BaseLLM):
             with temporary_headers_addition(extra_headers or {}):
                 response = self.orchestration_client.run(
                     config=config,
-                    timeout=int(timeout) if isinstance(timeout, (float)) else timeout
+                    # timeout=int(timeout) if isinstance(timeout, (float)) else timeout
                 )
         except OrchestrationError as err:
             raise GenAIHubOrchestrationError(status_code=err.code, message=err.message)
