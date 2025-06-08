@@ -19,15 +19,18 @@ import {
   TabPanels,
   TabPanel,
 } from "@tremor/react";
+import NumericalInput from "./shared/numerical_input";
 import { Input } from "antd";
-import { Modal, Form, InputNumber, Tooltip, Select as Select2 } from "antd";
+import { Modal, Form, Tooltip, Select as Select2 } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { PencilAltIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
+import { PencilAltIcon, TrashIcon, RefreshIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
 import { TextInput } from "@tremor/react";
 import { getModelDisplayName } from './key_team_helpers/fetch_available_models_team_key';
 import { message } from 'antd';
 import OrganizationInfoView from './organization/organization_view';
 import { Organization, organizationListCall, organizationCreateCall, organizationDeleteCall } from './networking';
+import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
+
 interface OrganizationsTableProps {
   organizations: Organization[];
   userRole: string;
@@ -64,6 +67,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
   const [orgToDelete, setOrgToDelete] = useState<string | null>(null);
   const [isOrgModalVisible, setIsOrgModalVisible] = useState(false);
   const [form] = Form.useForm();
+  const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (organizations.length === 0 && accessToken) {
@@ -104,6 +108,14 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
       if (!accessToken) return;
 
       console.log(`values in organizations new create call: ${JSON.stringify(values)}`);
+
+      // Transform allowed_vector_store_ids into object_permission
+      if (values.allowed_vector_store_ids && values.allowed_vector_store_ids.length > 0) {
+        values.object_permission = {
+          vector_stores: values.allowed_vector_store_ids
+        };
+        delete values.allowed_vector_store_ids;
+      }
 
       await organizationCreateCall(accessToken, values);
       setIsOrgModalVisible(false);
@@ -146,44 +158,143 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
   }
 
   return (
-    <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
-      <TabList className="flex justify-between mt-2 w-full items-center">
-        <div className="flex">
-          <Tab>Your Organizations</Tab>
-        </div>
-        <div className="flex items-center space-x-2">
-          {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
-          <Icon
-            icon={RefreshIcon}
-            variant="shadow"
-            size="xs"
-            className="self-center"
-            onClick={handleRefreshClick}
-          />
-        </div>
-      </TabList>
-      <TabPanels>
-        <TabPanel>
-          <Text>
-            Click on &ldquo;Organization ID&rdquo; to view organization details.
-          </Text>
-          <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
-            <Col numColSpan={1}>
-              <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableHeaderCell>Organization ID</TableHeaderCell>
-                      <TableHeaderCell>Organization Name</TableHeaderCell>
-                      <TableHeaderCell>Created</TableHeaderCell>
-                      <TableHeaderCell>Spend (USD)</TableHeaderCell>
-                      <TableHeaderCell>Budget (USD)</TableHeaderCell>
-                      <TableHeaderCell>Models</TableHeaderCell>
-                      <TableHeaderCell>TPM / RPM Limits</TableHeaderCell>
-                      <TableHeaderCell>Info</TableHeaderCell>
-                      <TableHeaderCell>Actions</TableHeaderCell>
-                    </TableRow>
-                  </TableHead>
+    <div className="w-full mx-4 h-[75vh]">
+      <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
+        <Col numColSpan={1} className="flex flex-col gap-2">
+          {(userRole === "Admin" || userRole === "Org Admin") && (
+            <>
+              <Button
+                className="w-fit"
+                onClick={() => setIsOrgModalVisible(true)}
+              >
+                + Create New Organization
+              </Button>
+              <Modal
+                title="Create Organization"
+                visible={isOrgModalVisible}
+                width={800}
+                footer={null}
+                onCancel={handleCancel}
+              >
+                <Form
+                  form={form}
+                  onFinish={handleCreate}
+                  labelCol={{ span: 8 }}
+                  wrapperCol={{ span: 16 }}
+                  labelAlign="left"
+                >
+                  <Form.Item
+                    label="Organization Name"
+                    name="organization_alias"
+                    rules={[{ required: true, message: "Please input an organization name" }]}
+                  >
+                    <TextInput placeholder="" />
+                  </Form.Item>
+                  <Form.Item label="Models" name="models">
+                    <Select2
+                      mode="multiple"
+                      placeholder="Select models"
+                      style={{ width: "100%" }}
+                    >
+                      <Select2.Option key="all-proxy-models" value="all-proxy-models">
+                        All Proxy Models
+                      </Select2.Option>
+                      {userModels && userModels.length > 0 && userModels.map((model) => (
+                        <Select2.Option key={model} value={model}>
+                          {getModelDisplayName(model)}
+                        </Select2.Option>
+                      ))}
+                    </Select2>
+                  </Form.Item>
+
+                  <Form.Item label="Max Budget (USD)" name="max_budget">
+                    <NumericalInput step={0.01} precision={2} width={200} />
+                  </Form.Item>
+                  <Form.Item label="Reset Budget" name="budget_duration">
+                    <Select2 defaultValue={null} placeholder="n/a">
+                      <Select2.Option value="24h">daily</Select2.Option>
+                      <Select2.Option value="7d">weekly</Select2.Option>
+                      <Select2.Option value="30d">monthly</Select2.Option>
+                    </Select2>
+                  </Form.Item>
+                  <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
+                    <NumericalInput step={1} width={400} />
+                  </Form.Item>
+                  <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
+                    <NumericalInput step={1} width={400} />
+                  </Form.Item>
+
+                  <Form.Item 
+                    label={
+                      <span>
+                        Allowed Vector Stores{' '}
+                        <Tooltip title="Select which vector stores this organization can access by default. Leave empty for access to all vector stores">
+                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="allowed_vector_store_ids"
+                    className="mt-4"
+                    help="Select vector stores this organization can access. Leave empty for access to all vector stores"
+                  >
+                    <VectorStoreSelector
+                      onChange={(values) => form.setFieldValue('allowed_vector_store_ids', values)}
+                      value={form.getFieldValue('allowed_vector_store_ids')}
+                      accessToken={accessToken || ''}
+                      placeholder="Select vector stores (optional)"
+                    />
+                  </Form.Item>
+
+                  <Form.Item label="Metadata" name="metadata">  
+                    <Input.TextArea rows={4} />
+                  </Form.Item>
+
+                  <div style={{ textAlign: "right", marginTop: "10px" }}>
+                    <Button type="submit">Create Organization</Button>
+                  </div>
+                </Form>
+              </Modal>
+            </>
+          )}
+
+          <TabGroup className="gap-2 h-[75vh] w-full">
+            <TabList className="flex justify-between mt-2 w-full items-center">
+              <div className="flex">
+                <Tab>Your Organizations</Tab>
+              </div>
+              <div className="flex items-center space-x-2">
+                {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
+                <Icon
+                  icon={RefreshIcon}
+                  variant="shadow"
+                  size="xs"
+                  className="self-center"
+                  onClick={handleRefreshClick}
+                />
+              </div>
+            </TabList>
+            <TabPanels>
+              <TabPanel>
+                <Text>
+                  Click on &ldquo;Organization ID&rdquo; to view organization details.
+                </Text>
+                <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
+                  <Col numColSpan={1}>
+                    <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
+                      <Table>
+                        <TableHead>
+                          <TableRow>
+                            <TableHeaderCell>Organization ID</TableHeaderCell>
+                            <TableHeaderCell>Organization Name</TableHeaderCell>
+                            <TableHeaderCell>Created</TableHeaderCell>
+                            <TableHeaderCell>Spend (USD)</TableHeaderCell>
+                            <TableHeaderCell>Budget (USD)</TableHeaderCell>
+                            <TableHeaderCell>Models</TableHeaderCell>
+                            <TableHeaderCell>TPM / RPM Limits</TableHeaderCell>
+                            <TableHeaderCell>Info</TableHeaderCell>
+                            <TableHeaderCell>Actions</TableHeaderCell>
+                          </TableRow>
+                        </TableHead>
 
                   <TableBody>
                     {organizations && organizations.length > 0
@@ -213,30 +324,102 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                               <TableCell>
                                 {org.litellm_budget_table?.max_budget !== null && org.litellm_budget_table?.max_budget !== undefined ? org.litellm_budget_table?.max_budget : "No limit"}
                               </TableCell>
-                              <TableCell>
-                                {Array.isArray(org.models) && (
-                                  <div className="flex flex-col">
-                                    {org.models.length === 0 ? (
-                                      <Badge size="xs" className="mb-1" color="red">
-                                        All Proxy Models
-                                      </Badge>
-                                    ) : (
-                                      org.models.map((model, index) =>
-                                        model === "all-proxy-models" ? (
-                                          <Badge key={index} size="xs" className="mb-1" color="red">
-                                            All Proxy Models
-                                          </Badge>
-                                        ) : (
-                                          <Badge key={index} size="xs" className="mb-1" color="blue">
-                                            {model.length > 30
-                                              ? `${getModelDisplayName(model).slice(0, 30)}...`
-                                              : getModelDisplayName(model)}
-                                          </Badge>
-                                        )
-                                      )
-                                    )}
-                                  </div>
-                                )}
+                              <TableCell
+                                style={{
+                                  maxWidth: "8-x",
+                                  whiteSpace: "pre-wrap",
+                                  overflow: "hidden",
+                                }}
+                                className={org.models.length > 3 ? "px-0" : ""}
+                              >
+                                <div className="flex flex-col">
+                                  {Array.isArray(org.models) ? (
+                                    <div className="flex flex-col">
+                                      {org.models.length === 0 ? (
+                                        <Badge size={"xs"} className="mb-1" color="red">
+                                          <Text>All Proxy Models</Text>
+                                        </Badge>
+                                      ) : (
+                                        <>
+                                          <div className="flex items-start">
+                                            {org.models.length > 3 && (
+                                              <div>
+                                                <Icon
+                                                  icon={expandedAccordions[org.organization_id || ''] ? ChevronDownIcon : ChevronRightIcon}
+                                                  className="cursor-pointer"
+                                                  size="xs"
+                                                  onClick={() => {
+                                                    setExpandedAccordions(prev => ({
+                                                      ...prev,
+                                                      [org.organization_id || '']: !prev[org.organization_id || '']
+                                                    }));
+                                                  }}
+                                                />
+                                              </div>
+                                            )}
+                                            <div className="flex flex-wrap gap-1">
+                                              {org.models.slice(0, 3).map((model, index) => (
+                                                model === "all-proxy-models" ? (
+                                                  <Badge
+                                                    key={index}
+                                                    size={"xs"}
+                                                    color="red"
+                                                  >
+                                                    <Text>All Proxy Models</Text>
+                                                  </Badge>
+                                                ) : (
+                                                  <Badge
+                                                    key={index}
+                                                    size={"xs"}
+                                                    color="blue"
+                                                  >
+                                                    <Text>
+                                                      {model.length > 30
+                                                        ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                                        : getModelDisplayName(model)}
+                                                    </Text>
+                                                  </Badge>
+                                                )
+                                              ))}
+                                              {org.models.length > 3 && !expandedAccordions[org.organization_id || ''] && (
+                                                <Badge size={"xs"} color="gray" className="cursor-pointer">
+                                                  <Text>+{org.models.length - 3} {org.models.length - 3 === 1 ? 'more model' : 'more models'}</Text>
+                                                </Badge>
+                                              )}
+                                              {expandedAccordions[org.organization_id || ''] && (
+                                                <div className="flex flex-wrap gap-1">
+                                                  {org.models.slice(3).map((model, index) => (
+                                                    model === "all-proxy-models" ? (
+                                                      <Badge
+                                                        key={index + 3}
+                                                        size={"xs"}
+                                                        color="red"
+                                                      >
+                                                        <Text>All Proxy Models</Text>
+                                                      </Badge>
+                                                    ) : (
+                                                      <Badge
+                                                        key={index + 3}
+                                                        size={"xs"}
+                                                        color="blue"
+                                                      >
+                                                        <Text>
+                                                          {model.length > 30
+                                                            ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                                            : getModelDisplayName(model)}
+                                                        </Text>
+                                                      </Badge>
+                                                    )
+                                                  ))}
+                                                </div>
+                                              )}
+                                            </div>
+                                          </div>
+                                        </>
+                                      )}
+                                    </div>
+                                  ) : null}
+                                </div>
                               </TableCell>
                               <TableCell>
                                 <Text>
@@ -276,12 +459,6 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
             </Col>
             {(userRole === "Admin" || userRole === "Org Admin") && (
               <Col numColSpan={1}>
-                <Button
-                  className="mx-auto"
-                  onClick={() => setIsOrgModalVisible(true)}
-                >
-                  + Create New Organization
-                </Button>
                 <Modal
                   title="Create Organization"
                   visible={isOrgModalVisible}
@@ -321,7 +498,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                     </Form.Item>
 
                     <Form.Item label="Max Budget (USD)" name="max_budget">
-                      <InputNumber step={0.01} precision={2} width={200} />
+                      <NumericalInput step={0.01} precision={2} width={200} />
                     </Form.Item>
                     <Form.Item label="Reset Budget" name="budget_duration">
                       <Select2 defaultValue={null} placeholder="n/a">
@@ -331,10 +508,30 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                       </Select2>
                     </Form.Item>
                     <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
-                      <InputNumber step={1} width={400} />
+                      <NumericalInput step={1} width={400} />
                     </Form.Item>
                     <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
-                      <InputNumber step={1} width={400} />
+                      <NumericalInput step={1} width={400} />
+                    </Form.Item>
+                    <Form.Item 
+                      label={
+                        <span>
+                          Allowed Vector Stores{' '}
+                          <Tooltip title="Select which vector stores this organization can access by default. Leave empty for access to all vector stores">
+                            <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                          </Tooltip>
+                        </span>
+                      }
+                      name="allowed_vector_store_ids"
+                      className="mt-4"
+                      help="Select vector stores this organization can access. Leave empty for access to all vector stores"
+                    >
+                      <VectorStoreSelector
+                        onChange={(values) => form.setFieldValue('allowed_vector_store_ids', values)}
+                        value={form.getFieldValue('allowed_vector_store_ids')}
+                        accessToken={accessToken || ''}
+                        placeholder="Select vector stores (optional)"
+                      />
                     </Form.Item>
 
                     <Form.Item label="Metadata" name="metadata">  
@@ -349,8 +546,11 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
               </Col>
             )}
           </Grid>
-        </TabPanel>
-      </TabPanels>
+              </TabPanel>
+            </TabPanels>
+          </TabGroup>
+        </Col>
+      </Grid>
 
       {isDeleteModalOpen ? (
         <div className="fixed z-10 inset-0 overflow-y-auto">
@@ -388,7 +588,8 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
           </div>
         </div>
       ) : <></>}
-    </TabGroup>
+            
+    </div>
   );
 };
 

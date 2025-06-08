@@ -2,9 +2,11 @@
 import TabItem from '@theme/TabItem';
 import Tabs from '@theme/Tabs';
 
-# Files API
+# Provider Files Endpoints
 
 Files are used to upload documents that can be used with features like Assistants, Fine-tuning, and Batch API.
+
+Use this to call the provider's `/files` endpoints directly, in the OpenAI format. 
 
 ## Quick Start
 
@@ -14,48 +16,105 @@ Files are used to upload documents that can be used with features like Assistant
 - Delete File
 - Get File Content
 
+
+
 <Tabs>
 <TabItem value="proxy" label="LiteLLM PROXY Server">
 
-```bash
-$ export OPENAI_API_KEY="sk-..."
+1. Setup config.yaml
 
-$ litellm
-
-# RUNNING on http://0.0.0.0:4000
+```
+# for /files endpoints
+files_settings:
+  - custom_llm_provider: azure
+    api_base: https://exampleopenaiendpoint-production.up.railway.app
+    api_key: fake-key
+    api_version: "2023-03-15-preview"
+  - custom_llm_provider: openai
+    api_key: os.environ/OPENAI_API_KEY
 ```
 
-**Upload a File**
+2. Start LiteLLM PROXY Server
+
 ```bash
-curl http://localhost:4000/v1/files \
-  -H "Authorization: Bearer sk-1234" \
-  -F purpose="fine-tune" \
-  -F file="@mydata.jsonl"
+litellm --config /path/to/config.yaml
+
+## RUNNING on http://0.0.0.0:4000
 ```
 
-**List Files**
-```bash
-curl http://localhost:4000/v1/files \
-  -H "Authorization: Bearer sk-1234"
+3. Use OpenAI's /files endpoints
+
+Upload a File
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-...",
+    base_url="http://0.0.0.0:4000/v1"
+)
+
+client.files.create(
+    file=wav_data,
+    purpose="user_data",
+    extra_body={"custom_llm_provider": "openai"}
+)
 ```
 
-**Retrieve File Information**
-```bash
-curl http://localhost:4000/v1/files/file-abc123 \
-  -H "Authorization: Bearer sk-1234"
+List Files
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-...",
+    base_url="http://0.0.0.0:4000/v1"
+)
+
+files = client.files.list(extra_body={"custom_llm_provider": "openai"})
+print("files=", files)
 ```
 
-**Delete File**
-```bash
-curl http://localhost:4000/v1/files/file-abc123 \
-  -X DELETE \
-  -H "Authorization: Bearer sk-1234"
+Retrieve File Information
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-...",
+    base_url="http://0.0.0.0:4000/v1"
+)
+
+file = client.files.retrieve(file_id="file-abc123", extra_body={"custom_llm_provider": "openai"})
+print("file=", file)
 ```
 
-**Get File Content**
-```bash
-curl http://localhost:4000/v1/files/file-abc123/content \
-  -H "Authorization: Bearer sk-1234"
+Delete File
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-...",
+    base_url="http://0.0.0.0:4000/v1"
+)
+
+response = client.files.delete(file_id="file-abc123", extra_body={"custom_llm_provider": "openai"})
+print("delete response=", response)
+```
+
+Get File Content
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-...",
+    base_url="http://0.0.0.0:4000/v1"
+)
+
+content = client.files.content(file_id="file-abc123", extra_body={"custom_llm_provider": "openai"})
+print("content=", content)
 ```
 
 </TabItem>
@@ -120,7 +179,7 @@ print("file content=", content)
 
 ### [OpenAI](#quick-start)
 
-## [Azure OpenAI](./providers/azure#azure-batches-api)
+### [Azure OpenAI](./providers/azure#azure-batches-api)
 
 ### [Vertex AI](./providers/vertex#batch-apis)
 

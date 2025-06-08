@@ -16,6 +16,36 @@ from .auth_checks_organization import _user_is_org_admin
 
 
 class RouteChecks:
+    @staticmethod
+    def is_virtual_key_allowed_to_call_route(
+        route: str, valid_token: UserAPIKeyAuth
+    ) -> bool:
+        """
+        Raises Exception if Virtual Key is not allowed to call the route
+        """
+
+        # Only check if valid_token.allowed_routes is set and is a list with at least one item
+        if valid_token.allowed_routes is None:
+            return True
+        if not isinstance(valid_token.allowed_routes, list):
+            return True
+        if len(valid_token.allowed_routes) == 0:
+            return True
+
+        # explicit check for allowed routes
+        if route in valid_token.allowed_routes:
+            return True
+
+        # check if wildcard pattern is allowed
+        for allowed_route in valid_token.allowed_routes:
+            if RouteChecks._route_matches_wildcard_pattern(
+                route=route, pattern=allowed_route
+            ):
+                return True
+
+        raise Exception(
+            f"Virtual key is not allowed to call this route. Only allowed to call routes: {valid_token.allowed_routes}. Tried to call route: {route}"
+        )
 
     @staticmethod
     def non_proxy_admin_allowed_routes_check(
@@ -24,7 +54,6 @@ class RouteChecks:
         route: str,
         request: Request,
         valid_token: UserAPIKeyAuth,
-        api_key: str,
         request_data: dict,
     ):
         """
@@ -68,7 +97,6 @@ class RouteChecks:
             and getattr(valid_token, "permissions", None) is not None
             and "get_spend_routes" in getattr(valid_token, "permissions", [])
         ):
-
             pass
         elif _user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value:
             if RouteChecks.is_llm_api_route(route=route):
@@ -81,7 +109,6 @@ class RouteChecks:
             ):
                 # the Admin Viewer is only allowed to call /user/update for their own user_id and can only update
                 if route == "/user/update":
-
                     # Check the Request params are valid for PROXY_ADMIN_VIEW_ONLY
                     if request_data is not None and isinstance(request_data, dict):
                         _params_updated = request_data.keys()
@@ -122,6 +149,8 @@ class RouteChecks:
             route=route, allowed_routes=LiteLLMRoutes.self_managed_routes.value
         ):  # routes that manage their own allowed/disallowed logic
             pass
+        elif route.startswith("/v1/mcp/"):
+            pass  # authN/authZ handled by api itself
         else:
             user_role = "unknown"
             user_id = "unknown"
@@ -223,6 +252,35 @@ class RouteChecks:
         if re.match(pattern, route):
             return True
         return False
+
+    @staticmethod
+    def _route_matches_wildcard_pattern(route: str, pattern: str) -> bool:
+        """
+        Check if route matches the wildcard pattern
+
+        eg.
+
+        pattern: "/scim/v2/*"
+        route: "/scim/v2/Users"
+        - returns: True
+
+        pattern: "/scim/v2/*"
+        route: "/chat/completions"
+        - returns: False
+
+
+        pattern: "/scim/v2/*"
+        route: "/scim/v2/Users/123"
+        - returns: True
+
+        """
+        if pattern.endswith("*"):
+            # Get the prefix (everything before the wildcard)
+            prefix = pattern[:-1]
+            return route.startswith(prefix)
+        else:
+            # If there's no wildcard, the pattern and route should match exactly
+            return route == pattern
 
     @staticmethod
     def check_route_access(route: str, allowed_routes: List[str]) -> bool:

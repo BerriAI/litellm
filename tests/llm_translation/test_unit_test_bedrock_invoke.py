@@ -25,9 +25,11 @@ def test_get_complete_url_basic(bedrock_transformer):
     """Test basic URL construction for non-streaming request"""
     url = bedrock_transformer.get_complete_url(
         api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
+        api_key=None,
         model="anthropic.claude-v2",
         optional_params={},
         stream=False,
+        litellm_params={},
     )
 
     assert (
@@ -40,9 +42,11 @@ def test_get_complete_url_streaming(bedrock_transformer):
     """Test URL construction for streaming request"""
     url = bedrock_transformer.get_complete_url(
         api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
+        api_key=None,
         model="anthropic.claude-v2",
         optional_params={},
         stream=True,
+        litellm_params={},
     )
 
     assert (
@@ -95,7 +99,7 @@ def test_sign_request_basic(mock_aws_request, mock_sigv4_auth, bedrock_transform
     api_base = "https://bedrock-runtime.us-east-1.amazonaws.com"
 
     # Call the method
-    result = bedrock_transformer.sign_request(
+    result, _ = bedrock_transformer.sign_request(
         headers=headers,
         optional_params=optional_params,
         request_data=request_data,

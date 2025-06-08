@@ -95,7 +95,14 @@ Use this for for tracking per [user, key, team, etc.](virtual_keys)
 
 ### Initialize Budget Metrics on Startup
 
-If you want to initialize the key/team budget metrics on startup, you can set the `prometheus_initialize_budget_metrics` to `true` in the `config.yaml`
+If you want litellm to emit the budget metrics for all keys, teams irrespective of whether they are getting requests or not, set `prometheus_initialize_budget_metrics` to `true` in the `config.yaml`
+
+**How this works:**
+
+- If the `prometheus_initialize_budget_metrics` is set to `true`
+  - Every 5 minutes litellm runs a cron job to read all keys, teams from the database
+  - It then emits the budget metrics for each key, team
+  - This is used to populate the budget metrics on the `/metrics` endpoint
 
 ```yaml
 litellm_settings:
@@ -173,6 +180,19 @@ Use this for LLM API Error monitoring and tracking remaining rate limits and tok
 | `litellm_llm_api_latency_metric`  | Latency (seconds) for just the LLM API call - tracked for labels "model", "hashed_api_key", "api_key_alias", "team", "team_alias", "requested_model", "end_user", "user" |
 | `litellm_llm_api_time_to_first_token_metric`             | Time to first token for LLM API call - tracked for labels `model`, `hashed_api_key`, `api_key_alias`, `team`, `team_alias` [Note: only emitted for streaming requests] |
 
+## Tracking `end_user` on Prometheus
+
+By default LiteLLM does not track `end_user` on Prometheus. This is done to reduce the cardinality of the metrics from LiteLLM Proxy.
+
+If you want to track `end_user` on Prometheus, you can do the following:
+
+```yaml showLineNumbers title="config.yaml"
+litellm_settings:
+  callbacks: ["prometheus"]
+  enable_end_user_cost_tracking_prometheus_only: true
+```
+
+
 ## [BETA] Custom Metrics
 
 Track custom metrics on prometheus on all events mentioned above. 
@@ -242,6 +262,19 @@ litellm_settings:
 | `litellm_redis_fails`         | Number of failed redis calls    |
 | `litellm_self_latency`         | Histogram latency for successful litellm api call    |
 
+#### DB Transaction Queue Health Metrics
+
+Use these metrics to monitor the health of the DB Transaction Queue. Eg. Monitoring the size of the in-memory and redis buffers. 
+
+| Metric Name                                         | Description                                                                 | Storage Type |
+|-----------------------------------------------------|-----------------------------------------------------------------------------|--------------|
+| `litellm_pod_lock_manager_size`                     | Indicates which pod has the lock to write updates to the database.         | Redis    |
+| `litellm_in_memory_daily_spend_update_queue_size`   | Number of items in the in-memory daily spend update queue. These are the aggregate spend logs for each user.                 | In-Memory    |
+| `litellm_redis_daily_spend_update_queue_size`       | Number of items in the Redis daily spend update queue.  These are the aggregate spend logs for each user.                    | Redis        |
+| `litellm_in_memory_spend_update_queue_size`         | In-memory aggregate spend values for keys, users, teams, team members, etc.| In-Memory    |
+| `litellm_redis_spend_update_queue_size`             | Redis aggregate spend values for keys, users, teams, etc.                  | Redis        |
+
+
 
 ## **🔥 LiteLLM Maintained Grafana Dashboards **
 
@@ -267,6 +300,17 @@ Here is a screenshot of the metrics you can monitor with the LiteLLM Grafana Das
 | `litellm_requests_metric`             | **deprecated** use `litellm_proxy_total_requests_metric` |
 
 
+
+## Add authentication on /metrics endpoint
+
+**By default /metrics endpoint is unauthenticated.** 
+
+You can opt into running litellm authentication on the /metrics endpoint by setting the following on the config 
+
+```yaml
+litellm_settings:
+  require_auth_for_metrics_endpoint: true
+```
 
 ## FAQ 
 

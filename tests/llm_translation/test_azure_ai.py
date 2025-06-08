@@ -14,7 +14,7 @@ from litellm.llms.anthropic.chat import ModelResponseIterator
 import httpx
 import json
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
-from base_rerank_unit_tests import BaseLLMRerankTest
+# from base_rerank_unit_tests import BaseLLMRerankTest
 
 load_dotenv()
 import io
@@ -159,6 +159,32 @@ def test_azure_ai_services_handler(api_base, expected_url):
         assert mock_client.call_args.kwargs["url"] == expected_url
 
 
+def test_azure_ai_services_with_api_version():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_client:
+        try:
+            response = litellm.completion(
+                model="azure_ai/Meta-Llama-3.1-70B-Instruct",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                api_key="my-fake-api-key",
+                api_version="2024-05-01-preview",
+                api_base="https://litellm8397336933.services.ai.azure.com/models",
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_client.assert_called_once()
+        assert mock_client.call_args.kwargs["headers"]["api-key"] == "my-fake-api-key"
+        assert (
+            mock_client.call_args.kwargs["url"]
+            == "https://litellm8397336933.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview"
+        )
+
+@pytest.mark.skip(reason="Skipping due to cohere ssl issues")
 def test_completion_azure_ai_command_r():
     try:
         import os
@@ -229,13 +255,43 @@ def test_azure_deepseek_reasoning_content():
         assert response.choices[0].message.content == "\n\nThe sky is a canvas of blue"
 
 
-class TestAzureAIRerank(BaseLLMRerankTest):
-    def get_custom_llm_provider(self) -> litellm.LlmProviders:
-        return litellm.LlmProviders.AZURE_AI
+# skipping due to cohere rbac issues
+# class TestAzureAIRerank(BaseLLMRerankTest):
+#     def get_custom_llm_provider(self) -> litellm.LlmProviders:
+#         return litellm.LlmProviders.AZURE_AI
 
-    def get_base_rerank_call_args(self) -> dict:
-        return {
-            "model": "azure_ai/cohere-rerank-v3-english",
-            "api_base": os.getenv("AZURE_AI_COHERE_API_BASE"),
-            "api_key": os.getenv("AZURE_AI_COHERE_API_KEY"),
-        }
+#     def get_base_rerank_call_args(self) -> dict:
+#         return {
+#             "model": "azure_ai/cohere-rerank-v3-english",
+#             "api_base": os.getenv("AZURE_AI_COHERE_API_BASE"),
+#             "api_key": os.getenv("AZURE_AI_COHERE_API_KEY"),
+#         }
+
+
+@pytest.mark.asyncio
+async def test_azure_ai_request_format():
+    """
+    Test that Azure AI requests are formatted correctly with the proper endpoint and parameters
+    for both synchronous and asynchronous calls
+    """
+    from openai import AsyncAzureOpenAI, AzureOpenAI
+
+    litellm._turn_on_debug()
+
+    # Set up the test parameters
+    api_key = os.getenv("AZURE_API_KEY")
+    api_base = f"{os.getenv('AZURE_API_BASE')}/openai/deployments/gpt-4o-new-test/chat/completions?api-version=2024-08-01-preview"
+    model = "azure_ai/gpt-4o"
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "Hello! How can I assist you today?"},
+        {"role": "user", "content": "hi"},
+    ]
+
+    await litellm.acompletion(
+        custom_llm_provider="azure_ai",
+        api_key=api_key,
+        api_base=api_base,
+        model=model,
+        messages=messages,
+    )

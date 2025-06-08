@@ -17,7 +17,7 @@ import pytest
 import litellm
 from typing import AsyncGenerator
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy.pass_through_endpoints.types import EndpointType
+from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
@@ -31,10 +31,10 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 from fastapi import Request
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
-    _init_kwargs_for_pass_through_endpoint,
     _update_metadata_with_tags_in_header,
+    HttpPassThroughEndpointHelpers
 )
-from litellm.proxy.pass_through_endpoints.types import PassthroughStandardLoggingPayload
+from litellm.types.passthrough_endpoints.pass_through_endpoints import PassthroughStandardLoggingPayload
 
 
 @pytest.fixture
@@ -110,11 +110,20 @@ def test_init_kwargs_for_pass_through_endpoint_basic(
         request_body={},
     )
 
-    result = _init_kwargs_for_pass_through_endpoint(
+    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
         request=request,
         user_api_key_dict=mock_user_api_key_dict,
         passthrough_logging_payload=passthrough_payload,
         litellm_call_id="test-call-id",
+        logging_obj=LiteLLMLoggingObj(
+            model="test-model",
+            messages=[],
+            stream=False,
+            call_type="test-call-type",
+            start_time=datetime.now(),
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        ),
     )
 
     assert result["call_type"] == "pass_through_endpoint"
@@ -152,12 +161,21 @@ def test_init_kwargs_with_litellm_metadata(mock_request, mock_user_api_key_dict)
         request_body={},
     )
 
-    result = _init_kwargs_for_pass_through_endpoint(
+    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
         request=request,
         user_api_key_dict=mock_user_api_key_dict,
         passthrough_logging_payload=passthrough_payload,
         _parsed_body=parsed_body,
         litellm_call_id="test-call-id",
+        logging_obj=LiteLLMLoggingObj(
+            model="test-model",
+            messages=[],
+            stream=False,
+            call_type="test-call-type",
+            start_time=datetime.now(),
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        ),
     )
 
     # Check that litellm_metadata was merged with default metadata
@@ -178,11 +196,20 @@ def test_init_kwargs_with_tags_in_header(mock_request, mock_user_api_key_dict):
         request_body={},
     )
 
-    result = _init_kwargs_for_pass_through_endpoint(
+    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
         request=request,
         user_api_key_dict=mock_user_api_key_dict,
         passthrough_logging_payload=passthrough_payload,
         litellm_call_id="test-call-id",
+        logging_obj=LiteLLMLoggingObj(
+            model="test-model",
+            messages=[],
+            stream=False,
+            call_type="test-call-type",
+            start_time=datetime.now(),
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        ),
     )
 
     # Check that tags were added to metadata
@@ -339,9 +366,6 @@ def test_pass_through_routes_support_all_methods():
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         router as llm_router,
     )
-    from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
-        router as vertex_router,
-    )
 
     # Expected HTTP methods
     expected_methods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
@@ -361,7 +385,6 @@ def test_pass_through_routes_support_all_methods():
 
     # Check both routers
     check_router_methods(llm_router)
-    check_router_methods(vertex_router)
 
 
 def test_is_bedrock_agent_runtime_route():

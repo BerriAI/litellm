@@ -28,22 +28,22 @@ In the config below:
 
 E.g.: 
 - `model=vllm-models` will route to `openai/facebook/opt-125m`. 
-- `model=gpt-3.5-turbo` will load balance between `azure/gpt-turbo-small-eu` and `azure/gpt-turbo-small-ca`
+- `model=gpt-4o` will load balance between `azure/gpt-4o-eu` and `azure/gpt-4o-ca`
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo ### RECEIVED MODEL NAME ###
+  - model_name: gpt-4o ### RECEIVED MODEL NAME ###
     litellm_params: # all params accepted by litellm.completion() - https://docs.litellm.ai/docs/completion/input
-      model: azure/gpt-turbo-small-eu ### MODEL NAME sent to `litellm.completion()` ###
+      model: azure/gpt-4o-eu ### MODEL NAME sent to `litellm.completion()` ###
       api_base: https://my-endpoint-europe-berri-992.openai.azure.com/
       api_key: "os.environ/AZURE_API_KEY_EU" # does os.getenv("AZURE_API_KEY_EU")
       rpm: 6      # [OPTIONAL] Rate limit for this deployment: in requests per minute (rpm)
   - model_name: bedrock-claude-v1 
     litellm_params:
       model: bedrock/anthropic.claude-instant-v1
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: azure/gpt-turbo-small-ca
+      model: azure/gpt-4o-ca
       api_base: https://my-endpoint-canada-berri992.openai.azure.com/
       api_key: "os.environ/AZURE_API_KEY_CA"
       rpm: 6
@@ -100,9 +100,9 @@ $ litellm --config /path/to/config.yaml --detailed_debug
 
 #### Step 3: Test it
 
-Sends request to model where `model_name=gpt-3.5-turbo` on config.yaml. 
+Sends request to model where `model_name=gpt-4o` on config.yaml. 
 
-If multiple with `model_name=gpt-3.5-turbo` does [Load Balancing](https://docs.litellm.ai/docs/proxy/load_balancing)
+If multiple with `model_name=gpt-4o` does [Load Balancing](https://docs.litellm.ai/docs/proxy/load_balancing)
 
 **[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
 
@@ -110,7 +110,7 @@ If multiple with `model_name=gpt-3.5-turbo` does [Load Balancing](https://docs.l
 curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
-      "model": "gpt-3.5-turbo",
+      "model": "gpt-4o",
       "messages": [
         {
           "role": "user",
@@ -145,9 +145,9 @@ model_list:
       api_key: sk-123
       api_base: https://openai-gpt-4-test-v-2.openai.azure.com/
       temperature: 0.2
-  - model_name: openai-gpt-3.5
+  - model_name: openai-gpt-4o
     litellm_params:
-      model: openai/gpt-3.5-turbo
+      model: openai/gpt-4o
       extra_headers: {"AI-Resource Group": "ishaan-resource"}
       api_key: sk-123
       organization: org-ikDc4ex8NB
@@ -395,9 +395,9 @@ model_list:
         model: huggingface/HuggingFaceH4/zephyr-7b-beta
         api_base: http://0.0.0.0:8003
         rpm: 60000      
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-        model: gpt-3.5-turbo
+        model: gpt-4o
         api_key: <my-openai-key>
         rpm: 200      
   - model_name: gpt-3.5-turbo-16k
@@ -409,13 +409,13 @@ model_list:
 litellm_settings:
   num_retries: 3 # retry call 3 times on each model_name (e.g. zephyr-beta)
   request_timeout: 10 # raise Timeout error if call takes longer than 10s. Sets litellm.request_timeout 
-  fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo"]}] # fallback to gpt-3.5-turbo if call fails num_retries 
-  context_window_fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo-16k"]}, {"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}] # fallback to gpt-3.5-turbo-16k if context window error
+  fallbacks: [{"zephyr-beta": ["gpt-4o"]}] # fallback to gpt-4o if call fails num_retries 
+  context_window_fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo-16k"]}, {"gpt-4o": ["gpt-3.5-turbo-16k"]}] # fallback to gpt-3.5-turbo-16k if context window error
   allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
 
 router_settings: # router_settings are optional
   routing_strategy: simple-shuffle # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle"
-  model_group_alias: {"gpt-4": "gpt-3.5-turbo"} # all requests with `gpt-4` will be routed to models with `gpt-3.5-turbo`
+  model_group_alias: {"gpt-4": "gpt-4o"} # all requests with `gpt-4` will be routed to models with `gpt-4o`
   num_retries: 2
   timeout: 30                                  # 30 seconds
   redis_host: <your redis host>                # set this when using multiple litellm proxy deployments, load balancing state stored in redis
@@ -448,6 +448,34 @@ model_list:
 
 s/o to [@David Manouchehri](https://www.linkedin.com/in/davidmanouchehri/) for helping with this. 
 
+### Centralized Credential Management
+
+Define credentials once and reuse them across multiple models. This helps with:
+- Secret rotation
+- Reducing config duplication
+
+```yaml
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: azure/gpt-4o
+      litellm_credential_name: default_azure_credential  # Reference credential below
+
+credential_list:
+  - credential_name: default_azure_credential
+    credential_values:
+      api_key: os.environ/AZURE_API_KEY  # Load from environment
+      api_base: os.environ/AZURE_API_BASE
+      api_version: "2023-05-15"
+    credential_info:
+      description: "Production credentials for EU region"
+```
+
+#### Key Parameters
+- `credential_name`: Unique identifier for the credential set
+- `credential_values`: Key-value pairs of credentials/secrets (supports `os.environ/` syntax)
+- `credential_info`: Key-value pairs of user provided credentials information.  No key-value pairs are required, but the dictionary must exist.
+
 ### Load API Keys from Secret Managers (Azure Vault, etc)
 
 [**Using Secret Managers with LiteLLM Proxy**](../secret)
@@ -468,9 +496,9 @@ Supported Environments:
 2. For each model set the list of supported environments in `model_info.supported_environments`
 ```yaml
 model_list:
- - model_name: gpt-3.5-turbo
+ - model_name: gpt-3.5-turbo-16k
    litellm_params:
-     model: openai/gpt-3.5-turbo
+     model: openai/gpt-3.5-turbo-16k
      api_key: os.environ/OPENAI_API_KEY
    model_info:
      supported_environments: ["development", "production", "staging"]
@@ -571,9 +599,9 @@ in your environment, and restart the proxy.
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 ```
 

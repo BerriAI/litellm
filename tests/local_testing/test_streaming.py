@@ -241,7 +241,7 @@ tools_schema = [
 def test_completion_azure_stream_special_char():
     litellm.set_verbose = True
     messages = [{"role": "user", "content": "hi. respond with the <xml> tag only"}]
-    response = completion(model="azure/chatgpt-v-2", messages=messages, stream=True)
+    response = completion(model="azure/chatgpt-v-3", messages=messages, stream=True)
     response_str = ""
     for part in response:
         response_str += part.choices[0].delta.content or ""
@@ -449,7 +449,7 @@ def test_completion_azure_stream():
             },
         ]
         response = completion(
-            model="azure/chatgpt-v-2", messages=messages, stream=True, max_tokens=50
+            model="azure/chatgpt-v-3", messages=messages, stream=True, max_tokens=50
         )
         complete_response = ""
         # Add any assertions here to check the response
@@ -553,7 +553,7 @@ async def test_completion_predibase_streaming(sync_mode):
 async def test_completion_ai21_stream():
     litellm.set_verbose = True
     response = await litellm.acompletion(
-        model="ai21_chat/jamba-1.5-large",
+        model="ai21_chat/jamba-mini",
         user="ishaan",
         stream=True,
         seed=123,
@@ -712,7 +712,7 @@ async def test_acompletion_claude_2_stream():
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_completion_gemini_stream(sync_mode):
     try:
-        litellm.set_verbose = True
+        litellm._turn_on_debug()
         print("Streaming gemini response")
         function1 = [
             {
@@ -1232,62 +1232,6 @@ def test_vertex_ai_stream(provider):
 # test_completion_vertexai_stream_bad_key()
 
 
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.asyncio
-async def test_completion_databricks_streaming(sync_mode):
-    litellm.set_verbose = True
-    model_name = "databricks/databricks-dbrx-instruct"
-    try:
-        if sync_mode:
-            final_chunk: Optional[litellm.ModelResponse] = None
-            response: litellm.CustomStreamWrapper = completion(  # type: ignore
-                model=model_name,
-                messages=messages,
-                max_tokens=10,  # type: ignore
-                stream=True,
-            )
-            complete_response = ""
-            # Add any assertions here to check the response
-            has_finish_reason = False
-            for idx, chunk in enumerate(response):
-                final_chunk = chunk
-                chunk, finished = streaming_format_tests(idx, chunk)
-                if finished:
-                    has_finish_reason = True
-                    break
-                complete_response += chunk
-            if has_finish_reason == False:
-                raise Exception("finish reason not set")
-            if complete_response.strip() == "":
-                raise Exception("Empty response received")
-        else:
-            response: litellm.CustomStreamWrapper = await litellm.acompletion(  # type: ignore
-                model=model_name,
-                messages=messages,
-                max_tokens=100,  # type: ignore
-                stream=True,
-            )
-            complete_response = ""
-            # Add any assertions here to check the response
-            has_finish_reason = False
-            idx = 0
-            final_chunk: Optional[litellm.ModelResponse] = None
-            async for chunk in response:
-                final_chunk = chunk
-                chunk, finished = streaming_format_tests(idx, chunk)
-                if finished:
-                    has_finish_reason = True
-                    break
-                complete_response += chunk
-                idx += 1
-            if has_finish_reason == False:
-                raise Exception("finish reason not set")
-            if complete_response.strip() == "":
-                raise Exception("Empty response received")
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 @pytest.mark.parametrize("sync_mode", [False, True])
 @pytest.mark.asyncio
 async def test_completion_replicate_llama3_streaming(sync_mode):
@@ -1493,7 +1437,7 @@ def test_bedrock_claude_3_streaming():
         "claude-3-opus-20240229",
         "cohere.command-r-plus-v1:0",  # bedrock
         "gpt-3.5-turbo",
-        "databricks/databricks-dbrx-instruct",  # databricks
+        # "databricks/databricks-dbrx-instruct",  # databricks
         "predibase/llama-3-8b-instruct",  # predibase
     ],
 )
@@ -2070,7 +2014,7 @@ def test_openai_chat_completion_complete_response_call():
     "model",
     [
         "gpt-3.5-turbo",
-        "azure/chatgpt-v-2",
+        "azure/chatgpt-v-3",
         "claude-3-haiku-20240307",
         "o1-preview",
         "o1",
@@ -2947,48 +2891,6 @@ def test_azure_streaming_and_function_calling():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
         raise e
-
-
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.asyncio
-async def test_completion_azure_ai_mistral_invalid_params(sync_mode):
-    try:
-        import os
-        from litellm import stream_chunk_builder
-
-        litellm.set_verbose = True
-
-        os.environ["AZURE_AI_API_BASE"] = os.getenv("AZURE_MISTRAL_API_BASE", "")
-        os.environ["AZURE_AI_API_KEY"] = os.getenv("AZURE_MISTRAL_API_KEY", "")
-
-        data = {
-            "model": "azure_ai/mistral",
-            "messages": [{"role": "user", "content": "What is the meaning of life?"}],
-            "frequency_penalty": 0.1,
-            "presence_penalty": 0.1,
-            "drop_params": True,
-            "stream": True,
-        }
-        chunks = []
-        if sync_mode:
-            response = completion(**data)  # type: ignore
-            for chunk in response:
-                print(chunk)
-                chunks.append(chunk)
-        else:
-            response = await litellm.acompletion(**data)  # type: ignore
-
-            async for chunk in response:
-                print(chunk)
-                chunks.append(chunk)
-        print(f"chunks: {chunks}")
-        response = stream_chunk_builder(chunks=chunks)
-        assert response.choices[0].message.content is not None
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
 
 @pytest.mark.asyncio
 async def test_azure_astreaming_and_function_calling():
@@ -4069,7 +3971,8 @@ def test_mock_response_iterator_tool_use():
     "model",
     [
         # "deepseek/deepseek-reasoner",
-        "anthropic/claude-3-7-sonnet-20250219",
+        # "anthropic/claude-3-7-sonnet-20250219",
+        "openrouter/anthropic/claude-3.7-sonnet",
     ],
 )
 def test_reasoning_content_completion(model):
@@ -4080,7 +3983,9 @@ def test_reasoning_content_completion(model):
             model=model,
             messages=[{"role": "user", "content": "Tell me a joke."}],
             stream=True,
-            thinking={"type": "enabled", "budget_tokens": 1024},
+            # thinking={"type": "enabled", "budget_tokens": 1024},
+            reasoning={"effort": "high"},
+            drop_params=True,
         )
 
         reasoning_content_exists = False

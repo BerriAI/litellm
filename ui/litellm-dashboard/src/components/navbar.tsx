@@ -1,33 +1,59 @@
 import Link from "next/link";
-import React from "react";
+import React, { useState, useEffect } from "react";
 import type { MenuProps } from "antd";
 import { Dropdown } from "antd";
-import { Organization } from "@/components/networking";
+import { getProxyBaseUrl, Organization } from "@/components/networking";
 import { defaultOrg } from "@/components/common_components/default_org";
 import { 
   UserOutlined,
   LogoutOutlined
 } from '@ant-design/icons';
+import { clearTokenCookies } from "@/utils/cookieUtils";
+import { fetchProxySettings } from "@/utils/proxyUtils";
+
 interface NavbarProps {
   userID: string | null;
+  userEmail: string | null;
   userRole: string | null;
   premiumUser: boolean;
   setProxySettings: React.Dispatch<React.SetStateAction<any>>;
   proxySettings: any;
+  accessToken: string | null;
 }
 
 const Navbar: React.FC<NavbarProps> = ({
   userID,
+  userEmail,
   userRole,
   premiumUser,
   proxySettings,
+  setProxySettings,
+  accessToken,
 }) => {
-  const isLocal = process.env.NODE_ENV === "development";
-  const imageUrl = isLocal ? "http://localhost:4000/get_image" : "/get_image";
-  let logoutUrl = proxySettings?.PROXY_LOGOUT_URL || "";
+  const baseUrl = getProxyBaseUrl();
+  const imageUrl = baseUrl + "/get_image";
+  const [logoutUrl, setLogoutUrl] = useState("");
+
+  useEffect(() => {
+    const initializeProxySettings = async () => {
+      if (accessToken) {
+        const settings = await fetchProxySettings(accessToken);
+        console.log("response from fetchProxySettings", settings);
+        if (settings) {
+          setProxySettings(settings);
+        }
+      }
+    };
+
+    initializeProxySettings();
+  }, [accessToken]);
+
+  useEffect(() => {
+    setLogoutUrl(proxySettings?.PROXY_LOGOUT_URL || "");
+  }, [proxySettings]);
 
   const handleLogout = () => {
-    document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+    clearTokenCookies();
     window.location.href = logoutUrl;
   };
 
@@ -37,6 +63,7 @@ const Navbar: React.FC<NavbarProps> = ({
       label: (
         <div className="py-1">
           <p className="text-sm text-gray-600">Role: {userRole}</p>
+          <p className="text-sm text-gray-600">Email: {userEmail || "Unknown"}</p>
           <p className="text-sm text-gray-600"><UserOutlined /> {userID}</p>
           <p className="text-sm text-gray-600">Premium User: {String(premiumUser)}</p>
         </div>

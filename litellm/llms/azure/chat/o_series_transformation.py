@@ -14,6 +14,7 @@ Translations handled by LiteLLM:
 
 from typing import List, Optional
 
+import litellm
 from litellm import verbose_logger
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import get_model_info
@@ -22,6 +23,27 @@ from ...openai.chat.o_series_transformation import OpenAIOSeriesConfig
 
 
 class AzureOpenAIO1Config(OpenAIOSeriesConfig):
+    def get_supported_openai_params(self, model: str) -> list:
+        """
+        Get the supported OpenAI params for the Azure O-Series models
+        """
+        all_openai_params = litellm.OpenAIGPTConfig().get_supported_openai_params(
+            model=model
+        )
+        non_supported_params = [
+            "logprobs",
+            "top_p",
+            "presence_penalty",
+            "frequency_penalty",
+            "top_logprobs",
+        ]
+
+        o_series_only_param = ["reasoning_effort"]
+        all_openai_params.extend(o_series_only_param)
+        return [
+            param for param in all_openai_params if param not in non_supported_params
+        ]
+
     def should_fake_stream(
         self,
         model: Optional[str],
@@ -57,7 +79,7 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
         return True
 
     def is_o_series_model(self, model: str) -> bool:
-        return "o1" in model or "o3" in model or "o_series/" in model
+        return "o1" in model or "o3" in model or "o4" in model or "o_series/" in model
 
     def transform_request(
         self,

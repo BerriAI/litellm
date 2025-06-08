@@ -1,13 +1,18 @@
+from datetime import datetime
 from typing import Dict, List, Literal, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.guardrails import DynamicGuardrailParams, GuardrailEventHooks
+from litellm.types.guardrails import (
+    DynamicGuardrailParams,
+    GuardrailEventHooks,
+    LitellmParams,
+    PiiEntityType,
+)
 from litellm.types.utils import StandardLoggingGuardrailInformation
 
 
 class CustomGuardrail(CustomLogger):
-
     def __init__(
         self,
         guardrail_name: Optional[str] = None,
@@ -16,6 +21,8 @@ class CustomGuardrail(CustomLogger):
             Union[GuardrailEventHooks, List[GuardrailEventHooks]]
         ] = None,
         default_on: bool = False,
+        mask_request_content: bool = False,
+        mask_response_content: bool = False,
         **kwargs,
     ):
         """
@@ -26,6 +33,8 @@ class CustomGuardrail(CustomLogger):
             supported_event_hooks: The event hooks that the guardrail supports
             event_hook: The event hook to run the guardrail on
             default_on: If True, the guardrail will be run by default on all requests
+            mask_request_content: If True, the guardrail will mask the request content
+            mask_response_content: If True, the guardrail will mask the response content
         """
         self.guardrail_name = guardrail_name
         self.supported_event_hooks = supported_event_hooks
@@ -33,6 +42,8 @@ class CustomGuardrail(CustomLogger):
             Union[GuardrailEventHooks, List[GuardrailEventHooks]]
         ] = event_hook
         self.default_on: bool = default_on
+        self.mask_request_content: bool = mask_request_content
+        self.mask_response_content: bool = mask_response_content
 
         if supported_event_hooks:
             ## validate event_hook is in supported_event_hooks
@@ -177,20 +188,17 @@ class CustomGuardrail(CustomLogger):
 
     def add_standard_logging_guardrail_information_to_request_data(
         self,
-        guardrail_json_response: Union[Exception, str, dict],
+        guardrail_json_response: Union[Exception, str, dict, List[dict]],
         request_data: dict,
         guardrail_status: Literal["success", "failure"],
+        start_time: Optional[float] = None,
+        end_time: Optional[float] = None,
+        duration: Optional[float] = None,
+        masked_entity_count: Optional[Dict[str, int]] = None,
     ) -> None:
         """
         Builds `StandardLoggingGuardrailInformation` and adds it to the request metadata so it can be used for logging to DataDog, Langfuse, etc.
         """
-        from litellm.proxy.proxy_server import premium_user
-
-        if premium_user is not True:
-            verbose_logger.warning(
-                f"Guardrail Tracing is only available for premium users. Skipping guardrail logging for guardrail={self.guardrail_name} event_hook={self.event_hook}"
-            )
-            return
         if isinstance(guardrail_json_response, Exception):
             guardrail_json_response = str(guardrail_json_response)
         slg = StandardLoggingGuardrailInformation(
@@ -198,8 +206,14 @@ class CustomGuardrail(CustomLogger):
             guardrail_mode=self.event_hook,
             guardrail_response=guardrail_json_response,
             guardrail_status=guardrail_status,
+            start_time=start_time,
+            end_time=end_time,
+            duration=duration,
+            masked_entity_count=masked_entity_count,
         )
         if "metadata" in request_data:
+            if request_data["metadata"] is None:
+                request_data["metadata"] = {}
             request_data["metadata"]["standard_logging_guardrail_information"] = slg
         elif "litellm_metadata" in request_data:
             request_data["litellm_metadata"][
@@ -209,6 +223,103 @@ class CustomGuardrail(CustomLogger):
             verbose_logger.warning(
                 "unable to log guardrail information. No metadata found in request_data"
             )
+
+    async def apply_guardrail(
+        self,
+        text: str,
+        language: Optional[str] = None,
+        entities: Optional[List[PiiEntityType]] = None,
+    ) -> str:
+        """
+        Apply your guardrail logic to the given text
+
+        Args:
+            text: The text to apply the guardrail to
+            language: The language of the text
+            entities: The entities to mask, optional
+
+        Any of the custom guardrails can override this method to provide custom guardrail logic
+
+        Returns the text with the guardrail applied
+
+        Raises:
+            Exception:
+                - If the guardrail raises an exception
+
+        """
+        return text
+
+    def _process_response(
+        self,
+        response: Optional[Dict],
+        request_data: dict,
+        start_time: Optional[float] = None,
+        end_time: Optional[float] = None,
+        duration: Optional[float] = None,
+    ):
+        """
+        Add StandardLoggingGuardrailInformation to the request data
+
+        This gets logged on downsteam Langfuse, DataDog, etc.
+        """
+        # Convert None to empty dict to satisfy type requirements
+        guardrail_response = {} if response is None else response
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=guardrail_response,
+            request_data=request_data,
+            guardrail_status="success",
+            duration=duration,
+            start_time=start_time,
+            end_time=end_time,
+        )
+        return response
+
+    def _process_error(
+        self,
+        e: Exception,
+        request_data: dict,
+        start_time: Optional[float] = None,
+        end_time: Optional[float] = None,
+        duration: Optional[float] = None,
+    ):
+        """
+        Add StandardLoggingGuardrailInformation to the request data
+
+        This gets logged on downsteam Langfuse, DataDog, etc.
+        """
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=e,
+            request_data=request_data,
+            guardrail_status="failure",
+            duration=duration,
+            start_time=start_time,
+            end_time=end_time,
+        )
+        raise e
+
+    def mask_content_in_string(
+        self,
+        content_string: str,
+        mask_string: str,
+        start_index: int,
+        end_index: int,
+    ) -> str:
+        """
+        Mask the content in the string between the start and end indices.
+        """
+
+        # Do nothing if the start or end are not valid
+        if not (0 <= start_index < end_index <= len(content_string)):
+            return content_string
+
+        # Mask the content
+        return content_string[:start_index] + mask_string + content_string[end_index:]
+
+    def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
+        """
+        Update the guardrails litellm params in memory
+        """
+        pass
 
 
 def log_guardrail_information(func):
@@ -225,21 +336,7 @@ def log_guardrail_information(func):
     import asyncio
     import functools
 
-    def process_response(self, response, request_data):
-        self.add_standard_logging_guardrail_information_to_request_data(
-            guardrail_json_response=response,
-            request_data=request_data,
-            guardrail_status="success",
-        )
-        return response
-
-    def process_error(self, e, request_data):
-        self.add_standard_logging_guardrail_information_to_request_data(
-            guardrail_json_response=e,
-            request_data=request_data,
-            guardrail_status="failure",
-        )
-        raise e
+    start_time = datetime.now()
 
     @functools.wraps(func)
     async def async_wrapper(*args, **kwargs):
@@ -249,9 +346,21 @@ def log_guardrail_information(func):
         )
         try:
             response = await func(*args, **kwargs)
-            return process_response(self, response, request_data)
+            return self._process_response(
+                response=response,
+                request_data=request_data,
+                start_time=start_time.timestamp(),
+                end_time=datetime.now().timestamp(),
+                duration=(datetime.now() - start_time).total_seconds(),
+            )
         except Exception as e:
-            return process_error(self, e, request_data)
+            return self._process_error(
+                e=e,
+                request_data=request_data,
+                start_time=start_time.timestamp(),
+                end_time=datetime.now().timestamp(),
+                duration=(datetime.now() - start_time).total_seconds(),
+            )
 
     @functools.wraps(func)
     def sync_wrapper(*args, **kwargs):
@@ -261,9 +370,17 @@ def log_guardrail_information(func):
         )
         try:
             response = func(*args, **kwargs)
-            return process_response(self, response, request_data)
+            return self._process_response(
+                response=response,
+                request_data=request_data,
+                duration=(datetime.now() - start_time).total_seconds(),
+            )
         except Exception as e:
-            return process_error(self, e, request_data)
+            return self._process_error(
+                e=e,
+                request_data=request_data,
+                duration=(datetime.now() - start_time).total_seconds(),
+            )
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):

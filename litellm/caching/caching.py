@@ -13,15 +13,16 @@ import json
 import time
 import traceback
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.types.caching import *
-from litellm.types.utils import all_litellm_params
+from litellm.types.utils import EmbeddingResponse, all_litellm_params
 
 from .base_cache import BaseCache
 from .disk_cache import DiskCache
@@ -88,16 +89,16 @@ class Cache:
         s3_aws_session_token: Optional[str] = None,
         s3_config: Optional[Any] = None,
         s3_path: Optional[str] = None,
-        redis_semantic_cache_use_async=False,
-        redis_semantic_cache_embedding_model="text-embedding-ada-002",
+        redis_semantic_cache_embedding_model: str = "text-embedding-ada-002",
+        redis_semantic_cache_index_name: Optional[str] = None,
         redis_flush_size: Optional[int] = None,
         redis_startup_nodes: Optional[List] = None,
-        disk_cache_dir=None,
+        disk_cache_dir: Optional[str] = None,
         qdrant_api_base: Optional[str] = None,
         qdrant_api_key: Optional[str] = None,
         qdrant_collection_name: Optional[str] = None,
         qdrant_quantization_config: Optional[str] = None,
-        qdrant_semantic_cache_embedding_model="text-embedding-ada-002",
+        qdrant_semantic_cache_embedding_model: str = "text-embedding-ada-002",
         **kwargs,
     ):
         """
@@ -170,8 +171,8 @@ class Cache:
                 port=port,
                 password=password,
                 similarity_threshold=similarity_threshold,
-                use_async=redis_semantic_cache_use_async,
                 embedding_model=redis_semantic_cache_embedding_model,
+                index_name=redis_semantic_cache_index_name,
                 **kwargs,
             )
         elif type == LiteLLMCacheType.QDRANT_SEMANTIC:
@@ -406,7 +407,7 @@ class Cache:
                     }
                 ]
             }
-            time.sleep(0.02)
+            time.sleep(CACHED_STREAMING_CHUNK_DELAY)
 
     def _get_cache_logic(
         self,
@@ -581,6 +582,22 @@ class Cache:
         except Exception as e:
             verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
 
+    def add_embedding_response_to_cache(
+        self,
+        result: EmbeddingResponse,
+        input: str,
+        kwargs: dict,
+        idx_in_result_data: int = 0,
+    ) -> Tuple[str, dict, dict]:
+        preset_cache_key = self.get_cache_key(**{**kwargs, "input": input})
+        kwargs["cache_key"] = preset_cache_key
+        embedding_response = result.data[idx_in_result_data]
+        cache_key, cached_data, kwargs = self._add_cache_logic(
+            result=embedding_response,
+            **kwargs,
+        )
+        return cache_key, cached_data, kwargs
+
     async def async_add_cache_pipeline(self, result, **kwargs):
         """
         Async implementation of add_cache for Embedding calls
@@ -596,13 +613,17 @@ class Cache:
                 kwargs["ttl"] = self.ttl
 
             cache_list = []
-            for idx, i in enumerate(kwargs["input"]):
-                preset_cache_key = self.get_cache_key(**{**kwargs, "input": i})
-                kwargs["cache_key"] = preset_cache_key
-                embedding_response = result.data[idx]
-                cache_key, cached_data, kwargs = self._add_cache_logic(
-                    result=embedding_response,
-                    **kwargs,
+            if isinstance(kwargs["input"], list):
+                for idx, i in enumerate(kwargs["input"]):
+                    (
+                        cache_key,
+                        cached_data,
+                        kwargs,
+                    ) = self.add_embedding_response_to_cache(result, i, kwargs, idx)
+                    cache_list.append((cache_key, cached_data))
+            elif isinstance(kwargs["input"], str):
+                cache_key, cached_data, kwargs = self.add_embedding_response_to_cache(
+                    result, kwargs["input"], kwargs
                 )
                 cache_list.append((cache_key, cached_data))
 

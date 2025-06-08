@@ -3,6 +3,7 @@ import {
   Card,
   Title,
   Text,
+  TextInput,
   Tab,
   TabList,
   TabGroup,
@@ -19,13 +20,16 @@ import {
   Button as TremorButton,
   Icon
 } from "@tremor/react";
-import { Button, Form, Input, Select, message, InputNumber, Tooltip } from "antd";
+import NumericalInput from "../shared/numerical_input";
+import { Button, Form, Input, Select, message, Tooltip } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { Member, Organization, organizationInfoCall, organizationMemberAddCall, organizationMemberUpdateCall, organizationMemberDeleteCall, organizationUpdateCall } from "../networking";
 import UserSearchModal from "../common_components/user_search_modal";
 import MemberModal from "../team/edit_membership";
+import ObjectPermissionsView from "../object_permissions_view";
+import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 
 interface OrganizationInfoProps {
   organizationId: string;
@@ -137,7 +141,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     try {
       if (!accessToken) return;
 
-      const updateData = {
+      const updateData: any = {
         organization_id: organizationId,
         organization_alias: values.organization_alias,
         models: values.models,
@@ -149,6 +153,14 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         },
         metadata: values.metadata ? JSON.parse(values.metadata) : null,
       };
+
+      // Handle object_permission updates
+      if (values.vector_stores !== undefined) {
+        updateData.object_permission = {
+          ...orgData?.object_permission,
+          vector_stores: values.vector_stores || []
+        };
+      }
       
       const response = await organizationUpdateCall(accessToken, updateData);
 
@@ -224,13 +236,33 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
             <Card>
                 <Text>Models</Text>
                 <div className="mt-2 flex flex-wrap gap-2">
-                {orgData.models.map((model, index) => (
+                {orgData.models.length === 0 ? (
+                  <Badge color="red">All proxy models</Badge>
+                ) : (
+                  orgData.models.map((model, index) => (
                     <Badge key={index} color="red">
-                    {model}
+                      {model}
+                    </Badge>
+                  ))
+                )}
+                </div>
+            </Card>
+            <Card>
+                <Text>Teams</Text>
+                <div className="mt-2 flex flex-wrap gap-2">
+                {orgData.teams?.map((team, index) => (
+                    <Badge key={index} color="red">
+                    {team.team_id}
                     </Badge>
                 ))}
                 </div>
             </Card>
+
+            <ObjectPermissionsView 
+              objectPermission={orgData.object_permission} 
+              variant="card"
+              accessToken={accessToken}
+            />
             </Grid>
           </TabPanel>
 
@@ -306,7 +338,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
 
           {/* Settings Panel */}
           <TabPanel>
-            <Card>
+            <Card className="overflow-y-auto max-h-[65vh]">
               <div className="flex justify-between items-center mb-4">
                 <Title>Organization Settings</Title>
                 {(canEditOrg && !isEditing) && (
@@ -330,6 +362,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                     max_budget: orgData.litellm_budget_table.max_budget,
                     budget_duration: orgData.litellm_budget_table.budget_duration,
                     metadata: orgData.metadata ? JSON.stringify(orgData.metadata, null, 2) : "",
+                    vector_stores: orgData.object_permission?.vector_stores || []
                   }}
                   layout="vertical"
                 >
@@ -338,7 +371,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                     name="organization_alias"
                     rules={[{ required: true, message: "Please input an organization name" }]}
                   >
-                    <Input />
+                    <TextInput />
                   </Form.Item>
                   
                   <Form.Item label="Models" name="models">
@@ -358,7 +391,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                   </Form.Item>
 
                   <Form.Item label="Max Budget (USD)" name="max_budget">
-                    <InputNumber step={0.01} precision={2} style={{ width: "100%" }} />
+                    <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
                   </Form.Item>
 
                   <Form.Item label="Reset Budget" name="budget_duration">
@@ -370,24 +403,35 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                   </Form.Item>
 
                   <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
-                    <InputNumber step={1} style={{ width: "100%" }} />
+                    <NumericalInput step={1} style={{ width: "100%" }} />
                   </Form.Item>
 
                   <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
-                    <InputNumber step={1} style={{ width: "100%" }} />
+                    <NumericalInput step={1} style={{ width: "100%" }} />
+                  </Form.Item>
+
+                  <Form.Item label="Vector Stores" name="vector_stores">
+                    <VectorStoreSelector
+                      onChange={(values) => form.setFieldValue('vector_stores', values)}
+                      value={form.getFieldValue('vector_stores')}
+                      accessToken={accessToken || ""}
+                      placeholder="Select vector stores"
+                    />
                   </Form.Item>
 
                   <Form.Item label="Metadata" name="metadata">  
                     <Input.TextArea rows={4} />
                   </Form.Item>
 
-                  <div className="flex justify-end gap-2 mt-6">
-                    <Button onClick={() => setIsEditing(false)}>
-                      Cancel
-                    </Button>
-                    <TremorButton type="submit">
-                      Save Changes
-                    </TremorButton>
+                  <div className="sticky z-10 bg-white p-4 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
+                    <div className="flex justify-end items-center gap-2">
+                      <Button onClick={() => setIsEditing(false)}>
+                        Cancel
+                      </Button>
+                      <TremorButton type="submit">
+                        Save Changes
+                      </TremorButton>
+                    </div>
                   </div>
                 </Form>
               ) : (
@@ -424,6 +468,13 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                     <div>Max: {orgData.litellm_budget_table.max_budget !== null ? `$${orgData.litellm_budget_table.max_budget}` : 'No Limit'}</div>
                     <div>Reset: {orgData.litellm_budget_table.budget_duration || 'Never'}</div>
                   </div>
+
+                  <ObjectPermissionsView 
+                    objectPermission={orgData.object_permission} 
+                    variant="inline"
+                    className="pt-4 border-t border-gray-200"
+                    accessToken={accessToken}
+                  />
                 </div>
               )}
             </Card>

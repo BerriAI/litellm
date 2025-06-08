@@ -37,6 +37,7 @@ class PerplexityChatConfig(OpenAIGPTConfig):
             "response_format",
             "stream",
             "temperature",
-            "top_p" "max_retries",
+            "top_p",
+            "max_retries",
             "extra_headers",
         ]

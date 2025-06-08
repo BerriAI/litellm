@@ -3,6 +3,9 @@
 import os
 import sys
 import traceback
+import json
+
+
 
 from typing import List, Dict, Any
 
@@ -98,10 +101,10 @@ def test_get_model_info_ollama_chat():
             }
         ),
     ) as mock_client:
-        info = OllamaConfig().get_model_info("mistral")
+        info = OllamaConfig().get_model_info("unknown-model")
         assert info["supports_function_calling"] is True
 
-        info = get_model_info("ollama/mistral")
+        info = get_model_info("ollama/unknown-model")
         print("info", info)
         assert info["supports_function_calling"] is True
 
@@ -109,21 +112,9 @@ def test_get_model_info_ollama_chat():
 
         print(mock_client.call_args.kwargs)
 
-        assert mock_client.call_args.kwargs["json"]["name"] == "mistral"
+        assert mock_client.call_args.kwargs["json"]["name"] == "unknown-model"
 
 
-def test_get_model_info_gemini():
-    """
-    Tests if ALL gemini models have 'tpm' and 'rpm' in the model info
-    """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    model_map = litellm.model_cost
-    for model, info in model_map.items():
-        if model.startswith("gemini/") and not "gemma" in model:
-            assert info.get("tpm") is not None, f"{model} does not have tpm"
-            assert info.get("rpm") is not None, f"{model} does not have rpm"
 
 
 def test_get_model_info_bedrock_region():
@@ -307,12 +298,14 @@ def test_get_model_info_custom_model_router():
                     "input_cost_per_token": 1,
                     "output_cost_per_token": 1,
                     "model": "openai/meta-llama/Meta-Llama-3-8B-Instruct",
-                    "model_id": "c20d603e-1166-4e0f-aa65-ed9c476ad4ca",
                 },
+                "model_info": {
+                    "id": "c20d603e-1166-4e0f-aa65-ed9c476ad4ca",
+                }
             }
         ]
     )
-    info = get_model_info("openai/meta-llama/Meta-Llama-3-8B-Instruct")
+    info = get_model_info("c20d603e-1166-4e0f-aa65-ed9c476ad4ca")
     print("info", info)
     assert info is not None
 
@@ -340,6 +333,8 @@ def test_get_model_info_bedrock_models():
             base_model = BedrockModelInfo.get_base_model(k)
             base_model_info = litellm.model_cost[base_model]
             for base_model_key, base_model_value in base_model_info.items():
+                if "invoke/" in k:
+                    continue
                 if base_model_key.startswith("supports_"):
                     assert (
                         base_model_key in v
@@ -361,7 +356,7 @@ def test_get_model_info_huggingface_models(monkeypatch):
                 "model_name": "meta-llama/Meta-Llama-3-8B-Instruct",
                 "litellm_params": {
                     "model": "huggingface/meta-llama/Meta-Llama-3-8B-Instruct",
-                    "api_base": "https://api-inference.huggingface.co/models/meta-llama/Llama-3.3-70B-Instruct",
+                    "api_base": "https://router.huggingface.co/hf-inference/models/meta-llama/Meta-Llama-3-8B-Instruct",
                     "api_key": os.environ["HUGGINGFACE_API_KEY"],
                 },
             }

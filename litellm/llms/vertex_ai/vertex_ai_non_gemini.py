@@ -323,7 +323,6 @@ def completion(  # noqa: PLR0915
             )
             completion_response = chat.send_message(prompt, **optional_params).text
         elif mode == "text":
-
             if fake_stream is not True and stream is True:
                 request_str += (
                     f"llm_model.predict_streaming({prompt}, **{optional_params})\n"
@@ -506,7 +505,6 @@ async def async_completion(  # noqa: PLR0915
     Add support for acompletion calls for gemini-pro
     """
     try:
-
         response_obj = None
         completion_response = None
         if mode == "chat":

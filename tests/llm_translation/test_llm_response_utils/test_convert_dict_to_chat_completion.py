@@ -855,3 +855,51 @@ def test_convert_to_model_response_object_with_empty_str():
     resp: ModelResponse = convert_to_model_response_object(**args)
     assert resp is not None
     assert resp.choices[0].message.content is not None
+
+
+def test_convert_to_model_response_object_with_thinking_content():
+    """Test that convert_to_model_response_object handles thinking content correctly."""
+
+    args = {
+        "response_object": {
+            "id": "chatcmpl-8cc87354-70f3-4a14-b71b-332e965d98d2",
+            "created": 1741057687,
+            "model": "claude-3-7-sonnet-20250219",
+            "object": "chat.completion",
+            "system_fingerprint": None,
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {
+                        "content": "# LiteLLM\n\nLiteLLM is an open-source library that provides a unified interface for working with various Large Language Models (LLMs). It acts as an abstraction layer that lets developers interact with multiple LLM providers through a single, consistent API.\n\n## Key features:\n\n- **Universal API**: Standardizes interactions with models from OpenAI, Anthropic, Cohere, Azure, and many other providers\n- **Simple switching**: Easily swap between different LLM providers without changing your code\n- **Routing capabilities**: Manage load balancing, fallbacks, and cost optimization\n- **Prompt templates**: Handle different model-specific prompt formats automatically\n- **Logging and observability**: Track usage, performance, and costs across providers\n\nLiteLLM is particularly useful for teams who want flexibility in their LLM infrastructure without creating custom integration code for each provider.",
+                        "role": "assistant",
+                        "tool_calls": None,
+                        "function_call": None,
+                        "reasoning_content": "The person is asking about \"litellm\" and included what appears to be a UUID or some form of identifier at the end of their message (fffffe14-7991-43d0-acd8-d3e606db31a8).\n\nLiteLLM is an open-source library/project that provides a unified interface for working with various Large Language Models (LLMs). It's essentially a lightweight package that standardizes the way developers can work with different LLM APIs like OpenAI, Anthropic, Cohere, etc. through a consistent interface.\n\nSome key features and aspects of LiteLLM:\n\n1. Unified API for multiple LLM providers (OpenAI, Anthropic, Azure, etc.)\n2. Standardized input/output formats\n3. Handles routing, fallbacks, and load balancing\n4. Provides logging and observability\n5. Can help with cost tracking across different providers\n6. Makes it easier to switch between different LLM providers\n\nThe UUID-like string they included doesn't seem directly related to the question, unless it's some form of identifier they're including for tracking purposes.",
+                        "thinking_blocks": [
+                            {
+                                "type": "thinking",
+                                "thinking": "The person is asking about \"litellm\" and included what appears to be a UUID or some form of identifier at the end of their message (fffffe14-7991-43d0-acd8-d3e606db31a8).\n\nLiteLLM is an open-source library/project that provides a unified interface for working with various Large Language Models (LLMs). It's essentially a lightweight package that standardizes the way developers can work with different LLM APIs like OpenAI, Anthropic, Cohere, etc. through a consistent interface.\n\nSome key features and aspects of LiteLLM:\n\n1. Unified API for multiple LLM providers (OpenAI, Anthropic, Azure, etc.)\n2. Standardized input/output formats\n3. Handles routing, fallbacks, and load balancing\n4. Provides logging and observability\n5. Can help with cost tracking across different providers\n6. Makes it easier to switch between different LLM providers\n\nThe UUID-like string they included doesn't seem directly related to the question, unless it's some form of identifier they're including for tracking purposes.",
+                                "signature": "ErUBCkYIARgCIkCf+r0qMSOMYkjlFERM00IxsY9I/m19dQGEF/Zv1E0AtvdZjKGnr+nr5vXUldmb/sUCgrQRH4YUyV0X3MoMrsNnEgxDqhUFcUTg1vM0CroaDEY1wKJ0Ca0EZ6S1jCIwF8ATum3xiF/mRSIIjoD6Virh0hFcOfH3Sz6Chtev9WUwwYMAVP4/hyzbrUDnsUlmKh0CfTayaXm6o63/6Kelr6pzLbErjQx2xZRnRjCypw==",
+                            }
+                        ],
+                    },
+                }
+            ],
+            "usage": {
+                "completion_tokens": 460,
+                "prompt_tokens": 65,
+                "total_tokens": 525,
+                "completion_tokens_details": None,
+                "prompt_tokens_details": {"audio_tokens": None, "cached_tokens": 0},
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+            },
+        },
+        "model_response_object": ModelResponse(),
+    }
+
+    resp: ModelResponse = convert_to_model_response_object(**args)
+    assert resp is not None
+    assert resp.choices[0].message.reasoning_content is not None

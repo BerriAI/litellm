@@ -7,6 +7,11 @@ from pydantic import BaseModel, Field
 
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
+SLACK_ALERTING_THRESHOLD_5_PERCENT = 0.05
+SLACK_ALERTING_THRESHOLD_15_PERCENT = 0.15
+MAX_OLDEST_HANGING_REQUESTS_TO_CHECK = 20
+HANGING_ALERT_BUFFER_TIME_SECONDS = 60
+
 
 class BaseOutageModel(TypedDict):
     alerts: List[int]
@@ -184,3 +189,12 @@ DEFAULT_ALERT_TYPES: List[AlertType] = [
     # Fallback alerts
     AlertType.fallback_reports,
 ]
+
+
+class HangingRequestData(BaseModel):
+    request_id: str
+    model: str
+    api_base: Optional[str] = None
+    key_alias: Optional[str] = None
+    team_alias: Optional[str] = None
+    alerting_metadata: Optional[dict] = None

@@ -16,9 +16,6 @@
     <a href="https://pypi.org/project/litellm/" target="_blank">
         <img src="https://img.shields.io/pypi/v/litellm.svg" alt="PyPI Version">
     </a>
-    <a href="https://dl.circleci.com/status-badge/redirect/gh/BerriAI/litellm/tree/main" target="_blank">
-        <img src="https://dl.circleci.com/status-badge/img/gh/BerriAI/litellm/tree/main.svg?style=svg" alt="CircleCI">
-    </a>
     <a href="https://www.ycombinator.com/companies/berriai">
         <img src="https://img.shields.io/badge/Y%20Combinator-W23-orange?style=flat-square" alt="Y Combinator W23">
     </a>
@@ -302,6 +299,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 | Provider                                                                            | [Completion](https://docs.litellm.ai/docs/#basic-usage) | [Streaming](https://docs.litellm.ai/docs/completion/stream#streaming-responses) | [Async Completion](https://docs.litellm.ai/docs/completion/stream#async-completion) | [Async Streaming](https://docs.litellm.ai/docs/completion/stream#async-streaming) | [Async Embedding](https://docs.litellm.ai/docs/embedding/supported_embedding) | [Async Image Generation](https://docs.litellm.ai/docs/image_generation) |
 |-------------------------------------------------------------------------------------|---------------------------------------------------------|---------------------------------------------------------------------------------|-------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------|-------------------------------------------------------------------------------|-------------------------------------------------------------------------|
 | [openai](https://docs.litellm.ai/docs/providers/openai)                             | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 | ✅                                                                             | ✅                                                                       |
+| [Meta - Llama API](https://docs.litellm.ai/docs/providers/meta_llama)                               | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 |                                                                              |                                                                        |
 | [azure](https://docs.litellm.ai/docs/providers/azure)                               | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 | ✅                                                                             | ✅                                                                       |
 | [AI/ML API](https://docs.litellm.ai/docs/providers/aiml)                               | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 | ✅                                                                             | ✅                                                                       |
 | [aws - sagemaker](https://docs.litellm.ai/docs/providers/aws_sagemaker)             | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 | ✅                                                                             |                                                                         |
@@ -335,76 +333,19 @@ curl 'http://0.0.0.0:4000/key/generate' \
 | [xinference [Xorbits Inference]](https://docs.litellm.ai/docs/providers/xinference) |                                                         |                                                                                 |                                                                                     |                                                                                   | ✅                                                                             |                                                                         |
 | [FriendliAI](https://docs.litellm.ai/docs/providers/friendliai)                              | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 |                                                                               |                                                                         |
 | [Galadriel](https://docs.litellm.ai/docs/providers/galadriel)                              | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 |                                                                               |                                                                         |
+| [Novita AI](https://novita.ai/models/llm?utm_source=github_litellm&utm_medium=github_readme&utm_campaign=github_link)                     | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 |                                                                               |                                                                         |
+| [Featherless AI](https://docs.litellm.ai/docs/providers/featherless_ai)                              | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 |                                                                               |                                                                         |
+| [Nebius AI Studio](https://docs.litellm.ai/docs/providers/nebius)                             | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 | ✅                                                                             |                                                                         |
 
 [**Read the Docs**](https://docs.litellm.ai/docs/)
 
 ## Contributing
 
-To contribute: Clone the repo locally -> Make a change -> Submit a PR with the change.
+Interested in contributing? Contributions to LiteLLM Python SDK, Proxy Server, and LLM integrations are both accepted and highly encouraged! 
 
-Here's how to modify the repo locally:
+**Quick start:** `git clone` → `make install-dev` → `make format` → `make lint` → `make test-unit`
 
-Step 1: Clone the repo
-
-```
-git clone https://github.com/BerriAI/litellm.git
-```
-
-Step 2: Install dependencies:
-
-```
-pip install -r requirements.txt
-```
-
-Step 3: Test your change:
-
-a. Add a pytest test within `tests/litellm/`
-
-This folder follows the same directory structure as `litellm/`.
-
-If a corresponding test file does not exist, create one.
-
-b. Run the test
-
-```
-cd tests/litellm # pwd: Documents/litellm/litellm/tests/litellm
-pytest /path/to/test_file.py
-```
-
-Step 4: Submit a PR with your changes! 🚀
-
-- push your fork to your GitHub repo
-- submit a PR from there
-
-### Building LiteLLM Docker Image 
-
-Follow these instructions if you want to build / run the LiteLLM Docker Image yourself.
-
-Step 1: Clone the repo
-
-```
-git clone https://github.com/BerriAI/litellm.git
-```
-
-Step 2: Build the Docker Image
-
-Build using Dockerfile.non_root
-```
-docker build -f docker/Dockerfile.non_root -t litellm_test_image .
-```
-
-Step 3: Run the Docker Image
-
-Make sure config.yaml is present in the root directory. This is your litellm proxy config file.
-```
-docker run \
-    -v $(pwd)/proxy_config.yaml:/app/config.yaml \
-    -e DATABASE_URL="postgresql://xxxxxxxx" \
-    -e LITELLM_MASTER_KEY="sk-1234" \
-    -p 4000:4000 \
-    litellm_test_image \
-    --config /app/config.yaml --detailed_debug
-```
+See our comprehensive [Contributing Guide (CONTRIBUTING.md)](CONTRIBUTING.md) for detailed instructions.
 
 # Enterprise
 For companies that need better security, user management and professional support
@@ -419,18 +360,41 @@ This covers:
 - ✅ **Custom SLAs**
 - ✅ **Secure access with Single Sign-On**
 
-# Code Quality / Linting
+# Contributing
+
+We welcome contributions to LiteLLM! Whether you're fixing bugs, adding features, or improving documentation, we appreciate your help.
+
+## Quick Start for Contributors
+
+```bash
+git clone https://github.com/BerriAI/litellm.git
+cd litellm
+make install-dev    # Install development dependencies
+make format         # Format your code
+make lint           # Run all linting checks
+make test-unit      # Run unit tests
+```
+
+For detailed contributing guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Code Quality / Linting
 
 LiteLLM follows the [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html).
 
-We run: 
-- Ruff for [formatting and linting checks](https://github.com/BerriAI/litellm/blob/e19bb55e3b4c6a858b6e364302ebbf6633a51de5/.circleci/config.yml#L320)
-- Mypy + Pyright for typing [1](https://github.com/BerriAI/litellm/blob/e19bb55e3b4c6a858b6e364302ebbf6633a51de5/.circleci/config.yml#L90), [2](https://github.com/BerriAI/litellm/blob/e19bb55e3b4c6a858b6e364302ebbf6633a51de5/.pre-commit-config.yaml#L4)
-- Black for [formatting](https://github.com/BerriAI/litellm/blob/e19bb55e3b4c6a858b6e364302ebbf6633a51de5/.circleci/config.yml#L79)
-- isort for [import sorting](https://github.com/BerriAI/litellm/blob/e19bb55e3b4c6a858b6e364302ebbf6633a51de5/.pre-commit-config.yaml#L10)
+Our automated checks include:
+- **Black** for code formatting
+- **Ruff** for linting and code quality
+- **MyPy** for type checking
+- **Circular import detection**
+- **Import safety checks**
 
+Run all checks locally:
+```bash
+make lint           # Run all linting (matches CI)
+make format-check   # Check formatting only
+```
 
-If you have suggestions on how to improve the code quality feel free to open an issue or a PR.
+All these checks must pass before your PR can be merged.
 
 
 # Support / talk with founders

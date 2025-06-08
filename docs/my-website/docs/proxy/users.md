@@ -194,7 +194,9 @@ Apply a budget across all calls an internal user (key owner) can make on the pro
 
 :::info
 
-For most use-cases, we recommend setting team-member budgets
+For keys, with a 'team_id' set, the team budget is used instead of the user's personal budget.
+
+To apply a budget to a user within a team, use team member budgets.
 
 :::
 
@@ -786,6 +788,17 @@ Expected Response:
     }
 }
 ```
+
+### [BETA] Multi-instance rate limiting
+
+Enable multi-instance rate limiting with the env var `EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING="True"`
+
+Changes: 
+- This moves to using async_increment instead of async_set_cache when updating current requests/tokens. 
+- The in-memory cache is synced with redis every 0.01s, to avoid calling redis for every request. 
+- In testing, this was found to be 2x faster than the previous implementation, and reduced drift between expected and actual fails to at most 10 requests at high-traffic (100 RPS across 3 instances). 
+
+
 ## Grant Access to new model 
 
 Use model access groups to give users access to select models, and add new ones to it over time (e.g. mistral, llama-2, etc.). 

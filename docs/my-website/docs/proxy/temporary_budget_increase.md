@@ -3,7 +3,7 @@
 Set temporary budget increase for a LiteLLM Virtual Key. Use this if you get asked to increase the budget for a key temporarily.
 
 
-| Heirarchy | Supported | 
+| Hierarchy | Supported | 
 |-----------|-----------|
 | LiteLLM Virtual Key | ✅ |
 | User | ❌ |

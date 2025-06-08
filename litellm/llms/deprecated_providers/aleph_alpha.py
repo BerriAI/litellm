@@ -77,9 +77,9 @@ class AlephAlphaConfig:
     - `control_log_additive` (boolean; default value: true): Method of applying control to attention scores.
     """
 
-    maximum_tokens: Optional[int] = (
-        litellm.max_tokens
-    )  # aleph alpha requires max tokens
+    maximum_tokens: Optional[
+        int
+    ] = litellm.max_tokens  # aleph alpha requires max tokens
     minimum_tokens: Optional[int] = None
     echo: Optional[bool] = None
     temperature: Optional[int] = None

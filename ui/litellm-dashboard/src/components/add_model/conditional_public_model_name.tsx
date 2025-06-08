@@ -14,6 +14,7 @@ const ConditionalPublicModelName: React.FC = () => {
   const customModelName = Form.useWatch('custom_model_name', form);
   const showPublicModelName = !selectedModels.includes('all-wildcard');
 
+
   // Force table to re-render when custom model name changes
   useEffect(() => {
     if (customModelName && selectedModels.includes('custom')) {
@@ -35,20 +36,33 @@ const ConditionalPublicModelName: React.FC = () => {
   // Initial setup of model mappings when models are selected
   useEffect(() => {
     if (selectedModels.length > 0 && !selectedModels.includes('all-wildcard')) {
-      const mappings = selectedModels.map((model: string) => {
-        if (model === 'custom' && customModelName) {
+      // Check if we already have mappings that match the selected models
+      const currentMappings = form.getFieldValue('model_mappings') || [];
+      
+      // Only update if the mappings don't exist or don't match the selected models
+      const shouldUpdateMappings = currentMappings.length !== selectedModels.length || 
+        !selectedModels.every(model => 
+          currentMappings.some((mapping: { public_name: string; litellm_model: string }) => 
+            mapping.public_name === model || 
+            (model === 'custom' && mapping.public_name === customModelName)));
+      
+      if (shouldUpdateMappings) {
+        const mappings = selectedModels.map((model: string) => {
+          if (model === 'custom' && customModelName) {
+            return {
+              public_name: customModelName,
+              litellm_model: customModelName
+            };
+          }
           return {
-            public_name: customModelName,
-            litellm_model: customModelName
+            public_name: model,
+            litellm_model: model
           };
-        }
-        return {
-          public_name: model,
-          litellm_model: model
-        };
-      });
-      form.setFieldValue('model_mappings', mappings);
-      setTableKey(prev => prev + 1); // Force table re-render
+        });
+        
+        form.setFieldValue('model_mappings', mappings);
+        setTableKey(prev => prev + 1); // Force table re-render
+      }
     }
   }, [selectedModels, customModelName, form]);
 
@@ -98,14 +112,6 @@ const ConditionalPublicModelName: React.FC = () => {
           size="small"
         />
       </Form.Item>
-      <Row>
-        <Col span={10}></Col>
-        <Col span={10}>
-          <Text className="mb-2">
-            Model name your users will pass in.
-          </Text>
-        </Col>
-      </Row>
     </>
   );
 };

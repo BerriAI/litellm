@@ -32,6 +32,7 @@ def completion(
         model=model,
         messages=messages,
         optional_params=optional_params,
+        litellm_params=litellm_params,
     )
     if "https" in model:
         completion_url = model
@@ -123,6 +124,7 @@ def embedding(
         model=model,
         messages=[],
         optional_params=optional_params,
+        litellm_params={},
     )
     response = litellm.module_level_client.post(
         embeddings_url, headers=headers, json=data

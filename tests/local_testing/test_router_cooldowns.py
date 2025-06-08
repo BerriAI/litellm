@@ -41,7 +41,7 @@ async def test_cooldown_badrequest_error():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -690,5 +690,52 @@ def test_router_fallbacks_with_cooldowns_and_model_id():
 
     router.completion(
         model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+
+@pytest.mark.asyncio()
+async def test_router_fallbacks_with_cooldowns_and_dynamic_credentials():
+    """
+    Ensure cooldown on credential 1 does not affect credential 2
+    """
+    from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments
+
+    litellm._turn_on_debug()
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "rpm": 1},
+                "model_info": {
+                    "id": "123",
+                },
+            }
+        ]
+    )
+
+    ## trigger ratelimit
+    try:
+        await router.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="my-bad-key-1",
+            mock_response="litellm.RateLimitError",
+        )
+        pytest.fail("Expected RateLimitError")
+    except litellm.RateLimitError:
+        pass
+
+    await asyncio.sleep(1)
+
+    cooldown_list = await _async_get_cooldown_deployments(
+        litellm_router_instance=router, parent_otel_span=None
+    )
+    print("cooldown_list: ", cooldown_list)
+    assert len(cooldown_list) == 1
+
+    await router.acompletion(
+        model="gpt-3.5-turbo",
+        api_key=os.getenv("OPENAI_API_KEY"),
         messages=[{"role": "user", "content": "hi"}],
     )

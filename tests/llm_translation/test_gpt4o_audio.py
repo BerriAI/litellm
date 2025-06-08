@@ -84,12 +84,14 @@ async def test_audio_output_from_model(stream):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [True, False])
-async def test_audio_input_to_model(stream):
+@pytest.mark.parametrize("model", ["gpt-4o-audio-preview"]) # "gpt-4o-audio-preview", 
+async def test_audio_input_to_model(stream, model):
     # Fetch the audio file and convert it to a base64 encoded string
     audio_format = "pcm16"
     if stream is False:
         audio_format = "wav"
     litellm._turn_on_debug()
+    litellm.drop_params = True
     url = "https://openaiassets.blob.core.windows.net/$web/API/docs/audio/alloy.wav"
     response = requests.get(url)
     response.raise_for_status()
@@ -97,7 +99,7 @@ async def test_audio_input_to_model(stream):
     encoded_string = base64.b64encode(wav_data).decode("utf-8")
     try:
         completion = await litellm.acompletion(
-            model="gpt-4o-audio-preview",
+            model=model,
             modalities=["text", "audio"],
             audio={"voice": "alloy", "format": audio_format},
             stream=stream,
@@ -120,6 +122,7 @@ async def test_audio_input_to_model(stream):
     except Exception as e:
         if "openai-internal" in str(e):
             pytest.skip("Skipping test due to openai-internal error")
+        raise e
     if stream is True:
         await check_streaming_response(completion)
     else:

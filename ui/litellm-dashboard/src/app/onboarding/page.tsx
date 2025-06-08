@@ -17,17 +17,12 @@ import {
   userUpdateUserCall,
   getOnboardingCredentials,
   claimOnboardingToken,
+  getUiConfig,
+  getProxyBaseUrl
 } from "@/components/networking";
 import { jwtDecode } from "jwt-decode";
 import { Form, Button as Button2, message } from "antd";
-
-function getCookie(name: string) {
-  console.log("COOKIES", document.cookie)
-  const cookieValue = document.cookie
-      .split('; ')
-      .find(row => row.startsWith(name + '='));
-  return cookieValue ? cookieValue.split('=')[1] : null;
-}
+import { getCookie } from "@/utils/cookieUtils";
 
 export default function Onboarding() {
   const [form] = Form.useForm();
@@ -40,11 +35,20 @@ export default function Onboarding() {
   const [userID, setUserID] = useState<string | null>(null);
   const [loginUrl, setLoginUrl] = useState<string>("");
   const [jwtToken, setJwtToken] = useState<string>("");
+  const [getUiConfigLoading, setGetUiConfigLoading] = useState<boolean>(true);
 
   useEffect(() => {
-    if (!inviteID) {
+    getUiConfig().then((data) => { // get the information for constructing the proxy base url, and then set the token and auth loading
+      console.log("ui config in onboarding.tsx:", data);
+      setGetUiConfigLoading(false);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!inviteID || getUiConfigLoading) { // wait for the ui config to be loaded
       return;
     }
+
     getOnboardingCredentials(inviteID).then((data) => {
       const login_url = data.login_url;
       console.log("login_url:", login_url);
@@ -64,7 +68,7 @@ export default function Onboarding() {
       const user_id = decoded.user_id;
       setUserID(user_id);
     });
-  }, [inviteID]);
+  }, [inviteID, getUiConfigLoading]);
 
   const handleSubmit = (formValues: Record<string, any>) => {
     console.log(
@@ -91,14 +95,20 @@ export default function Onboarding() {
       formValues.password
     ).then((data) => {
       let litellm_dashboard_ui = "/ui/";
-      const user_id = data.data?.user_id || data.user_id;
-      litellm_dashboard_ui += "?userID=" + user_id;
+      litellm_dashboard_ui += "?login=success";
 
       // set cookie "token" to jwtToken
       document.cookie = "token=" + jwtToken;
       console.log("redirecting to:", litellm_dashboard_ui);
 
-      window.location.href = litellm_dashboard_ui;
+      const proxyBaseUrl = getProxyBaseUrl();
+      console.log("proxyBaseUrl:", proxyBaseUrl);
+
+      if (proxyBaseUrl) {
+        window.location.href = proxyBaseUrl + litellm_dashboard_ui;
+      } else {
+        window.location.href = litellm_dashboard_ui;
+      }
     });
 
     // redirect to login page
@@ -117,7 +127,7 @@ export default function Onboarding() {
           color="sky"
         >
           <Grid numItems={2} className="flex justify-between items-center">
-            <Col>SSO is under the Enterprise Tirer.</Col>
+            <Col>SSO is under the Enterprise Tier.</Col>
 
             <Col>
               <Button variant="primary" className="mb-2">

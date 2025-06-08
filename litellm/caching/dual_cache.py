@@ -12,7 +12,10 @@ import asyncio
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional, Union
+
+if TYPE_CHECKING:
+    from litellm.types.caching import RedisPipelineIncrementOperation
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -24,7 +27,7 @@ from .redis_cache import RedisCache
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     Span = Any
 
@@ -367,6 +370,31 @@ class DualCache(BaseCache):
                     value,
                     parent_otel_span=parent_otel_span,
                     ttl=kwargs.get("ttl", None),
+                )
+
+            return result
+        except Exception as e:
+            raise e  # don't log if exception is raised
+
+    async def async_increment_cache_pipeline(
+        self,
+        increment_list: List["RedisPipelineIncrementOperation"],
+        local_only: bool = False,
+        parent_otel_span: Optional[Span] = None,
+        **kwargs,
+    ) -> Optional[List[float]]:
+        try:
+            result: Optional[List[float]] = None
+            if self.in_memory_cache is not None:
+                result = await self.in_memory_cache.async_increment_pipeline(
+                    increment_list=increment_list,
+                    parent_otel_span=parent_otel_span,
+                )
+
+            if self.redis_cache is not None and local_only is False:
+                result = await self.redis_cache.async_increment_pipeline(
+                    increment_list=increment_list,
+                    parent_otel_span=parent_otel_span,
                 )
 
             return result

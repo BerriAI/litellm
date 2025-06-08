@@ -7,7 +7,7 @@ from litellm.proxy._types import GenerateKeyRequest, UserAPIKeyAuth
 
 async def user_api_key_auth(request: Request, api_key: str) -> UserAPIKeyAuth:
     try:
-        modified_master_key = f"{os.getenv('PROXY_MASTER_KEY')}-1234"
+        modified_master_key = f"{os.getenv('LITELLM_MASTER_KEY')}-1234"
         if api_key == modified_master_key:
             return UserAPIKeyAuth(api_key=api_key)
         raise Exception
