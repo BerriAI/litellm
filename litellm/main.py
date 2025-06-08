@@ -1960,9 +1960,10 @@ def completion(  # type: ignore # noqa: PLR0915
                 logger_fn=logger_fn,
                 timeout=timeout,  # type: ignore
                 custom_prompt_dict=custom_prompt_dict,
-                client=client,  # pass AsyncOpenAI, OpenAI client
+                client=client,
                 custom_llm_provider=custom_llm_provider,
                 encoding=encoding,
+                api_key=api_key,
             )
         elif custom_llm_provider == "aiohttp_openai":
             # NEW aiohttp provider for 10-100x higher RPS
