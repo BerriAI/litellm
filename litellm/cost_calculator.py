@@ -773,6 +773,8 @@ def completion_cost(  # noqa: PLR0915
                             n=n,
                             size=size,
                             optional_params=optional_params,
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
                         )
                 elif (
                     call_type == CallTypes.speech.value
@@ -1079,6 +1081,8 @@ def default_image_cost_calculator(
     n: Optional[int] = 1,  # Default to 1 image
     size: Optional[str] = "1024-x-1024",  # OpenAI default
     optional_params: Optional[dict] = None,
+    prompt_tokens: Optional[int] = None,  # Actual prompt tokens from usage
+    completion_tokens: Optional[int] = None,  # Actual completion tokens from usage
 ) -> float:
     """
     Default image cost calculator for image generation
@@ -1155,7 +1159,74 @@ def default_image_cost_calculator(
             f"Model not found in cost map. Tried checking {models_to_check}"
         )
 
-    return cost_info["input_cost_per_pixel"] * height * width * n
+    # Check if this is a token-based pricing model (like gpt-image-1)
+    if "input_cost_per_token" in cost_info or "output_cost_per_token" in cost_info:
+        # For token-based pricing, we need to calculate based on actual usage
+        # This is a fallback calculation for when usage data is not available
+        # Real cost should be calculated from actual token usage in response
+        
+        # For gpt-image-1, estimate output tokens based on quality and size
+        base_model_str = model.split("/")[-1] if "/" in model else model
+        if "gpt-image-1" in base_model_str:
+            # Use actual token counts if available and non-zero, otherwise estimate
+            if prompt_tokens is not None and completion_tokens is not None and (prompt_tokens > 0 or completion_tokens > 0):
+                # Use actual token usage from response
+                text_input_tokens = prompt_tokens
+                output_tokens = completion_tokens
+            else:
+                # Fallback to estimation when actual usage is not available or zero
+                output_tokens = _estimate_gpt_image_1_output_tokens(quality, height, width)
+                text_input_tokens = 50  # Conservative estimate for average prompt
+            
+            input_cost = text_input_tokens * cost_info.get("input_cost_per_token", 0)
+            output_cost = output_tokens * cost_info.get("output_cost_per_token", 0)
+            
+            return (input_cost + output_cost) * n
+        else:
+            # For other token-based image models, use a simple fallback
+            estimated_tokens = 1000  # Default estimate
+            return estimated_tokens * cost_info.get("output_cost_per_token", 0) * n
+    else:
+        # Pixel-based pricing (legacy models like DALL-E 2/3)
+        return cost_info["input_cost_per_pixel"] * height * width * n
+
+
+def _estimate_gpt_image_1_output_tokens(
+    quality: Optional[str], height: int, width: int
+) -> int:
+    """
+    Estimate output tokens for gpt-image-1 based on quality and dimensions.
+    Based on community research from OpenAI forum discussions.
+    
+    Returns:
+        int: Estimated output tokens
+    """
+    # Default to medium quality if not specified
+    if not quality:
+        quality = "medium"
+    
+    quality = quality.lower()
+    
+    # Base token estimates from OpenAI
+    if height == 1024 and width == 1024:
+        # Square 1024x1024
+        token_map = {"low": 272, "medium": 1056, "high": 4160}
+        return token_map.get(quality, 1056)
+    elif (height == 1024 and width == 1536) or (height == 1536 and width == 1024):
+        # Rectangular 1024x1536 or 1536x1024
+        token_map = {"low": 408, "medium": 1584, "high": 6240}
+        return token_map.get(quality, 1584)
+    else:
+        # For other dimensions, scale proportionally from base 1024x1024
+        base_pixels = 1024 * 1024
+        actual_pixels = height * width
+        pixel_ratio = actual_pixels / base_pixels
+        
+        base_tokens = {"low": 272, "medium": 1056, "high": 4160}
+        base_token_count = base_tokens.get(quality, 1056)
+        
+        # Scale tokens roughly proportionally to pixel count
+        return int(base_token_count * pixel_ratio)
 
 
 def batch_cost_calculator(
