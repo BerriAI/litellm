@@ -1,17 +1,23 @@
 import React from 'react';
 import { Card, Grid, Text, Title, Accordion, AccordionHeader, AccordionBody } from '@tremor/react';
 import { AreaChart, BarChart } from '@tremor/react';
+import type { CustomTooltipProps } from '@tremor/react';
 import { SpendMetrics, DailyData, ModelActivityData, MetricWithMetadata, KeyMetricWithMetadata } from './usage/types';
 import { Collapse } from 'antd';
-import { valueFormatter } from '../components/usage/utils/value_formatters';
+import { valueFormatter, valueFormatterSpend } from '../components/usage/utils/value_formatters';
 
 interface ActivityMetricsProps {
   modelMetrics: Record<string, ModelActivityData>;
 }
 
-const CustomTooltip = ({ active, payload, label }: any) => {
+interface ChartDataPoint {
+  date: string;
+  metrics: SpendMetrics;
+}
+
+export const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
   if (active && payload && payload.length) {
-    const formatCategoryName = (name: string) => {
+    const formatCategoryName = (name: string): string => {
         return name.replace('metrics.', '')
                    .replace(/_/g, ' ')
                    .split(' ')
@@ -19,29 +25,37 @@ const CustomTooltip = ({ active, payload, label }: any) => {
                    .join(' ');
     };
 
-    const getRawValue = (dataPoint: any, key: string) => {
-      const keys = key.split('.');
-      let value = dataPoint;
-      for (const k of keys) {
-        if (value === undefined) return undefined;
-        value = value[k];
+    const getRawValue = (dataPoint: ChartDataPoint, key: string): number | undefined => {
+      // key is like "metrics.total_tokens"
+      const metricKey = key.substring(key.indexOf('.') + 1) as keyof SpendMetrics;
+      if (dataPoint.metrics && metricKey in dataPoint.metrics) {
+        return dataPoint.metrics[metricKey];
       }
-      return value;
+      return undefined;
     }
 
     return (
       <div className="w-56 rounded-tremor-default border border-tremor-border bg-tremor-background p-2 text-tremor-default shadow-tremor-dropdown">
         <p className="text-tremor-content-strong">{label}</p>
-        {payload.map((item: any) => {
-          const rawValue = getRawValue(item.payload, item.dataKey);
+        {payload.map((item) => {
+          const dataKey = item.dataKey?.toString();
+          if (!dataKey || !item.payload) return null;
+
+          const rawValue = getRawValue(item.payload, dataKey);
+          const isSpend = dataKey.includes('spend');
+          const formattedValue = rawValue !== undefined
+            ? isSpend
+              ? `$${rawValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+              : rawValue.toLocaleString()
+            : 'N/A';
           return (
-            <div key={item.dataKey} className="flex items-center justify-between space-x-4">
+            <div key={dataKey} className="flex items-center justify-between space-x-4">
               <div className="flex items-center space-x-2">
                 <span className={`h-3 w-3 shrink-0 rounded-full`} style={{backgroundColor: item.color}} />
-                <p className="font-medium text-tremor-content dark:text-dark-tremor-content">{formatCategoryName(item.dataKey)}</p>
+                <p className="font-medium text-tremor-content dark:text-dark-tremor-content">{formatCategoryName(dataKey)}</p>
               </div>
               <p className="font-medium text-tremor-content-emphasis dark:text-dark-tremor-content-emphasis">
-                {rawValue !== undefined ? rawValue.toLocaleString() : 'N/A'}
+                {formattedValue}
               </p>
             </div>
           )
@@ -96,9 +110,10 @@ const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: Mode
           <BarChart
             data={metrics.daily_data}
             index="date"
-            categories={["metrics.api_requests"]}
-            colors={["blue"]}
-            valueFormatter={(number: number) => number.toLocaleString()}
+            categories={["metrics.successful_requests"]}
+            colors={["green"]}
+            valueFormatter={valueFormatter}
+            customTooltip={CustomTooltip}
           />
         </Card>
 
@@ -109,7 +124,8 @@ const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: Mode
             index="date"
             categories={["metrics.spend"]}
             colors={["green"]}
-            valueFormatter={(value: number) => `$${value.toFixed(2)}`}
+            valueFormatter={valueFormatterSpend}
+            customTooltip={CustomTooltip}
           />
         </Card>
 
@@ -119,9 +135,10 @@ const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: Mode
             data={metrics.daily_data}
             index="date"
             categories={["metrics.successful_requests", "metrics.failed_requests"]}
-            colors={["emerald", "red"]}
-            valueFormatter={(number: number) => number.toLocaleString()}
+            colors={["green", "red"]}
+            valueFormatter={valueFormatter}
             stack
+            customTooltip={CustomTooltip}
           />
         </Card>
         
@@ -136,7 +153,8 @@ const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: Mode
             index="date"
             categories={["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"]}
             colors={["cyan", "purple"]}
-            valueFormatter={(number: number) => number.toLocaleString()}
+            valueFormatter={valueFormatter}
+            customTooltip={CustomTooltip}
           />
         </Card>
       </Grid>
@@ -255,9 +273,10 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
               data={sortedDailyData}
               index="date"
               categories={["metrics.successful_requests", "metrics.failed_requests"]}
-              colors={["emerald", "red"]}
-              valueFormatter={(number: number) => number.toLocaleString()}
+              colors={["green", "red"]}
+              valueFormatter={valueFormatter}
               stack
+              customTooltip={CustomTooltip}
             />
           </Card>
         </Grid>
