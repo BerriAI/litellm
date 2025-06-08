@@ -291,7 +291,7 @@ class PangeaHandler(CustomGuardrail):
         event_type = GuardrailEventHooks.pre_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             verbose_proxy_logger.debug(
-                f"Pangea Guardail (async_pre_call_hook): Guardrail is disabled {self.guardrail_name}."
+                f"Pangea Guardrail (async_pre_call_hook): Guardrail is disabled {self.guardrail_name}."
             )
             return data
 
@@ -357,7 +357,7 @@ class PangeaHandler(CustomGuardrail):
         event_type = GuardrailEventHooks.post_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             verbose_proxy_logger.debug(
-                f"Pangea Guardail (async_pre_call_hook): Guardrail is disabled {self.guardrail_name}."
+                f"Pangea Guardrail (async_pre_call_hook): Guardrail is disabled {self.guardrail_name}."
             )
             return data
 
