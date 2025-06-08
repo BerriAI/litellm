@@ -53,9 +53,10 @@ pip install litellm==1.72.2
 ## TLDR
 
 * **Why Upgrade**
-    - /v1/messages API performance improvements (lower latency, higher RPS)
-    - Multi instance rate limiting support
-    - Full Claude-4 cost tracking & Gemini 2.5 Pro preview
+    - Performance Improvements for /v1/messages: For this endpoint LiteLLM Proxy overhead is now down to 50ms at 250 RPS. 
+    - Audit Logs on UI: Track when Keys, Teams, and Models were deleted by viewing Audit Logs on the LiteLLM UI.
+    - /v1/messages all models support: You can now use all LiteLLM models (`gpt-4.1`, `o1-pro`, `gemini-2.5-pro`) with /v1/messages API. 
+    - Anthropic MCP: Use remote MCP Servers with Anthropic Models. 
 * **Who Should Read**
     - Teams using `/v1/messages` API (Claude Code), LiteLLM Rate Limiting
 * **Risk of Upgrade**
@@ -68,14 +69,25 @@ pip install litellm==1.72.2
 
 ## `/v1/messages` Performance Improvements
 
-This release brings significant performance improvements to the `/v1/messages` API. For large streaming requests LiteLLM overhead latency is now 50ms and can handle 250 RPS per instance.
-
 <Image 
   img={require('../../img/release_notes/v1_messages_perf.png')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 
+This release brings significant performance improvements to the /v1/messages API on LiteLLM. 
+
+For this endpoint LiteLLM Proxy overhead latency is now down to 50ms, and each instance can handle 250 RPS. We validated these improvements through load testing with payloads containing over 1,000 streaming chunks.
+
+This is great for real time use cases with large requests (eg. multi turn conversations, Claude Code, etc.). 
+
+
+
 ## Audit Logs on UI
+
+<Image 
+  img={require('../../img/release_notes/ui_audit_log.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
 
 This release introduces support for viewing audit logs in the UI. As a Proxy Admin, you can now check if and when a key was deleted, along with who performed the action.
 
@@ -83,11 +95,6 @@ LiteLLM tracks changes to the following entities and actions:
 
 - **Entities:** Keys, Teams, Users, Models
 - **Actions:** Create, Update, Delete, Regenerate
-
-<Image 
-  img={require('../../img/release_notes/ui_audit_log.png')}
-  style={{width: '100%', display: 'block', margin: '2rem auto'}}
-/>
 
 
 
