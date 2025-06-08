@@ -444,16 +444,10 @@ class Function(OpenAIObject):
 
 
 class ChatCompletionDeltaToolCall(OpenAIObject):
-    id: str
+    id: Optional[str] = None
     function: Function
     type: Optional[str] = None
     index: int
-
-    def __init__(self, **params):
-        if params.get("id") is None:
-            params["id"] = f"{uuid.uuid4()}"
-
-        super(ChatCompletionDeltaToolCall, self).__init__(**params)
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
