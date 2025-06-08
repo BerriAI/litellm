@@ -56,7 +56,7 @@ pip install litellm==1.72.2
     - Performance Improvements for /v1/messages: For this endpoint LiteLLM Proxy overhead is now down to 50ms at 250 RPS. 
     - Audit Logs on UI: Track when Keys, Teams, and Models were deleted by viewing Audit Logs on the LiteLLM UI.
     - /v1/messages all models support: You can now use all LiteLLM models (`gpt-4.1`, `o1-pro`, `gemini-2.5-pro`) with /v1/messages API. 
-    - Anthropic MCP: Use remote MCP Servers with Anthropic Models. 
+    - [Anthropic MCP](../../docs/providers/anthropic#mcp-tool-calling): Use remote MCP Servers with Anthropic Models. 
 * **Who Should Read**
     - Teams using `/v1/messages` API (Claude Code), LiteLLM Rate Limiting
 * **Risk of Upgrade**
@@ -120,6 +120,7 @@ LiteLLM tracks changes to the following entities and actions:
     - Cost tracking added for new Claude models - [PR](https://github.com/BerriAI/litellm/pull/11339)
         - `claude-4-opus-20250514`
         - `claude-4-sonnet-20250514`
+    - Support for MCP tool calling with Anthropic models - [PR](https://github.com/BerriAI/litellm/pull/11474)
 - **[Google AI Studio](../../docs/providers/gemini)**
     - Google Gemini 2.5 Pro Preview 06-05 support - [PR](https://github.com/BerriAI/litellm/pull/11447)
     - Gemini streaming thinking content parsing with `reasoning_content` - [PR](https://github.com/BerriAI/litellm/pull/11298)
@@ -155,7 +156,7 @@ LiteLLM tracks changes to the following entities and actions:
     - Provider-specific optional params handling for embedding calls - [PR](https://github.com/BerriAI/litellm/pull/11346)
     - Proper Sagemaker request attribute usage for embeddings - [PR](https://github.com/BerriAI/litellm/pull/11362)
 - **[Rerank API](../../docs/rerank/supported_rerank)**
-    - New HuggingFace rerank provider support - [PR](https://github.com/BerriAI/litellm/pull/11438)
+    - New HuggingFace rerank provider support - [PR](https://github.com/BerriAI/litellm/pull/11438), [Guide](../../docs/providers/huggingface_rerank)
 
 ---
 
@@ -180,7 +181,7 @@ LiteLLM tracks changes to the following entities and actions:
     - Fixed SCIM running patch operation case sensitivity - [PR](https://github.com/BerriAI/litellm/pull/11335)
 - **General**
     - Converted action buttons to sticky footer action buttons - [PR](https://github.com/BerriAI/litellm/pull/11293)
-    - Custom Server Root Path improvements - don't require reserving `/litellm` route - [PR](https://github.com/BerriAI/litellm/pull/11460)
+    - Custom Server Root Path - support for serving UI on a custom root path - [Guide](../../docs/proxy/custom_root_ui)
 ---
 
 ## Logging / Guardrails Integrations
