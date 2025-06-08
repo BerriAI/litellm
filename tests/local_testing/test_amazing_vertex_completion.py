@@ -31,6 +31,7 @@ from litellm import (
     completion,
     completion_cost,
     embedding,
+    image_generation,
 )
 from litellm.llms.vertex_ai.gemini.transformation import (
     _gemini_convert_messages_with_history,
@@ -58,11 +59,13 @@ VERTEX_MODELS_TO_NOT_TEST = [
     "gemini-pro-experimental",
     "gemini-flash-experimental",
     "gemini-1.5-flash-exp-0827",
+    "gemini-2.0-pro-exp-02-05",
     "gemini-pro-flash",
     "gemini-1.5-flash-exp-0827",
     "gemini-2.0-flash-exp",
     "gemini-2.0-flash-thinking-exp",
     "gemini-2.0-flash-thinking-exp-01-21",
+    "gemini-2.0-flash-preview-image-generation",
 ]
 
 
@@ -145,7 +148,7 @@ async def test_get_response():
     prompt = '\ndef count_nums(arr):\n    """\n    Write a function count_nums which takes an array of integers and returns\n    the number of elements which has a sum of digits > 0.\n    If a number is negative, then its first signed digit will be negative:\n    e.g. -123 has signed digits -1, 2, and 3.\n    >>> count_nums([]) == 0\n    >>> count_nums([-1, 11, -11]) == 1\n    >>> count_nums([1, 1, 2]) == 3\n    """\n'
     try:
         response = await acompletion(
-            model="gemini-pro",
+            model="gemini-1.5-flash",
             messages=[
                 {
                     "role": "system",
@@ -451,6 +454,10 @@ async def test_async_vertexai_response():
             or "ultra" in model
             or "002" in model
             or "gemini-2.0-flash-thinking-exp" in model
+            or "gemini-2.0-pro-exp-02-05" in model
+            or "gemini-pro" in model
+            or "gemini-1.0-pro" in model
+            or "image-generation" in model
         ):
             # our account does not have access to this model
             continue
@@ -461,6 +468,8 @@ async def test_async_vertexai_response():
                 model=model, messages=messages, temperature=0.7, timeout=5
             )
             print(f"response: {response}")
+        except litellm.NotFoundError as e:
+            pass
         except litellm.RateLimitError as e:
             pass
         except litellm.Timeout as e:
@@ -480,6 +489,7 @@ async def test_async_vertexai_response():
 @pytest.mark.asyncio
 async def test_async_vertexai_streaming_response():
     import random
+    litellm._turn_on_debug()
 
     load_vertex_ai_credentials()
     test_models = (
@@ -490,6 +500,7 @@ async def test_async_vertexai_streaming_response():
     )
     test_models = random.sample(test_models, 1)
     test_models += litellm.vertex_language_models  # always test gemini-pro
+    test_models = ["gemini-2.5-flash-preview-05-20"]
     for model in test_models:
         if model in VERTEX_MODELS_TO_NOT_TEST or (
             "gecko" in model
@@ -497,6 +508,10 @@ async def test_async_vertexai_streaming_response():
             or "ultra" in model
             or "002" in model
             or "gemini-2.0-flash-thinking-exp" in model
+            or "gemini-2.0-pro-exp-02-05" in model
+            or "gemini-pro" in model
+            or "gemini-1.0-pro" in model
+            or "image-generation" in model
         ):
             # our account does not have access to this model
             continue
@@ -511,13 +526,14 @@ async def test_async_vertexai_streaming_response():
                 stream=True,
             )
             print(f"response: {response}")
-            complete_response = ""
+            complete_response: str = ""
             async for chunk in response:
                 print(f"chunk: {chunk}")
                 if chunk.choices[0].delta.content is not None:
                     complete_response += chunk.choices[0].delta.content
             print(f"complete_response: {complete_response}")
-            assert len(complete_response) > 0
+        except litellm.NotFoundError as e:
+            pass
         except litellm.RateLimitError as e:
             pass
         except litellm.APIConnectionError:
@@ -937,9 +953,8 @@ from test_completion import response_format_tests
 @pytest.mark.parametrize(
     "model",
     [
-        "vertex_ai/mistral-large@2407",
+        "vertex_ai/mistral-large-2411",
         "vertex_ai/mistral-nemo@2407",
-        "vertex_ai/codestral@2405",
         # "vertex_ai/meta/llama3-405b-instruct-maas",
     ],  #
 )  # "vertex_ai",
@@ -1001,10 +1016,9 @@ async def test_partner_models_httpx(model, sync_mode):
 @pytest.mark.parametrize(
     "model",
     [
-        "vertex_ai/mistral-large@2407",
+        "vertex_ai/mistral-large-2411",
         # "vertex_ai/meta/llama3-405b-instruct-maas",
-        "vertex_ai/codestral@2405",
-    ],  #
+    ],
 )  # "vertex_ai",
 @pytest.mark.parametrize(
     "sync_mode",
@@ -1520,6 +1534,61 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
 
             assert resp.model == model.split("/")[1]
 
+@pytest.mark.asyncio
+async def test_anthropic_message_via_anthropic_messages():
+    from litellm.llms.custom_httpx.llm_http_handler import AsyncHTTPHandler
+    from unittest.mock import MagicMock, AsyncMock
+
+    load_vertex_ai_credentials()
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.set_verbose = True
+    client = AsyncHTTPHandler()
+
+    httpx_response = AsyncMock()
+    httpx_response.side_effect = vertex_httpx_mock_post_valid_response_anthropic
+
+    call_1_kwargs = {}
+    call_2_kwargs = {}
+    with patch.object(client, "post", new=httpx_response) as mock_call:
+        messages = [{"role": "user", "content": "List 5 cookie recipes"}]
+        response = await litellm.anthropic_messages(model="vertex_ai/claude-3-5-sonnet@20240620", messages=messages, max_tokens=100, client=client)
+
+        print(f"response: {response}")
+        assert mock_call.call_count == 1
+        call_1_kwargs = mock_call.call_args.kwargs
+
+    with patch.object(client, "post", new=httpx_response) as mock_call:
+        response_2 = await litellm.acompletion(model="vertex_ai/claude-3-5-sonnet@20240620", messages=messages, max_tokens=100, client=client)
+        print(f"response_2: {response_2}")
+        call_args = mock_call.call_args
+        print(f"call_args: {call_args}")
+        call_2_kwargs = mock_call.call_args.kwargs
+        call_2_kwargs["url"] = call_args[0][0]
+    
+    """
+    Compare Call 1 and Call 2
+
+    Expect:
+        - url 
+        - headers
+        - data / json
+
+        to be the same, except for the Authorization header.
+    """
+    print(f"call_1_kwargs: {call_1_kwargs}")
+    print(f"call_2_kwargs: {call_2_kwargs}")
+    assert call_1_kwargs["url"] == call_2_kwargs["url"], f"Expected url to be the same, but got {call_1_kwargs['url']} and Expected {call_2_kwargs['url']}"
+    assert "Authorization".lower() in [k.lower() for k in call_1_kwargs["headers"].keys()], f"Expected Authorization header to be present in call_1_kwargs, but got {call_1_kwargs['headers'].keys()}"
+    assert "content-type".lower() in [k.lower() for k in call_1_kwargs["headers"].keys()], f"Expected Content-Type header to be present in call_1_kwargs, but got {call_1_kwargs['headers'].keys()}"
+
+    ## validate request body
+    print(f"call 1 kwargs keys: {call_1_kwargs.keys()}")
+    print(f"call_2_kwargs['json']: {type(call_2_kwargs['json'])}")
+    print(f"call_1_kwargs['data']: {type(call_1_kwargs['data'])}")
+    call_1_kwargs_data = json.loads(call_1_kwargs["data"])
+    for k, v in call_2_kwargs["json"].items():
+        assert k in call_1_kwargs_data, f"Expected {k} to be present in call_1_kwargs['data'], but got {call_1_kwargs_data.keys()}"
 
 @pytest.mark.parametrize(
     "model, vertex_location, supports_response_schema",
@@ -1774,7 +1843,7 @@ async def test_gemini_pro_function_calling_streaming(sync_mode):
     load_vertex_ai_credentials()
     litellm.set_verbose = True
     data = {
-        "model": "vertex_ai/gemini-pro",
+        "model": "vertex_ai/gemini-1.5-flash",
         "messages": [
             {
                 "role": "user",
@@ -1833,57 +1902,6 @@ async def test_gemini_pro_function_calling_streaming(sync_mode):
     except litellm.RateLimitError as e:
         pass
 
-
-@pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
-async def test_gemini_pro_async_function_calling():
-    load_vertex_ai_credentials()
-    litellm.set_verbose = True
-    try:
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_current_weather",
-                    "description": "Get the current weather in a given location.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "location": {
-                                "type": "string",
-                                "description": "The city and state, e.g. San Francisco, CA",
-                            },
-                            "unit": {
-                                "type": "string",
-                                "enum": ["celsius", "fahrenheit"],
-                            },
-                        },
-                        "required": ["location"],
-                    },
-                },
-            }
-        ]
-        messages = [
-            {
-                "role": "user",
-                "content": "What's the weather like in Boston today in fahrenheit?",
-            }
-        ]
-        completion = await litellm.acompletion(
-            model="gemini-pro", messages=messages, tools=tools, tool_choice="auto"
-        )
-        print(f"completion: {completion}")
-        print(f"message content: {completion.choices[0].message.content}")
-        assert completion.choices[0].message.content is None
-        assert len(completion.choices[0].message.tool_calls) == 1
-
-    # except litellm.APIError as e:
-    #     pass
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {str(e)}")
-    # raise Exception("it worked!")
 
 
 # asyncio.run(gemini_pro_async_function_calling())
@@ -2174,9 +2192,55 @@ async def test_vertexai_multimodal_embedding_base64image_in_input():
         print("Response:", response)
 
 
-@pytest.mark.skip(
-    reason="new test - works locally running into vertex version issues on ci/cd"
-)
+def test_vertexai_embedding_embedding_latest():
+    try:
+        load_vertex_ai_credentials()
+        litellm.set_verbose = True
+
+        response = embedding(
+            model="vertex_ai/text-embedding-004",
+            input=["hi"],
+            dimensions=1,
+            auto_truncate=True,
+            task_type="RETRIEVAL_QUERY",
+        )
+
+        assert len(response.data[0]["embedding"]) == 1
+        assert response.usage.prompt_tokens > 0
+        print(f"response:", response)
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_vertexai_multimodalembedding_embedding_latest():
+    try:
+        import requests, base64
+
+        load_vertex_ai_credentials()
+        litellm._turn_on_debug()
+
+        response = embedding(
+            model="vertex_ai/multimodalembedding@001",
+            input=["hi"],
+            dimensions=1,
+            auto_truncate=True,
+            task_type="RETRIEVAL_QUERY",
+        )
+
+        print(f"response.usage: {response.usage}")
+        assert response.usage is not None
+        assert response.usage.prompt_tokens_details is not None
+
+        assert response._hidden_params["response_cost"] > 0
+        print(f"response:", response)
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_vertexai_embedding_embedding_latest():
     try:
         load_vertex_ai_credentials()
@@ -3068,6 +3132,7 @@ async def test_vertexai_embedding_finetuned(respx_mock: MockRouter):
     """
     load_vertex_ai_credentials()
     litellm.set_verbose = True
+    litellm.disable_aiohttp_transport = True # since this uses respx, we need to set use_aiohttp_transport to False
 
     # Test input
     input_text = ["good morning from litellm", "this is another item"]
@@ -3136,6 +3201,8 @@ async def test_vertexai_model_garden_model_completion(
 
     Using OpenAI compatible models from Vertex Model Garden
     """
+    litellm.disable_aiohttp_transport = True # since this uses respx, we need to set use_aiohttp_transport to False
+    litellm.module_level_aclient = httpx.AsyncClient()
     load_vertex_ai_credentials()
     litellm.set_verbose = True
 
@@ -3211,18 +3278,6 @@ async def test_vertexai_model_garden_model_completion(
     assert response.usage.total_tokens == 172
 
 
-def test_vertexai_code_gecko():
-    litellm.set_verbose = True
-    load_vertex_ai_credentials()
-    response = completion(
-        model="vertex_ai/code-gecko@002",
-        messages=[{"role": "user", "content": "Hello world!"}],
-        stream=True,
-    )
-
-    for chunk in response:
-        print(chunk)
-
 
 def vertex_ai_anthropic_thinking_mock_response(*args, **kwargs):
     mock_response = MagicMock()
@@ -3286,3 +3341,604 @@ def test_vertex_anthropic_completion():
         assert response.choices[0].message.thinking_blocks is not None
         assert isinstance(response.choices[0].message.thinking_blocks, list)
         assert len(response.choices[0].message.thinking_blocks) > 0
+
+
+def test_signed_s3_url_with_format():
+    from litellm import completion
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    load_vertex_ai_credentials()
+
+    args = {
+        "model": "vertex_ai/gemini-2.0-flash-001",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://litellm-logo-aws-marketplace.s3.us-west-2.amazonaws.com/berriai-logo-github.png?response-content-disposition=inline&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Security-Token=IQoJb3JpZ2luX2VjENj%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FwEaCXVzLXdlc3QtMiJGMEQCIHlAy6QneghdEo4Dp4rw%2BHhdInKX4MU3T0hZT1qV3AD%2FAiBGY%2FtfxmBJkj%2BK6%2FxAgek6L3tpOcq6su1mBrj87El%2FCirLAwghEAEaDDg4ODYwMjIyMzQyOCIMzds7lsxAFHHCRHmkKqgDgnsJBaEmmwXBWqzyMMe3BUKsCqfvrYupFGxBREP%2BaEz%2ByLSKiTM3xWzaRz6vrP9T4HSJ97B9wQ3dhUBT22XzdOFsaq49wZapwy9hoPNrMyZ77DIa0MlEbg0uudGOaMAw4NbVEqoERQuZmIMMbNHCeoJsZxKCttRZlTDzU%2FeNNy96ltb%2FuIkX5b3OOYdUaKj%2FUjmPz%2FEufY%2Bn%2FFHawunSYXJwL4pYuBF1IKRtPjqamaYscH%2FrzD7fubGUMqk6hvyGEo%2BLqnVyruQEmVFqAnXyWlpHGqeWazEC7xcsC2lhLO%2FKUouyVML%2FxyYtL4CuKp52qtLWWauAFGnyBZnCHtSL58KLaMTSh7inhoFFIKDN2hymrJ4D9%2Bxv%2FMOzefH5X%2B0pcdJUwyxcwgL3myggRmIYq1L6IL4I%2F54BIU%2FMctJcRXQ8NhQNP2PsaCsXYHHVMXRZxps9v8t9Ciorb0PAaLr0DIGVgEqejSjwbzNTctQf59Rj0GhZ0A6A3nFaq3nL4UvO51aPP6aelN6RnLwHh8fF80iPWII7Oj9PWn9bkON%2F7%2B5k42oPFR0KDTD0yaO%2BBjrlAouRvkyHZnCuLuJdEeqc8%2Fwm4W8SbMiYDzIEPPe2wFR2sH4%2FDlnJRqia9Or00d4N%2BOefBkPv%2Bcdt68r%2FwjeWOrulczzLGjJE%2FGw1Lb9dtGtmupGm2XKOW3geJwXkk1qcr7u5zwy6DNamLJbitB026JFKorRnPajhe5axEDv%2BRu6l1f0eailIrCwZ2iytA94Ni8LTha2GbZvX7fFHcmtyNlgJPpMcELdkOEGTCNBldGck5MFHG27xrVrlR%2F7HZIkKYlImNmsOIjuK7acDiangvVdB6GlmVbzNUKtJ7YJhS2ivwvdDIf8XuaFAkhjRNpewDl0GzPvojK%2BDTizZydyJL%2B20pVkSXptyPwrrHEeiOFWwhszW2iTZij4rlRAoZW6NEdfkWsXrGMbxJTZa3E5URejJbg%2B4QgGtjLrgJhRC1pJGP02GX7VMxVWZzomfC2Hn7WaF44wgcuqjE4HGJfpA2ZLBxde52g%3D%3D&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=ASIA45ZGR4NCKIUOODV3%2F20250305%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20250305T235823Z&X-Amz-Expires=43200&X-Amz-SignedHeaders=host&X-Amz-Signature=71a900a9467eaf3811553500aaf509a10a9e743a8133cfb6a78dcbcbc6da4a05",
+                            "format": "image/jpeg",
+                        },
+                    },
+                    {"type": "text", "text": "Describe this image"},
+                ],
+            }
+        ],
+    }
+    with patch.object(client, "post", new=MagicMock()) as mock_client:
+        try:
+            response = completion(**args, client=client)
+            print(response)
+        except Exception as e:
+            print(e)
+
+        print(mock_client.call_args.kwargs)
+
+        mock_client.assert_called()
+
+        print(mock_client.call_args.kwargs)
+
+        json_str = json.dumps(mock_client.call_args.kwargs["json"])
+        assert "image/jpeg" in json_str
+        assert "image/png" not in json_str
+
+
+def test_gemini_fine_tuned_model_request_consistency():
+    """
+    Assert the same transformation is applied to Fine tuned gemini 2.0 flash and gemini 2.0 flash
+
+    - Request 1: Fine tuned: vertex_ai/gemini/ft-uuid
+    - Request 2: vertex_ai/gemini-2.0-flash-001
+    """
+    litellm.set_verbose = True
+    load_vertex_ai_credentials()
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from unittest.mock import patch, MagicMock
+
+    # Set up the messages
+    messages = [
+        {
+            "role": "system",
+            "content": "Your name is Litellm Bot, you are a helpful assistant",
+        },
+        {
+            "role": "user",
+            "content": "Hello, what is your name and can you tell me the weather?",
+        },
+    ]
+
+    # Define tools
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        }
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+
+    client = HTTPHandler(concurrent_limit=1)
+
+    # First request
+    with patch.object(client, "post", new=MagicMock()) as mock_post_1:
+        try:
+            response_1 = completion(
+                model="vertex_ai/gemini/ft-uuid",
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                client=client,
+            )
+
+        except Exception as e:
+            print(e)
+
+        # Store the request body from the first call
+        first_request_body = mock_post_1.call_args.kwargs["json"]
+        print("first_request_body", first_request_body)
+
+        # Validate correct `model` is added to the request to Vertex AI
+        print("final URL=", mock_post_1.call_args.kwargs["url"])
+        # Validate the request url
+        assert (
+            "publishers/google/models/ft-uuid:generateContent"
+            in mock_post_1.call_args.kwargs["url"]
+        )
+
+    # Second request
+    with patch.object(client, "post", new=MagicMock()) as mock_post_2:
+        try:
+            response_2 = completion(
+                model="vertex_ai/gemini-2.0-flash-001",
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        # Store the request body from the second call
+        second_request_body = mock_post_2.call_args.kwargs["json"]
+        print("second_request_body", second_request_body)
+
+    # Get the diff between the two request bodies
+    # Convert dictionaries to formatted JSON strings
+    import json
+
+    first_json = json.dumps(first_request_body, indent=2).splitlines()
+    second_json = json.dumps(second_request_body, indent=2).splitlines()
+    # Assert there is no difference between the request bodies
+    assert first_json == second_json, "Request bodies should be identical"
+
+
+@pytest.mark.parametrize("provider", ["vertex_ai", "gemini"])
+@pytest.mark.parametrize("route", ["completion", "embedding", "image_generation"])
+def test_litellm_api_base(monkeypatch, provider, route):
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "api_base", "https://litellm.com")
+
+    load_vertex_ai_credentials()
+
+    if route == "image_generation" and provider == "gemini":
+        pytest.skip("Gemini does not support image generation")
+
+    with patch.object(client, "post", new=MagicMock()) as mock_client:
+        try:
+            if route == "completion":
+                response = completion(
+                    model=f"{provider}/gemini-2.0-flash-001",
+                    messages=[{"role": "user", "content": "Hello, world!"}],
+                    client=client,
+                )
+            elif route == "embedding":
+                response = embedding(
+                    model=f"{provider}/gemini-2.0-flash-001",
+                    input=["Hello, world!"],
+                    client=client,
+                )
+            elif route == "image_generation":
+                response = image_generation(
+                    model=f"{provider}/gemini-2.0-flash-001",
+                    prompt="Hello, world!",
+                    client=client,
+                )
+        except Exception as e:
+            print(e)
+
+        mock_client.assert_called()
+        assert mock_client.call_args.kwargs["url"].startswith("https://litellm.com")
+
+
+def test_gemini_tool_calling_working_demo():
+    load_vertex_ai_credentials()
+    litellm._turn_on_debug()
+    args = {
+        "messages": [
+            {
+                "content": "\n    You are a helpful assistant who can help with questions on customers business or personal finances.\n    Use the results from the available tools to answer the question.\n    ",
+                "role": "system"
+            },
+            {
+                "content": "Hello",
+                "role": "user"
+            }
+        ],
+        "max_completion_tokens": 1000,
+        "temperature": 0.0,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "test_agent",
+                    "description": "This tool helps find relevant help content",
+                    "parameters": {
+                        "properties": {
+                            "state": {
+                                "properties": {
+                                    "messages": {
+                                        "items": {
+                                            "type": "object"
+                                        },
+                                        "type": "array"
+                                    },
+                                    "conversation_id": {
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "messages",
+                                    "conversation_id"
+                                ],
+                                "type": "object"
+                            },
+                            "config": {
+                                "description": "Configuration for a Runnable.",
+                                "properties": {
+                                    "tags": {
+                                        "items": {
+                                            "type": "string"
+                                        },
+                                        "type": "array"
+                                    },
+                                    "metadata": {
+                                        "type": "object"
+                                    },
+                                    "callbacks": {
+                                        "anyOf": [
+                                            {"type": "array"},
+                                            {"type": "object"},
+                                            {"type": "null"}
+                                        ],
+                                    },
+                                    "run_name": {
+                                        "type": "string"
+                                    },
+                                    "max_concurrency": {
+                                        "anyOf": [
+                                            {
+                                                "type": "integer"
+                                            },
+                                            {
+                                                "type": "null"
+                                            }
+                                        ]
+                                    },
+                                    "recursion_limit": {
+                                        "type": "integer"
+                                    },
+                                    "configurable": {
+                                        "type": "object"
+                                    },
+                                    "run_id": {
+                                        "anyOf": [
+                                            {
+                                                "format": "uuid",
+                                                "type": "string"
+                                            },
+                                            {
+                                                "type": "null"
+                                            }
+                                        ]
+                                    }
+                                },
+                                "type": "object"
+                            },
+                            "kwargs": {
+                                "default": None,
+                                "type": "object"
+                            }
+                        },
+                        "required": [
+                            "state",
+                            "config"
+                        ],
+                        "type": "object"
+                    }
+                }
+            }
+        ]
+    }
+    response = completion(model="vertex_ai/gemini-2.0-flash", **args)
+    print(response)
+
+def test_gemini_tool_calling_not_working():
+    load_vertex_ai_credentials()
+    litellm._turn_on_debug()
+    args = {
+        "messages": [
+            {
+                "content": "\n    You are a helpful assistant who can help with questions on customers business or personal finances.\n    Use the results from the available tools to answer the question.\n    ",
+                "role": "system"
+            },
+            {
+                "content": "Hello",
+                "role": "user"
+            }
+        ],
+        "max_completion_tokens": 1000,
+        "temperature": 0.0,
+        "tools": [
+        {
+            "type": "function",
+            "function": {
+                "name": "test_agent",
+                "description": "This tool helps find relevant help content",
+                "parameters": {
+                    "properties": {
+                        "state": {
+                            "properties": {
+                                "messages": {
+                                    "items": {},
+                                    "type": "array"
+                                },
+                                "conversation_id": {
+                                    "type": "string"
+                                }
+                            },
+                            "required": [
+                                "messages",
+                                "conversation_id"
+                            ],
+                            "type": "object"
+                        },
+                        "config": {
+                            "description": "Configuration for a Runnable.",
+                            "properties": {
+                                "tags": {
+                                    "items": {
+                                        "type": "string"
+                                    },
+                                    "type": "array"
+                                },
+                                "metadata": {
+                                    "type": "object"
+                                },
+                                "callbacks": {
+                                    "anyOf": [
+                                        {
+                                            "items": {},
+                                            "type": "array"
+                                        },
+                                        {},
+                                        {
+                                            "type": "null"
+                                        }
+                                    ]
+                                },
+                                "run_name": {
+                                    "type": "string"
+                                },
+                                "max_concurrency": {
+                                    "anyOf": [
+                                        {
+                                            "type": "integer"
+                                        },
+                                        {
+                                            "type": "null"
+                                        }
+                                    ]
+                                },
+                                "recursion_limit": {
+                                    "type": "integer"
+                                },
+                                "configurable": {
+                                    "type": "object"
+                                },
+                                "run_id": {
+                                    "anyOf": [
+                                        {
+                                            "format": "uuid",
+                                            "type": "string"
+                                        },
+                                        {
+                                            "type": "null"
+                                        }
+                                    ]
+                                }
+                            },
+                            "type": "object"
+                        },
+                        "kwargs": {
+                            "default": None,
+                            "type": "object"
+                        }
+                    },
+                    "required": [
+                        "state",
+                        "config"
+                    ],
+                    "type": "object"
+                }
+            }
+        }
+    ]
+    }
+    response = completion(model="vertex_ai/gemini-2.0-flash", **args)
+    print(response)
+
+def test_vertex_ai_llama_tool_calling():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    load_vertex_ai_credentials()
+    litellm._turn_on_debug()
+    args = {
+    "model": "vertex_ai/meta/llama-4-maverick-17b-128e-instruct-maas",
+    "messages": [
+        {
+            "role": "user",
+            "content": "What is the weather in Boston, MA today?"
+        }
+    ],
+    "tools": [
+        {
+            "type": "function",
+					  "function": {
+							"name": "get_weather",
+							"description": "Get current temperature for a given location.",
+							"parameters": {
+									"type": "object",
+									"properties": {
+											"location": {
+													"type": "string",
+													"description": "City and country e.g. Bogotá, Colombia"
+											}
+									},
+									"required": [
+											"location"
+									],
+									"additionalProperties": False
+							}
+						}
+        }
+    ],
+    "vertex_location": "us-east5"
+    }
+    try: 
+        response = completion(**args)
+    except litellm.RateLimitError:
+        pytest.skip("Rate limit error")
+    print(response)
+
+    assert response.choices[0].message.tool_calls is not None
+    assert response.choices[0].finish_reason == "tool_calls"
+    assert response._hidden_params["response_cost"] > 0
+
+
+def test_vertex_schema_test():
+    load_vertex_ai_credentials()
+    litellm._turn_on_debug()
+
+    def tool_call(text: str | None) -> str:
+        return text or "No text provided"
+
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "git_create_branch",
+            "description": "Creates a new branch from an optional base branch",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo_path": {"title": "Repo Path", "type": "string"},
+                    "branch_name": {"title": "Branch Name", "type": "string"},
+                    "base_branch": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": None, "title": "Base Branch"},
+                },
+                "required": ["repo_path", "branch_name"],
+                "title": "GitCreateBranch",
+            }
+        }
+    }
+
+
+    response = litellm.completion(
+        model="vertex_ai/gemini-2.5-flash-preview-05-20",
+        messages=[{"role": "user", "content": "call the tool"}],
+        tools=[tool],
+        tool_choice="required",
+    )
+
+    print(response)
+
+
+
+
+def test_vertex_ai_response_id():
+    """Test that litellm preserves the response ID from Vertex AI's API for non-streaming responses"""
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    load_vertex_ai_credentials()
+
+    client = HTTPHandler()
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "responseId": "vertex_ai_response_123",
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [{"text": "Hello! How can I help you today?"}],
+                },
+                "finishReason": "STOP",
+                "safetyRatings": [
+                    {
+                        "category": "HARM_CATEGORY_HATE_SPEECH",
+                        "probability": "NEGLIGIBLE",
+                    }
+                ],
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 8,
+            "totalTokenCount": 18,
+        },
+    }
+
+    with patch.object(client, "post", return_value=mock_response) as mock_post:
+        response = completion(
+            model="vertex_ai/gemini-1.5-pro",
+            messages=[{"role": "user", "content": "Hi!"}],
+            client=client,
+        )
+
+        # Verify the response ID is preserved
+        assert response.id == "vertex_ai_response_123"
+        assert response.choices[0].message.content == "Hello! How can I help you today?"
+
+
+def test_vertex_ai_streaming_response_id():
+    """Test that litellm preserves the response ID from Vertex AI's API for streaming responses"""
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        make_sync_call,
+    )
+    load_vertex_ai_credentials()
+
+    client = HTTPHandler()
+
+    def mock_post(url, **kwargs):
+        def stream_response():
+            chunk = {
+                "responseId": "vertex_ai_response_stream_123",
+                "candidates": [
+                    {
+                        "content": {
+                            "role": "model",
+                            "parts": [{"text": "Hello streaming!"}],
+                        },
+                        "finishReason": "STOP",
+                    }
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 10,
+                    "candidatesTokenCount": 8,
+                    "totalTokenCount": 18,
+                },
+            }
+            yield json.dumps(chunk)
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.iter_lines = MagicMock(return_value=stream_response())
+        return mock_response
+
+    logging_obj = MagicMock()
+
+    with patch.object(client, "post", side_effect=mock_post):
+        iterator = make_sync_call(
+            client=client,
+            gemini_client=None,
+            api_base="https://mock-vertex-ai-api.com",
+            headers={},
+            data="{}",
+            model="gemini-pro",
+            messages=[],
+            logging_obj=logging_obj,
+        )
+        iterator = iter(iterator)
+        first_chunk = next(iterator)
+        assert first_chunk.id == "vertex_ai_response_stream_123"

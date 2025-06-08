@@ -69,10 +69,10 @@ async def langfuse_proxy_route(
         request=request, api_key="Bearer {}".format(api_key)
     )
 
-    callback_settings_obj: Optional[TeamCallbackMetadata] = (
-        _get_dynamic_logging_metadata(
-            user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
-        )
+    callback_settings_obj: Optional[
+        TeamCallbackMetadata
+    ] = _get_dynamic_logging_metadata(
+        user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )
 
     dynamic_langfuse_public_key: Optional[str] = None

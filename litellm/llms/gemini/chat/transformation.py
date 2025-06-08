@@ -6,7 +6,8 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.llms.vertex_ai import ContentType, PartType
+from litellm.types.llms.vertex_ai import ContentType, PartType, SpeechConfig, VoiceConfig, PrebuiltVoiceConfig
+from litellm.utils import supports_reasoning
 
 from ...vertex_ai.gemini.transformation import _gemini_convert_messages_with_history
 from ...vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
@@ -66,8 +67,11 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
     def get_config(cls):
         return super().get_config()
 
+    def is_model_gemini_audio_model(self, model: str) -> bool:
+        return "tts" in model
+
     def get_supported_openai_params(self, model: str) -> List[str]:
-        return [
+        supported_params = [
             "temperature",
             "top_p",
             "max_tokens",
@@ -81,7 +85,16 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
             "stop",
             "logprobs",
             "frequency_penalty",
+            "modalities",
+            "parallel_tool_calls",
+            "web_search_options",
         ]
+        if supports_reasoning(model):
+            supported_params.append("reasoning_effort")
+            supported_params.append("thinking")
+        if self.is_model_gemini_audio_model(model):
+            supported_params.append("audio")
+        return supported_params
 
     def map_openai_params(
         self,
@@ -90,6 +103,39 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         model: str,
         drop_params: bool,
     ) -> Dict:
+        # Handle audio parameter for TTS models
+        if self.is_model_gemini_audio_model(model):
+            for param, value in non_default_params.items():
+                if param == "audio" and isinstance(value, dict):
+                    # Validate audio format - Gemini TTS only supports pcm16
+                    audio_format = value.get("format")
+                    if audio_format is not None and audio_format != "pcm16":
+                        raise ValueError(
+                            f"Unsupported audio format for Gemini TTS models: {audio_format}. "
+                            f"Gemini TTS models only support 'pcm16' format as they return audio data in L16 PCM format. "
+                            f"Please set audio format to 'pcm16'."
+                        )
+
+                    # Map OpenAI audio parameter to Gemini speech config
+                    speech_config: SpeechConfig = {}
+
+                    if "voice" in value:
+                        prebuilt_voice_config: PrebuiltVoiceConfig = {
+                            "voiceName": value["voice"]
+                        }
+                        voice_config: VoiceConfig = {
+                            "prebuiltVoiceConfig": prebuilt_voice_config
+                        }
+                        speech_config["voiceConfig"] = voice_config
+
+                    if speech_config:
+                        optional_params["speechConfig"] = speech_config
+
+                    # Ensure audio modality is set
+                    if "responseModalities" not in optional_params:
+                        optional_params["responseModalities"] = ["AUDIO"]
+                    elif "AUDIO" not in optional_params["responseModalities"]:
+                        optional_params["responseModalities"].append("AUDIO")
 
         if litellm.vertex_ai_safety_settings is not None:
             optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
@@ -114,12 +160,16 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                     if element.get("type") == "image_url":
                         img_element = element
                         _image_url: Optional[str] = None
+                        format: Optional[str] = None
                         if isinstance(img_element.get("image_url"), dict):
                             _image_url = img_element["image_url"].get("url")  # type: ignore
+                            format = img_element["image_url"].get("format")  # type: ignore
                         else:
                             _image_url = img_element.get("image_url")  # type: ignore
                         if _image_url and "https://" in _image_url:
-                            image_obj = convert_to_anthropic_image_obj(_image_url)
+                            image_obj = convert_to_anthropic_image_obj(
+                                _image_url, format=format
+                            )
                             img_element["image_url"] = (  # type: ignore
                                 convert_generic_image_chunk_to_openai_image_obj(
                                     image_obj

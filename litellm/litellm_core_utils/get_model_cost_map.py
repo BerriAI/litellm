@@ -13,7 +13,7 @@ import os
 import httpx
 
 
-def get_model_cost_map(url: str):
+def get_model_cost_map(url: str) -> dict:
     if (
         os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False)
         or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == "True"

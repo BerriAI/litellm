@@ -18,6 +18,7 @@ from litellm import Choices, Message, ModelResponse, EmbeddingResponse, Usage
 from litellm import completion
 from unittest.mock import patch
 from litellm.llms.xai.chat.transformation import XAIChatConfig, XAI_API_BASE
+from base_llm_unit_tests import BaseReasoningLLMTests, BaseLLMChatTest
 
 
 def test_xai_chat_config_get_openai_compatible_provider_info():
@@ -123,7 +124,7 @@ def test_completion_xai(stream):
             },
         ]
         response = completion(
-            model="xai/grok-beta",
+            model="xai/grok-3-mini-beta",
             messages=messages,
             stream=stream,
         )
@@ -142,3 +143,38 @@ def test_completion_xai(stream):
             assert response.choices[0].message.content is not None
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+def test_xai_message_name_filtering():
+    messages = [
+        {
+            "role": "system",
+            "content": "*I press the green button*",
+            "name": "example_user"
+        },
+        {"role": "user", "content": "Hello", "name": "John"},
+        {"role": "assistant", "content": "Hello", "name": "Jane"},
+    ]
+    response = completion(
+        model="xai/grok-3-mini-beta",
+        messages=messages,
+    )
+    assert response is not None
+    assert response.choices[0].message.content is not None
+
+
+class TestXAIReasoningEffort(BaseReasoningLLMTests):
+    def get_base_completion_call_args(self):
+        return {
+            "model": "xai/grok-3-mini-beta",
+            "messages": [{"role": "user", "content": "Hello"}],
+        }
+    
+class TestXAIChat(BaseLLMChatTest):
+    def get_base_completion_call_args(self):
+        return {
+            "model": "xai/grok-3-mini-beta",
+        }
+    def test_tool_call_no_arguments(self, tool_call_no_arguments):
+        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
+        pass

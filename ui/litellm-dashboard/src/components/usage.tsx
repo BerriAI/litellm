@@ -39,12 +39,8 @@ import {
   getProxyUISettings
 } from "./networking";
 import { start } from "repl";
+import TopKeyView from "./top_key_view";
 console.log("process.env.NODE_ENV", process.env.NODE_ENV);
-const isLocal = process.env.NODE_ENV === "development";
-const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
-if (isLocal !== true) {
-  console.log = function() {};
-}
 
 interface UsagePageProps {
   accessToken: string | null;
@@ -399,7 +395,9 @@ const UsagePage: React.FC<UsagePageProps> = ({
       async () => {
         const top_keys = await adminTopKeysCall(accessToken);
         return top_keys.map((k: any) => ({
-          key: (k["key_alias"] || k["key_name"] || k["api_key"]).substring(0, 10),
+          key: (k["api_key"]).substring(0, 10),
+          api_key: k["api_key"],
+          key_alias: k["key_alias"],
           spend: Number(k["total_spend"].toFixed(2)),
         }));
       },
@@ -654,25 +652,20 @@ const UsagePage: React.FC<UsagePageProps> = ({
                 </Card>
               </Col>
               <Col numColSpan={1}>
-                <Card>
+                <Card className="h-full">
                   <Title>Top API Keys</Title>
-                  <BarChart
-                    className="mt-4 h-40"
-                    data={topKeys}
-                    index="key"
-                    categories={["spend"]}
-                    colors={["cyan"]}
-                    yAxisWidth={80}
-                    tickGap={5}
-                    layout="vertical"
-                    showXAxis={false}
-                    showLegend={false}
-                    valueFormatter={(value) => `$${value.toFixed(2)}`}
+                  <TopKeyView
+                    topKeys={topKeys}
+                    accessToken={accessToken}
+                    userID={userID}
+                    userRole={userRole}
+                    teams={null}
+                    premiumUser={premiumUser}
                   />
                 </Card>
               </Col>
               <Col numColSpan={1}>
-              <Card>
+                <Card className="h-full">
                   <Title>Top Models</Title>
                   <BarChart
                     className="mt-4 h-40"
@@ -687,7 +680,6 @@ const UsagePage: React.FC<UsagePageProps> = ({
                     valueFormatter={(value) => `$${value.toFixed(2)}`}
                   />
                 </Card>
-               
               </Col>
               <Col numColSpan={1}>
                 

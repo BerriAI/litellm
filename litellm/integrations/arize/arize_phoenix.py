@@ -1,17 +1,21 @@
 import os
-from typing import TYPE_CHECKING, Any
-from litellm.integrations.arize import _utils
+import urllib.parse
+from typing import TYPE_CHECKING, Any, Union
+
 from litellm._logging import verbose_logger
+from litellm.integrations.arize import _utils
 from litellm.types.integrations.arize_phoenix import ArizePhoenixConfig
 
 if TYPE_CHECKING:
-    from .opentelemetry import OpenTelemetryConfig as _OpenTelemetryConfig
-    from litellm.types.integrations.arize import Protocol as _Protocol
     from opentelemetry.trace import Span as _Span
+
+    from litellm.types.integrations.arize import Protocol as _Protocol
+
+    from .opentelemetry import OpenTelemetryConfig as _OpenTelemetryConfig
 
     Protocol = _Protocol
     OpenTelemetryConfig = _OpenTelemetryConfig
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     Protocol = Any
     OpenTelemetryConfig = Any
@@ -19,6 +23,7 @@ else:
 
 
 ARIZE_HOSTED_PHOENIX_ENDPOINT = "https://app.phoenix.arize.com/v1/traces"
+
 
 class ArizePhoenixLogger:
     @staticmethod
@@ -49,7 +54,7 @@ class ArizePhoenixLogger:
             protocol = "otlp_grpc"
         else:
             endpoint = ARIZE_HOSTED_PHOENIX_ENDPOINT
-            protocol = "otlp_http"       
+            protocol = "otlp_http"
             verbose_logger.debug(
                 f"No PHOENIX_COLLECTOR_ENDPOINT or PHOENIX_COLLECTOR_HTTP_ENDPOINT found, using default endpoint with http: {ARIZE_HOSTED_PHOENIX_ENDPOINT}"
             )
@@ -57,17 +62,16 @@ class ArizePhoenixLogger:
         otlp_auth_headers = None
         # If the endpoint is the Arize hosted Phoenix endpoint, use the api_key as the auth header as currently it is uses
         # a slightly different auth header format than self hosted phoenix
-        if endpoint == ARIZE_HOSTED_PHOENIX_ENDPOINT: 
+        if endpoint == ARIZE_HOSTED_PHOENIX_ENDPOINT:
             if api_key is None:
-                raise ValueError("PHOENIX_API_KEY must be set when the Arize hosted Phoenix endpoint is used.")
+                raise ValueError(
+                    "PHOENIX_API_KEY must be set when the Arize hosted Phoenix endpoint is used."
+                )
             otlp_auth_headers = f"api_key={api_key}"
         elif api_key is not None:
             # api_key/auth is optional for self hosted phoenix
-            otlp_auth_headers = f"Authorization=Bearer {api_key}"
+            otlp_auth_headers = f"Authorization={urllib.parse.quote(f'Bearer {api_key}')}"
 
         return ArizePhoenixConfig(
-            otlp_auth_headers=otlp_auth_headers,
-            protocol=protocol,
-            endpoint=endpoint
+            otlp_auth_headers=otlp_auth_headers, protocol=protocol, endpoint=endpoint
         )
-

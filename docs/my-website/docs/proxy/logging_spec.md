@@ -59,6 +59,22 @@ Inherits from `StandardLoggingUserAPIKeyMetadata` and adds:
 | `spend_logs_metadata` | `Optional[dict]` | Key-value pairs for spend logging |
 | `requester_ip_address` | `Optional[str]` | Requester's IP address |
 | `requester_metadata` | `Optional[dict]` | Additional requester metadata |
+| `vector_store_request_metadata` | `Optional[List[StandardLoggingVectorStoreRequest]]` | Vector store request metadata |
+| `requester_custom_headers` | Dict[str, str] | Any custom (`x-`) headers sent by the client to the proxy. |
+| `guardrail_information` | `Optional[StandardLoggingGuardrailInformation]` | Guardrail information |
+
+
+## StandardLoggingVectorStoreRequest
+
+| Field | Type | Description |
+|-------|------|-------------|
+| vector_store_id | Optional[str] | ID of the vector store |
+| custom_llm_provider | Optional[str] | Custom LLM provider the vector store is associated with (e.g., bedrock, openai, anthropic) |
+| query | Optional[str] | Query to the vector store |
+| vector_store_search_response | Optional[VectorStoreSearchResponse] | OpenAI format vector store search response |
+| start_time | Optional[float] | Start time of the vector store request |
+| end_time | Optional[float] | End time of the vector store request |
+
 
 ## StandardLoggingAdditionalHeaders
 
@@ -78,6 +94,8 @@ Inherits from `StandardLoggingUserAPIKeyMetadata` and adds:
 | `api_base` | `Optional[str]` | Optional API base URL |
 | `response_cost` | `Optional[str]` | Optional response cost |
 | `additional_headers` | `Optional[StandardLoggingAdditionalHeaders]` | Additional headers |
+| `batch_models` | `Optional[List[str]]` | Only set for Batches API. Lists the models used for cost calculation |
+| `litellm_model_name` | `Optional[str]` | Model name sent in request |
 
 ## StandardLoggingModelInformation
 
@@ -112,3 +130,19 @@ Inherits from `StandardLoggingUserAPIKeyMetadata` and adds:
 A literal type with two possible values:
 - `"success"`
 - `"failure"`
+
+## StandardLoggingGuardrailInformation
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `guardrail_name` | `Optional[str]` | Guardrail name |
+| `guardrail_mode` | `Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]]` | Guardrail mode |
+| `guardrail_request` | `Optional[dict]` | Guardrail request |
+| `guardrail_response` | `Optional[Union[dict, str, List[dict]]]` | Guardrail response |
+| `guardrail_status` | `Literal["success", "failure"]` | Guardrail status |
+| `start_time` | `Optional[float]` | Start time of the guardrail |
+| `end_time` | `Optional[float]` | End time of the guardrail |
+| `duration` | `Optional[float]` | Duration of the guardrail in seconds |
+| `masked_entity_count` | `Optional[Dict[str, int]]` | Count of masked entities |
+
+

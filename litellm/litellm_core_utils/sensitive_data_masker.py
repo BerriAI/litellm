@@ -1,5 +1,7 @@
 from typing import Any, Dict, Optional, Set
 
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
+
 
 class SensitiveDataMasker:
     def __init__(
@@ -39,7 +41,10 @@ class SensitiveDataMasker:
         return result
 
     def mask_dict(
-        self, data: Dict[str, Any], depth: int = 0, max_depth: int = 10
+        self,
+        data: Dict[str, Any],
+        depth: int = 0,
+        max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER,
     ) -> Dict[str, Any]:
         if depth >= max_depth:
             return data

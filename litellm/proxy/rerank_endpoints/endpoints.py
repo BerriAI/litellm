@@ -7,9 +7,11 @@ from fastapi.responses import ORJSONResponse
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
 router = APIRouter()
 import asyncio
+
 
 @router.post(
     "/v2/rerank",
@@ -37,7 +39,6 @@ async def rerank(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
-        get_custom_headers,
         llm_router,
         proxy_config,
         proxy_logging_obj,
@@ -89,7 +90,7 @@ async def rerank(
         api_base = hidden_params.get("api_base", None) or ""
         additional_headers = hidden_params.get("additional_headers", None) or {}
         fastapi_response.headers.update(
-            get_custom_headers(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,

@@ -257,6 +257,8 @@ def test_aaparallel_function_call_with_anthropic_thinking(model):
                 thinking={"type": "enabled", "budget_tokens": 1024},
             )  # get a new response from the model where it can see the function response
             print("second response\n", second_response)
+
+            ## THIRD RESPONSE
     except litellm.InternalServerError as e:
         print(e)
     except litellm.RateLimitError as e:
@@ -560,8 +562,9 @@ def test_groq_parallel_function_call():
 @pytest.mark.parametrize(
     "model",
     [
-        "anthropic.claude-3-sonnet-20240229-v1:0",
-        "claude-3-haiku-20240307",
+        # "anthropic.claude-3-sonnet-20240229-v1:0",
+        # "claude-3-haiku-20240307",
+        "databricks/databricks-claude-3-7-sonnet"
     ],
 )
 def test_anthropic_function_call_with_no_schema(model):
@@ -797,83 +800,3 @@ async def test_watsonx_tool_choice(sync_mode):
                 raise e
 
 
-@pytest.mark.asyncio
-async def test_function_calling_with_dbrx():
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-
-    client = AsyncHTTPHandler()
-    with patch.object(client, "post", return_value=MagicMock()) as mock_completion:
-        try:
-            resp = await litellm.acompletion(
-                model="databricks/databricks-dbrx-instruct",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a helpful customer support assistant. Use the supplied tools to assist the user.",
-                    },
-                    {
-                        "role": "user",
-                        "content": "Hi, can you tell me the delivery date for my order?",
-                    },
-                    {
-                        "role": "assistant",
-                        "content": "Hi there! I can help with that. Can you please provide your order ID?",
-                    },
-                    {
-                        "role": "user",
-                        "content": "i think it is order_12345, also what is the weather in Phoenix, AZ?",
-                    },
-                ],
-                tools=[
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "get_delivery_date",
-                            "description": "Get the delivery date for a customer'''s order. Call this whenever you need to know the delivery date, for example when a customer asks '''Where is my package'''",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {
-                                    "order_id": {
-                                        "type": "string",
-                                        "description": "The customer'''s order ID.",
-                                    }
-                                },
-                                "required": ["order_id"],
-                                "additionalProperties": False,
-                            },
-                        },
-                    },
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "check_weather",
-                            "description": "Check the current weather in a location. For example when asked: '''What is the temperature in San Fransisco, CA?'''",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {
-                                    "city": {
-                                        "type": "string",
-                                        "description": "The city to check the weather for.",
-                                    },
-                                    "state": {
-                                        "type": "string",
-                                        "description": "The state to check the weather for.",
-                                    },
-                                },
-                                "required": ["city", "state"],
-                                "additionalProperties": False,
-                            },
-                        },
-                    },
-                ],
-                client=client,
-                tool_choice="auto",
-            )
-        except Exception as e:
-            print(e)
-
-        mock_completion.assert_called_once()
-        print(mock_completion.call_args.kwargs)
-        json_data = json.loads(mock_completion.call_args.kwargs["data"])
-        assert "tools" in json_data
-        assert "tool_choice" in json_data

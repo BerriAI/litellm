@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
+from litellm.utils import token_counter
 
 from ..common_utils import SagemakerError
 
@@ -36,6 +37,7 @@ class SagemakerConfig(BaseConfig):
     """
 
     max_new_tokens: Optional[int] = None
+    max_completion_tokens: Optional[int] = None
     top_p: Optional[float] = None
     temperature: Optional[float] = None
     return_full_text: Optional[bool] = None
@@ -43,6 +45,7 @@ class SagemakerConfig(BaseConfig):
     def __init__(
         self,
         max_new_tokens: Optional[int] = None,
+        max_completion_tokens: Optional[int] = None,
         top_p: Optional[float] = None,
         temperature: Optional[float] = None,
         return_full_text: Optional[bool] = None,
@@ -64,7 +67,7 @@ class SagemakerConfig(BaseConfig):
         )
 
     def get_supported_openai_params(self, model: str) -> List:
-        return ["stream", "temperature", "max_tokens", "top_p", "stop", "n"]
+        return ["stream", "temperature", "max_tokens", "max_completion_tokens", "top_p", "stop", "n"]
 
     def map_openai_params(
         self,
@@ -88,9 +91,9 @@ class SagemakerConfig(BaseConfig):
                 optional_params["top_p"] = value
             if param == "n":
                 optional_params["best_of"] = value
-                optional_params["do_sample"] = (
-                    True  # Need to sample if you want best of for hf inference endpoints
-                )
+                optional_params[
+                    "do_sample"
+                ] = True  # Need to sample if you want best of for hf inference endpoints
             if param == "stream":
                 optional_params["stream"] = value
             if param == "stop":
@@ -100,6 +103,8 @@ class SagemakerConfig(BaseConfig):
                 # Failed: Error occurred: HuggingfaceException - Input validation error: `max_new_tokens` must be strictly positive
                 if value == 0:
                     value = 1
+                optional_params["max_new_tokens"] = value
+            if param == "max_completion_tokens":
                 optional_params["max_new_tokens"] = value
         non_default_params.pop("aws_sagemaker_allow_zero_temp", None)
         return optional_params
@@ -238,9 +243,12 @@ class SagemakerConfig(BaseConfig):
             )
 
         ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
-        prompt_tokens = len(encoding.encode(prompt))
-        completion_tokens = len(
-            encoding.encode(model_response["choices"][0]["message"].get("content", ""))
+        prompt_tokens = token_counter(
+            text=prompt, count_response_tokens=True
+        )  # doesn't apply any default token count from openai's chat template
+        completion_tokens = token_counter(
+            text=model_response["choices"][0]["message"].get("content", ""),
+            count_response_tokens=True,
         )
 
         model_response.created = int(time.time())
@@ -259,6 +267,7 @@ class SagemakerConfig(BaseConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:

@@ -8,6 +8,10 @@ else:
     VertexBase = Any
 
 
+GCS_DEFAULT_BATCH_SIZE = 2048
+GCS_DEFAULT_FLUSH_INTERVAL_SECONDS = 20
+
+
 class GCSLoggingConfig(TypedDict):
     """
     Internal LiteLLM Config for GCS Bucket logging

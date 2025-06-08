@@ -39,7 +39,7 @@ export const columns = (
     accessorKey: "spend",
     cell: ({ row }) => (
       <span className="text-xs">
-        {row.original.spend ? row.original.spend.toFixed(2) : "-"}
+        {row.original.spend ? row.original.spend.toFixed(4) : "-"}
       </span>
     ),
   },

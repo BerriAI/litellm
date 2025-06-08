@@ -1,3 +1,4 @@
+# ruff: noqa: T201
 import importlib
 import json
 import os
@@ -10,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 import click
 import httpx
 from dotenv import load_dotenv
-
+import urllib.parse
 if TYPE_CHECKING:
     from fastapi import FastAPI
 else:
@@ -451,7 +452,19 @@ class ProxyInitializationHelpers:
     help="Path to the SSL certfile. Use this when you want to provide SSL certificate when starting proxy",
     envvar="SSL_CERTFILE_PATH",
 )
+@click.option(
+    "--use_prisma_migrate",
+    is_flag=True,
+    default=False,
+    help="Use prisma migrate instead of prisma db push for database schema updates",
+)
 @click.option("--local", is_flag=True, default=False, help="for local debugging")
+@click.option(
+    "--skip_server_startup",
+    is_flag=True,
+    default=False,
+    help="Skip starting the server after setup (useful for migrations only)",
+)
 def run_server(  # noqa: PLR0915
     host,
     port,
@@ -486,6 +499,8 @@ def run_server(  # noqa: PLR0915
     ssl_keyfile_path,
     ssl_certfile_path,
     log_config,
+    use_prisma_migrate,
+    skip_server_startup,
 ):
     args = locals()
     if local:
@@ -644,7 +659,7 @@ def run_server(  # noqa: PLR0915
                     **key_management_settings
                 )
             database_url = general_settings.get("database_url", None)
-            if database_url is None:
+            if database_url is None and os.getenv("DATABASE_URL") is None:
                 # Check if all required variables are provided
                 database_host = os.getenv("DATABASE_HOST")
                 database_username = os.getenv("DATABASE_USERNAME")
@@ -657,15 +672,21 @@ def run_server(  # noqa: PLR0915
                     and database_password
                     and database_name
                 ):
+                    # Handle the problem of special character escaping in the database URL
+                    database_username_enc = urllib.parse.quote_plus(database_username)
+                    database_password_enc = urllib.parse.quote_plus(database_password)
+                    database_name_enc = urllib.parse.quote_plus(database_name)
+
                     # Construct DATABASE_URL from the provided variables
-                    database_url = f"postgresql://{database_username}:{database_password}@{database_host}/{database_name}"
+                    database_url = f"postgresql://{database_username_enc}:{database_password_enc}@{database_host}/{database_name_enc}"
+
                     os.environ["DATABASE_URL"] = database_url
             db_connection_pool_limit = general_settings.get(
                 "database_connection_pool_limit",
                 LiteLLMDatabaseConnectionPool.database_connection_pool_limit.value,
             )
             db_connection_timeout = general_settings.get(
-                "database_connection_timeout",
+                "database_connection_pool_timeout",
                 LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value,
             )
             if database_url and database_url.startswith("os.environ/"):
@@ -715,7 +736,10 @@ def run_server(  # noqa: PLR0915
 
             if is_prisma_runnable:
                 from litellm.proxy.db.check_migration import check_prisma_schema_diff
-                from litellm.proxy.db.prisma_client import should_update_prisma_schema
+                from litellm.proxy.db.prisma_client import (
+                    PrismaManager,
+                    should_update_prisma_schema,
+                )
 
                 if (
                     should_update_prisma_schema(
@@ -725,26 +749,7 @@ def run_server(  # noqa: PLR0915
                 ):
                     check_prisma_schema_diff(db_url=None)
                 else:
-                    for _ in range(4):
-                        # run prisma db push, before starting server
-                        # Save the current working directory
-                        original_dir = os.getcwd()
-                        # set the working directory to where this script is
-                        abspath = os.path.abspath(__file__)
-                        dname = os.path.dirname(abspath)
-                        os.chdir(dname)
-                        try:
-                            subprocess.run(
-                                ["prisma", "db", "push", "--accept-data-loss"]
-                            )
-                            break  # Exit the loop if the subprocess succeeds
-                        except subprocess.CalledProcessError as e:
-                            import time
-
-                            print(f"Error: {e}")  # noqa
-                            time.sleep(random.randrange(start=1, stop=5))
-                        finally:
-                            os.chdir(original_dir)
+                    PrismaManager.setup_database(use_migrate=use_prisma_migrate)
             else:
                 print(  # noqa
                     f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa
@@ -759,6 +764,11 @@ def run_server(  # noqa: PLR0915
 
         # DO NOT DELETE - enables global variables to work across files
         from litellm.proxy.proxy_server import app  # noqa
+
+        # Skip server startup if requested (after all setup is done)
+        if skip_server_startup:
+            print("LiteLLM: Setup complete. Skipping server startup as requested.")  # noqa
+            return
 
         uvicorn_args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
             host=host,

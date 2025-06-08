@@ -2,9 +2,9 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Use LiteLLM AI Gateway with Aporia Guardrails
+# Aporia Guardrails with LiteLLM Gateway
 
-In this tutorial we will use LiteLLM Proxy with Aporia to detect PII in requests and profanity in responses
+In this tutorial we will use LiteLLM AI Gateway with Aporia to detect PII in requests and profanity in responses
 
 ## 1. Setup guardrails on Aporia
 

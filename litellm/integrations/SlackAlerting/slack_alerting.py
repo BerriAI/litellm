@@ -6,7 +6,7 @@ import os
 import random
 import time
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 
 from openai import APIError
 
@@ -16,7 +16,12 @@ import litellm.litellm_core_utils.litellm_logging
 import litellm.types
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.constants import HOURS_IN_A_DAY
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_alert_type
+from litellm.integrations.SlackAlerting.hanging_request_check import (
+    AlertingHangingRequestCheck,
+)
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.exception_mapping_utils import (
     _add_key_name_and_team_to_alert,
@@ -25,12 +30,18 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import AlertType, CallInfo, VirtualKeyEvent, WebhookEvent
+from litellm.proxy._types import (
+    AlertType,
+    CallInfo,
+    Litellm_EntityType,
+    VirtualKeyEvent,
+    WebhookEvent,
+)
 from litellm.types.integrations.slack_alerting import *
 
 from ..email_templates.templates import *
 from .batching_handler import send_to_webhook, squash_payloads
-from .utils import _add_langfuse_trace_id_to_alert, process_slack_alerting_variables
+from .utils import process_slack_alerting_variables
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -77,6 +88,10 @@ class SlackAlerting(CustomBatchLogger):
         self.alerting_args = SlackAlertingArgs(**alerting_args)
         self.default_webhook_url = default_webhook_url
         self.flush_lock = asyncio.Lock()
+        self.periodic_started = False
+        self.hanging_request_check = AlertingHangingRequestCheck(
+            slack_alerting_object=self,
+        )
         super().__init__(**kwargs, flush_lock=self.flush_lock)
 
     def update_values(
@@ -91,12 +106,17 @@ class SlackAlerting(CustomBatchLogger):
         if alerting is not None:
             self.alerting = alerting
             asyncio.create_task(self.periodic_flush())
+            self.periodic_started = True
         if alerting_threshold is not None:
             self.alerting_threshold = alerting_threshold
         if alert_types is not None:
             self.alert_types = alert_types
         if alerting_args is not None:
             self.alerting_args = SlackAlertingArgs(**alerting_args)
+            if not self.periodic_started:
+                asyncio.create_task(self.periodic_flush())
+                self.periodic_started = True
+
         if alert_to_webhook_url is not None:
             # update the dict
             if self.alert_to_webhook_url is None:
@@ -195,12 +215,15 @@ class SlackAlerting(CustomBatchLogger):
         if self.alerting is None or self.alert_types is None:
             return
 
-        time_difference_float, model, api_base, messages = (
-            self._response_taking_too_long_callback_helper(
-                kwargs=kwargs,
-                start_time=start_time,
-                end_time=end_time,
-            )
+        (
+            time_difference_float,
+            model,
+            api_base,
+            messages,
+        ) = self._response_taking_too_long_callback_helper(
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
         )
         if litellm.turn_off_message_logging or litellm.redact_messages_in_exceptions:
             messages = "Message not logged. litellm.redact_messages_in_exceptions=True"
@@ -434,106 +457,17 @@ class SlackAlerting(CustomBatchLogger):
 
     async def response_taking_too_long(
         self,
-        start_time: Optional[datetime.datetime] = None,
-        end_time: Optional[datetime.datetime] = None,
-        type: Literal["hanging_request", "slow_response"] = "hanging_request",
         request_data: Optional[dict] = None,
     ):
         if self.alerting is None or self.alert_types is None:
             return
-        model: str = ""
-        if request_data is not None:
-            model = request_data.get("model", "")
-            messages = request_data.get("messages", None)
-            if messages is None:
-                # if messages does not exist fallback to "input"
-                messages = request_data.get("input", None)
 
-            # try casting messages to str and get the first 100 characters, else mark as None
-            try:
-                messages = str(messages)
-                messages = messages[:100]
-            except Exception:
-                messages = ""
+        if AlertType.llm_requests_hanging not in self.alert_types:
+            return
 
-            if (
-                litellm.turn_off_message_logging
-                or litellm.redact_messages_in_exceptions
-            ):
-                messages = (
-                    "Message not logged. litellm.redact_messages_in_exceptions=True"
-                )
-            request_info = f"\nRequest Model: `{model}`\nMessages: `{messages}`"
-        else:
-            request_info = ""
-
-        if type == "hanging_request":
-            await asyncio.sleep(
-                self.alerting_threshold
-            )  # Set it to 5 minutes - i'd imagine this might be different for streaming, non-streaming, non-completion (embedding + img) requests
-            alerting_metadata: dict = {}
-            if await self._request_is_completed(request_data=request_data) is True:
-                return
-
-            if request_data is not None:
-                if request_data.get("deployment", None) is not None and isinstance(
-                    request_data["deployment"], dict
-                ):
-                    _api_base = litellm.get_api_base(
-                        model=model,
-                        optional_params=request_data["deployment"].get(
-                            "litellm_params", {}
-                        ),
-                    )
-
-                    if _api_base is None:
-                        _api_base = ""
-
-                    request_info += f"\nAPI Base: {_api_base}"
-                elif request_data.get("metadata", None) is not None and isinstance(
-                    request_data["metadata"], dict
-                ):
-                    # In hanging requests sometime it has not made it to the point where the deployment is passed to the `request_data``
-                    # in that case we fallback to the api base set in the request metadata
-                    _metadata: dict = request_data["metadata"]
-                    _api_base = _metadata.get("api_base", "")
-
-                    request_info = _add_key_name_and_team_to_alert(
-                        request_info=request_info, metadata=_metadata
-                    )
-
-                    if _api_base is None:
-                        _api_base = ""
-
-                    if "alerting_metadata" in _metadata:
-                        alerting_metadata = _metadata["alerting_metadata"]
-                    request_info += f"\nAPI Base: `{_api_base}`"
-                # only alert hanging responses if they have not been marked as success
-                alerting_message = (
-                    f"`Requests are hanging - {self.alerting_threshold}s+ request time`"
-                )
-
-                if "langfuse" in litellm.success_callback:
-                    langfuse_url = await _add_langfuse_trace_id_to_alert(
-                        request_data=request_data,
-                    )
-
-                    if langfuse_url is not None:
-                        request_info += "\n🪢 Langfuse Trace: {}".format(langfuse_url)
-
-                # add deployment latencies to alert
-                _deployment_latency_map = self._get_deployment_latencies_to_alert(
-                    metadata=request_data.get("metadata", {})
-                )
-                if _deployment_latency_map is not None:
-                    request_info += f"\nDeployment Latencies\n{_deployment_latency_map}"
-
-                await self.send_alert(
-                    message=alerting_message + request_info,
-                    level="Medium",
-                    alert_type=AlertType.llm_requests_hanging,
-                    alerting_metadata=alerting_metadata,
-                )
+        await self.hanging_request_check.add_request_to_hanging_request_check(
+            request_data=request_data
+        )
 
     async def failed_tracking_alert(self, error_message: str, failing_model: str):
         """
@@ -566,7 +500,7 @@ class SlackAlerting(CustomBatchLogger):
                 ttl=self.alerting_args.budget_alert_ttl,
             )
 
-    async def budget_alerts(  # noqa: PLR0915
+    async def budget_alerts(
         self,
         type: Literal[
             "token_budget",
@@ -578,6 +512,13 @@ class SlackAlerting(CustomBatchLogger):
         ],
         user_info: CallInfo,
     ):
+        """
+        Send a budget alert on slack or webhook
+
+        Args:
+            type: The type of budget alert to send
+            user_info: The user info to send the alert for
+        """
         ## PREVENTITIVE ALERTING ## - https://github.com/BerriAI/litellm/issues/2727
         # - Alert once within 24hr period
         # - Cache this information
@@ -589,9 +530,15 @@ class SlackAlerting(CustomBatchLogger):
             return
         if "budget_alerts" not in self.alert_types:
             return
-        _id: Optional[str] = "default_id"  # used for caching
+
+        # Get the appropriate budget alert type handler
+        budget_alert_class = get_budget_alert_type(type)
+        _id = budget_alert_class.get_id(user_info)
         user_info_json = user_info.model_dump(exclude_none=True)
         user_info_str = self._get_user_info_str(user_info)
+        event_message = budget_alert_class.get_event_message()
+
+        # Set default event unless we're in projected_limit_exceeded
         event: Optional[
             Literal[
                 "budget_crossed",
@@ -599,69 +546,30 @@ class SlackAlerting(CustomBatchLogger):
                 "projected_limit_exceeded",
                 "soft_budget_crossed",
             ]
-        ] = None
-        event_group: Optional[
-            Literal["internal_user", "team", "key", "proxy", "customer"]
-        ] = None
-        event_message: str = ""
+        ] = (
+            "projected_limit_exceeded" if type == "projected_limit_exceeded" else None
+        )
+
         webhook_event: Optional[WebhookEvent] = None
-        if type == "proxy_budget":
-            event_group = "proxy"
-            event_message += "Proxy Budget: "
-        elif type == "soft_budget":
-            event_group = "proxy"
-            event_message += "Soft Budget Crossed: "
-        elif type == "user_budget":
-            event_group = "internal_user"
-            event_message += "User Budget: "
-            _id = user_info.user_id or _id
-        elif type == "team_budget":
-            event_group = "team"
-            event_message += "Team Budget: "
-            _id = user_info.team_id or _id
-        elif type == "token_budget":
-            event_group = "key"
-            event_message += "Key Budget: "
-            _id = user_info.token
-        elif type == "projected_limit_exceeded":
-            event_group = "key"
-            event_message += "Key Budget: Projected Limit Exceeded"
-            event = "projected_limit_exceeded"
-            _id = user_info.token
 
         # percent of max_budget left to spend
         if user_info.max_budget is None and user_info.soft_budget is None:
             return
-        percent_left: float = 0
-        if user_info.max_budget is not None:
-            if user_info.max_budget > 0:
-                percent_left = (
-                    user_info.max_budget - user_info.spend
-                ) / user_info.max_budget
 
         # check if crossed budget
-        if user_info.max_budget is not None:
-            if user_info.spend >= user_info.max_budget:
-                event = "budget_crossed"
-                event_message += (
-                    f"Budget Crossed\n Total Budget:`{user_info.max_budget}`"
-                )
-            elif percent_left <= 0.05:
-                event = "threshold_crossed"
-                event_message += "5% Threshold Crossed "
-            elif percent_left <= 0.15:
-                event = "threshold_crossed"
-                event_message += "15% Threshold Crossed"
-        elif user_info.soft_budget is not None:
-            if user_info.spend >= user_info.soft_budget:
-                event = "soft_budget_crossed"
-        if event is not None and event_group is not None:
+        event, event_message = self._get_event_and_event_message(
+            event=event,
+            user_info=user_info,
+            event_message=event_message,
+        )
+
+        # send alert
+        if event is not None and user_info.event_group is not None:
             _cache_key = "budget_alerts:{}:{}".format(event, _id)
             result = await _cache.async_get_cache(key=_cache_key)
             if result is None:
                 webhook_event = WebhookEvent(
                     event=event,
-                    event_group=event_group,
                     event_message=event_message,
                     **user_info_json,
                 )
@@ -681,6 +589,82 @@ class SlackAlerting(CustomBatchLogger):
             return
         return
 
+    def _get_event_and_event_message(
+        self,
+        user_info: CallInfo,
+        event: Optional[
+            Literal[
+                "budget_crossed",
+                "threshold_crossed",
+                "soft_budget_crossed",
+                "projected_limit_exceeded",
+            ]
+        ],
+        event_message: str,
+    ) -> Tuple[
+        Optional[
+            Literal[
+                "budget_crossed",
+                "threshold_crossed",
+                "soft_budget_crossed",
+                "projected_limit_exceeded",
+            ]
+        ],
+        str,
+    ]:
+        """
+        Get the event and event message for a budget alert
+
+        This will append any new information to the event_message
+
+        Handles Max Budget and Soft Budget Alerts
+        """
+        percent_left: float = self._get_percent_of_max_budget_left(user_info=user_info)
+
+        #####################################################################
+        # SOFT BUDGET CHECK
+        # Check if the key/team/user has a soft budget set and they have crossed it
+        #####################################################################
+        if user_info.soft_budget is not None:
+            if user_info.spend >= user_info.soft_budget:
+                event = "soft_budget_crossed"
+                event_message += f"Total Soft Budget:`{user_info.soft_budget}`"
+
+        #####################################################################
+        # MAX BUDGET CHECK
+        # Check if the key/team/user has a max budget set and they have either
+        ## a. Crossed their max budget
+        ## b. Either 5% or 15% of their max budget is left
+        #####################################################################
+        if user_info.max_budget is not None:
+            if user_info.spend >= user_info.max_budget:
+                event = "budget_crossed"
+                event_message += (
+                    f"Budget Crossed\n Total Budget:`{user_info.max_budget}`"
+                )
+            elif percent_left <= SLACK_ALERTING_THRESHOLD_5_PERCENT:
+                event = "threshold_crossed"
+                event_message += "5% Threshold Crossed "
+            elif percent_left <= SLACK_ALERTING_THRESHOLD_15_PERCENT:
+                event = "threshold_crossed"
+                event_message += "15% Threshold Crossed"
+
+        return event, event_message
+
+    def _get_percent_of_max_budget_left(self, user_info: CallInfo) -> float:
+        """
+        Get the percent of the max budget that is left
+        """
+        percent_left: float = 0.0
+        current_spend: float = user_info.spend
+        max_budget: Optional[float] = user_info.max_budget
+        if max_budget is None:
+            return percent_left
+        if max_budget <= 0:
+            return percent_left
+        percent_left = (max_budget - current_spend) / max_budget
+        return percent_left
+
     def _get_user_info_str(self, user_info: CallInfo) -> str:
         """
         Create a standard message for a budget alert
@@ -689,6 +673,8 @@ class SlackAlerting(CustomBatchLogger):
         _all_fields_as_dict.pop("token")
         msg = ""
         for k, v in _all_fields_as_dict.items():
+            if isinstance(v, Litellm_EntityType):
+                v = v.value
             msg += f"*{k}:* `{v}`\n"
 
         return msg
@@ -721,7 +707,7 @@ class SlackAlerting(CustomBatchLogger):
                 projected_exceeded_date=None,
                 projected_spend=None,
                 event="spend_tracked",
-                event_group="customer",
+                event_group=Litellm_EntityType.END_USER,
                 event_message="Customer spend tracked. Customer={}, spend={}".format(
                     end_user_id, response_cost
                 ),
@@ -1715,7 +1701,7 @@ Model Info:
             await self.internal_usage_cache.async_set_cache(
                 key=_event_cache_key,
                 value="SENT",
-                ttl=(30 * 24 * 60 * 60),  # 1 month
+                ttl=(30 * HOURS_IN_A_DAY * 60 * 60),  # 1 month
             )
 
         except Exception as e:
@@ -1768,7 +1754,6 @@ Model Info:
         - Team Created, Updated, Deleted
         """
         try:
-
             message = f"`{event_name}`\n"
 
             key_event_dict = key_event.model_dump()

@@ -19,7 +19,6 @@ from litellm.types.rerank import (
 
 class TogetherAIRerankConfig:
     def _transform_response(self, response: dict) -> RerankResponse:
-
         _billed_units = RerankBilledUnits(**response.get("usage", {}))
         _tokens = RerankTokens(**response.get("usage", {}))
         rerank_meta = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)

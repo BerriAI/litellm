@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { ColumnDef, Row } from "@tanstack/react-table";
 import { DataTable } from "./view_logs/table";
 import { Select, SelectItem } from "@tremor/react"
@@ -9,11 +9,39 @@ import { Tooltip } from "antd";
 import { Team, KeyResponse } from "./key_team_helpers/key_list";
 import FilterComponent from "./common_components/filter";
 import { FilterOption } from "./common_components/filter";
-import { Organization, userListCall } from "./networking";
+import { keyListCall, Organization, userListCall } from "./networking";
 import { createTeamSearchFunction } from "./key_team_helpers/team_search_fn";
 import { createOrgSearchFunction } from "./key_team_helpers/organization_search_fn";
+import { useFilterLogic } from "./key_team_helpers/filter_logic";
+import { Setter } from "@/types";
+import { updateExistingKeys } from "@/utils/dataUtils";
+import { debounce } from "lodash";
+import { defaultPageSize } from "./constants";
+import { fetchAllTeams } from "./key_team_helpers/filter_helpers";
+import { fetchAllOrganizations } from "./key_team_helpers/filter_helpers";
+import {
+  flexRender,
+  getCoreRowModel,
+  getSortedRowModel,
+  SortingState,
+  useReactTable,
+} from "@tanstack/react-table";
+import {
+  Table,
+  TableHead,
+  TableHeaderCell,
+  TableBody,
+  TableRow,
+  TableCell,
+  Icon,
+} from "@tremor/react";
+import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
+import { Badge, Text } from "@tremor/react";
+import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+
 interface AllKeysTableProps {
   keys: KeyResponse[];
+  setKeys: Setter<KeyResponse[]>;
   isLoading?: boolean;
   pagination: {
     currentPage: number;
@@ -25,11 +53,20 @@ interface AllKeysTableProps {
   teams: Team[] | null;
   selectedTeam: Team | null;
   setSelectedTeam: (team: Team | null) => void;
+  selectedKeyAlias: string | null;
+  setSelectedKeyAlias: Setter<string | null>;
   accessToken: string | null;
   userID: string | null;
   userRole: string | null;
   organizations: Organization[] | null;
   setCurrentOrg: React.Dispatch<React.SetStateAction<Organization | null>>;
+  refresh?: () => void;
+  onSortChange?: (sortBy: string, sortOrder: 'asc' | 'desc') => void;
+  currentSort?: {
+    sortBy: string;
+    sortOrder: 'asc' | 'desc';
+  };
+  premiumUser: boolean;
 }
 
 // Define columns similar to our logs table
@@ -82,8 +119,11 @@ const TeamFilter = ({
  * AllKeysTable – a new table for keys that mimics the table styling used in view_logs.
  * The team selector and filtering have been removed so that all keys are shown.
  */
+
+
 export function AllKeysTable({ 
   keys, 
+  setKeys,
   isLoading = false,
   pagination,
   onPageChange,
@@ -91,21 +131,52 @@ export function AllKeysTable({
   teams,
   selectedTeam,
   setSelectedTeam,
+  selectedKeyAlias,
+  setSelectedKeyAlias,
   accessToken,
   userID,
   userRole,
   organizations,
-  setCurrentOrg
+  setCurrentOrg,
+  refresh,
+  onSortChange,
+  currentSort,
+  premiumUser,
 }: AllKeysTableProps) {
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
-  const [filters, setFilters] = useState<{
-    'Team ID': string;
-    'Organization ID': string;
-  }>({
-    'Team ID': '',
-    'Organization ID': ''
-  });
   const [userList, setUserList] = useState<UserResponse[]>([]);
+  const [sorting, setSorting] = React.useState<SortingState>(() => {
+    if (currentSort) {
+      return [{
+        id: currentSort.sortBy,
+        desc: currentSort.sortOrder === 'desc'
+      }];
+    }
+    return [{
+      id: "created_at",
+      desc: true
+    }];
+  });
+  const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
+
+  // Use the filter logic hook
+
+  const {
+    filters,
+    filteredKeys,
+    allKeyAliases,
+    allTeams,
+    allOrganizations,
+    handleFilterChange,
+    handleFilterReset
+  } = useFilterLogic({
+    keys,
+    teams,
+    organizations,
+    accessToken,
+  });
+
+  
 
   useEffect(() => {
     if (accessToken) {
@@ -118,42 +189,21 @@ export function AllKeysTable({
     }
   }, [accessToken, keys]);
 
-  const handleFilterChange = (newFilters: Record<string, string>) => {
-    // Update filters state
-    setFilters({
-      'Team ID': newFilters['Team ID'] || '',
-      'Organization ID': newFilters['Organization ID'] || ''
-    });
-  
-    // Handle Team change
-    if (newFilters['Team ID']) {
-      const selectedTeamData = teams?.find(team => team.team_id === newFilters['Team ID']);
-      if (selectedTeamData) {
-        setSelectedTeam(selectedTeamData);
-      }
+  // Add a useEffect to call refresh when a key is created
+  useEffect(() => {
+    if (refresh) {
+      const handleStorageChange = () => {
+        refresh();
+      };
+      
+      // Listen for storage events that might indicate a key was created
+      window.addEventListener('storage', handleStorageChange);
+      
+      return () => {
+        window.removeEventListener('storage', handleStorageChange);
+      };
     }
-  
-    // Handle Org change
-    if (newFilters['Organization ID']) {
-      const selectedOrg = organizations?.find(org => org.organization_id === newFilters['Organization ID']);
-      if (selectedOrg) {
-        setCurrentOrg(selectedOrg);
-      }
-    }
-  };
-
-  const handleFilterReset = () => {
-    // Reset filters state
-    setFilters({
-      'Team ID': '',
-      'Organization ID': ''
-    });
-    
-    // Reset team and org selections
-    setSelectedTeam(null); // or whatever your default value should be
-    setCurrentOrg(null); // or whatever your default value should be
-  };
-  
+  }, [refresh]);
 
   const columns: ColumnDef<KeyResponse>[] = [
     {
@@ -170,8 +220,9 @@ export function AllKeysTable({
         ) : null,
     },
     {
-      header: "Key ID",
+      id: "token",
       accessorKey: "token",
+      header: "Key ID",
       cell: (info) => (
         <div className="overflow-hidden">
           <Tooltip title={info.getValue() as string}>
@@ -188,13 +239,24 @@ export function AllKeysTable({
       ),
     },
     {
-      header: "Secret Key",
+      id: "key_alias",
+      accessorKey: "key_alias",
+      header: "Key Alias",
+      cell: (info) => {
+        const value = info.getValue() as string;
+        return <Tooltip title={value}>{value ? (value.length > 20 ? `${value.slice(0, 20)}...` : value) : "-"}</Tooltip>
+      }
+    },
+    {
+      id: "key_name",
       accessorKey: "key_name",
+      header: "Secret Key",
       cell: (info) => <span className="font-mono text-xs">{info.getValue() as string}</span>,
     },
     {
+      id: "team_alias",
+      accessorKey: "team_id",
       header: "Team Alias",
-      accessorKey: "team_id", // Change to access the team_id
       cell: ({ row, getValue }) => {
         const teamId = getValue() as string;
         const team = teams?.find(t => t.team_id === teamId);
@@ -202,33 +264,35 @@ export function AllKeysTable({
       },
     },
     {
-      header: "Team ID",
+      id: "team_id",
       accessorKey: "team_id",
-      cell: (info) => <Tooltip title={info.getValue() as string}>{info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}</Tooltip>
-    },
-
-    {
-      header: "Key Alias",
-      accessorKey: "key_alias",
+      header: "Team ID",
       cell: (info) => <Tooltip title={info.getValue() as string}>{info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}</Tooltip>
     },
     {
-      header: "Organization ID",
+      id: "organization_id",
       accessorKey: "organization_id",
+      header: "Organization ID",
       cell: (info) => info.getValue() ? info.renderValue() : "-",
     },
     {
-      header: "User Email",
+      id: "user_email",
       accessorKey: "user_id",
+      header: "User Email",
       cell: (info) => {
         const userId = info.getValue() as string;
         const user = userList.find(u => u.user_id === userId);
-        return user?.user_email ? user.user_email : "-";
+        return user?.user_email ? (
+          <Tooltip title={user?.user_email}>
+            <span>{user?.user_email.slice(0, 20)}...</span>
+          </Tooltip>
+        ) : "-";
       },
     },
     {
-      header: "User ID",
+      id: "user_id",
       accessorKey: "user_id",
+      header: "User ID",
       cell: (info) => {
         const userId = info.getValue() as string;
         return userId ? (
@@ -239,74 +303,165 @@ export function AllKeysTable({
       },
     },
     {
-      header: "Created At",
+      id: "created_at",
       accessorKey: "created_at",
+      header: "Created At",
       cell: (info) => {
         const value = info.getValue();
         return value ? new Date(value as string).toLocaleDateString() : "-";
       },
     },
     {
-      header: "Created By",
+      id: "created_by",
       accessorKey: "created_by",
+      header: "Created By",
       cell: (info) => {
         const value = info.getValue();
         return value ? value : "Unknown";
       },
     },
     {
-      header: "Expires",
-      accessorKey: "expires",
+      id: "updated_at",
+      accessorKey: "updated_at",
+      header: "Updated At",
       cell: (info) => {
         const value = info.getValue();
         return value ? new Date(value as string).toLocaleDateString() : "Never";
       },
     },
     {
-      header: "Spend (USD)",
+      id: "expires",
+      accessorKey: "expires",
+      header: "Expires",
+      cell: (info) => {
+        const value = info.getValue();
+        return value ? new Date(value as string).toLocaleDateString() : "Never";
+      },
+    },
+    {
+      id: "spend",
       accessorKey: "spend",
+      header: "Spend (USD)",
       cell: (info) => Number(info.getValue()).toFixed(4),
     },
     {
-      header: "Budget (USD)",
+      id: "max_budget",
       accessorKey: "max_budget",
+      header: "Budget (USD)",
       cell: (info) =>
         info.getValue() !== null && info.getValue() !== undefined
           ? info.getValue()
           : "Unlimited",
     },
     {
-      header: "Budget Reset",
+      id: "budget_reset_at",
       accessorKey: "budget_reset_at",
+      header: "Budget Reset",
       cell: (info) => {
         const value = info.getValue();
         return value ? new Date(value as string).toLocaleString() : "Never";
       },
     },
     {
-      header: "Models",
+      id: "models",
       accessorKey: "models",
+      header: "Models",
       cell: (info) => {
         const models = info.getValue() as string[];
         return (
-          <div className="flex flex-wrap gap-1">
-            {models && models.length > 0 ? (
-              models.map((model, index) => (
-                <span
-                  key={index}
-                  className="px-2 py-1 bg-blue-100 rounded text-xs"
-                >
-                  {model}
-                </span>
-              ))
-            ) : (
-              "-"
-            )}
+          <div className="flex flex-col py-2">
+            {Array.isArray(models) ? (
+              <div className="flex flex-col">
+                {models.length === 0 ? (
+                  <Badge size={"xs"} className="mb-1" color="red">
+                    <Text>All Proxy Models</Text>
+                  </Badge>
+                ) : (
+                  <>
+                    <div className="flex items-start">
+                      {models.length > 3 && (
+                        <div>
+                          <Icon
+                            icon={expandedAccordions[info.row.id] ? ChevronDownIcon : ChevronRightIcon}
+                            className="cursor-pointer"
+                            size="xs"
+                            onClick={() => {
+                              setExpandedAccordions(prev => ({
+                                ...prev,
+                                [info.row.id]: !prev[info.row.id]
+                              }));
+                            }}
+                          />
+                        </div>
+                      )}
+                      <div className="flex flex-wrap gap-1">
+                        {models.slice(0, 3).map((model, index) => (
+                          model === "all-proxy-models" ? (
+                            <Badge
+                              key={index}
+                              size={"xs"}
+                              color="red"
+                            >
+                              <Text>All Proxy Models</Text>
+                            </Badge>
+                          ) : (
+                            <Badge
+                              key={index}
+                              size={"xs"}
+                              color="blue"
+                            >
+                              <Text>
+                                {model.length > 30
+                                  ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                  : getModelDisplayName(model)}
+                              </Text>
+                            </Badge>
+                          )
+                        ))}
+                        {models.length > 3 && !expandedAccordions[info.row.id] && (
+                          <Badge size={"xs"} color="gray" className="cursor-pointer">
+                            <Text>+{models.length - 3} {models.length - 3 === 1 ? 'more model' : 'more models'}</Text>
+                          </Badge>
+                        )}
+                        {expandedAccordions[info.row.id] && (
+                          <div className="flex flex-wrap gap-1">
+                            {models.slice(3).map((model, index) => (
+                              model === "all-proxy-models" ? (
+                                <Badge
+                                  key={index + 3}
+                                  size={"xs"}
+                                  color="red"
+                                >
+                                  <Text>All Proxy Models</Text>
+                                </Badge>
+                              ) : (
+                                <Badge
+                                  key={index + 3}
+                                  size={"xs"}
+                                  color="blue"
+                                >
+                                  <Text>
+                                    {model.length > 30
+                                      ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                      : getModelDisplayName(model)}
+                                  </Text>
+                                </Badge>
+                              )
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : null}
           </div>
         );
       },
     },
     {
+      id: "rate_limits",
       header: "Rate Limits",
       cell: ({ row }) => {
         const key = row.original;
@@ -321,68 +476,260 @@ export function AllKeysTable({
   ];
 
   const filterOptions: FilterOption[] = [
-    { name: 'Team ID', label: 'Team ID', isSearchable: true, searchFn: createTeamSearchFunction(teams) },
-    { name: 'Organization ID', label: 'Organization ID', isSearchable: true, searchFn: createOrgSearchFunction(organizations) }
+    { 
+      name: 'Team ID', 
+      label: 'Team ID', 
+      isSearchable: true, 
+      searchFn: async (searchText: string) => {
+        if (!allTeams || allTeams.length === 0) return [];
+        
+        const filteredTeams = allTeams.filter(team => 
+          team.team_id.toLowerCase().includes(searchText.toLowerCase()) || 
+          (team.team_alias && team.team_alias.toLowerCase().includes(searchText.toLowerCase()))
+        );
+        
+        return filteredTeams.map(team => ({
+          label: `${team.team_alias || team.team_id} (${team.team_id})`,
+          value: team.team_id
+        }));
+      }
+    },
+    { 
+      name: 'Organization ID', 
+      label: 'Organization ID', 
+      isSearchable: true, 
+      searchFn: async (searchText: string) => {
+        if (!allOrganizations || allOrganizations.length === 0) return [];
+        
+        const filteredOrgs = allOrganizations.filter(org => 
+          org.organization_id?.toLowerCase().includes(searchText.toLowerCase()) ?? false
+        );
+        
+        return filteredOrgs
+          .filter(org => org.organization_id !== null && org.organization_id !== undefined)
+          .map(org => ({
+            label: `${org.organization_id || 'Unknown'} (${org.organization_id})`,
+            value: org.organization_id as string
+          }));
+      }
+    },
+    {
+      name: "Key Alias",
+      label: "Key Alias",
+      isSearchable: true,
+      searchFn: async (searchText) => {
+        const filteredKeyAliases = allKeyAliases.filter(key => {
+          return key.toLowerCase().includes(searchText.toLowerCase())
+        });
+
+        return filteredKeyAliases.map((key) => {
+          return {
+            label: key,
+            value: key
+          }
+        });
+      }
+    },
+    {
+      name: 'User ID',
+      label: 'User ID',
+      isSearchable: false,
+    },
+    {
+      name: 'Key Hash',
+      label: 'Key Hash',
+      isSearchable: false,
+    }
+
   ];
   
-  
+  console.log(`keys: ${JSON.stringify(keys)}`)
+
+  const table = useReactTable({
+    data: filteredKeys,
+    columns: columns.filter(col => col.id !== 'expander'),
+    state: {
+      sorting,
+    },
+    onSortingChange: (updaterOrValue) => {
+      const newSorting = typeof updaterOrValue === 'function' 
+        ? updaterOrValue(sorting)
+        : updaterOrValue;
+      console.log(`newSorting: ${JSON.stringify(newSorting)}`)
+      setSorting(newSorting);
+      if (newSorting && newSorting.length > 0) {
+        const sortState = newSorting[0];
+        const sortBy = sortState.id;
+        const sortOrder = sortState.desc ? 'desc' : 'asc';
+        console.log(`sortBy: ${sortBy}, sortOrder: ${sortOrder}`)
+        handleFilterChange({
+          ...filters,
+          'Sort By': sortBy,
+          'Sort Order': sortOrder
+        });
+        onSortChange?.(sortBy, sortOrder);
+      }
+    },
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    enableSorting: true,
+    manualSorting: false,
+  });
+
+  // Update local sorting state when currentSort prop changes
+  React.useEffect(() => {
+    if (currentSort) {
+      setSorting([{
+        id: currentSort.sortBy,
+        desc: currentSort.sortOrder === 'desc'
+      }]);
+    }
+  }, [currentSort]);
+
   return (
     <div className="w-full h-full overflow-hidden">
       {selectedKeyId ? (
         <KeyInfoView 
           keyId={selectedKeyId} 
           onClose={() => setSelectedKeyId(null)}
-          keyData={keys.find(k => k.token === selectedKeyId)}
+          keyData={filteredKeys.find(k => k.token === selectedKeyId)}
+          onKeyDataUpdate={(updatedKeyData) => {
+            setKeys(keys => keys.map(key => {
+              if (key.token === updatedKeyData.token) {
+                return updateExistingKeys(key, updatedKeyData)
+              }
+              return key
+            }))
+          }}
+          onDelete={() => {
+            setKeys(keys => keys.filter(key => key.token !== selectedKeyId))
+          }}
           accessToken={accessToken}
           userID={userID}
           userRole={userRole}
-          teams={teams}
+          teams={allTeams}
+          premiumUser={premiumUser}
         />
       ) : (
         <div className="border-b py-4 flex-1 overflow-hidden">
-          <div className="flex items-center justify-between w-full mb-2">
+          <div className="w-full mb-6">
             <FilterComponent options={filterOptions} onApplyFilters={handleFilterChange} initialValues={filters} onResetFilters={handleFilterReset}/>
-            <div className="flex items-center gap-4">
-              <span className="inline-flex text-sm text-gray-700">
-                Showing {isLoading ? "..." : `${(pagination.currentPage - 1) * pageSize + 1} - ${Math.min(pagination.currentPage * pageSize, pagination.totalCount)}`} of {isLoading ? "..." : pagination.totalCount} results
+          </div>
+
+          <div className="flex items-center justify-between w-full mb-4">
+            <span className="inline-flex text-sm text-gray-700">
+              Showing {isLoading ? "..." : `${(pagination.currentPage - 1) * pageSize + 1} - ${Math.min(pagination.currentPage * pageSize, pagination.totalCount)}`} of {isLoading ? "..." : pagination.totalCount} results
+            </span>
+            
+            <div className="inline-flex items-center gap-2">
+              <span className="text-sm text-gray-700">
+                Page {isLoading ? "..." : pagination.currentPage} of {isLoading ? "..." : pagination.totalPages}
               </span>
               
-              <div className="inline-flex items-center gap-2">
-                <span className="text-sm text-gray-700">
-                  Page {isLoading ? "..." : pagination.currentPage} of {isLoading ? "..." : pagination.totalPages}
-                </span>
-                
-                <button
-                  onClick={() => onPageChange(pagination.currentPage - 1)}
-                  disabled={isLoading || pagination.currentPage === 1}
-                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Previous
-                </button>
-                
-                <button
-                  onClick={() => onPageChange(pagination.currentPage + 1)} 
-                  disabled={isLoading || pagination.currentPage === pagination.totalPages}
-                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Next
-                </button>
+              <button
+                onClick={() => onPageChange(pagination.currentPage - 1)}
+                disabled={isLoading || pagination.currentPage === 1}
+                className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Previous
+              </button>
+              
+              <button
+                onClick={() => onPageChange(pagination.currentPage + 1)} 
+                disabled={isLoading || pagination.currentPage === pagination.totalPages}
+                className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+          <div className="h-[75vh] overflow-auto">
+            <div className="rounded-lg custom-border relative">
+              <div className="overflow-x-auto">
+                <Table className="[&_td]:py-0.5 [&_th]:py-1">
+                  <TableHead>
+                    {table.getHeaderGroups().map((headerGroup) => (
+                      <TableRow key={headerGroup.id}>
+                        {headerGroup.headers.map((header) => (
+                          <TableHeaderCell 
+                            key={header.id} 
+                            className={`py-1 h-8 ${
+                              header.id === 'actions' 
+                                ? 'sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]' 
+                                : ''
+                            }`}
+                            onClick={header.column.getToggleSortingHandler()}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center">
+                                {header.isPlaceholder ? null : (
+                                  flexRender(
+                                    header.column.columnDef.header,
+                                    header.getContext()
+                                  )
+                                )}
+                              </div>
+                              {header.id !== 'actions' && (
+                                <div className="w-4">
+                                  {header.column.getIsSorted() ? (
+                                    {
+                                      asc: <ChevronUpIcon className="h-4 w-4 text-blue-500" />,
+                                      desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />
+                                    }[header.column.getIsSorted() as string]
+                                  ) : (
+                                    <SwitchVerticalIcon className="h-4 w-4 text-gray-400" />
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </TableHeaderCell>
+                        ))}
+                      </TableRow>
+                    ))}
+                  </TableHead>
+                  <TableBody>
+                    {isLoading ? (
+                      <TableRow>
+                        <TableCell colSpan={columns.length} className="h-8 text-center">
+                          <div className="text-center text-gray-500">
+                            <p>🚅 Loading keys...</p>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ) : filteredKeys.length > 0 ? (
+                      table.getRowModel().rows.map((row) => (
+                        <TableRow key={row.id} className="h-8">
+                          {row.getVisibleCells().map((cell) => (
+                            <TableCell
+                              key={cell.id}
+                              style={{
+                                maxWidth: "8-x",
+                                whiteSpace: "pre-wrap",
+                                overflow: "hidden",
+                              }}
+                              className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${cell.column.id === 'models' && (cell.getValue() as string[]).length > 3 ? "px-0" : ""}`}
+                            >
+                              {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                            </TableCell>
+                          ))}
+                        </TableRow>
+                      ))
+                    ) : (
+                      <TableRow>
+                        <TableCell colSpan={columns.length} className="h-8 text-center">
+                          <div className="text-center text-gray-500">
+                            <p>No keys found</p>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
               </div>
             </div>
           </div>
-          <div className="h-[32rem] overflow-auto">
-            
-            <DataTable
-              columns={columns.filter(col => col.id !== 'expander')}
-              data={keys}
-              isLoading={isLoading}
-              getRowCanExpand={() => false}
-              renderSubComponent={() => <></>}
-            />
-          </div>
         </div>
       )}
-      
     </div>
   );
 }

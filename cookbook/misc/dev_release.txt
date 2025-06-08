@@ -1,2 +1,11 @@
 python3 -m build
 twine upload --verbose dist/litellm-1.18.13.dev4.tar.gz -u __token__ - 
+
+
+Note: You might need to make a MANIFEST.ini file on root for build process incase it fails 
+
+Place this in MANIFEST.ini
+recursive-exclude venv *
+recursive-exclude myenv *
+recursive-exclude py313_env *
+recursive-exclude **/.venv *

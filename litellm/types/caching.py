@@ -37,6 +37,16 @@ class RedisPipelineIncrementOperation(TypedDict):
     ttl: Optional[int]
 
 
+class RedisPipelineSetOperation(TypedDict):
+    """
+    TypeDict for 1 Redis Pipeline Set Operation
+    """
+
+    key: str
+    value: Any
+    ttl: Optional[int]
+
+
 DynamicCacheControl = TypedDict(
     "DynamicCacheControl",
     {
@@ -75,4 +85,4 @@ class HealthCheckCacheParams(BaseModel):
     port: Optional[Union[str, int]] = None
     redis_kwargs: Optional[Dict[str, Any]] = None
     namespace: Optional[str] = None
-    redis_version: Optional[str] = None
+    redis_version: Optional[Union[str, int, float]] = None

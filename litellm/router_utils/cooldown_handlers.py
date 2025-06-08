@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from litellm.router import Router as _Router
 
     LitellmRouter = _Router
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     LitellmRouter = Any
     Span = Any
@@ -112,12 +112,19 @@ def _should_run_cooldown_logic(
         deployment is None
         or litellm_router_instance.get_model_group(id=deployment) is None
     ):
+        verbose_router_logger.debug(
+            "Should Not Run Cooldown Logic: deployment id is none or model group can't be found."
+        )
         return False
 
     if litellm_router_instance.disable_cooldowns:
+        verbose_router_logger.debug(
+            "Should Not Run Cooldown Logic: disable_cooldowns is True"
+        )
         return False
 
     if deployment is None:
+        verbose_router_logger.debug("Should Not Run Cooldown Logic: deployment is None")
         return False
 
     if not _is_cooldown_required(
@@ -126,9 +133,15 @@ def _should_run_cooldown_logic(
         exception_status=exception_status,
         exception_str=str(original_exception),
     ):
+        verbose_router_logger.debug(
+            "Should Not Run Cooldown Logic: _is_cooldown_required returned False"
+        )
         return False
 
     if deployment in litellm_router_instance.provider_default_deployment_ids:
+        verbose_router_logger.debug(
+            "Should Not Run Cooldown Logic: deployment is in provider_default_deployment_ids"
+        )
         return False
 
     return True
@@ -244,6 +257,8 @@ def _set_cooldown_deployments(
     - True if the deployment should be put in cooldown
     - False if the deployment should not be put in cooldown
     """
+    verbose_router_logger.debug("checks 'should_run_cooldown_logic'")
+
     if (
         _should_run_cooldown_logic(
             litellm_router_instance, deployment, exception_status, original_exception
@@ -251,6 +266,7 @@ def _set_cooldown_deployments(
         is False
         or deployment is None
     ):
+        verbose_router_logger.debug("should_run_cooldown_logic returned False")
         return False
 
     exception_status_int = cast_exception_status_to_int(exception_status)

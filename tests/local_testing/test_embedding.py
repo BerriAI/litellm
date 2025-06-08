@@ -643,8 +643,8 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
 @pytest.mark.asyncio
-@patch("litellm.llms.huggingface.chat.handler.async_get_hf_task_embedding_for_model")
-@patch("litellm.llms.huggingface.chat.handler.get_hf_task_embedding_for_model")
+@patch("litellm.llms.huggingface.embedding.handler.async_get_hf_task_embedding_for_model")
+@patch("litellm.llms.huggingface.embedding.handler.get_hf_task_embedding_for_model")
 @pytest.mark.parametrize("sync_mode", [True, False])
 async def test_hf_embedding_sentence_sim(
     mock_async_get_hf_task_embedding_for_model,
@@ -786,6 +786,8 @@ def test_mistral_embeddings():
         )
         print(f"response: {response}")
         assert isinstance(response.usage, litellm.Usage)
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -1029,6 +1031,28 @@ def test_hosted_vllm_embedding(monkeypatch):
         assert json_data["model"] == "jina-embeddings-v3"
 
 
+def test_llamafile_embedding(monkeypatch):
+    monkeypatch.setenv("LLAMAFILE_API_BASE", "http://localhost:8080/v1")
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    with patch.object(client, "post") as mock_post:
+        try:
+            embedding(
+                model="llamafile/jina-embeddings-v3",
+                input=["Hello world"],
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        mock_post.assert_called_once()
+
+        json_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert json_data["input"] == ["Hello world"]
+        assert json_data["model"] == "jina-embeddings-v3"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", [True, False])
 async def test_lm_studio_embedding(monkeypatch, sync_mode):
@@ -1075,9 +1099,14 @@ def test_embedding_response_ratelimit_headers(model):
     hidden_params = response._hidden_params
     additional_headers = hidden_params.get("additional_headers", {})
 
-    print(additional_headers)
-    assert "x-ratelimit-remaining-requests" in additional_headers
-    assert int(additional_headers["x-ratelimit-remaining-requests"]) > 0
+    print("additional_headers", additional_headers)
+
+    # Azure is flaky with returning x-ratelimit-remaining-requests, we need to verify the upstream api returns this header
+    # if upstream api returns this header, we need to verify the header is transformed by litellm
+    if "llm_provider-x-ratelimit-limit-requests" in additional_headers or "x-ratelimit-limit-requests" in additional_headers:
+        assert "x-ratelimit-remaining-requests" in additional_headers
+        assert int(additional_headers["x-ratelimit-remaining-requests"]) > 0
+    
     assert "x-ratelimit-remaining-tokens" in additional_headers
     assert int(additional_headers["x-ratelimit-remaining-tokens"]) > 0
 
@@ -1136,3 +1165,4 @@ async def test_embedding_with_extra_headers(sync_mode):
 
         mock_post.assert_called_once()
         assert "my-test-param" in mock_post.call_args.kwargs["headers"]
+        

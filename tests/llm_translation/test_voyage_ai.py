@@ -54,3 +54,27 @@ def test_voyage_ai_embedding_extra_params():
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+def test_voyage_ai_embedding_prompt_token_mapping():
+    try:
+
+        client = HTTPHandler()
+        litellm.set_verbose = True
+
+        with patch.object(client, "post", return_value=MagicMock(status_code=200, json=lambda: {"usage": {"total_tokens": 120}})) as mock_client:
+            response = litellm.embedding(
+                model="voyage/voyage-3-lite",
+                input=["a"],
+                dimensions=512,
+                input_type="document",
+                client=client,
+            )
+
+            mock_client.assert_called_once()
+            # Assert the response
+            assert response.usage.prompt_tokens == 120
+            assert response.usage.total_tokens == 120
+
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")

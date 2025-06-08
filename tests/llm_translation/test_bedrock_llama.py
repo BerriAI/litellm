@@ -18,3 +18,5 @@ class TestBedrockTestSuite(BaseLLMChatTest):
         return {
             "model": "bedrock/converse/us.meta.llama3-3-70b-instruct-v1:0",
         }
+
+

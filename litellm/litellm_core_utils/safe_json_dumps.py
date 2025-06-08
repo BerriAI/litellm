@@ -1,8 +1,9 @@
 import json
 from typing import Any, Union
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
 
-def safe_dumps(data: Any, max_depth: int = 10) -> str:
+def safe_dumps(data: Any, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> str:
     """
     Recursively serialize data while detecting circular references.
     If a circular reference is detected then a marker string is returned.

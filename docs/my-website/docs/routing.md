@@ -25,7 +25,7 @@ If you want a server to load balance across different LLM APIs, use our [LiteLLM
 
 ### Quick Start
 
-Loadbalance across multiple [azure](./providers/azure.md)/[bedrock](./providers/bedrock.md)/[provider](./providers/) deployments. LiteLLM will handle retrying in different regions if a call fails.
+Loadbalance across multiple [azure](./providers/azure)/[bedrock](./providers/bedrock.md)/[provider](./providers/) deployments. LiteLLM will handle retrying in different regions if a call fails.
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -830,7 +830,7 @@ asyncio.run(router_acompletion())
 
 Set `weight` on a deployment to pick one deployment more often than others. 
 
-This works across **ALL** routing strategies. 
+This works across **simple-shuffle** routing strategy (this is the default, if no routing strategy is selected). 
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -952,8 +952,8 @@ router_settings:
 ```
 
 Defaults:
-- allowed_fails: 0
-- cooldown_time: 60s 
+- allowed_fails: 3
+- cooldown_time: 5s (`DEFAULT_COOLDOWN_TIME_SECONDS` in constants.py)
 
 **Set Per Model**
 

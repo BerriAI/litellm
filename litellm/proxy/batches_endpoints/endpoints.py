@@ -2,28 +2,29 @@
 
 #                          /v1/batches Endpoints
 
-import asyncio
 
 ######################################################################
-from typing import Dict, Optional
+import asyncio
+from typing import Dict, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.batches.main import (
-    CancelBatchRequest,
-    CreateBatchRequest,
-    RetrieveBatchRequest,
-)
+from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import is_known_model
-from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    _is_base64_encoded_unified_file_id,
+    get_models_from_unified_file_id,
+)
+from litellm.proxy.utils import handle_exception_on_proxy, is_known_model
+from litellm.types.llms.openai import LiteLLMBatchCreateRequest
 
 router = APIRouter()
 
@@ -67,9 +68,7 @@ async def create_batch(
     ```
     """
     from litellm.proxy.proxy_server import (
-        add_litellm_data_to_request,
         general_settings,
-        get_custom_headers,
         llm_router,
         proxy_config,
         proxy_logging_obj,
@@ -82,15 +81,18 @@ async def create_batch(
         verbose_proxy_logger.debug(
             "Request received by LiteLLM:\n{}".format(json.dumps(data, indent=4)),
         )
-
-        # Include original request and headers in the data
-        data = await add_litellm_data_to_request(
-            data=data,
+        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        (
+            data,
+            litellm_logging_obj,
+        ) = await base_llm_response_processor.common_processing_pre_call_logic(
             request=request,
             general_settings=general_settings,
             user_api_key_dict=user_api_key_dict,
             version=version,
+            proxy_logging_obj=proxy_logging_obj,
             proxy_config=proxy_config,
+            route_type="acreate_batch",
         )
 
         ## check if model is a loadbalanced model
@@ -103,7 +105,11 @@ async def create_batch(
         custom_llm_provider = (
             provider or data.pop("custom_llm_provider", None) or "openai"
         )
-        _create_batch_data = CreateBatchRequest(**data)
+        _create_batch_data = LiteLLMBatchCreateRequest(**data)
+        input_file_id = _create_batch_data.get("input_file_id", None)
+        unified_file_id: Union[str, Literal[False]] = False
+        if input_file_id:
+            unified_file_id = _is_base64_encoded_unified_file_id(input_file_id)
         if (
             litellm.enable_loadbalancing_on_batch_endpoints is True
             and is_router_model
@@ -118,10 +124,42 @@ async def create_batch(
                 )
 
             response = await llm_router.acreate_batch(**_create_batch_data)  # type: ignore
+        elif (
+            unified_file_id and input_file_id
+        ):  # litellm_proxy:application/octet-stream;unified_id,c4843482-b176-4901-8292-7523fd0f2c6e;target_model_names,gpt-4o-mini
+            target_model_names = get_models_from_unified_file_id(unified_file_id)
+            ## EXPECTS 1 MODEL
+            if len(target_model_names) != 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Expected 1 model, got {}".format(
+                            len(target_model_names)
+                        )
+                    },
+                )
+            model = target_model_names[0]
+            _create_batch_data["model"] = model
+            if llm_router is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "LLM Router not initialized. Ensure models added to proxy."
+                    },
+                )
+
+            response = await llm_router.acreate_batch(**_create_batch_data)
+            response.input_file_id = input_file_id
+            response._hidden_params["unified_file_id"] = unified_file_id
         else:
             response = await litellm.acreate_batch(
                 custom_llm_provider=custom_llm_provider, **_create_batch_data  # type: ignore
             )
+
+        ### CALL HOOKS ### - modify outgoing data
+        response = await proxy_logging_obj.post_call_success_hook(
+            data=data, user_api_key_dict=user_api_key_dict, response=response
+        )
 
         ### ALERTING ###
         asyncio.create_task(
@@ -137,7 +175,7 @@ async def create_batch(
         api_base = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
-            get_custom_headers(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
@@ -199,8 +237,9 @@ async def retrieve_batch(
     ```
     """
     from litellm.proxy.proxy_server import (
-        get_custom_headers,
+        general_settings,
         llm_router,
+        proxy_config,
         proxy_logging_obj,
         version,
     )
@@ -212,7 +251,24 @@ async def retrieve_batch(
             batch_id=batch_id,
         )
 
-        if litellm.enable_loadbalancing_on_batch_endpoints is True:
+        data = cast(dict, _retrieve_batch_request)
+        unified_batch_id = _is_base64_encoded_unified_file_id(batch_id)
+
+        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        (
+            data,
+            litellm_logging_obj,
+        ) = await base_llm_response_processor.common_processing_pre_call_logic(
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_logging_obj=proxy_logging_obj,
+            proxy_config=proxy_config,
+            route_type="aretrieve_batch",
+        )
+
+        if litellm.enable_loadbalancing_on_batch_endpoints is True or unified_batch_id:
             if llm_router is None:
                 raise HTTPException(
                     status_code=500,
@@ -221,7 +277,8 @@ async def retrieve_batch(
                     },
                 )
 
-            response = await llm_router.aretrieve_batch(**_retrieve_batch_request)  # type: ignore
+            response = await llm_router.aretrieve_batch(**data)  # type: ignore
+            response._hidden_params["unified_batch_id"] = unified_batch_id
         else:
             custom_llm_provider = (
                 provider
@@ -229,8 +286,13 @@ async def retrieve_batch(
                 or "openai"
             )
             response = await litellm.aretrieve_batch(
-                custom_llm_provider=custom_llm_provider, **_retrieve_batch_request  # type: ignore
+                custom_llm_provider=custom_llm_provider, **data  # type: ignore
             )
+
+        ### CALL HOOKS ### - modify outgoing data
+        response = await proxy_logging_obj.post_call_success_hook(
+            data=data, user_api_key_dict=user_api_key_dict, response=response
+        )
 
         ### ALERTING ###
         asyncio.create_task(
@@ -246,7 +308,7 @@ async def retrieve_batch(
         api_base = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
-            get_custom_headers(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
@@ -306,11 +368,7 @@ async def list_batches(
 
     ```
     """
-    from litellm.proxy.proxy_server import (
-        get_custom_headers,
-        proxy_logging_obj,
-        version,
-    )
+    from litellm.proxy.proxy_server import proxy_logging_obj, version
 
     verbose_proxy_logger.debug("GET /v1/batches after={} limit={}".format(after, limit))
     try:
@@ -332,7 +390,7 @@ async def list_batches(
         api_base = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
-            get_custom_headers(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
@@ -397,7 +455,6 @@ async def cancel_batch(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
-        get_custom_headers,
         proxy_config,
         proxy_logging_obj,
         version,
@@ -443,7 +500,7 @@ async def cancel_batch(
         api_base = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
-            get_custom_headers(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,

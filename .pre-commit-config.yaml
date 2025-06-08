@@ -6,44 +6,35 @@ repos:
         entry: pyright
         language: system
         types: [python]
-        files: ^litellm/
+        files: ^(litellm/|litellm_proxy_extras/|enterprise/)
     -   id: isort
         name: isort
         entry: isort
         language: system
         types: [python]
-        files: litellm/.*\.py
+        files: (litellm/|litellm_proxy_extras/|enterprise/).*\.py
         exclude: ^litellm/__init__.py$
--   repo: https://github.com/psf/black
-    rev: 24.2.0
-    hooks:
-    - id: black
+    -   id: black
+        name: black
+        entry: poetry run black
+        language: system
+        types: [python]
+        files: (litellm/|litellm_proxy_extras/|enterprise/).*\.py
 -   repo: https://github.com/pycqa/flake8
     rev: 7.0.0  # The version of flake8 to use
     hooks:
     -  id: flake8
-       exclude: ^litellm/tests/|^litellm/proxy/tests/|^litellm/tests/litellm/|^tests/litellm/
+       exclude: ^litellm/tests/|^litellm/proxy/tests/|^litellm/tests/test_litellm/|^tests/test_litellm/|^tests/enterprise/
        additional_dependencies: [flake8-print]
-       files: litellm/.*\.py
-    # -  id: flake8
-    #    name: flake8 (router.py function length)
-    #    files: ^litellm/router\.py$
-    #    args: [--max-function-length=40]
-    # #    additional_dependencies: [flake8-functions]
+       files: (litellm/|litellm_proxy_extras/|enterprise/).*\.py
 -   repo: https://github.com/python-poetry/poetry
     rev: 1.8.0
     hooks:
       - id: poetry-check
+        files: ^(pyproject.toml|litellm-proxy-extras/pyproject.toml)$
 -   repo: local
     hooks:
     -   id: check-files-match
         name: Check if files match
         entry: python3 ci_cd/check_files_match.py
         language: system
-    # -   id: check-file-length
-    #     name: Check file length
-    #     entry: python check_file_length.py
-    #     args: ["10000"]  # set your desired maximum number of lines
-    #     language: python
-    #     files: litellm/.*\.py
-    #     exclude: ^litellm/tests/

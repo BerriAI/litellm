@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union
 import httpx
 
 import litellm
+from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
@@ -139,8 +140,10 @@ class ReplicateConfig(BaseConfig):
     def get_complete_url(
         self,
         api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         version_id = self.model_to_version_id(model)
@@ -219,10 +222,11 @@ class ReplicateConfig(BaseConfig):
 
         version_id = self.model_to_version_id(model)
         request_data: dict = {"input": input_data}
-        if ":" in version_id and len(version_id) > 64:
+        if ":" in version_id and len(version_id) > REPLICATE_MODEL_NAME_WITH_ID_LENGTH:
             model_parts = version_id.split(":")
             if (
-                len(model_parts) > 1 and len(model_parts[1]) == 64
+                len(model_parts) > 1
+                and len(model_parts[1]) == REPLICATE_MODEL_NAME_WITH_ID_LENGTH
             ):  ## checks if model name has a 64 digit code - e.g. "meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3"
                 request_data["version"] = model_parts[1]
 
@@ -308,6 +312,7 @@ class ReplicateConfig(BaseConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:

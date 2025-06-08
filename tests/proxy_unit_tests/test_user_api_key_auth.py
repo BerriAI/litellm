@@ -4,6 +4,9 @@
 import os
 import sys
 
+import litellm.proxy
+import litellm.proxy.proxy_server
+
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
@@ -329,7 +332,7 @@ async def test_auth_with_allowed_routes(route, should_raise_error):
     ],
 )
 def test_is_ui_route_allowed(route, user_role, expected_result):
-    from litellm.proxy.auth.user_api_key_auth import _is_ui_route
+    from litellm.proxy.auth.auth_checks import _is_ui_route
     from litellm.proxy._types import LiteLLM_UserTable
 
     user_obj = LiteLLM_UserTable(
@@ -367,7 +370,7 @@ def test_is_ui_route_allowed(route, user_role, expected_result):
     ],
 )
 def test_is_api_route_allowed(route, user_role, expected_result):
-    from litellm.proxy.auth.user_api_key_auth import _is_api_route_allowed
+    from litellm.proxy.auth.auth_checks import _is_api_route_allowed
     from litellm.proxy._types import LiteLLM_UserTable
 
     user_obj = LiteLLM_UserTable(
@@ -635,7 +638,7 @@ async def test_soft_budget_alert():
 
 
 def test_is_allowed_route():
-    from litellm.proxy.auth.user_api_key_auth import _is_allowed_route
+    from litellm.proxy.auth.auth_checks import _is_allowed_route
     from litellm.proxy._types import UserAPIKeyAuth
     import datetime
 
@@ -646,7 +649,6 @@ def test_is_allowed_route():
         "token_type": "api",
         "request": request,
         "request_data": {"input": ["hello world"], "model": "embedding-small"},
-        "api_key": "9644159bc181998825c44c788b1526341ed2e825d1b6f562e23173759e14bb86",
         "valid_token": UserAPIKeyAuth(
             token="9644159bc181998825c44c788b1526341ed2e825d1b6f562e23173759e14bb86",
             key_name="sk-...CJjQ",
@@ -734,7 +736,7 @@ def test_is_allowed_route():
     ],
 )
 def test_is_user_proxy_admin(user_obj, expected_result):
-    from litellm.proxy.auth.user_api_key_auth import _is_user_proxy_admin
+    from litellm.proxy.auth.auth_checks import _is_user_proxy_admin
 
     assert _is_user_proxy_admin(user_obj) == expected_result
 
@@ -791,6 +793,14 @@ async def test_user_api_key_auth_websocket():
         # Assert that `user_api_key_auth` was called with the correct parameters
         mock_user_api_key_auth.assert_called_once()
 
+        # Get the request object that was passed to user_api_key_auth
+        request_arg = mock_user_api_key_auth.call_args.kwargs["request"]
+        
+        # Verify that the request has headers set
+        assert hasattr(request_arg, "headers"), "Request object should have headers attribute"
+        assert "authorization" in request_arg.headers, "Request headers should contain authorization"
+        assert request_arg.headers["authorization"] == "Bearer some_api_key"
+
         assert (
             mock_user_api_key_auth.call_args.kwargs["api_key"] == "Bearer some_api_key"
         )
@@ -826,7 +836,7 @@ async def test_jwt_user_api_key_auth_builder_enforce_rbac(enforce_rbac, monkeypa
     ]
 
     local_cache.set_cache(
-        key="litellm_jwt_auth_keys",
+        key="litellm_jwt_auth_keys_my-fake-url",
         value=keys,
     )
 
@@ -947,3 +957,90 @@ def test_get_model_from_request(route, request_data, expected_model):
     from litellm.proxy.auth.user_api_key_auth import get_model_from_request
 
     assert get_model_from_request(request_data, route) == expected_model
+
+
+@pytest.mark.asyncio
+async def test_jwt_non_admin_team_route_access(monkeypatch):
+    """
+    Test that a non-admin JWT user cannot access team management routes
+    """
+    from fastapi import Request, HTTPException
+    from starlette.datastructures import URL
+    from unittest.mock import patch
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    import json
+    from litellm.proxy._types import ProxyException
+
+    mock_jwt_response = {
+        "is_proxy_admin": False,
+        "team_id": None,
+        "team_object": None,
+        "user_id": None,
+        "user_object": None,
+        "org_id": None,
+        "org_object": None,
+        "end_user_id": None,
+        "end_user_object": None,
+        "token": "eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJmR09YQTNhbHFObjByRzJ6OHJQT1FLZVVMSWxCNDFnVWl4VDJ5WE1QVG1ZIn0.eyJleHAiOjE3NDI2MDAzODIsImlhdCI6MTc0MjYwMDA4MiwianRpIjoiODRhNjZmZjAtMTE5OC00YmRkLTk1NzAtNWZhMjNhZjYxMmQyIiwiaXNzIjoiaHR0cDovL2xvY2FsaG9zdDo4MDgwL3JlYWxtcy9saXRlbGxtLXJlYWxtIiwiYXVkIjoiYWNjb3VudCIsInN1YiI6ImZmMGZjOGNiLWUyMjktNDkyYy05NzYwLWNlYzVhMDYxNmI2MyIsInR5cCI6IkJlYXJlciIsImF6cCI6ImxpdGVsbG0tdGVzdC1jbGllbnQtaWQiLCJzaWQiOiI4MTYwNjIxOC0yNmZmLTQwMjAtOWQxNy05Zjc0YmFlNTBkODUiLCJhY3IiOiIxIiwiYWxsb3dlZC1vcmlnaW5zIjpbImh0dHA6Ly9sb2NhbGhvc3Q6NDAwMC8qIl0sInJlYWxtX2FjY2VzcyI6eyJyb2xlcyI6WyJvZmZsaW5lX2FjY2VzcyIsImRlZmF1bHQtcm9sZXMtbGl0ZWxsbS1yZWFsbSIsInVtYV9hdXRob3JpemF0aW9uIl19LCJyZXNvdXJjZV9hY2Nlc3MiOnsiYWNjb3VudCI6eyJyb2xlcyI6WyJtYW5hZ2UtYWNjb3VudCIsIm1hbmFnZS1hY2NvdW50LWxpbmtzIiwidmlldy1wcm9maWxlIl19fSwic2NvcGUiOiJwcm9maWxlIGdyb3Vwcy1zY29wZSBlbWFpbCBsaXRlbGxtLmFwaS5jb25zdW1lciIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJuYW1lIjoiS3Jpc2ggRGhvbGFraWEiLCJncm91cHMiOlsiL28zX21pbmlfYWNjZXNzIl0sInByZWZlcnJlZF91c2VybmFtZSI6ImtycmlzaGRoMiIsImdpdmVuX25hbWUiOiJLcmlzaCIsImZhbWlseV9uYW1lIjoiRGhvbGFraWEiLCJlbWFpbCI6ImtycmlzaGRob2xha2lhMkBnbWFpbC5jb20ifQ.Fu2ErZhnfez-bhn_XmjkywcFdZHcFUSvzIzfdNiEowdA0soLmCyqf9731amP6m68shd9qk11e0mQhxFIAIxZPojViC1Csc9TBXLRRQ8ESMd6gPIj-DBkKVkQSZLJ1uibsh4Oo2RViGtqWVcEt32T8U_xhGdtdzNkJ8qy_e0fdNDsUnhmSaTQvmZJYarW0roIrkC-zYZrX3fftzbQfavSu9eqdfPf6wUttIrkaWThWUuORy-xaeZfSmvsGbEg027hh6QwlChiZTSF8R6bRxoqfPN3ZaGFFgbBXNRYZA_eYi2IevhIwJHi_r4o1UvtKAJyfPefm-M6hCfkN_6da4zsog",
+    }
+
+    # Create request
+    request = Request(
+        scope={"type": "http", "headers": [("Authorization", "Bearer fake.jwt.token")]}
+    )
+    request._url = URL(url="/team/new")
+
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "general_settings", {"enable_jwt_auth": True}
+    )
+
+    # Mock JWTAuthManager.auth_builder
+    with patch(
+        "litellm.proxy.auth.handle_jwt.JWTAuthManager.auth_builder",
+        return_value=mock_jwt_response,
+    ):
+        try:
+            await user_api_key_auth(request=request, api_key="Bearer fake.jwt.token")
+            pytest.fail(
+                "Expected this call to fail. Non-admin user should not access team routes."
+            )
+        except ProxyException as e:
+            print("e", e)
+            assert "Only proxy admin can be used to generate" in str(e.message)
+
+
+@pytest.mark.asyncio
+async def test_x_litellm_api_key():
+    """
+    Check if auth can pick up x-litellm-api-key header, even if Bearer token is provided
+    """
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import (
+        LiteLLM_TeamTable,
+        LiteLLM_TeamTableCachedObj,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+
+    master_key = "sk-1234"
+
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    setattr(litellm.proxy.proxy_server, "master_key", master_key)
+    setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
+
+    ignored_key = "aj12445"
+
+    # Create request with headers as bytes
+    request = Request(
+        scope={
+            "type": "http"
+        }
+    )
+    request._url = URL(url="/chat/completions")
+
+    valid_token = await user_api_key_auth(request=request, api_key="Bearer " + ignored_key, custom_litellm_key_header=master_key)
+    assert valid_token.token == hash_token(master_key)
+

@@ -21,16 +21,18 @@ sys.path.insert(
 import litellm
 import asyncio
 from typing import Optional
-from litellm.types.utils import StandardLoggingPayload, Usage
+from litellm.types.utils import StandardLoggingPayload, Usage, ModelInfoBase
 from litellm.integrations.custom_logger import CustomLogger
 
 
 class TestCustomLogger(CustomLogger):
     def __init__(self):
         self.recorded_usage: Optional[Usage] = None
+        self.standard_logging_payload: Optional[StandardLoggingPayload] = None
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         standard_logging_payload = kwargs.get("standard_logging_object")
+        self.standard_logging_payload = standard_logging_payload
         print(
             "standard_logging_payload",
             json.dumps(standard_logging_payload, indent=4, default=str),
@@ -222,10 +224,10 @@ async def test_stream_token_counting_anthropic_with_include_usage():
     )
 
     input_tokens_anthropic_api = sum(
-        [getattr(usage, "input_tokens", 0) for usage in all_anthropic_usage_chunks]
+        [getattr(usage, "input_tokens", 0) or 0 for usage in all_anthropic_usage_chunks]
     )
     output_tokens_anthropic_api = sum(
-        [getattr(usage, "output_tokens", 0) for usage in all_anthropic_usage_chunks]
+        [getattr(usage, "output_tokens", 0) or 0 for usage in all_anthropic_usage_chunks]
     )
     print("input_tokens_anthropic_api", input_tokens_anthropic_api)
     print("output_tokens_anthropic_api", output_tokens_anthropic_api)

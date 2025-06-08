@@ -6,6 +6,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
+from litellm.constants import SECRET_MANAGER_REFRESH_INTERVAL
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
@@ -34,13 +35,19 @@ class HashicorpSecretManager(BaseSecretManager):
         # Validate environment
         if not self.vault_token:
             raise ValueError(
-                "Missing Vault token. Please set VAULT_TOKEN in your environment."
+                "Missing Vault token. Please set HCP_VAULT_TOKEN in your environment."
             )
 
         litellm.secret_manager_client = self
         litellm._key_management_system = KeyManagementSystem.HASHICORP_VAULT
-        _refresh_interval = os.environ.get("HCP_VAULT_REFRESH_INTERVAL", 86400)
-        _refresh_interval = int(_refresh_interval) if _refresh_interval else 86400
+        _refresh_interval = os.environ.get(
+            "HCP_VAULT_REFRESH_INTERVAL", SECRET_MANAGER_REFRESH_INTERVAL
+        )
+        _refresh_interval = (
+            int(_refresh_interval)
+            if _refresh_interval
+            else SECRET_MANAGER_REFRESH_INTERVAL
+        )
         self.cache = InMemoryCache(
             default_ttl=_refresh_interval
         )  # store in memory for 1 day
@@ -90,9 +97,9 @@ class HashicorpSecretManager(BaseSecretManager):
             headers["X-Vault-Namespace"] = self.vault_namespace
         try:
             # We use the client cert and key for mutual TLS
-            resp = httpx.post(
+            client = httpx.Client(cert=(self.tls_cert_path, self.tls_key_path))
+            resp = client.post(
                 login_url,
-                cert=(self.tls_cert_path, self.tls_key_path),
                 headers=headers,
                 json=self._get_tls_cert_auth_body(),
             )

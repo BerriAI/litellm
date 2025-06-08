@@ -1,12 +1,17 @@
 """Abstraction function for OpenAI's realtime API"""
 
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 import litellm
 from litellm import get_llm_provider
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
 
+from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime
 from ..llms.openai.realtime.handler import OpenAIRealtime
@@ -14,6 +19,7 @@ from ..utils import client as wrapper_client
 
 azure_realtime = AzureOpenAIRealtime()
 openai_realtime = OpenAIRealtime()
+base_llm_http_handler = BaseLLMHTTPHandler()
 
 
 @wrapper_client
@@ -33,13 +39,17 @@ async def _arealtime(
 
     For PROXY use only.
     """
+    headers = cast(Optional[dict], kwargs.get("headers"))
+    extra_headers = cast(Optional[dict], kwargs.get("extra_headers"))
+    if headers is None:
+        headers = {}
+    if extra_headers is not None:
+        headers.update(extra_headers)
     litellm_logging_obj: LiteLLMLogging = kwargs.get("litellm_logging_obj")  # type: ignore
-    litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
-    proxy_server_request = kwargs.get("proxy_server_request", None)
-    model_info = kwargs.get("model_info", None)
-    metadata = kwargs.get("metadata", {})
     user = kwargs.get("user", None)
     litellm_params = GenericLiteLLMParams(**kwargs)
+
+    litellm_params_dict = get_litellm_params(**kwargs)
 
     model, _custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
         model=model,
@@ -51,18 +61,29 @@ async def _arealtime(
         model=model,
         user=user,
         optional_params={},
-        litellm_params={
-            "litellm_call_id": litellm_call_id,
-            "proxy_server_request": proxy_server_request,
-            "model_info": model_info,
-            "metadata": metadata,
-            "preset_cache_key": None,
-            "stream_response": {},
-        },
+        litellm_params=litellm_params_dict,
         custom_llm_provider=_custom_llm_provider,
     )
 
-    if _custom_llm_provider == "azure":
+    provider_config: Optional[BaseRealtimeConfig] = None
+    if _custom_llm_provider in LlmProviders._member_map_.values():
+        provider_config = ProviderConfigManager.get_provider_realtime_config(
+            model=model,
+            provider=LlmProviders(_custom_llm_provider),
+        )
+    if provider_config is not None:
+        await base_llm_http_handler.async_realtime(
+            model=model,
+            websocket=websocket,
+            logging_obj=litellm_logging_obj,
+            provider_config=provider_config,
+            api_base=api_base,
+            api_key=api_key,
+            client=client,
+            timeout=timeout,
+            headers=headers,
+        )
+    elif _custom_llm_provider == "azure":
         api_base = (
             dynamic_api_base
             or litellm_params.api_base
@@ -151,6 +172,8 @@ async def _realtime_health_check(
         url = openai_realtime._construct_url(
             api_base=api_base or "https://api.openai.com/", model=model
         )
+    else:
+        raise ValueError(f"Unsupported model: {model}")
     async with websockets.connect(  # type: ignore
         url,
         extra_headers={

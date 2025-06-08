@@ -7,6 +7,9 @@ from pydantic import BaseModel
 import litellm
 from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_name
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.audio_transcription.transformation import (
+    BaseAudioTranscriptionConfig,
+)
 from litellm.types.utils import FileTypes
 from litellm.utils import (
     TranscriptionResponse,
@@ -75,6 +78,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         model: str,
         audio_file: FileTypes,
         optional_params: dict,
+        litellm_params: dict,
         model_response: TranscriptionResponse,
         timeout: float,
         max_retries: int,
@@ -83,15 +87,23 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         api_base: Optional[str],
         client=None,
         atranscription: bool = False,
+        provider_config: Optional[BaseAudioTranscriptionConfig] = None,
     ) -> TranscriptionResponse:
-        data = {"model": model, "file": audio_file, **optional_params}
-
-        if "response_format" not in data or (
-            data["response_format"] == "text" or data["response_format"] == "json"
-        ):
-            data["response_format"] = (
-                "verbose_json"  # ensures 'duration' is received - used for cost calculation
+        """
+        Handle audio transcription request
+        """
+        if provider_config is not None:
+            data = provider_config.transform_audio_transcription_request(
+                model=model,
+                audio_file=audio_file,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
             )
+
+            if isinstance(data, bytes):
+                raise ValueError("OpenAI transformation route requires a dict")
+        else:
+            data = {"model": model, "file": audio_file, **optional_params}
 
         if atranscription is True:
             return self.async_audio_transcriptions(  # type: ignore
@@ -143,7 +155,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             additional_args={"complete_input_dict": data},
             original_response=stringified_response,
         )
-        hidden_params = {"model": "whisper-1", "custom_llm_provider": "openai"}
+        hidden_params = {"model": model, "custom_llm_provider": "openai"}
         final_response: TranscriptionResponse = convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, hidden_params=hidden_params, response_type="audio_transcription")  # type: ignore
         return final_response
 
@@ -198,7 +210,9 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
                 additional_args={"complete_input_dict": data},
                 original_response=stringified_response,
             )
-            hidden_params = {"model": "whisper-1", "custom_llm_provider": "openai"}
+            # Extract the actual model from data instead of hardcoding "whisper-1"
+            actual_model = data.get("model", "whisper-1")
+            hidden_params = {"model": actual_model, "custom_llm_provider": "openai"}
             return convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, hidden_params=hidden_params, response_type="audio_transcription")  # type: ignore
         except Exception as e:
             ## LOGGING

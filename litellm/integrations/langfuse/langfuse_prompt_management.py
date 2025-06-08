@@ -4,7 +4,7 @@ Call Hook for LiteLLM Proxy which allows Langfuse prompt management.
 
 import os
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 from packaging.version import Version
 from typing_extensions import TypeAlias
@@ -26,13 +26,15 @@ if TYPE_CHECKING:
     from langfuse import Langfuse
     from langfuse.client import ChatPromptClient, TextPromptClient
 
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
     LangfuseClass: TypeAlias = Langfuse
 
     PROMPT_CLIENT = Union[TextPromptClient, ChatPromptClient]
 else:
     PROMPT_CLIENT = Any
     LangfuseClass = Any
-
+    LiteLLMLoggingObj = Any
 in_memory_dynamic_logger_cache = DynamicLoggingCache()
 
 
@@ -40,6 +42,7 @@ in_memory_dynamic_logger_cache = DynamicLoggingCache()
 def langfuse_client_init(
     langfuse_public_key=None,
     langfuse_secret=None,
+    langfuse_secret_key=None,
     langfuse_host=None,
     flush_interval=1,
 ) -> LangfuseClass:
@@ -67,7 +70,10 @@ def langfuse_client_init(
         )
 
     # Instance variables
-    secret_key = langfuse_secret or os.getenv("LANGFUSE_SECRET_KEY")
+
+    secret_key = (
+        langfuse_secret or langfuse_secret_key or os.getenv("LANGFUSE_SECRET_KEY")
+    )
     public_key = langfuse_public_key or os.getenv("LANGFUSE_PUBLIC_KEY")
     langfuse_host = langfuse_host or os.getenv(
         "LANGFUSE_HOST", "https://cloud.langfuse.com"
@@ -124,9 +130,12 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         return "langfuse"
 
     def _get_prompt_from_id(
-        self, langfuse_prompt_id: str, langfuse_client: LangfuseClass
+        self,
+        langfuse_prompt_id: str,
+        langfuse_client: LangfuseClass,
+        prompt_label: Optional[str] = None,
     ) -> PROMPT_CLIENT:
-        return langfuse_client.get_prompt(langfuse_prompt_id)
+        return langfuse_client.get_prompt(langfuse_prompt_id, label=prompt_label)
 
     def _compile_prompt(
         self,
@@ -165,14 +174,13 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         model: str,
         messages: List[AllMessageValues],
         non_default_params: dict,
-        prompt_id: str,
+        prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
-    ) -> Tuple[
-        str,
-        List[AllMessageValues],
-        dict,
-    ]:
+        litellm_logging_obj: LiteLLMLoggingObj,
+        tools: Optional[List[Dict]] = None,
+        prompt_label: Optional[str] = None,
+    ) -> Tuple[str, List[AllMessageValues], dict,]:
         return self.get_chat_completion_prompt(
             model,
             messages,
@@ -180,6 +188,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             prompt_id,
             prompt_variables,
             dynamic_callback_params,
+            prompt_label=prompt_label,
         )
 
     def should_run_prompt_management(
@@ -190,6 +199,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         langfuse_client = langfuse_client_init(
             langfuse_public_key=dynamic_callback_params.get("langfuse_public_key"),
             langfuse_secret=dynamic_callback_params.get("langfuse_secret"),
+            langfuse_secret_key=dynamic_callback_params.get("langfuse_secret_key"),
             langfuse_host=dynamic_callback_params.get("langfuse_host"),
         )
         langfuse_prompt_client = self._get_prompt_from_id(
@@ -202,14 +212,18 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         prompt_id: str,
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_label: Optional[str] = None,
     ) -> PromptManagementClient:
         langfuse_client = langfuse_client_init(
             langfuse_public_key=dynamic_callback_params.get("langfuse_public_key"),
             langfuse_secret=dynamic_callback_params.get("langfuse_secret"),
+            langfuse_secret_key=dynamic_callback_params.get("langfuse_secret_key"),
             langfuse_host=dynamic_callback_params.get("langfuse_host"),
         )
         langfuse_prompt_client = self._get_prompt_from_id(
-            langfuse_prompt_id=prompt_id, langfuse_client=langfuse_client
+            langfuse_prompt_id=prompt_id,
+            langfuse_client=langfuse_client,
+            prompt_label=prompt_label,
         )
 
         ## SET PROMPT

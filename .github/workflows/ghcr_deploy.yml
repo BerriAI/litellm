@@ -80,7 +80,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      #
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -112,10 +111,58 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.release_type }} # if a tag is provided, use that, otherwise use the release tag, and if neither is available, use 'latest'
+          tags: |
+            ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }},
+            ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.release_type }}
+            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
+            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm:main-stable', env.REGISTRY) || '' }},
+            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm:{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
           labels: ${{ steps.meta.outputs.labels }}
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
-          
+  
+  build-and-push-image-ee:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.commit_hash }}
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for EE Dockerfile
+        id: meta-ee
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-ee
+      # Configure multi platform Docker builds
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@e0e4588fad221d38ee467c0bffd91115366dc0c5
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@edfb0fe6204400c56fbfd3feba3fe9ad1adfa345
+
+      - name: Build and push EE Docker image
+        uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: |
+            ${{ steps.meta-ee.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }},
+            ${{ steps.meta-ee.outputs.tags }}-${{ github.event.inputs.release_type }}
+            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-ee:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
+            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-ee:main-stable', env.REGISTRY) || '' }}
+          labels: ${{ steps.meta-ee.outputs.labels }}
+          platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
+   
   build-and-push-image-database:
     runs-on: ubuntu-latest
     permissions:
@@ -151,8 +198,12 @@ jobs:
           context: .
           file: ./docker/Dockerfile.database
           push: true
-          tags: ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.release_type }} 
-          labels: ${{ steps.meta-database.outputs.labels }} 
+          tags: |
+            ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }},
+            ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.release_type }}
+            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-database:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
+            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-database:main-stable', env.REGISTRY) || '' }}
+          labels: ${{ steps.meta-database.outputs.labels }}
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
             
   build-and-push-image-non_root:
@@ -190,7 +241,11 @@ jobs:
           context: .
           file: ./docker/Dockerfile.non_root
           push: true
-          tags: ${{ steps.meta-non_root.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-non_root.outputs.tags }}-${{ github.event.inputs.release_type }} 
+          tags: |
+            ${{ steps.meta-non_root.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }},
+            ${{ steps.meta-non_root.outputs.tags }}-${{ github.event.inputs.release_type }}
+            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-non_root:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
+            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-non_root:main-stable', env.REGISTRY) || '' }}
           labels: ${{ steps.meta-non_root.outputs.labels }} 
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
   
@@ -229,7 +284,11 @@ jobs:
           context: .
           file: ./litellm-js/spend-logs/Dockerfile
           push: true
-          tags: ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.release_type }}
+          tags: |
+            ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }},
+            ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.release_type }}
+            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-spend_logs:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
+            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-spend_logs:main-stable', env.REGISTRY) || '' }}
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
 
   build-and-push-helm-chart:

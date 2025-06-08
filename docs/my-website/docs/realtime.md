@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Realtime Endpoints
+# /realtime
 
 Use this to loadbalance across Azure + OpenAI. 
 
@@ -19,6 +19,8 @@ model_list:
     litellm_params:
       model: openai/gpt-4o-realtime-preview-2024-10-01
       api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: realtime
 ```
 </TabItem>
 <TabItem value="openai+azure" label="OpenAI + Azure">

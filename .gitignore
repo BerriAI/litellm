@@ -1,3 +1,4 @@
+.python-version
 .venv
 .env
 .newenv
@@ -72,6 +73,7 @@ tests/local_testing/log.txt
 .codegpt
 litellm/proxy/_new_new_secret_config.yaml
 litellm/proxy/custom_guardrail.py
+.mypy_cache/*
 litellm/proxy/_experimental/out/404.html
 litellm/proxy/_experimental/out/404.html
 litellm/proxy/_experimental/out/model_hub.html
@@ -79,3 +81,14 @@ litellm/proxy/_experimental/out/model_hub.html
 litellm/proxy/application.log
 tests/llm_translation/vertex_test_account.json
 tests/llm_translation/test_vertex_key.json
+litellm/proxy/migrations/0_init/migration.sql
+litellm/proxy/db/migrations/0_init/migration.sql
+litellm/proxy/db/migrations/*
+litellm/proxy/migrations/*config.yaml
+litellm/proxy/migrations/*
+config.yaml
+tests/litellm/litellm_core_utils/llm_cost_calc/log.txt
+tests/test_custom_dir/*
+test.py
+
+litellm_config.yaml
