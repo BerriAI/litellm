@@ -64,28 +64,6 @@ def test_convert_chat_to_text_completion():
     )
 
 
-def test_convert_provider_response_logprobs():
-    """Test converting provider logprobs to text completion logprobs"""
-    response = ModelResponse(
-        id="test123",
-        _hidden_params={
-            "original_response": {
-                "details": {"tokens": [{"text": "hello", "logprob": -1.0}]}
-            }
-        },
-    )
-
-    result = LiteLLMResponseObjectHandler._convert_provider_response_logprobs_to_text_completion_logprobs(
-        response=response, custom_llm_provider="huggingface"
-    )
-
-    # Note: The actual assertion here depends on the implementation of
-    # litellm.huggingface._transform_logprobs, but we can at least test the function call
-    assert (
-        result is not None or result is None
-    )  # Will depend on the actual implementation
-
-
 def test_convert_provider_response_logprobs_non_huggingface():
     """Test converting provider logprobs for non-huggingface provider"""
     response = ModelResponse(id="test123", _hidden_params={})

@@ -1,6 +1,6 @@
 import os
 import sys
-
+import json
 import pytest
 
 sys.path.insert(
@@ -86,63 +86,6 @@ class TestFireworksAIChatCompletion(BaseLLMChatTest):
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
-
-    def test_multilingual_requests(self):
-        """
-        Fireworks AI raises a 500 BadRequest error when the request contains invalid utf-8 sequences.
-        """
-        pass
-
-    @pytest.mark.parametrize(
-        "response_format",
-        [
-            {"type": "json_object"},
-            {"type": "text"},
-        ],
-    )
-    @pytest.mark.flaky(retries=6, delay=1)
-    def test_json_response_format(self, response_format):
-        """
-        Test that the JSON response format is supported by the LLM API
-        """
-        from litellm.utils import supports_response_schema
-        from openai import OpenAI
-        from unittest.mock import patch
-
-        client = OpenAI()
-
-        base_completion_call_args = self.get_base_completion_call_args()
-        litellm.set_verbose = True
-
-        messages = [
-            {
-                "role": "system",
-                "content": "Your output should be a JSON object with no additional properties.  ",
-            },
-            {
-                "role": "user",
-                "content": "Respond with this in json. city=San Francisco, state=CA, weather=sunny, temp=60",
-            },
-        ]
-
-        with patch.object(
-            client.chat.completions.with_raw_response, "create"
-        ) as mock_post:
-            response = self.completion_function(
-                **base_completion_call_args,
-                messages=messages,
-                response_format=response_format,
-                client=client,
-            )
-
-            mock_post.assert_called_once()
-            if response_format["type"] == "json_object":
-                assert (
-                    mock_post.call_args.kwargs["response_format"]["type"]
-                    == "json_object"
-                )
-            else:
-                assert mock_post.call_args.kwargs["response_format"]["type"] == "text"
 
 
 class TestFireworksAIAudioTranscription(BaseLLMAudioTranscriptionTest):
@@ -253,14 +196,15 @@ def test_global_disable_flag_with_transform_messages_helper(monkeypatch):
     from openai import OpenAI
     from unittest.mock import patch
     from litellm import completion
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
 
     monkeypatch.setattr(litellm, "disable_add_transform_inline_image_block", True)
 
-    client = OpenAI()
-
     with patch.object(
-        client.chat.completions.with_raw_response,
-        "create",
+        client,
+        "post",
     ) as mock_post:
         try:
             completion(
@@ -286,9 +230,10 @@ def test_global_disable_flag_with_transform_messages_helper(monkeypatch):
 
         mock_post.assert_called_once()
         print(mock_post.call_args.kwargs)
+        json_data = json.loads(mock_post.call_args.kwargs["data"])
         assert (
             "#transform=inline"
-            not in mock_post.call_args.kwargs["messages"][0]["content"][1]["image_url"][
+            not in json_data["messages"][0]["content"][1]["image_url"][
                 "url"
             ]
         )

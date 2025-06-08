@@ -1,12 +1,9 @@
 model_list:
-  - model_name: fake-openai-endpoint
+  - model_name: gemini/*
     litellm_params:
-      model: openai/my-fake-model
-      api_key: my-fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-
-
-general_settings:
-  store_model_in_db: true
-  store_prompts_in_spend_logs: true
-
+      model: gemini/*
+      api_key: os.environ/GEMINI_API_KEY
+  - model_name: "anthropic/*"
+    litellm_params:
+      model: "anthropic/*"
+      api_key: os.environ/ANTHROPIC_API_KEY

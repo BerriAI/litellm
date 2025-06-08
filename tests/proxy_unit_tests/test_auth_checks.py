@@ -13,9 +13,6 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest, litellm
 import httpx
-from litellm.proxy.auth.auth_checks import (
-    _handle_failed_db_connection_for_get_key_object,
-)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import get_end_user_object
 from litellm.caching.caching import DualCache
@@ -27,7 +24,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.proxy.auth.auth_checks import (
-    _team_model_access_check,
+    can_team_access_model,
     _virtual_key_soft_budget_check,
 )
 from litellm.proxy.utils import ProxyLogging
@@ -76,36 +73,6 @@ async def test_get_end_user_object(customer_spend, customer_budget):
                     customer_spend, customer_budget, str(e)
                 )
             )
-
-
-@pytest.mark.asyncio
-async def test_handle_failed_db_connection():
-    """
-    Test cases:
-    1. When allow_requests_on_db_unavailable=True -> return UserAPIKeyAuth
-    2. When allow_requests_on_db_unavailable=False -> raise original error
-    """
-    from litellm.proxy.proxy_server import general_settings, litellm_proxy_admin_name
-
-    # Test case 1: allow_requests_on_db_unavailable=True
-    general_settings["allow_requests_on_db_unavailable"] = True
-    mock_error = httpx.ConnectError("Failed to connect to DB")
-
-    result = await _handle_failed_db_connection_for_get_key_object(e=mock_error)
-
-    assert isinstance(result, UserAPIKeyAuth)
-    assert result.key_name == "failed-to-connect-to-db"
-    assert result.token == "failed-to-connect-to-db"
-    assert result.user_id == litellm_proxy_admin_name
-
-    # Test case 2: allow_requests_on_db_unavailable=False
-    general_settings["allow_requests_on_db_unavailable"] = False
-
-    with pytest.raises(httpx.ConnectError) as exc_info:
-        await _handle_failed_db_connection_for_get_key_object(e=mock_error)
-    print("_handle_failed_db_connection_for_get_key_object got exception", exc_info)
-
-    assert str(exc_info.value) == "Failed to connect to DB"
 
 
 @pytest.mark.parametrize(
@@ -427,9 +394,9 @@ async def test_virtual_key_max_budget_check(
     ],
 )
 @pytest.mark.asyncio
-async def test_team_model_access_check(model, team_models, expect_to_work):
+async def test_can_team_access_model(model, team_models, expect_to_work):
     """
-    Test cases for _team_model_access_check:
+    Test cases for can_team_access_model:
     1. Exact model match
     2. all-proxy-models access
     3. Wildcard (*) access
@@ -438,16 +405,16 @@ async def test_team_model_access_check(model, team_models, expect_to_work):
     6. Empty model list
     7. None model list
     """
-    team_object = LiteLLM_TeamTable(
-        team_id="test-team",
-        models=team_models,
-    )
-
     try:
-        _team_model_access_check(
+        team_object = LiteLLM_TeamTable(
+            team_id="test-team",
+            models=team_models,
+        )
+        result = can_team_access_model(
             model=model,
             team_object=team_object,
             llm_router=None,
+            team_model_aliases=None,
         )
         if not expect_to_work:
             pytest.fail(

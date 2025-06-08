@@ -1,21 +1,16 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Button, Input, Dropdown, MenuProps, Select, Spin } from 'antd';
-import { Card, Button as TremorButton } from '@tremor/react';
-import {
-  FilterIcon,
-  XIcon,
-  CheckIcon,
-  ChevronDownIcon,
-  ChevronUpIcon,
-  SearchIcon
-} from '@heroicons/react/outline';
-import debounce from 'lodash/debounce';
+import React, { useState, useCallback } from "react";
+import { Button, Input, Select } from "antd";
+import { FilterIcon } from "@heroicons/react/outline";
+import debounce from "lodash/debounce";
 
 export interface FilterOption {
   name: string;
   label?: string;
   isSearchable?: boolean;
-  searchFn?: (searchText: string) => Promise<Array<{ label: string; value: string }>>;
+  searchFn?: (
+    searchText: string
+  ) => Promise<Array<{ label: string; value: string }>>;
+  options?: Array<{ label: string; value: string }>;
 }
 
 interface FilterValues {
@@ -35,221 +30,143 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
   onApplyFilters,
   onResetFilters,
   initialValues = {},
-  buttonLabel = "Filter",
+  buttonLabel = "Filters",
 }) => {
   const [showFilters, setShowFilters] = useState<boolean>(false);
-  const [selectedFilter, setSelectedFilter] = useState<string>(options[0]?.name || '');
-  const [filterValues, setFilterValues] = useState<FilterValues>(initialValues);
   const [tempValues, setTempValues] = useState<FilterValues>(initialValues);
-  const [dropdownOpen, setDropdownOpen] = useState<boolean>(false);
-  const [searchOptions, setSearchOptions] = useState<Array<{ label: string; value: string }>>([]);
-  const [searchLoading, setSearchLoading] = useState<boolean>(false);
-  const [searchInputValue, setSearchInputValue] = useState<string>('');
-  
-  const filtersRef = useRef<HTMLDivElement>(null);
-  
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as HTMLElement;
-      if (filtersRef.current && 
-          !filtersRef.current.contains(target) && 
-          !target.closest('.ant-dropdown') &&
-          !target.closest('.ant-select-dropdown')) {
-        setShowFilters(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  const [searchOptionsMap, setSearchOptionsMap] = useState<{
+    [key: string]: Array<{ label: string; value: string }>;
+  }>({});
+  const [searchLoadingMap, setSearchLoadingMap] = useState<{
+    [key: string]: boolean;
+  }>({});
+  const [searchInputValueMap, setSearchInputValueMap] = useState<{
+    [key: string]: string;
+  }>({});
 
   const debouncedSearch = useCallback(
     debounce(async (value: string, option: FilterOption) => {
-      if (!value || !option.isSearchable || !option.searchFn) return;
-      
-      setSearchLoading(true);
+      if (!option.isSearchable || !option.searchFn) return;
+
+      setSearchLoadingMap((prev) => ({ ...prev, [option.name]: true }));
       try {
         const results = await option.searchFn(value);
-        setSearchOptions(results);
+        setSearchOptionsMap((prev) => ({ ...prev, [option.name]: results }));
       } catch (error) {
-        console.error('Error searching:', error);
-        setSearchOptions([]);
+        console.error("Error searching:", error);
+        setSearchOptionsMap((prev) => ({ ...prev, [option.name]: [] }));
       } finally {
-        setSearchLoading(false);
+        setSearchLoadingMap((prev) => ({ ...prev, [option.name]: false }));
       }
     }, 300),
     []
   );
-  
-  const handleFilterChange = (value: string) => {
-    setTempValues(prev => ({
-      ...prev,
-      [selectedFilter]: value
-    }));
-  };
-  
-  const clearFilters = () => {
-    const emptyValues: FilterValues = {};
-    options.forEach(option => {
-      emptyValues[option.name] = '';
-    });
-    setTempValues(emptyValues);
-  };
-  
-  const handleApplyFilters = () => {
-    setFilterValues(tempValues);
-    onApplyFilters(tempValues);
-    setShowFilters(false);
-  };
-  
-  const dropdownItems: MenuProps['items'] = options.map(option => ({
-    key: option.name,
-    label: (
-      <div className="flex items-center gap-2">
-        {selectedFilter === option.name && (
-          <CheckIcon className="h-4 w-4 text-blue-600" />
-        )}
-        {option.label || option.name}
-      </div>
-    ),
-  }));
 
-  const currentOption = options.find(option => option.name === selectedFilter);
+  const handleFilterChange = (name: string, value: string) => {
+    const newValues = {
+      ...tempValues,
+      [name]: value,
+    };
+    setTempValues(newValues);
+    onApplyFilters(newValues);
+  };
 
   const resetFilters = () => {
     const emptyValues: FilterValues = {};
-    options.forEach(option => {
-      emptyValues[option.name] = '';
+    options.forEach((option) => {
+      emptyValues[option.name] = "";
     });
     setTempValues(emptyValues);
-    setFilterValues(emptyValues);
-    setSearchInputValue('');
-    setSearchOptions([]);
-    onResetFilters(); // Call the parent's reset function
+    onResetFilters();
   };
-  
+
+  // Define the order of filters
+  const orderedFilters = [
+    "Team ID",
+    "Status",
+    "Organization ID",
+    "Key Alias",
+    "User ID",
+    "Key Hash",
+    "Model"
+  ];
+
   return (
-    <div className="relative" ref={filtersRef}>
-      <TremorButton
-        icon={FilterIcon}
-        onClick={() => setShowFilters(!showFilters)}
-        variant="secondary"
-        size='xs'
-        className="flex items-center pr-2"
-      >
-        {buttonLabel}
-      </TremorButton>
+    <div className="w-full">
+      <div className="flex items-center gap-2 mb-6">
+        <Button
+          icon={<FilterIcon className="h-4 w-4" />}
+          onClick={() => setShowFilters(!showFilters)}
+          className="flex items-center gap-2"
+        >
+          {buttonLabel}
+        </Button>
+        <Button onClick={resetFilters}>Reset Filters</Button>
+      </div>
+
       {showFilters && (
-        <Card className="absolute left-0 mt-2 w-96 z-50 border border-gray-200 shadow-lg">
-          <div className="flex flex-col gap-4">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium">Where</span>
-              
-              <Dropdown
-                menu={{
-                  items: dropdownItems,
-                  onClick: ({ key }) => {
-                    setSelectedFilter(key);
-                    setDropdownOpen(false);
-                    setSearchOptions([]);
-                  }
-                }}
-                onOpenChange={setDropdownOpen}
-                open={dropdownOpen}
-                trigger={['click']}
-              >
-                <Button className="min-w-32 text-left flex justify-between items-center">
-                  {currentOption?.label || selectedFilter}
-                  {dropdownOpen ? (
-                    <ChevronUpIcon className="h-4 w-4" />
-                  ) : (
-                    <ChevronDownIcon className="h-4 w-4" />
-                  )}
-                </Button>
-              </Dropdown>
-              
-              {currentOption?.isSearchable ? (
-              <Select
-                showSearch
-                placeholder={`Search ${currentOption.label || selectedFilter}...`}
-                value={tempValues[selectedFilter] || undefined}
-                onChange={(value) => handleFilterChange(value)}
-                onSearch={(value) => {
-                  setSearchInputValue(value);
-                  debouncedSearch(value, currentOption);
-                }}
-                onInputKeyDown={(e) => {
-                  if (e.key === 'Enter' && searchInputValue) {
-                    // Allow manual entry of the value on Enter
-                    handleFilterChange(searchInputValue);
-                    e.preventDefault();
-                  }
-                }}
-                filterOption={false}
-                className="flex-1 w-full max-w-full truncate"
-                loading={searchLoading}
-                options={searchOptions}
-                allowClear
-                notFoundContent={
-                  searchLoading ? <Spin size="small" /> : (
-                    <div className="p-2">
-                      {searchInputValue && (
-                        <Button 
-                          type="link" 
-                          className="p-0 mt-1"
-                          onClick={() => {
-                            handleFilterChange(searchInputValue);
-                            // Close the dropdown/select after selecting the value
-                            const selectElement = document.activeElement as HTMLElement;
-                            if (selectElement) {
-                              selectElement.blur();
-                            }
-                          }}
-                        >
-                          Use &ldquo;{searchInputValue}&rdquo; as filter value
-                        </Button>
-                        )}
-                    </div>
-                  )
-                }
-              />
-            ) : (
-                <Input
-                  placeholder="Enter value..."
-                  value={tempValues[selectedFilter] || ''}
-                  onChange={(e) => handleFilterChange(e.target.value)}
-                  className="px-3 py-1.5 border rounded-md text-sm flex-1 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  suffix={
-                    tempValues[selectedFilter] ? (
-                      <XIcon
-                        className="h-4 w-4 cursor-pointer text-gray-400 hover:text-gray-500"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleFilterChange('');
-                        }}
-                      />
-                    ) : null
-                  }
-                />
-              )}
-            </div>
+        <div className="grid grid-cols-3 gap-x-6 gap-y-4 mb-6">
+          {orderedFilters.map((filterName) => {
+            const option = options.find(
+              (opt) => opt.label === filterName || opt.name === filterName
+            );
+            if (!option) return null;
 
-
-            <div className="flex gap-2 justify-end">
-              <Button
-                onClick={() => {
-                  clearFilters();
-                  onResetFilters();
-                  setShowFilters(false);
-                }}
-              >
-                Reset
-              </Button>
-              <Button onClick={handleApplyFilters}>
-                Apply Filters
-              </Button>
-            </div>
-          </div>
-        </Card>
+            return (
+              <div key={option.name} className="flex flex-col gap-2">
+                <label className="text-sm text-gray-600">
+                  {option.label || option.name}
+                </label>
+                {option.isSearchable ? (
+                  <Select
+                    showSearch
+                    className="w-full"
+                    placeholder={`Search ${option.label || option.name}...`}
+                    value={tempValues[option.name] || undefined}
+                    onChange={(value) => handleFilterChange(option.name, value)}
+                    onSearch={(value) => {
+                      setSearchInputValueMap((prev) => ({
+                        ...prev,
+                        [option.name]: value,
+                      }));
+                      if (option.searchFn) {
+                        debouncedSearch(value, option);
+                      }
+                    }}
+                    filterOption={false}
+                    loading={searchLoadingMap[option.name]}
+                    options={searchOptionsMap[option.name] || []}
+                    allowClear
+                  />
+                ) : option.options ? (
+                  <Select
+                    className="w-full"
+                    placeholder={`Select ${option.label || option.name}...`}
+                    value={tempValues[option.name] || undefined}
+                    onChange={(value) => handleFilterChange(option.name, value)}
+                    allowClear
+                  >
+                    {option.options.map((opt) => (
+                      <Select.Option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </Select.Option>
+                    ))}
+                  </Select>
+                ) : (
+                  <Input
+                    className="w-full"
+                    placeholder={`Enter ${option.label || option.name}...`}
+                    value={tempValues[option.name] || ""}
+                    onChange={(e) =>
+                      handleFilterChange(option.name, e.target.value)
+                    }
+                    allowClear
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );

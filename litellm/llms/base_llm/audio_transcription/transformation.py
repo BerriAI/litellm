@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
@@ -8,7 +8,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIAudioTranscriptionOptionalParams,
 )
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import FileTypes, ModelResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -28,8 +28,10 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
     def get_complete_url(
         self,
         api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         """
@@ -40,6 +42,18 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
         Some providers need `model` in `api_base`
         """
         return api_base or ""
+
+    @abstractmethod
+    def transform_audio_transcription_request(
+        self,
+        model: str,
+        audio_file: FileTypes,
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> Union[dict, bytes]:
+        raise NotImplementedError(
+            "AudioTranscriptionConfig needs a request transformation for audio transcription models"
+        )
 
     def transform_request(
         self,

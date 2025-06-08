@@ -23,7 +23,7 @@ Requirements:
   - ** Set on config.yaml** set your master key under `general_settings:master_key`, example below
   - ** Set env variable** set `LITELLM_MASTER_KEY`
 
-(the proxy Dockerfile checks if the `DATABASE_URL` is set and then intializes the DB connection)
+(the proxy Dockerfile checks if the `DATABASE_URL` is set and then initializes the DB connection)
 
 ```shell
 export DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname>
@@ -333,7 +333,7 @@ curl http://localhost:4000/v1/chat/completions \
 
 **Expected Response**
 
-Expect to see a successfull response from the litellm proxy since the key passed in `X-Litellm-Key` is valid
+Expect to see a successful response from the litellm proxy since the key passed in `X-Litellm-Key` is valid
 ```shell
 {"id":"chatcmpl-f9b2b79a7c30477ab93cd0e717d1773e","choices":[{"finish_reason":"stop","index":0,"message":{"content":"\n\nHello there, how may I assist you today?","role":"assistant","tool_calls":null,"function_call":null}}],"created":1677652288,"model":"gpt-3.5-turbo-0125","object":"chat.completion","system_fingerprint":"fp_44709d6fcb","usage":{"completion_tokens":12,"prompt_tokens":9,"total_tokens":21}
 ```

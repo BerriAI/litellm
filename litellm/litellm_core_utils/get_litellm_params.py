@@ -48,6 +48,7 @@ def get_litellm_params(
     user_continue_message=None,
     base_model: Optional[str] = None,
     litellm_trace_id: Optional[str] = None,
+    litellm_session_id: Optional[str] = None,
     hf_model_name: Optional[str] = None,
     custom_prompt_dict: Optional[dict] = None,
     litellm_metadata: Optional[dict] = None,
@@ -57,6 +58,10 @@ def get_litellm_params(
     prompt_variables: Optional[dict] = None,
     async_call: Optional[bool] = None,
     ssl_verify: Optional[bool] = None,
+    merge_reasoning_content_in_choices: Optional[bool] = None,
+    use_litellm_proxy: Optional[bool] = None,
+    api_version: Optional[str] = None,
+    max_retries: Optional[int] = None,
     **kwargs,
 ) -> dict:
     litellm_params = {
@@ -88,6 +93,7 @@ def get_litellm_params(
         "base_model": base_model
         or _get_base_model_from_litellm_call_metadata(metadata=metadata),
         "litellm_trace_id": litellm_trace_id,
+        "litellm_session_id": litellm_session_id,
         "hf_model_name": hf_model_name,
         "custom_prompt_dict": custom_prompt_dict,
         "litellm_metadata": litellm_metadata,
@@ -97,5 +103,19 @@ def get_litellm_params(
         "prompt_variables": prompt_variables,
         "async_call": async_call,
         "ssl_verify": ssl_verify,
+        "merge_reasoning_content_in_choices": merge_reasoning_content_in_choices,
+        "api_version": api_version,
+        "azure_ad_token": kwargs.get("azure_ad_token"),
+        "tenant_id": kwargs.get("tenant_id"),
+        "client_id": kwargs.get("client_id"),
+        "client_secret": kwargs.get("client_secret"),
+        "azure_username": kwargs.get("azure_username"),
+        "azure_password": kwargs.get("azure_password"),
+        "max_retries": max_retries,
+        "timeout": kwargs.get("timeout"),
+        "bucket_name": kwargs.get("bucket_name"),
+        "vertex_credentials": kwargs.get("vertex_credentials"),
+        "vertex_project": kwargs.get("vertex_project"),
+        "use_litellm_proxy": use_litellm_proxy,
     }
     return litellm_params

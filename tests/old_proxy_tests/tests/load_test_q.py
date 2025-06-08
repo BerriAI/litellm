@@ -25,7 +25,7 @@ config = {
         {
             "model_name": "gpt-3.5-turbo",
             "litellm_params": {
-                "model": "azure/chatgpt-v-2",
+                "model": "azure/chatgpt-v-3",
                 "api_key": os.environ["AZURE_API_KEY"],
                 "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
                 "api_version": "2023-07-01-preview",

@@ -1,13 +1,15 @@
 # used by CI/CD testing
-openai==1.54.0 
+openai==1.81.0
 python-dotenv
 tiktoken
 importlib_metadata
 cohere
-redis
+redis==5.2.1
+redisvl==0.4.1
 anthropic
-orjson==3.9.15
-pydantic==2.7.1
+orjson==3.10.12 # fast /embedding responses
+pydantic==2.10.2
 google-cloud-aiplatform==1.43.0
-fastapi-sso==0.10.0
+fastapi-sso==0.16.0 
 uvloop==0.21.0
+mcp==1.5.0    # for MCP server  

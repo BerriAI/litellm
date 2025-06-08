@@ -1,4 +1,4 @@
-from typing import Callable, List, Set, Union
+from typing import Callable, List, Set, Type, Union
 
 import litellm
 from litellm._logging import verbose_logger
@@ -86,20 +86,19 @@ class LoggingCallbackManager:
             callback=callback, parent_list=litellm._async_failure_callback
         )
 
-    def remove_callback_from_list_by_object(
-            self, callback_list, obj
-    ):
+    def remove_callback_from_list_by_object(self, callback_list, obj):
         """
         Remove callbacks that are methods of a particular object (e.g., router cleanup)
         """
-        if not isinstance(callback_list, list): # Not list -> do nothing
+        if not isinstance(callback_list, list):  # Not list -> do nothing
             return
-        
-        remove_list=[c for c in callback_list if hasattr(c, '__self__') and c.__self__ == obj]
+
+        remove_list = [
+            c for c in callback_list if hasattr(c, "__self__") and c.__self__ == obj
+        ]
 
         for c in remove_list:
             callback_list.remove(c)
-
 
     def _add_string_callback_to_list(
         self, callback: str, parent_list: List[Union[CustomLogger, Callable, str]]
@@ -254,3 +253,25 @@ class LoggingCallbackManager:
             ):
                 matched_callbacks.add(callback)
         return matched_callbacks
+
+    def get_custom_loggers_for_type(
+        self, callback_type: Type[CustomLogger]
+    ) -> List[CustomLogger]:
+        """
+        Get all custom loggers that are instances of the given class type
+        """
+        # ensure we don't have duplicate instances
+        all_callbacks = []
+        for callback in self._get_all_callbacks():
+            if isinstance(callback, callback_type) and callback not in all_callbacks:
+                all_callbacks.append(callback)
+        return all_callbacks
+
+    def callback_is_active(self, callback_type: Type[CustomLogger]) -> bool:
+        """
+        Returns True if any of the active callbacks are of the given type
+        """
+        return any(
+            isinstance(callback, callback_type)
+            for callback in self._get_all_callbacks()
+        )

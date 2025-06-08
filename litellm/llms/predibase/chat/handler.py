@@ -228,10 +228,10 @@ class PredibaseChatCompletion:
         api_key: str,
         logging_obj,
         optional_params: dict,
+        litellm_params: dict,
         tenant_id: str,
         timeout: Union[float, httpx.Timeout],
         acompletion=None,
-        litellm_params=None,
         logger_fn=None,
         headers: dict = {},
     ) -> Union[ModelResponse, CustomStreamWrapper]:
@@ -241,6 +241,7 @@ class PredibaseChatCompletion:
             messages=messages,
             optional_params=optional_params,
             model=model,
+            litellm_params=litellm_params,
         )
         completion_url = ""
         input_text = ""
@@ -394,7 +395,6 @@ class PredibaseChatCompletion:
         logger_fn=None,
         headers={},
     ) -> ModelResponse:
-
         async_handler = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.PREDIBASE,
             params={"timeout": timeout},

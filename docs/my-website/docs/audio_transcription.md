@@ -1,13 +1,15 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Speech to Text
+# /audio/transcriptions
 
 Use this to loadbalance across Azure + OpenAI. 
 
 ## Quick Start
 
-```python
+### LiteLLM Python SDK
+
+```python showLineNumbers
 from litellm import transcription
 import os 
 
@@ -20,7 +22,7 @@ response = transcription(model="whisper", file=audio_file)
 print(f"response: {response}")
 ```
 
-## Proxy Usage
+### LiteLLM Proxy
 
 ### Add model to config 
 
@@ -28,7 +30,7 @@ print(f"response: {response}")
 <Tabs>
 <TabItem value="openai" label="OpenAI">
 
-```yaml
+```yaml showLineNumbers
 model_list:
 - model_name: whisper
   litellm_params:
@@ -43,7 +45,7 @@ general_settings:
 </TabItem>
 <TabItem value="openai+azure" label="OpenAI + Azure">
 
-```yaml
+```yaml showLineNumbers
 model_list:
 - model_name: whisper
   litellm_params:
@@ -88,9 +90,9 @@ curl --location 'http://0.0.0.0:8000/v1/audio/transcriptions' \
 ```
 
 </TabItem>
-<TabItem value="openai" label="OpenAI">
+<TabItem value="openai" label="OpenAI Python SDK">
 
-```python
+```python showLineNumbers
 from openai import OpenAI
 client = openai.OpenAI(
     api_key="sk-1234",

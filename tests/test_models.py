@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-
 async def generate_key(session, models=[]):
     url = "http://0.0.0.0:4000/key/generate"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
@@ -58,17 +57,50 @@ async def test_get_models():
         await get_models(session=session, key=key)
 
 
-async def add_models(session, model_id="123", model_name="azure-gpt-3.5"):
+async def add_models(session, model_id="123", model_name="azure-gpt-3.5", key="sk-1234", team_id=None):
     url = "http://0.0.0.0:4000/model/new"
     headers = {
-        "Authorization": f"Bearer sk-1234",
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
 
     data = {
         "model_name": model_name,
         "litellm_params": {
-            "model": "azure/chatgpt-v-2",
+            "model": "azure/chatgpt-v-3",
+            "api_key": "os.environ/AZURE_API_KEY",
+            "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
+            "api_version": "2023-05-15",
+        },
+        "model_info": {"id": model_id},
+    }
+
+    if team_id:
+        data["model_info"]["team_id"] = team_id
+
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+        response_text = await response.text()
+        print(f"Add models {response_text}")
+        print()
+
+        if status != 200:
+            raise Exception(f"Request did not return a 200 status code: {status}")
+
+        response_json = await response.json()
+        return response_json
+
+async def update_model(session, model_id="123", model_name="azure-gpt-3.5", key="sk-1234"):
+    url = "http://0.0.0.0:4000/model/update"
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+
+    data = {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": "azure/chatgpt-v-3",
             "api_key": "os.environ/AZURE_API_KEY",
             "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
             "api_version": "2023-05-15",
@@ -199,13 +231,13 @@ async def test_get_specific_model():
         )
 
 
-async def delete_model(session, model_id="123"):
+async def delete_model(session, model_id="123", key="sk-1234"):
     """
     Make sure only models user has access to are returned
     """
     url = "http://0.0.0.0:4000/model/delete"
     headers = {
-        "Authorization": f"Bearer sk-1234",
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
     data = {"id": model_id}
@@ -260,7 +292,7 @@ async def add_model_for_health_checking(session, model_id="123"):
     data = {
         "model_name": f"azure-model-health-check-{model_id}",
         "litellm_params": {
-            "model": "azure/chatgpt-v-2",
+            "model": "azure/chatgpt-v-3",
             "api_key": os.getenv("AZURE_API_KEY"),
             "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
             "api_version": "2023-05-15",
@@ -385,7 +417,7 @@ async def test_add_model_run_health():
 
         assert _health_info["healthy_count"] == 1
         assert (
-            _healthy_endpooint["model"] == "azure/chatgpt-v-2"
+            _healthy_endpooint["model"] == "azure/chatgpt-v-3"
         )  # this is the model that got added
 
         # assert httpx client is is unchanges
@@ -414,6 +446,23 @@ async def test_add_model_run_health():
         # cleanup
         await delete_model(session=session, model_id=model_id)
 
+@pytest.mark.asyncio
+async def test_get_personal_models_for_user():
+    """
+    Test /models endpoint with team
+    """
+    from tests.test_users import new_user
+    async with aiohttp.ClientSession() as session:
+        # Creat a user
+        user_data = await new_user(session=session, i=0, models=["gpt-3.5-turbo"])
+        user_id = user_data["user_id"]
+        user_api_key = user_data["key"]
+
+        model_group_info = await get_model_group_info(session=session, key=user_api_key)
+        print(model_group_info)
+
+        assert len(model_group_info["data"]) == 1
+        assert model_group_info["data"][0]["model_group"] == "gpt-3.5-turbo"
 
 @pytest.mark.asyncio
 async def test_model_group_info_e2e():
@@ -441,3 +490,49 @@ async def test_model_group_info_e2e():
                 has_anthropic_claude_3_opus = True
 
         assert has_anthropic_claude_3_5_haiku and has_anthropic_claude_3_opus
+
+
+@pytest.mark.asyncio
+async def test_team_model_e2e():
+    """
+    Test team model e2e
+
+    - create team
+    - create user
+    - add user to team as admin
+    - add model to team
+    - update model
+    - delete model
+    """
+    from tests.test_users import new_user
+    from tests.test_team import new_team
+    import uuid
+    async with aiohttp.ClientSession() as session:
+        # Creat a user
+        user_data = await new_user(session=session, i=0)
+        user_id = user_data["user_id"]
+        user_api_key = user_data["key"]
+
+        # Create a team
+        member_list = [
+            {"role": "admin", "user_id": user_id},
+        ]
+        team_data = await new_team(session=session, member_list=member_list, i=0)
+        team_id = team_data["team_id"]
+
+        model_id = str(uuid.uuid4())
+        model_name = "my-test-model"
+        # Add model to team
+        model_data = await add_models(session=session, model_id=model_id, model_name=model_name, key=user_api_key, team_id=team_id)
+        model_id = model_data["model_id"]
+
+        # Update model
+        model_data = await update_model(session=session, model_id=model_id, model_name=model_name, key=user_api_key)
+        model_id = model_data["model_id"]
+        
+        # Delete model
+        await delete_model(session=session, model_id=model_id, key=user_api_key)
+
+
+        
+        

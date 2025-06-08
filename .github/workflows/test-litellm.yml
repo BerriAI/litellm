@@ -1,0 +1,40 @@
+name: LiteLLM Mock Tests (folder - tests/test_litellm)
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Thank You Message
+      run: |
+        echo "### 🙏 Thank you for contributing to LiteLLM!" >> $GITHUB_STEP_SUMMARY
+        echo "Your PR is being tested now. We appreciate your help in making LiteLLM better!" >> $GITHUB_STEP_SUMMARY
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+
+    - name: Install Poetry
+      uses: snok/install-poetry@v1
+
+    - name: Install dependencies
+      run: |
+        poetry install --with dev,proxy-dev --extras proxy
+        poetry run pip install "pytest-retry==1.6.3"
+        poetry run pip install pytest-xdist
+    - name: Setup litellm-enterprise as local package
+      run: |
+        cd enterprise
+        python -m pip install -e .
+        cd ..
+    - name: Run tests
+      run: |
+        poetry run pytest tests/test_litellm -x -vv -n 4 

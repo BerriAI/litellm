@@ -74,6 +74,59 @@ async def test_basic_s3_logging(sync_mode, streaming):
         s3.delete_object(Bucket="load-testing-oct", Key=key)
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "streaming", [(True)]
+)
+async def test_basic_s3_v2_logging(streaming):
+    from blockbuster import BlockBuster
+    from litellm.integrations.s3_v2 import S3Logger
+    s3_v2_logger = S3Logger(s3_flush_interval=1)
+    litellm.callbacks = [s3_v2_logger]
+    blockbuster = BlockBuster()
+    blockbuster.activate()
+
+    litellm._turn_on_debug()
+    litellm.callbacks = ["s3_v2"]
+    litellm.s3_callback_params = {
+        "s3_bucket_name": "load-testing-oct",
+        "s3_aws_secret_access_key": "os.environ/AWS_SECRET_ACCESS_KEY",
+        "s3_aws_access_key_id": "os.environ/AWS_ACCESS_KEY_ID",
+        "s3_region_name": "us-west-2",
+    }
+    litellm.set_verbose = True
+    response_id = None
+    response = await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "This is a test"}],
+        stream=streaming,
+    )
+    if streaming:
+        async for chunk in response:
+            print(chunk)
+            response_id = chunk.id
+    else:
+        response_id = response.id
+
+    await asyncio.sleep(30)
+    print(f"response: {response}")
+
+    # stop blockbuster
+    blockbuster.deactivate()
+
+    total_objects, all_s3_keys = list_all_s3_objects("load-testing-oct")
+
+    print(f"all_s3_keys: {all_s3_keys}")
+
+    #assert that atlest one key has response.id in it
+    assert any(response_id in key for key in all_s3_keys)
+    s3 = boto3.client("s3")
+    # delete all objects
+    for key in all_s3_keys:
+        s3.delete_object(Bucket="load-testing-oct", Key=key)
+
+
 def list_all_s3_objects(bucket_name):
     s3 = boto3.client("s3")
 
@@ -244,7 +297,7 @@ async def make_async_calls():
     for _ in range(5):
         task = asyncio.create_task(
             litellm.acompletion(
-                model="azure/chatgpt-v-2",
+                model="azure/chatgpt-v-3",
                 messages=[{"role": "user", "content": "This is a test"}],
                 max_tokens=5,
                 temperature=0.7,

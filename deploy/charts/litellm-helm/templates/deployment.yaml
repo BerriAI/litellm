@@ -78,8 +78,8 @@ spec:
             - name: PROXY_MASTER_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "litellm.fullname" . }}-masterkey
-                  key: masterkey
+                  name: {{ .Values.masterkeySecretName | default (printf "%s-masterkey" (include "litellm.fullname" .)) }}
+                  key: {{ .Values.masterkeySecretKey | default "masterkey" }}
             {{- if .Values.redis.enabled }}
             - name: REDIS_HOST
               value: {{ include "litellm.redis.serviceName" . }}
@@ -96,6 +96,9 @@ spec:
             - name: {{ $key }}
               value: {{ $val | quote }}
             {{- end }}
+            {{- end }}
+            {{- with .Values.extraEnvVars }}
+              {{- toYaml . | nindent 12 }}
             {{- end }}
           envFrom:
           {{- range .Values.environmentSecrets }}

@@ -11,7 +11,7 @@ Translations handled by LiteLLM:
 - Logprobs => drop param (if user opts in to dropping param) 
 """
 
-from typing import List, Optional
+from typing import Any, Coroutine, List, Literal, Optional, Union, cast, overload
 
 import litellm
 from litellm import verbose_logger
@@ -130,15 +130,29 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         )
 
     def is_model_o_series_model(self, model: str) -> bool:
-        if model in litellm.open_ai_chat_completion_models and (
-            "o1" in model or "o3" in model
-        ):
-            return True
-        return False
+        model = model.split("/")[-1]  # could be "openai/o3" or "o3"
+        return model in litellm.open_ai_chat_completion_models and any(
+            model.startswith(pfx) for pfx in ("o1", "o3", "o4")
+        )
+
+    @overload
+    def _transform_messages(
+        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
+        ...
+
+    @overload
+    def _transform_messages(
+        self,
+        messages: List[AllMessageValues],
+        model: str,
+        is_async: Literal[False] = False,
+    ) -> List[AllMessageValues]:
+        ...
 
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str
-    ) -> List[AllMessageValues]:
+        self, messages: List[AllMessageValues], model: str, is_async: bool = False
+    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
         Handles limitations of O-1 model family.
         - modalities: image => drop param (if user opts in to dropping param)
@@ -152,4 +166,11 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
                 )
                 messages[i] = new_message  # Replace the old message with the new one
 
-        return messages
+        if is_async:
+            return super()._transform_messages(
+                messages, model, is_async=cast(Literal[True], True)
+            )
+        else:
+            return super()._transform_messages(
+                messages, model, is_async=cast(Literal[False], False)
+            )

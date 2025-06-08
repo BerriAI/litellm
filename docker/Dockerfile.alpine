@@ -35,7 +35,7 @@ RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
 # Update dependencies and clean up
-RUN apk update && apk upgrade && rm -rf /var/cache/apk/*
+RUN apk upgrade --no-cache
 
 WORKDIR /app
 

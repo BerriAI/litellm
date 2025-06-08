@@ -470,23 +470,15 @@ def test_reading_openai_org_id_from_headers():
 
 
 @pytest.mark.parametrize(
-    "headers, expected_data",
+    "headers, general_settings, expected_data",
     [
-        ({"OpenAI-Organization": "test_org_id"}, {"organization": "test_org_id"}),
-        ({"openai-organization": "test_org_id"}, {"organization": "test_org_id"}),
-        ({}, {}),
-        (
-            {
-                "OpenAI-Organization": "test_org_id",
-                "Authorization": "Bearer test_token",
-            },
-            {
-                "organization": "test_org_id",
-            },
-        ),
+        ({"X-OpenWebUI-User-Id": "ishaan3"}, {"user_header_name":"X-OpenWebUI-User-Id"}, "ishaan3"),
+        ({"x-openwebui-user-id": "ishaan3"}, {"user_header_name":"X-OpenWebUI-User-Id"}, "ishaan3"),
+        ({"X-OpenWebUI-User-Id": "ishaan3"}, {}, None),
+        ({}, None, None),
     ],
 )
-def test_add_litellm_data_for_backend_llm_call(headers, expected_data):
+def test_add_litellm_data_for_backend_llm_call(headers, general_settings, expected_data):
     import json
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
     from litellm.proxy._types import UserAPIKeyAuth
@@ -495,10 +487,9 @@ def test_add_litellm_data_for_backend_llm_call(headers, expected_data):
         api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
     )
 
-    data = LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
+    data = LiteLLMProxyRequestSetup.get_user_from_headers(
         headers=headers,
-        user_api_key_dict=user_api_key_dict,
-        general_settings=None,
+        general_settings=general_settings,
     )
 
     assert json.dumps(data, sort_keys=True) == json.dumps(expected_data, sort_keys=True)
@@ -556,6 +547,53 @@ def test_update_internal_user_params():
     )
 
 
+def test_update_internal_new_user_params_with_no_initial_role_set():
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_internal_new_user_params,
+    )
+    from litellm.proxy._types import NewUserRequest
+
+    litellm.default_internal_user_params = {
+        "max_budget": 100,
+        "budget_duration": "30d",
+        "models": ["gpt-3.5-turbo"],
+    }
+
+    data = NewUserRequest(user_email="krrish3@berri.ai")
+    data_json = data.model_dump()
+    updated_data_json = _update_internal_new_user_params(data_json, data)
+    assert updated_data_json["models"] == litellm.default_internal_user_params["models"]
+    assert (
+        updated_data_json["max_budget"]
+        == litellm.default_internal_user_params["max_budget"]
+    )
+    assert (
+        updated_data_json["budget_duration"]
+        == litellm.default_internal_user_params["budget_duration"]
+    )
+
+def test_update_internal_new_user_params_with_user_defined_values():
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_internal_new_user_params,
+    )
+    from litellm.proxy._types import NewUserRequest
+
+    litellm.default_internal_user_params = {
+        "max_budget": 100,
+        "budget_duration": "30d",
+        "models": ["gpt-3.5-turbo"],
+        "user_role": "proxy_admin",
+    }
+
+    data = NewUserRequest(user_email="krrish3@berri.ai", max_budget=1000, budget_duration="1mo")
+    data_json = data.model_dump()
+    updated_data_json = _update_internal_new_user_params(data_json, data)
+    assert updated_data_json["user_email"] == "krrish3@berri.ai"
+    assert updated_data_json["user_role"] == "proxy_admin"
+    assert updated_data_json["max_budget"] == 1000
+    assert updated_data_json["budget_duration"] == "1mo"
+    
+
 @pytest.mark.asyncio
 async def test_proxy_config_update_from_db():
     from litellm.proxy.proxy_server import ProxyConfig
@@ -601,7 +639,8 @@ async def test_proxy_config_update_from_db():
         }
 
 
-def test_prepare_key_update_data():
+@pytest.mark.asyncio
+async def test_prepare_key_update_data():
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         prepare_key_update_data,
     )
@@ -609,15 +648,15 @@ def test_prepare_key_update_data():
 
     existing_key_row = MagicMock()
     data = UpdateKeyRequest(key="test_key", models=["gpt-4"], duration="120s")
-    updated_data = prepare_key_update_data(data, existing_key_row)
+    updated_data = await prepare_key_update_data(data, existing_key_row)
     assert "expires" in updated_data
 
     data = UpdateKeyRequest(key="test_key", metadata={})
-    updated_data = prepare_key_update_data(data, existing_key_row)
+    updated_data = await prepare_key_update_data(data, existing_key_row)
     assert updated_data["metadata"] == {}
 
     data = UpdateKeyRequest(key="test_key", metadata=None)
-    updated_data = prepare_key_update_data(data, existing_key_row)
+    updated_data = await prepare_key_update_data(data, existing_key_row)
     assert updated_data["metadata"] is None
 
 
@@ -770,42 +809,6 @@ async def test_add_litellm_data_to_request_duplicate_tags(
 
 
 @pytest.mark.parametrize(
-    "general_settings, user_api_key_dict, expected_enforced_params",
-    [
-        (
-            {"enforced_params": ["param1", "param2"]},
-            UserAPIKeyAuth(
-                api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
-            ),
-            ["param1", "param2"],
-        ),
-        (
-            {"service_account_settings": {"enforced_params": ["param1", "param2"]}},
-            UserAPIKeyAuth(
-                api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
-            ),
-            ["param1", "param2"],
-        ),
-        (
-            {"service_account_settings": {"enforced_params": ["param1", "param2"]}},
-            UserAPIKeyAuth(
-                api_key="test_api_key",
-                metadata={"enforced_params": ["param3", "param4"]},
-            ),
-            ["param1", "param2", "param3", "param4"],
-        ),
-    ],
-)
-def test_get_enforced_params(
-    general_settings, user_api_key_dict, expected_enforced_params
-):
-    from litellm.proxy.litellm_pre_call_utils import _get_enforced_params
-
-    enforced_params = _get_enforced_params(general_settings, user_api_key_dict)
-    assert enforced_params == expected_enforced_params
-
-
-@pytest.mark.parametrize(
     "general_settings, user_api_key_dict, request_body, expected_error",
     [
         (
@@ -820,6 +823,17 @@ def test_get_enforced_params(
             {"service_account_settings": {"enforced_params": ["user"]}},
             UserAPIKeyAuth(
                 api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
+            ),
+            {},
+            False,
+        ),
+        (
+            {"service_account_settings": {"enforced_params": ["user"]}},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+                user_id="test_user_id", 
+                org_id="test_org_id",
+                metadata={"service_account_id": "test_service_account_id"}
             ),
             {},
             True,
@@ -854,6 +868,7 @@ def test_get_enforced_params(
             {"service_account_settings": {"enforced_params": ["user"]}},
             UserAPIKeyAuth(
                 api_key="test_api_key",
+                metadata={"service_account_id": "test_service_account_id"}
             ),
             {"user": "test_user"},
             False,
@@ -939,8 +954,9 @@ def test_get_team_models():
     model_access_groups["default"].extend(["gpt-4o-mini"])
     model_access_groups["team2"].extend(["gpt-3.5-turbo"])
 
+    team_models = user_api_key_dict.team_models
     result = get_team_models(
-        user_api_key_dict=user_api_key_dict,
+        team_models=team_models,
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
     )
@@ -987,6 +1003,35 @@ def test_update_config_fields():
     )
     assert team_config["langfuse_public_key"] == "my-fake-key"
     assert team_config["langfuse_secret"] == "my-fake-secret"
+
+def test_update_config_fields_default_internal_user_params(monkeypatch):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    monkeypatch.setattr(litellm, "default_internal_user_params", None)
+
+
+    args = {
+        "current_config": {},
+        "param_name": "litellm_settings",
+        "db_param_value": {
+            "default_internal_user_params": {
+                "user_role": "proxy_admin",
+                "max_budget": 1000,
+                "budget_duration": "1mo",
+            },
+        },
+    }
+    updated_config = proxy_config._update_config_fields(**args)
+
+    assert litellm.default_internal_user_params == {
+        "user_role": "proxy_admin",
+        "max_budget": 1000,
+        "budget_duration": "1mo",
+    }
+
+    monkeypatch.setattr(litellm, "default_internal_user_params", None) # reset to default
 
 
 @pytest.mark.parametrize(
@@ -1508,20 +1553,17 @@ from litellm.proxy.utils import ProxyUpdateSpend
 async def test_end_user_transactions_reset():
     # Setup
     mock_client = MagicMock()
-    mock_client.end_user_list_transactons = {"1": 10.0}  # Bad log
+    end_user_list_transactions = {"1": 10.0}  # Bad log
     mock_client.db.tx = AsyncMock(side_effect=Exception("DB Error"))
 
     # Call function - should raise error
     with pytest.raises(Exception):
         await ProxyUpdateSpend.update_end_user_spend(
-            n_retry_times=0, prisma_client=mock_client, proxy_logging_obj=MagicMock()
+            n_retry_times=0,
+            prisma_client=mock_client,
+            proxy_logging_obj=MagicMock(),
+            end_user_list_transactions=end_user_list_transactions,
         )
-
-    # Verify cleanup happened
-    assert (
-        mock_client.end_user_list_transactons == {}
-    ), "Transactions list should be empty after error"
-
 
 @pytest.mark.asyncio
 async def test_spend_logs_cleanup_after_error():

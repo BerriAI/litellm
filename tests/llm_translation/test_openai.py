@@ -3,6 +3,7 @@ import os
 import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
+from typing import Optional
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -17,6 +18,11 @@ import litellm
 from litellm import Choices, Message, ModelResponse
 from base_llm_unit_tests import BaseLLMChatTest
 import asyncio
+from litellm.types.llms.openai import (
+    ChatCompletionAnnotation,
+    ChatCompletionAnnotationURLCitation,
+)
+from base_audio_transcription_unit_tests import BaseLLMAudioTranscriptionTest
 
 
 def test_openai_prediction_param():
@@ -262,7 +268,7 @@ async def test_vision_with_custom_model():
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABB0lEQVRYhe2SzWrEIBCAh2A0jxEs4j6GLDS9hqWmV5Flt0cJS+lRwv742DXpEjY1kOZW6HwHFZnPmVEBEARBEARB/jd0KYA/bcUYbPrRLh6amXHJ/K+ypMoyUaGthILzw0l+xI0jsO7ZcmCcm4ILd+QuVYgpHOmDmz6jBeJImdcUCmeBqQpuqRIbVmQsLCrAalrGpfoEqEogqbLTWuXCPCo+Ki1XGqgQ+jVVuhB8bOaHkvmYuzm/b0KYLWwoK58oFqi6XfxQ4Uz7d6WeKpna6ytUs5e8betMcqAv5YPC5EZB2Lm9FIn0/VP6R58+/GEY1X1egVoZ/3bt/EqF6malgSAIgiDIH+QL41409QMY0LMAAAAASUVORK5CYII="
+                            "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABDElEQVRYhe2SzWqEMBRGPyQTfQxJsc5jBKGzFmlslyFIZxsCQ7sUaWd87EanpdpIrbtC71mE/NyTm9wEIAiCIAiC+N/otQBxU2Sf/aeh4enqptHXri+/yxIq63jlKCw6cXssnr3ObdzdGYFYCJ2IzHKXLygHXCB98Gm4DE+ZZemu5EisQSyZTmyg+AuzQbkezCuIy7EI0k9Ig3FtruwydY+qniqtV5yQyo8qpUIl2fc90KVzJWohWf2qu75vlw52rdfjVDHg8vLWwixW7PChqLkSyUadwfSS0uQZhEvRuIkS53uJvrK8cGWYaPwpGt8efvw+vlo8TPMzcmP8w7lrNypc1RsNgiAIgiD+Iu/RyDYhCaWrgQAAAABJRU5ErkJggg=="
                         },
                     },
                 ],
@@ -286,22 +292,6 @@ class TestOpenAIChatCompletion(BaseLLMChatTest):
         Skip for now, as it's working locally but not in CI
         """
         pass
-
-    def test_multilingual_requests(self):
-        """
-        Tests that the provider can handle multilingual requests and invalid utf-8 sequences
-
-        Context: https://github.com/openai/openai-python/issues/1921
-        """
-        base_completion_call_args = self.get_base_completion_call_args()
-        try:
-            response = self.completion_function(
-                **base_completion_call_args,
-                messages=[{"role": "user", "content": "你好世界！\ud83e, ö"}],
-            )
-            assert response is not None
-        except litellm.InternalServerError:
-            pytest.skip("Skipping test due to InternalServerError")
 
     def test_prompt_caching(self):
         """
@@ -360,3 +350,122 @@ def test_o1_parallel_tool_calls(model):
         parallel_tool_calls=True,
         drop_params=True,
     )
+
+
+def test_openai_chat_completion_streaming_handler_reasoning_content():
+    from litellm.llms.openai.chat.gpt_transformation import (
+        OpenAIChatCompletionStreamingHandler,
+    )
+    from unittest.mock import MagicMock
+
+    streaming_handler = OpenAIChatCompletionStreamingHandler(
+        streaming_response=MagicMock(),
+        sync_stream=True,
+    )
+    response = streaming_handler.chunk_parser(
+        chunk={
+            "id": "e89b6501-8ac2-464c-9550-7cd3daf94350",
+            "object": "chat.completion.chunk",
+            "created": 1741037890,
+            "model": "deepseek-reasoner",
+            "system_fingerprint": "fp_5417b77867_prod0225",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": None, "reasoning_content": "."},
+                    "logprobs": None,
+                    "finish_reason": None,
+                }
+            ],
+        }
+    )
+
+    assert response.choices[0].delta.reasoning_content == "."
+
+
+def validate_response_url_citation(url_citation: ChatCompletionAnnotationURLCitation):
+    assert "end_index" in url_citation
+    assert "start_index" in url_citation
+    assert "url" in url_citation
+
+
+def validate_web_search_annotations(annotations: ChatCompletionAnnotation):
+    """validates litellm response contains web search annotations"""
+    print("annotations: ", annotations)
+    assert annotations is not None
+    assert isinstance(annotations, list)
+    for annotation in annotations:
+        assert annotation["type"] == "url_citation"
+        url_citation: ChatCompletionAnnotationURLCitation = annotation["url_citation"]
+        validate_response_url_citation(url_citation)
+
+
+@pytest.mark.flaky(reruns=3)
+def test_openai_web_search():
+    """Makes a simple web search request and validates the response contains web search annotations and all expected fields are present"""
+    litellm._turn_on_debug()
+    response = litellm.completion(
+        model="openai/gpt-4o-search-preview",
+        messages=[
+            {
+                "role": "user",
+                "content": "What was a positive news story from today?",
+            }
+        ],
+    )
+    print("litellm response: ", response.model_dump_json(indent=4))
+    message = response.choices[0].message
+    if hasattr(message, "annotations"):
+        annotations: ChatCompletionAnnotation = message.annotations
+        validate_web_search_annotations(annotations)
+
+
+def test_openai_web_search_streaming():
+    """Makes a simple web search request and validates the response contains web search annotations and all expected fields are present"""
+    # litellm._turn_on_debug()
+    test_openai_web_search: Optional[ChatCompletionAnnotation] = None
+    response = litellm.completion(
+        model="openai/gpt-4o-search-preview",
+        messages=[
+            {
+                "role": "user",
+                "content": "What was a positive news story from today?",
+            }
+        ],
+        stream=True,
+    )
+    for chunk in response:
+        print("litellm response chunk: ", chunk)
+        if (
+            hasattr(chunk.choices[0].delta, "annotations")
+            and chunk.choices[0].delta.annotations is not None
+        ):
+            test_openai_web_search = chunk.choices[0].delta.annotations
+
+    # Assert this request has at-least one web search annotation
+    if test_openai_web_search is not None:
+        validate_web_search_annotations(test_openai_web_search)
+
+
+class TestOpenAIGPT4OAudioTranscription(BaseLLMAudioTranscriptionTest):
+    def get_base_audio_transcription_call_args(self) -> dict:
+        return {
+            "model": "openai/gpt-4o-transcribe",
+        }
+
+    def get_custom_llm_provider(self) -> litellm.LlmProviders:
+        return litellm.LlmProviders.OPENAI
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["gpt-4o"])
+async def test_openai_pdf_url(model):
+    from litellm.utils import return_raw_request, CallTypes
+
+    request = return_raw_request(CallTypes.completion, {
+        "model": model,
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "What is the first page of the PDF?"}, {"type": "file", "file": {"file_id": "https://arxiv.org/pdf/2303.08774"}}]}],
+    })
+    print("request: ", request)
+
+    assert "file_data" in request["raw_request_body"]["messages"][0]["content"][1]["file"]
+

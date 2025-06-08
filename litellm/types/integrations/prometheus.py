@@ -70,6 +70,7 @@ class UserAPIKeyLabelNames(Enum):
     EXCEPTION_CLASS = EXCEPTION_CLASS
     STATUS_CODE = "status_code"
     FALLBACK_MODEL = "fallback_model"
+    ROUTE = "route"
 
 
 DEFINED_PROMETHEUS_METRICS = Literal[
@@ -79,6 +80,7 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_proxy_failed_requests_metric",
     "litellm_deployment_latency_per_output_token",
     "litellm_requests_metric",
+    "litellm_total_tokens_metric",
     "litellm_input_tokens_metric",
     "litellm_output_tokens_metric",
     "litellm_deployment_successful_fallbacks",
@@ -125,6 +127,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.STATUS_CODE.value,
         UserAPIKeyLabelNames.USER_EMAIL.value,
+        UserAPIKeyLabelNames.ROUTE.value,
     ]
 
     litellm_proxy_failed_requests_metric = [
@@ -137,6 +140,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
         UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
+        UserAPIKeyLabelNames.ROUTE.value,
     ]
 
     litellm_deployment_latency_per_output_token = [
@@ -162,6 +166,17 @@ class PrometheusMetricLabels:
     ]
 
     litellm_input_tokens_metric = [
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+    ]
+
+    litellm_total_tokens_metric = [
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
@@ -291,4 +306,7 @@ class UserAPIKeyLabelValues(BaseModel):
     ] = None
     fallback_model: Annotated[
         Optional[str], Field(..., alias=UserAPIKeyLabelNames.FALLBACK_MODEL.value)
+    ] = None
+    route: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.ROUTE.value)
     ] = None

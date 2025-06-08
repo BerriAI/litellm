@@ -1,5 +1,5 @@
 import json
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import orjson
 from fastapi import Request, UploadFile, status
@@ -81,8 +81,13 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
 def _safe_get_request_parsed_body(request: Optional[Request]) -> Optional[dict]:
     if request is None:
         return None
-    if hasattr(request, "scope") and "parsed_body" in request.scope:
-        return request.scope["parsed_body"]
+    if (
+        hasattr(request, "scope")
+        and "parsed_body" in request.scope
+        and isinstance(request.scope["parsed_body"], tuple)
+    ):
+        accepted_keys, parsed_body = request.scope["parsed_body"]
+        return {key: parsed_body[key] for key in accepted_keys}
     return None
 
 
@@ -93,7 +98,7 @@ def _safe_set_request_parsed_body(
     try:
         if request is None:
             return
-        request.scope["parsed_body"] = parsed_body
+        request.scope["parsed_body"] = (tuple(parsed_body.keys()), parsed_body)
     except Exception as e:
         verbose_proxy_logger.debug(
             "Unexpected error setting request parsed body - {}".format(e)
@@ -142,10 +147,10 @@ def check_file_size_under_limit(
 
     if llm_router is not None and request_data["model"] in router_model_names:
         try:
-            deployment: Optional[Deployment] = (
-                llm_router.get_deployment_by_model_group_name(
-                    model_group_name=request_data["model"]
-                )
+            deployment: Optional[
+                Deployment
+            ] = llm_router.get_deployment_by_model_group_name(
+                model_group_name=request_data["model"]
             )
             if (
                 deployment
@@ -180,3 +185,39 @@ def check_file_size_under_limit(
             )
 
     return True
+
+
+async def get_form_data(request: Request) -> Dict[str, Any]:
+    """
+    Read form data from request
+
+    Handles when OpenAI SDKs pass form keys as `timestamp_granularities[]="word"` instead of `timestamp_granularities=["word", "sentence"]`
+    """
+    form = await request.form()
+    form_data = dict(form)
+    parsed_form_data: dict[str, Any] = {}
+    for key, value in form_data.items():
+        # OpenAI SDKs pass form keys as `timestamp_granularities[]="word"` instead of `timestamp_granularities=["word", "sentence"]`
+        if key.endswith("[]"):
+            clean_key = key[:-2]
+            parsed_form_data.setdefault(clean_key, []).append(value)
+        else:
+            parsed_form_data[key] = value
+    return parsed_form_data
+
+
+async def get_request_body(request: Request) -> Dict[str, Any]:
+    """
+    Read the request body and parse it as JSON.
+    """
+    if request.headers.get("content-type") == "application/json":
+        return await _read_request_body(request)
+    elif (
+        request.headers.get("content-type") == "multipart/form-data"
+        or request.headers.get("content-type") == "application/x-www-form-urlencoded"
+    ):
+        return await get_form_data(request)
+    else:
+        raise ValueError(
+            f"Unsupported content type: {request.headers.get('content-type')}"
+        )
