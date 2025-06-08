@@ -54,11 +54,13 @@ pip install litellm==1.72.2
 
 * **Why Upgrade**
     - Performance Improvements for /v1/messages: For this endpoint LiteLLM Proxy overhead is now down to 50ms at 250 RPS. 
+    - Accurate Rate Limiting: Multi-instance rate limiting now tracks rate limits across keys, models, teams, and users with 0 spillover.
     - Audit Logs on UI: Track when Keys, Teams, and Models were deleted by viewing Audit Logs on the LiteLLM UI.
     - /v1/messages all models support: You can now use all LiteLLM models (`gpt-4.1`, `o1-pro`, `gemini-2.5-pro`) with /v1/messages API. 
     - [Anthropic MCP](../../docs/providers/anthropic#mcp-tool-calling): Use remote MCP Servers with Anthropic Models. 
 * **Who Should Read**
-    - Teams using `/v1/messages` API (Claude Code), LiteLLM Rate Limiting
+    - Teams using `/v1/messages` API (Claude Code)
+    - Proxy Admins using LiteLLM Virtual Keys and setting rate limits
 * **Risk of Upgrade**
     - **Medium**
         - Upgraded `ddtrace==3.8.0`, if you use DataDog tracing this is a medium level risk. We recommend monitoring logs for any issues.
@@ -80,7 +82,23 @@ For this endpoint LiteLLM Proxy overhead latency is now down to 50ms, and each i
 
 This is great for real time use cases with large requests (eg. multi turn conversations, Claude Code, etc.). 
 
+## Multi-Instance Rate Limiting Improvements
 
+<Image 
+  img={require('../../img/release_notes/multi_instance_rate_limits_v3.jpg')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+LiteLLM v1.72.2.rc now accurately tracks rate limits across keys, models, teams, and users with 0 spillover.
+
+This is a significant improvement over the previous version, which faced issues with leakage and spillover in high traffic, multi-instance setups.
+
+**Key Changes:**
+- Redis is now part of the rate limit check, instead of being a background sync. This ensures accuracy and reduces read/write operations during low activity.
+- LiteLLM now uses Lua scripts to ensure all checks are atomic.
+- In-memory caching uses Redis values. This prevents drift, and reduces Redis queries once objects are over their limit.
+
+These changes are currently behind the feature flag - `ENABLE_MULTI_INSTANCE_RATE_LIMITING=True`. We plan to GA this in our next release - subject to feedback.
 
 ## Audit Logs on UI
 
