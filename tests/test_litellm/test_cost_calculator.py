@@ -266,3 +266,46 @@ def test_default_image_cost_calculator(monkeypatch):
     }
     cost = default_image_cost_calculator(**args)
     assert cost == 10485760
+
+
+def test_gpt_image_1_token_based_cost_calculation():
+    """Test that gpt-image-1 uses token-based pricing correctly"""
+    import json
+    # Load the local model cost map directly
+    with open('model_prices_and_context_window.json', 'r') as f:
+        litellm.model_cost = json.load(f)
+    
+    from litellm.cost_calculator import default_image_cost_calculator, _estimate_gpt_image_1_output_tokens
+    
+    # Test token estimation function
+    assert _estimate_gpt_image_1_output_tokens("low", 1024, 1024) == 272
+    assert _estimate_gpt_image_1_output_tokens("medium", 1024, 1024) == 1056
+    assert _estimate_gpt_image_1_output_tokens("high", 1024, 1024) == 4160
+    
+    # Test cost calculation for medium quality 1024x1024
+    cost = default_image_cost_calculator(
+        model="gpt-image-1",
+        quality="medium",
+        size="1024x1024",
+        n=1
+    )
+    
+    # Expected: 50 text tokens * 5e-06 + 1056 output tokens * 4e-05
+    expected_cost = 50 * 5e-06 + 1056 * 4e-05
+    assert abs(cost - expected_cost) < 1e-6
+    
+    # Test that different qualities produce different costs
+    cost_low = default_image_cost_calculator(model="gpt-image-1", quality="low", size="1024x1024")
+    cost_medium = default_image_cost_calculator(model="gpt-image-1", quality="medium", size="1024x1024")
+    cost_high = default_image_cost_calculator(model="gpt-image-1", quality="high", size="1024x1024")
+    
+    assert cost_low < cost_medium < cost_high
+    
+    # Test Azure variant
+    azure_cost = default_image_cost_calculator(
+        model="azure/gpt-image-1",
+        custom_llm_provider="azure", 
+        quality="medium",
+        size="1024x1024"
+    )
+    assert abs(azure_cost - expected_cost) < 1e-6
