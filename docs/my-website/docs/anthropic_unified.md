@@ -90,44 +90,7 @@ async for chunk in response:
 
 </TabItem>
 
-<TabItem value="o1-pro" label="OpenAI o1-pro">
-
-#### Non-streaming example
-```python showLineNumbers title="OpenAI o1-pro Example using LiteLLM Python SDK"
-import litellm
-import os
-
-# Set API key
-os.environ["OPENAI_API_KEY"] = "your-openai-api-key"
-
-response = await litellm.anthropic.messages.acreate(
-    messages=[{"role": "user", "content": "Solve this math problem: What is the derivative of x^3 + 2x^2 - 5x + 1?"}],
-    model="openai/o1-pro",
-    max_tokens=500,
-)
-```
-
-#### Streaming example
-```python showLineNumbers title="OpenAI o1-pro Streaming Example using LiteLLM Python SDK"
-import litellm
-import os
-
-# Set API key
-os.environ["OPENAI_API_KEY"] = "your-openai-api-key"
-
-response = await litellm.anthropic.messages.acreate(
-    messages=[{"role": "user", "content": "Solve this math problem: What is the derivative of x^3 + 2x^2 - 5x + 1?"}],
-    model="openai/o1-pro",
-    max_tokens=500,
-    stream=True,
-)
-async for chunk in response:
-    print(chunk)
-```
-
-</TabItem>
-
-<TabItem value="gemini" label="Google Gemini">
+<TabItem value="gemini" label="Google AI Studio">
 
 #### Non-streaming example
 ```python showLineNumbers title="Google Gemini Example using LiteLLM Python SDK"
@@ -350,45 +313,7 @@ response = client.messages.create(
 
 </TabItem>
 
-<TabItem value="o1-pro-proxy" label="OpenAI o1-pro">
-
-1. Setup config.yaml
-
-```yaml
-model_list:
-    - model_name: openai-o1-pro
-      litellm_params:
-        model: openai/o1-pro
-        api_key: os.environ/OPENAI_API_KEY
-```
-
-2. Start proxy 
-
-```bash
-litellm --config /path/to/config.yaml
-```
-
-3. Test it! 
-
-```python showLineNumbers title="OpenAI o1-pro Example using LiteLLM Proxy Server"
-import anthropic
-
-# point anthropic sdk to litellm proxy 
-client = anthropic.Anthropic(
-    base_url="http://0.0.0.0:4000",
-    api_key="sk-1234",
-)
-
-response = client.messages.create(
-    messages=[{"role": "user", "content": "Solve this math problem: What is the derivative of x^3 + 2x^2 - 5x + 1?"}],
-    model="openai-o1-pro",
-    max_tokens=500,
-)
-```
-
-</TabItem>
-
-<TabItem value="gemini-proxy" label="Google Gemini">
+<TabItem value="gemini-proxy" label="Google AI Studio">
 
 1. Setup config.yaml
 
