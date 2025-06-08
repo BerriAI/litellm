@@ -20,7 +20,9 @@
 	"customizations": {
 		// Configure properties specific to VS Code.
 		"vscode": {
-			"settings": {},
+			"settings": {
+				"python.defaultInterpreterPath": "${containerWorkspaceFolder}/.venv/bin/python"
+			},
 			"extensions": [
 				"ms-python.python",
 				"ms-python.vscode-pylance",
@@ -53,5 +55,5 @@
 	// "remoteUser": "litellm",
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": "pipx install poetry && poetry install -E extra_proxy -E proxy"
+	"postCreateCommand": "pipx install poetry && poetry config virtualenvs.in-project true && poetry install -E extra_proxy -E proxy"
 }
