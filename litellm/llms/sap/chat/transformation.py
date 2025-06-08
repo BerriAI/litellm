@@ -24,7 +24,7 @@ from gen_ai_hub.orchestration.models.config import OrchestrationConfig
 from gen_ai_hub.orchestration.models.message import Message
 from gen_ai_hub.orchestration.models.llm import LLM
 from gen_ai_hub.orchestration.models.template import Template
-from gen_ai_hub.orchestration.models.response_format import ResponseFormatJsonSchema
+from gen_ai_hub.orchestration.models.response_format import ResponseFormatJsonSchema, ResponseFormatJsonObject, ResponseFormatText
 
 
 
@@ -121,10 +121,13 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         tools = optional_params.pop("tools", None)
         response_format = optional_params.pop("response_format", None)
         if isinstance(response_format, dict):
-            schema = response_format['json_schema']
-            if not schema.get('description', None):
-                schema["description"] = ""
-            response_format = ResponseFormatJsonSchema(**schema)
+            if response_format.get('type', None) == 'json_schema' and 'json_schema' in response_format:
+                schema = response_format['json_schema']
+                if not schema.get('description', None):
+                    schema["description"] = ""
+                response_format = ResponseFormatJsonSchema(**schema)
+            else:
+                response_format = response_format['type']
         config = OrchestrationConfig(
             template=Template(messages=messages_, response_format=response_format),
             llm=LLM(name=model, parameters=model_params, version=model_version),
