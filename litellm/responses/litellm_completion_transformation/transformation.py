@@ -2,7 +2,7 @@
 Handles transforming from Responses API -> LiteLLM completion  (Chat Completion API)
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, cast
 
 from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
@@ -31,6 +31,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParamFunctionChunk,
     ChatCompletionUserMessage,
     GenericChatCompletionMessage,
+    OpenAIMcpServerTool,
     Reasoning,
     ResponseAPIUsage,
     ResponseInputParam,
@@ -208,9 +209,9 @@ class LiteLLMCompletionResponsesConfig:
             _messages = litellm_completion_request.get("messages") or []
             session_messages = chat_completion_session.get("messages") or []
             litellm_completion_request["messages"] = session_messages + _messages
-            litellm_completion_request["litellm_trace_id"] = (
-                chat_completion_session.get("litellm_session_id")
-            )
+            litellm_completion_request[
+                "litellm_trace_id"
+            ] = chat_completion_session.get("litellm_session_id")
         return litellm_completion_request
 
     @staticmethod
@@ -466,26 +467,32 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def transform_responses_api_tools_to_chat_completion_tools(
-        tools: Optional[List[FunctionToolParam]],
-    ) -> List[ChatCompletionToolParam]:
+        tools: Optional[List[Union[FunctionToolParam, OpenAIMcpServerTool]]],
+    ) -> List[Union[ChatCompletionToolParam, OpenAIMcpServerTool]]:
         """
         Transform a Responses API tools into a Chat Completion tools
         """
         if tools is None:
             return []
-        chat_completion_tools: List[ChatCompletionToolParam] = []
+        chat_completion_tools: List[
+            Union[ChatCompletionToolParam, OpenAIMcpServerTool]
+        ] = []
         for tool in tools:
-            chat_completion_tools.append(
-                ChatCompletionToolParam(
-                    type="function",
-                    function=ChatCompletionToolParamFunctionChunk(
-                        name=tool["name"],
-                        description=tool.get("description") or "",
-                        parameters=dict(tool.get("parameters", {}) or {}),
-                        strict=tool.get("strict", False) or False,
-                    ),
+            if tool.get("type") == "mcp":
+                chat_completion_tools.append(cast(OpenAIMcpServerTool, tool))
+            else:
+                typed_tool = cast(FunctionToolParam, tool)
+                chat_completion_tools.append(
+                    ChatCompletionToolParam(
+                        type="function",
+                        function=ChatCompletionToolParamFunctionChunk(
+                            name=typed_tool["name"],
+                            description=typed_tool.get("description") or "",
+                            parameters=dict(typed_tool.get("parameters", {}) or {}),
+                            strict=typed_tool.get("strict", False) or False,
+                        ),
+                    )
                 )
-            )
         return chat_completion_tools
 
     @staticmethod

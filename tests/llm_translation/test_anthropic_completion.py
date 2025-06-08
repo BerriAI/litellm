@@ -1307,3 +1307,25 @@ def test_anthropic_mcp_server_tool_use(spec: str):
         print(e)
 
     assert response is not None
+
+@pytest.mark.parametrize("model", ["openai/gpt-4.1", "anthropic/claude-sonnet-4-20250514"])
+def test_anthropic_mcp_server_responses_api(model: str):
+    from litellm import responses
+    
+    tools=[
+            {
+                "type": "mcp",
+                "server_label": "deepwiki",
+                "server_url": "https://mcp.deepwiki.com/mcp",
+                "require_approval": "never",
+            },
+        ]
+
+    response = litellm.responses(
+        model=model,
+        input="Who won the World Cup in 2022?",
+        max_output_tokens=100,
+        tools=tools
+    )
+
+    assert response is not None
