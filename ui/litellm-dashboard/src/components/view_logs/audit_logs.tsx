@@ -6,6 +6,7 @@ import { uiAuditLogsCall, keyListCall } from "../networking";
 import { AuditLogEntry, auditLogColumns } from "./columns";
 import { Text } from "@tremor/react";
 import { Team } from "../key_team_helpers/key_list";
+import { formatCurrency } from "@/utils/currencyUtils";
 
 interface AuditLogsProps {
   accessToken: string | null;
@@ -307,9 +308,27 @@ export default function AuditLogs({
           if (onlyKnownFieldsChanged && changedKeys.length > 0) {
             return (
               <div>
-                {changedKeys.includes('token') && <p><strong>Token:</strong> {value.token || 'N/A'}</p>}
-                {changedKeys.includes('spend') && <p><strong>Spend:</strong> {value.spend !== undefined ? `$${Number(value.spend).toFixed(6)}` : 'N/A'}</p>}
-                {changedKeys.includes('max_budget') && <p><strong>Max Budget:</strong> {value.max_budget !== undefined ? `$${Number(value.max_budget).toFixed(6)}` : 'N/A'}</p>}
+                {changedKeys.includes("token") && (
+                  <p>
+                    <strong>Token:</strong> {value.token || "N/A"}
+                  </p>
+                )}
+                {changedKeys.includes("spend") && (
+                  <p>
+                    <strong>Spend:</strong>{" "}
+                    {value.spend !== undefined
+                      ? `${formatCurrency(value.spend)}`
+                      : "N/A"}
+                  </p>
+                )}
+                {changedKeys.includes("max_budget") && (
+                  <p>
+                    <strong>Max Budget:</strong>{" "}
+                    {value.max_budget !== undefined
+                      ? `${formatCurrency(value.max_budget)}`
+                      : "N/A"}
+                  </p>
+                )}
               </div>
             );
           } else {
@@ -559,9 +578,7 @@ export default function AuditLogs({
               <div className="flex items-center space-x-2">
                 <span className="text-sm text-gray-700">
                   Page {allLogsQuery.isLoading ? "..." : clientCurrentPage} of{" "}
-                  {allLogsQuery.isLoading
-                    ? "..."
-                    : totalFilteredPages}
+                  {allLogsQuery.isLoading ? "..." : totalFilteredPages}
                 </span>
                 <button
                   onClick={() =>

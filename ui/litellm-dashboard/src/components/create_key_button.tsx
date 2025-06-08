@@ -43,8 +43,7 @@ import Createuser from "./create_user_button";
 import debounce from 'lodash/debounce';
 import { rolesWithWriteAccess } from '../utils/roles';
 import BudgetDurationDropdown from "./common_components/budget_duration_dropdown";
-
-
+import { formatCurrency, getCurrencyCode } from "../utils/currencyUtils";
 
 const { Option } = Select;
 
@@ -533,7 +532,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
             </Form.Item>
           </div>
 
-          {/* Section 3: Optional Settings */}
+           {/* Section 3: Optional Settings */}
           <div className="mb-8">
             <Accordion className="mt-4 mb-4">
               <AccordionHeader>
@@ -544,14 +543,16 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   className="mt-4"
                   label={
                     <span>
-                      Max Budget (USD){' '}
-                      <Tooltip title="Maximum amount in USD this key can spend. When reached, the key will be blocked from making further requests">
-                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      Max Budget ({getCurrencyCode()}){" "}
+                      <Tooltip
+                        title={`Maximum amount in ${getCurrencyCode()} this key can spend. When reached, the key will be blocked from making further requests`}
+                      >
+                        <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                       </Tooltip>
                     </span>
                   }
                   name="max_budget"
-                  help={`Budget cannot exceed team max budget: $${team?.max_budget !== null && team?.max_budget !== undefined ? team?.max_budget : "unlimited"}`}
+                  help={`Budget cannot exceed team max budget: ${formatCurrency(team?.max_budget !== null && team?.max_budget !== undefined ? team?.max_budget : "unlimited")}`}
                   rules={[
                     {
                       validator: async (_, value) => {
@@ -562,7 +563,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                           value > team.max_budget
                         ) {
                           throw new Error(
-                            `Budget cannot exceed team max budget: $${team.max_budget}`
+                            `Budget cannot exceed team max budget: ${formatCurrency(team.max_budget)}`
                           );
                         }
                       },
@@ -662,14 +663,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 >
                   <TextInput placeholder="e.g., 30d" />
                 </Form.Item>
-                <Form.Item 
+                <Form.Item
                   label={
                     <span>
                       Guardrails{' '}
                       <Tooltip title="Apply safety guardrails to this key to filter content or enforce policies">
-                        <a 
-                          href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
-                          target="_blank" 
+                        <a
+                          href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
+                          target="_blank"
                           rel="noopener noreferrer"
                           onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
                         >
@@ -678,7 +679,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                       </Tooltip>
                     </span>
                   }
-                  name="guardrails" 
+                  name="guardrails"
                   className="mt-4"
                   help="Select existing guardrails or enter new ones"
                 >
@@ -689,29 +690,29 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     options={guardrailsList.map(name => ({ value: name, label: name }))}
                   />
                 </Form.Item>
-                <Form.Item 
-                      label={
-                        <span>
+                <Form.Item
+                  label={
+                    <span>
                           Allowed Vector Stores{' '}
-                          <Tooltip title="Select which vector stores this key can access. If none selected, the key will have access to all available vector stores">
+                      <Tooltip title="Select which vector stores this key can access. If none selected, the key will have access to all available vector stores">
                             <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                          </Tooltip>
-                        </span>
-                      } 
-                      name="allowed_vector_store_ids" 
-                      className="mt-4"
-                      help="Select vector stores this key can access. Leave empty for access to all vector stores"
-                    >
-                      <PremiumVectorStoreSelector
+                      </Tooltip>
+                    </span>
+                  }
+                  name="allowed_vector_store_ids"
+                  className="mt-4"
+                  help="Select vector stores this key can access. Leave empty for access to all vector stores"
+                >
+                  <PremiumVectorStoreSelector
                         onChange={(values) => form.setFieldValue('allowed_vector_store_ids', values)}
                         value={form.getFieldValue('allowed_vector_store_ids')}
-                        accessToken={accessToken}
-                        placeholder="Select vector stores (optional)"
-                        premiumUser={premiumUser}
-                      />
-                    </Form.Item>
+                    accessToken={accessToken}
+                    placeholder="Select vector stores (optional)"
+                    premiumUser={premiumUser}
+                  />
+                </Form.Item>
 
-                <Form.Item 
+                <Form.Item
                   label={
                     <span>
                       Metadata{' '}
@@ -719,8 +720,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         <InfoCircleOutlined style={{ marginLeft: '4px' }} />
                       </Tooltip>
                     </span>
-                  } 
-                  name="metadata" 
+                  }
+                  name="metadata"
                   className="mt-4"
                 >
                   <Input.TextArea
@@ -728,7 +729,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     placeholder="Enter metadata as JSON"
                   />
                 </Form.Item>
-                <Form.Item 
+                <Form.Item
                   label={
                     <span>
                       Tags{' '}
@@ -736,12 +737,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         <InfoCircleOutlined style={{ marginLeft: '4px' }} />
                       </Tooltip>
                     </span>
-                  } 
-                  name="tags" 
-                  className="mt-4" 
+                  }
+                  name="tags"
+                  className="mt-4"
                   help={`Tags for tracking spend and/or doing tag-based routing.`}
                 >
-                <Select
+                  <Select
                     mode="tags"
                     style={{ width: '100%' }}
                     placeholder="Enter tags"
@@ -751,28 +752,28 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 </Form.Item>
                 <Accordion className="mt-4 mb-4">
                   <AccordionHeader>
-                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2">
 
-                    <b>Advanced Settings</b>
+                      <b>Advanced Settings</b>
                     <Tooltip title={ 
-                      <span>
+                          <span>
                         Learn more about advanced settings in our{' '}
-                        <a 
+                            <a
                           href={proxyBaseUrl ? `${proxyBaseUrl}/#/key%20management/generate_key_fn_key_generate_post`: `/#/key%20management/generate_key_fn_key_generate_post`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-blue-400 hover:text-blue-300"
-                        >
-                          documentation
-                        </a>
-                      </span>
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-blue-400 hover:text-blue-300"
+                            >
+                              documentation
+                            </a>
+                          </span>
                     }>
-                      <InfoCircleOutlined className="text-gray-400 hover:text-gray-300 cursor-help" />
-                    </Tooltip>
+                        <InfoCircleOutlined className="text-gray-400 hover:text-gray-300 cursor-help" />
+                      </Tooltip>
                     </div>
                   </AccordionHeader>
                   <AccordionBody>
-                    <SchemaFormFields 
+                    <SchemaFormFields
                       schemaComponent="GenerateKeyRequest"
                       form={form}
                       excludedFields={['key_alias', 'team_id', 'models', 'duration', 'metadata', 'tags', 'guardrails', "max_budget", "budget_duration", "tpm_limit", "rpm_limit"]}

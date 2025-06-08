@@ -23,6 +23,7 @@ import { KeyEditView } from "./key_edit_view";
 import { RegenerateKeyModal } from "./regenerate_key_modal";
 import { rolesWithWriteAccess } from '../utils/roles';
 import ObjectPermissionsView from "./object_permissions_view";
+import { formatCurrency, getCurrencyCode } from "@/utils/currencyUtils";
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -240,8 +241,8 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
               <Card>
                 <Text>Spend</Text>
                 <div className="mt-2">
-                  <Title>${Number(keyData.spend).toFixed(4)}</Title>
-                  <Text>of {keyData.max_budget !== null ? `$${keyData.max_budget}` : "Unlimited"}</Text>
+                  <Title>{formatCurrency(Number(keyData.spend).toFixed(4))}</Title>
+                  <Text>of {keyData.max_budget !== null ? formatCurrency(keyData.max_budget) : "Unlimited"}</Text>
                 </div>
               </Card>
 
@@ -339,12 +340,12 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
 
                   <div>
                     <Text className="font-medium">Spend</Text>
-                    <Text>${Number(keyData.spend).toFixed(4)} USD</Text>
+                    <Text>{formatCurrency(Number(keyData.spend).toFixed(4))}</Text>
                   </div>
 
                   <div>
                     <Text className="font-medium">Budget</Text>
-                    <Text>{keyData.max_budget !== null ? `$${keyData.max_budget} USD` : "Unlimited"}</Text>
+                    <Text>{keyData.max_budget !== null ? formatCurrency(keyData.max_budget) + " " + getCurrencyCode() : "Unlimited"}</Text>
                   </div>
 
                   <div>

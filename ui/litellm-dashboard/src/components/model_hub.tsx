@@ -20,6 +20,7 @@ import { RightOutlined, CopyOutlined } from "@ant-design/icons";
 
 import { Modal, Tooltip, message } from "antd";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { formatCurrency, getCurrencyCode } from "../utils/currencyUtils";
 
 interface ModelHubProps {
   accessToken: string | null;
@@ -176,15 +177,15 @@ const ModelHub: React.FC<ModelHubProps> = ({
                         : "Unknown"}
                     </Text>
                     <Text>
-                      Input Cost Per 1M Tokens (USD):{" "}
+                      Input Cost Per 1M Tokens (getCurrencyCode()):{" "}
                       {model?.input_cost_per_token
-                        ? `$${(model.input_cost_per_token * 1_000_000).toFixed(2)}`
+                        ? `${formatCurrency((model.input_cost_per_token * 1_000_000).toFixed(2))}`
                         : "Unknown"}
                     </Text>
                     <Text>
-                      Output Cost Per 1M Tokens (USD):{" "}
+                      Output Cost Per 1M Tokens (getCurrencyCode()):{" "}
                       {model?.output_cost_per_token
-                        ? `$${(model.output_cost_per_token * 1_000_000).toFixed(2)}`
+                        ? `${formatCurrency((model.output_cost_per_token * 1_000_000).toFixed(2))}`
                         : "Unknown"}
                     </Text>
                   </div>
@@ -259,7 +260,7 @@ const ModelHub: React.FC<ModelHubProps> = ({
               <TabPanels>
                 <TabPanel>
                   <Text>
-                    <strong>Model Group:</strong> 
+                    <strong>Model Group:</strong>
                     <pre>{JSON.stringify(selectedModel, null, 2)}</pre>
                   </Text>
                 </TabPanel>

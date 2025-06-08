@@ -96,6 +96,7 @@ import {
   v2TeamListCall
 } from "./networking";
 import { updateExistingKeys } from "@/utils/dataUtils";
+import { getCurrencyCode } from "../utils/currencyUtils";
 
 interface TeamInfo {
   members_with_roles: Member[];

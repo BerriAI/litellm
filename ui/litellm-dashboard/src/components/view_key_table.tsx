@@ -72,6 +72,7 @@ import { KeyResponse } from "./key_team_helpers/key_list";
 import { AllKeysTable } from "./all_keys_table";
 import { Team } from "./key_team_helpers/key_list";
 import { Setter } from "@/types";
+import { getCurrencyCode } from "@/utils/currencyUtils";
 
 interface EditKeyModalProps {
   visible: boolean;
@@ -164,7 +165,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   const [spendData, setSpendData] = useState<
     { day: string; spend: number }[] | null
   >(null);
-  
+
   // NEW: Declare filter states for team and key alias.
   const [teamFilter, setTeamFilter] = useState<string>(selectedTeam?.team_id || "");
 
@@ -358,7 +359,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         const updatedData = data.map((item) =>
           item.token === selectedToken?.token ?
             { ...item, key_name: response.key_name, ...formValues }
-          : item
+            : item
         );
         setData(updatedData);
       }
@@ -375,7 +376,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
   return (
     <div>
-      <AllKeysTable 
+      <AllKeysTable
         keys={keys}
         setKeys={setKeys}
         isLoading={isLoading}
@@ -482,7 +483,10 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
             <Form.Item name="key_alias" label="Key Alias">
               <TextInput disabled={true} />
             </Form.Item>
-            <Form.Item name="max_budget" label="Max Budget (USD)">
+            <Form.Item
+              name="max_budget"
+              label={`Max Budget (${getCurrencyCode()})`}
+            >
               <InputNumber
                 step={0.01}
                 precision={2}
@@ -506,7 +510,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
               Current expiry:{" "}
               {selectedToken?.expires != null ?
                 new Date(selectedToken.expires).toLocaleString()
-              : "Never"}
+                : "Never"}
             </div>
             {newExpiryTime && (
               <div className="mt-2 text-sm text-green-600">

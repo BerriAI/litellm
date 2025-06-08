@@ -36,6 +36,7 @@ import { isAdminRole } from "@/utils/roles";
 import ObjectPermissionsView from "../object_permissions_view";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import PremiumVectorStoreSelector from "../common_components/PremiumVectorStoreSelector";
+import { formatCurrency, getCurrencyCode } from "@/utils/currencyUtils";
 
 export interface TeamData {
   team_id: string;
@@ -292,7 +293,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <Text>Budget Status</Text>
                 <div className="mt-2">
                   <Title>${info.spend.toFixed(6)}</Title>
-                  <Text>of {info.max_budget === null ? "Unlimited" : `$${info.max_budget}`}</Text>
+                  <Text>
+                    of{" "}
+                    {info.max_budget === null
+                      ? "Unlimited"
+                      : `${formatCurrency(info.max_budget)}`}
+                  </Text>
                   {info.budget_duration && (
                     <Text className="text-gray-500">Reset: {info.budget_duration}</Text>
                   )}
@@ -413,8 +419,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     </Select>
                   </Form.Item>
 
-                  <Form.Item label="Max Budget (USD)" name="max_budget">
-                    <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
+                  <Form.Item
+                    label={`Max Budget (${getCurrencyCode()})`}
+                    name="max_budget"
+                  >
+                    <NumericalInput
+                      step={0.01}
+                      precision={2}
+                      style={{ width: "100%" }}
+                    />
                   </Form.Item>
 
                   <Form.Item label="Reset Budget" name="budget_duration">
@@ -517,8 +530,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </div>
                   <div>
                     <Text className="font-medium">Budget</Text>
-                      <div>Max: {info.max_budget !== null ? `$${info.max_budget}` : 'No Limit'}</div>
-                    <div>Reset: {info.budget_duration || 'Never'}</div>
+                    <div>
+                      Max:{" "}
+                      {info.max_budget !== null
+                        ? `${formatCurrency(info.max_budget)}`
+                        : "No Limit"}
+                    </div>
+                    <div>Reset: {info.budget_duration || "Never"}</div>
                   </div>
                   <div>
                     <Text className="font-medium">Organization ID</Text>

@@ -6,6 +6,7 @@ import { fetchTeamModels } from "../components/create_key_button";
 import { modelAvailableCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
+import { getCurrencyCode } from "@/utils/currencyUtils";
 
 interface KeyEditViewProps {
   keyData: KeyResponse;
@@ -131,8 +132,12 @@ export function KeyEditView({
         </Select>
       </Form.Item>
 
-      <Form.Item label="Max Budget (USD)" name="max_budget">
-        <NumericalInput step={0.01} style={{ width: "100%" }} placeholder="Enter a numerical value"/>
+      <Form.Item label={`Max Budget (${getCurrencyCode()})`} name="max_budget">
+        <NumericalInput
+          step={0.01}
+          style={{ width: "100%" }}
+          placeholder="Enter a numerical value"
+        />
       </Form.Item>
 
       <Form.Item label="Reset Budget" name="budget_duration">

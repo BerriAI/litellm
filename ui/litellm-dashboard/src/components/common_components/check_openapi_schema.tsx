@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import { Form, Input, InputNumber, Select } from 'antd';
+import React, { useState, useEffect } from "react";
+import { Form, Input, InputNumber, Select } from "antd";
 import { TextInput } from "@tremor/react";
-import { InfoCircleOutlined } from '@ant-design/icons';
-import { Tooltip } from 'antd';
-import { getOpenAPISchema } from '../networking';
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { Tooltip } from "antd";
+import { getOpenAPISchema } from "../networking";
+import { getCurrencyCode } from "@/utils/currencyUtils";
 
 interface SchemaProperty {
   type?: string;
@@ -27,7 +28,7 @@ interface SchemaFormFieldsProps {
   form: any;
   overrideLabels?: { [key: string]: string };
   overrideTooltips?: { [key: string]: string };
-  customValidation?: { 
+  customValidation?: {
     [key: string]: (rule: any, value: any) => Promise<void> 
   };
   defaultValues?: { [key: string]: any };
@@ -61,12 +62,13 @@ const getFieldHelp = (key: string, property: SchemaProperty, type: string): stri
 
   // Specific field help text
   const specificHelp: { [key: string]: string } = {
-    max_budget: 'Enter maximum budget in USD (e.g., 100.50)',
-    budget_duration: 'Select a time period for budget reset',
-    tpm_limit: 'Enter maximum tokens per minute (whole number)',
-    rpm_limit: 'Enter maximum requests per minute (whole number)',
-    duration: 'Enter duration (e.g., 30s, 24h, 7d)',
-    metadata: 'Enter JSON object with key-value pairs\nExample: {"team": "research", "project": "nlp"}',
+    max_budget: `Enter maximum budget in ${getCurrencyCode()} (e.g., 100.50)`,
+    budget_duration: "Select a time period for budget reset",
+    tpm_limit: "Enter maximum tokens per minute (whole number)",
+    rpm_limit: "Enter maximum requests per minute (whole number)",
+    duration: "Enter duration (e.g., 30s, 24h, 7d)",
+    metadata:
+      'Enter JSON object with key-value pairs\nExample: {"team": "research", "project": "nlp"}',
     config: 'Enter configuration as JSON object\nExample: {"setting": "value"}',
     permissions: 'Enter comma-separated permission strings',
     enforced_params: 'Enter parameters as JSON object\nExample: {"param": "value"}',
@@ -84,7 +86,7 @@ const getFieldHelp = (key: string, property: SchemaProperty, type: string): stri
   if (isJSONField(key, property)) {
     return `${helpText}\nMust be valid JSON format`;
   }
-  
+
   if (property.enum) {
     return `Select from available options\nAllowed values: ${property.enum.join(', ')}`;
   }
@@ -92,7 +94,7 @@ const getFieldHelp = (key: string, property: SchemaProperty, type: string): stri
   return helpText;
 };
 
-const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({ 
+const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
   schemaComponent,
   excludedFields = [],
   form,
@@ -109,20 +111,20 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
       try {
         const schema = await getOpenAPISchema();
         const componentSchema = schema.components.schemas[schemaComponent];
-        
+
         if (!componentSchema) {
           throw new Error(`Schema component "${schemaComponent}" not found`);
         }
 
         setSchemaProperties(componentSchema);
-        
+
         const defaultFormValues: { [key: string]: any } = {};
         Object.keys(componentSchema.properties)
           .filter(key => !excludedFields.includes(key) && defaultValues[key] !== undefined)
           .forEach(key => {
             defaultFormValues[key] = defaultValues[key];
           });
-        
+
         form.setFieldsValue(defaultFormValues);
         
       } catch (error) {
@@ -149,10 +151,10 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
   const renderFormItem = (key: string, property: SchemaProperty) => {
     const type = getPropertyType(property);
     const isRequired = schemaProperties?.required?.includes(key);
-    
+
     const label = overrideLabels[key] || property.title || key;
     const tooltip = overrideTooltips[key] || property.description;
-    
+
     const rules = [];
     if (isRequired) {
       rules.push({ required: true, message: `${label} is required` });
@@ -200,7 +202,7 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
       );
     } else if (type === 'number' || type === 'integer') {
       inputComponent = (
-        <InputNumber 
+        <InputNumber
           style={{ width: '100%' }}
           precision={type === 'integer' ? 0 : undefined}
         />

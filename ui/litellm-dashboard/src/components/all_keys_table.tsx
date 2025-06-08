@@ -38,6 +38,7 @@ import {
 import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
 import { Badge, Text } from "@tremor/react";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import { formatCurrency, getCurrencyCode } from "@/utils/currencyUtils";
 
 interface AllKeysTableProps {
   keys: KeyResponse[];
@@ -341,13 +342,13 @@ export function AllKeysTable({
     {
       id: "spend",
       accessorKey: "spend",
-      header: "Spend (USD)",
-      cell: (info) => Number(info.getValue()).toFixed(4),
+      header: "Spend (" + getCurrencyCode() + ")",
+      cell: (info) => formatCurrency(Number(info.getValue()).toFixed(4)),
     },
     {
       id: "max_budget",
       accessorKey: "max_budget",
-      header: "Budget (USD)",
+      header: `Budget (${getCurrencyCode()})`,
       cell: (info) =>
         info.getValue() !== null && info.getValue() !== undefined
           ? info.getValue()

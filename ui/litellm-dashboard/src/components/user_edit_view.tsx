@@ -5,6 +5,7 @@ import { Button } from "@tremor/react";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import { all_admin_roles } from "../utils/roles";
 import { InfoCircleOutlined } from "@ant-design/icons";
+import { getCurrencyCode } from "@/utils/currencyUtils";
 interface UserEditViewProps {
   userData: any;
   onCancel: () => void;
@@ -77,33 +78,33 @@ export function UserEditView({
       </Form.Item>
 
       <Form.Item label={
-                  <span>
+          <span>
                     Global Proxy Role{' '}
-                    <Tooltip title="This is the role that the user will globally on the proxy. This role is independent of any team/org specific roles.">
+            <Tooltip title="This is the role that the user will globally on the proxy. This role is independent of any team/org specific roles.">
                       <InfoCircleOutlined/>
-                    </Tooltip>
-                  </span>
-                } 
+            </Tooltip>
+          </span>
+        }
               name="user_role">
-            <Select>
-              {possibleUIRoles &&
-                Object.entries(possibleUIRoles).map(
-                  ([role, { ui_label, description }]) => (
-                    <SelectItem key={role} value={role} title={ui_label}>
-                      <div className="flex">
-                        {ui_label}{" "}
-                        <p
-                          className="ml-2"
-                          style={{ color: "gray", fontSize: "12px" }}
-                        >
-                          {description}
-                        </p>
-                      </div>
-                    </SelectItem>
+        <Select>
+          {possibleUIRoles &&
+            Object.entries(possibleUIRoles).map(
+              ([role, { ui_label, description }]) => (
+                <SelectItem key={role} value={role} title={ui_label}>
+                  <div className="flex">
+                    {ui_label}{" "}
+                    <p
+                      className="ml-2"
+                      style={{ color: "gray", fontSize: "12px" }}
+                    >
+                      {description}
+                    </p>
+                  </div>
+                </SelectItem>
                   ),
-                )}
-            </Select>
-          </Form.Item>
+            )}
+        </Select>
+      </Form.Item>
 
       <Form.Item
         label={
@@ -134,15 +135,8 @@ export function UserEditView({
         </Select>
       </Form.Item>
 
-      <Form.Item
-        label="Max Budget (USD)"
-        name="max_budget"
-      >
-        <InputNumber
-          step={0.01}
-          precision={2}
-          style={{ width: "100%" }}
-        />
+      <Form.Item label={`$Max Budget (${getCurrencyCode()})`} name="max_budget">
+        <InputNumber step={0.01} precision={2} style={{ width: "100%" }} />
       </Form.Item>
 
       <Form.Item
@@ -165,4 +159,4 @@ export function UserEditView({
       </div>
     </Form>
   );
-} 
+}
