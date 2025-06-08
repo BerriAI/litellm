@@ -92,3 +92,4 @@ tests/test_custom_dir/*
 test.py
 
 litellm_config.yaml
+.cursor
