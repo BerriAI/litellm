@@ -20,14 +20,14 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
 
 guardrails:
--   guardrail_name: pangea-ai-guard,
+  - guardrail_name: pangea-ai-guard
     litellm_params:
-      guardrail: pangea,
-      mode: post_call,
-      api_key: pts_pangeatokenid,  # Pangea token with access to AI Guard service.
-      api_base: "https://ai-guard.aws.us.pangea.cloud",  # Pangea AI Guard base url for your pangea domain.  Uses this value as default if not included.
-      pangea_input_recipe: "example_input",  # Pangea AI Guard recipe name to run before prompt submission to LLM
-      pangea_output_recipe: "example_output",  # Pangea AI Guard recipe name to run on LLM generated response
+      guardrail: pangea
+      mode: post_call
+      api_key: pts_pangeatokenid  # Pangea token with access to AI Guard service.
+      api_base: "https://ai-guard.aws.us.pangea.cloud"  # Pangea AI Guard base url for your pangea domain.  Uses this value as default if not included.
+      pangea_input_recipe: "example_input"  # Pangea AI Guard recipe name to run before prompt submission to LLM
+      pangea_output_recipe: "example_output"  # Pangea AI Guard recipe name to run on LLM generated response
 ```
 
 
