@@ -652,10 +652,6 @@ petals_models = [
     "petals-team/StableBeluga2",
 ]
 
-sap_gen_ai_hub_models = [
-    "petals-team/StableBeluga2",
-]
-
 ollama_models = ["llama2"]
 
 maritalk_models = ["maritalk"]

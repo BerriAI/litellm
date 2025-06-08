@@ -148,7 +148,6 @@ from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha, palm
 from .llms.groq.chat.handler import GroqChatCompletion
 from .llms.sap.chat.handler import GenAIHubOrchestration
-from .llms.huggingface.chat.handler import Huggingface
 from .llms.huggingface.embedding.handler import HuggingFaceEmbedding
 from .llms.nlp_cloud.chat.handler import completion as nlp_cloud_chat_completion
 from .llms.ollama.completion import handler as ollama
@@ -1724,7 +1723,6 @@ def completion(  # type: ignore # noqa: PLR0915
                     optional_params[k] = v
 
             response = base_llm_http_handler.completion(
-
                 model=model,
                 stream=stream,
                 messages=messages,
@@ -1733,12 +1731,13 @@ def completion(  # type: ignore # noqa: PLR0915
                 model_response=model_response,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-
-                logger_fn=logger_fn,
-                timeout=timeout,  # type: ignore
-                custom_prompt_dict=custom_prompt_dict,
                 custom_llm_provider=custom_llm_provider,
+                timeout=timeout,
+                headers=headers,
                 encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
+                client=client,
             )
         elif custom_llm_provider == "sap":
             headers = headers or litellm.headers
@@ -1763,14 +1762,10 @@ def completion(  # type: ignore # noqa: PLR0915
                 logger_fn=logger_fn,
                 timeout=timeout,  # type: ignore
                 custom_prompt_dict=custom_prompt_dict,
-                client=client,  # pass AsyncOpenAI, OpenAI client
+                client=client,
                 custom_llm_provider=custom_llm_provider,
-                timeout=timeout,
-                headers=headers,
                 encoding=encoding,
                 api_key=api_key,
-                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
-                client=client,
             )
         elif custom_llm_provider == "aiohttp_openai":
             # NEW aiohttp provider for 10-100x higher RPS
@@ -1870,7 +1865,6 @@ def completion(  # type: ignore # noqa: PLR0915
                     optional_params[k] = v
 
             ## COMPLETION CALL
-            raise ValueError(f'{model=} - {custom_llm_provider=}')
             try:
                 response = openai_chat_completions.completion(
                     model=model,
