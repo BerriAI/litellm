@@ -25,7 +25,7 @@ from gen_ai_hub.orchestration.models.message import Message
 from gen_ai_hub.orchestration.models.llm import LLM
 from gen_ai_hub.orchestration.models.template import Template
 from gen_ai_hub.orchestration.models.response_format import ResponseFormatJsonSchema, ResponseFormatJsonObject, ResponseFormatText
-
+from gen_ai_hub.orchestration.models.tools import FunctionTool
 
 
 class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
@@ -118,7 +118,11 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         model_params = {k: v for k, v in optional_params.items() if k in supported_params}
         messages_ = [Message(**kwargs) for kwargs in messages]
         model_version = optional_params.pop('model_version', 'latest')
-        tools = optional_params.pop("tools", None)
+        tools_input = optional_params.pop("tools", None)
+        tools = []
+        if tools_input is not None:
+            for tool in tools_input:
+                tools.append(FunctionTool(**tool["function"]))
         response_format = optional_params.pop("response_format", None)
         if isinstance(response_format, dict):
             if response_format.get('type', None) == 'json_schema' and 'json_schema' in response_format:
@@ -129,7 +133,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             else:
                 response_format = response_format['type']
         config = OrchestrationConfig(
-            template=Template(messages=messages_, response_format=response_format),
+            template=Template(messages=messages_, response_format=response_format, tools=tools),
             llm=LLM(name=model, parameters=model_params, version=model_version),
         )
         
@@ -150,7 +154,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         obj = model_response.model_dump()# response.module_results.llm
         obj['choices'] = [asdict(c) for c in llm_response.choices]
         for c in obj['choices']:
-            c["message"]["role"] = c["message"]["role"].value
+            c["message"]["role"] = c["message"]["role"].value if hasattr(c["message"]["role"], "value") else c["message"]["role"]
         obj['created'] = llm_response.created
         obj['model'] = llm_response.model
         obj["usage"] = Usage(**asdict(llm_response.usage))
