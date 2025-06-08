@@ -75,6 +75,21 @@ This release brings significant performance improvements to the `/v1/messages` A
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 
+## Audit Logs on UI
+
+This release introduces support for viewing audit logs in the UI. As a Proxy Admin, you can now check if and when a key was deleted, along with who performed the action.
+
+LiteLLM tracks changes to the following entities and actions: 
+
+- **Entities:** Keys, Teams, Users, Models
+- **Actions:** Create, Update, Delete, Regenerate
+
+<Image 
+  img={require('../../img/release_notes/ui_audit_log.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+
 
 ## New Models / Updated Models
 
