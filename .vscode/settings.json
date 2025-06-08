@@ -1,0 +1,30 @@
+{
+	"pgsql.serverGroups": [
+		{
+			"name": "Servers",
+			"id": "98E70987-2BC3-42A8-9A52-D5FFDBCCDE40",
+			"isDefault": true
+		}
+	],
+	"pgsql.connections": [
+		{
+			"id": "547EC4AF-059C-442F-A6CF-E35BEC13C367",
+			"groupId": "98E70987-2BC3-42A8-9A52-D5FFDBCCDE40",
+			"authenticationType": "SqlLogin",
+			"connectTimeout": 15,
+			"applicationName": "vscode-pgsql",
+			"clientEncoding": "utf8",
+			"sslmode": "prefer",
+			"server": "db",
+			"user": "postgres",
+			"port": "5432",
+			"database": "litellm",
+			"password": "postgres",
+			"profileName": "litellm",
+			"expiresOn": 0,
+			"profileSource": 0,
+			"displayName": "litellm",
+			"savePassword": true
+		}
+	]
+}
