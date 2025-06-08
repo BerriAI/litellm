@@ -3,10 +3,54 @@ import { Card, Grid, Text, Title, Accordion, AccordionHeader, AccordionBody } fr
 import { AreaChart, BarChart } from '@tremor/react';
 import { SpendMetrics, DailyData, ModelActivityData, MetricWithMetadata, KeyMetricWithMetadata } from './usage/types';
 import { Collapse } from 'antd';
+import { valueFormatter } from '../components/usage/utils/value_formatters';
 
 interface ActivityMetricsProps {
   modelMetrics: Record<string, ModelActivityData>;
 }
+
+const CustomTooltip = ({ active, payload, label }: any) => {
+  if (active && payload && payload.length) {
+    const formatCategoryName = (name: string) => {
+        return name.replace('metrics.', '')
+                   .replace(/_/g, ' ')
+                   .split(' ')
+                   .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+                   .join(' ');
+    };
+
+    const getRawValue = (dataPoint: any, key: string) => {
+      const keys = key.split('.');
+      let value = dataPoint;
+      for (const k of keys) {
+        if (value === undefined) return undefined;
+        value = value[k];
+      }
+      return value;
+    }
+
+    return (
+      <div className="w-56 rounded-tremor-default border border-tremor-border bg-tremor-background p-2 text-tremor-default shadow-tremor-dropdown">
+        <p className="text-tremor-content-strong">{label}</p>
+        {payload.map((item: any) => {
+          const rawValue = getRawValue(item.payload, item.dataKey);
+          return (
+            <div key={item.dataKey} className="flex items-center justify-between space-x-4">
+              <div className="flex items-center space-x-2">
+                <span className={`h-3 w-3 shrink-0 rounded-full`} style={{backgroundColor: item.color}} />
+                <p className="font-medium text-tremor-content dark:text-dark-tremor-content">{formatCategoryName(item.dataKey)}</p>
+              </div>
+              <p className="font-medium text-tremor-content-emphasis dark:text-dark-tremor-content-emphasis">
+                {rawValue !== undefined ? rawValue.toLocaleString() : 'N/A'}
+              </p>
+            </div>
+          )
+        })}
+      </div>
+    );
+  }
+  return null;
+};
 
 const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: ModelActivityData }) => {
   return (
@@ -42,7 +86,8 @@ const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: Mode
             index="date"
             categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]}
             colors={["blue", "cyan", "indigo"]}
-            valueFormatter={(number: number) => number.toLocaleString()}
+            valueFormatter={valueFormatter}
+            customTooltip={CustomTooltip}
           />
         </Card>
 
@@ -200,7 +245,8 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
               index="date"
               categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]}
               colors={["blue", "cyan", "indigo"]}
-              valueFormatter={(number: number) => number.toLocaleString()}
+              valueFormatter={valueFormatter}
+              customTooltip={CustomTooltip}
             />
           </Card>
           <Card>
