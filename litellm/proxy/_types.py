@@ -991,6 +991,10 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
         default=None,
         description="Max budget for each model (e.g. {'gpt-4o': {'max_budget': '0.0000001', 'budget_duration': '1d', 'tpm_limit': 1000, 'rpm_limit': 1000}})",
     )
+    budget_reset_at: Optional[datetime] = Field(
+        default=None,
+        description="Datetime when the budget is reset",
+    )
 
 
 class BudgetRequest(LiteLLMPydanticObjectBase):
@@ -1330,8 +1334,16 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
     model_max_budget: Optional[dict] = None
     budget_duration: Optional[str] = None
+    budget_reset_at: Optional[datetime] = None
 
     model_config = ConfigDict(protected_namespaces=())
+
+
+class LiteLLM_BudgetTableFull(LiteLLM_BudgetTable):
+    """Represents all params for a LiteLLM_BudgetTable record"""
+
+    budget_id: str
+    created_at: datetime
 
 
 class LiteLLM_TeamMemberTable(LiteLLM_BudgetTable):
@@ -1922,6 +1934,36 @@ class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
         if values.get("changed_by") is not None:
             values["changed_by"] = str(values["changed_by"])
         return values
+
+    @model_validator(mode="after")
+    def mask_api_keys(self):
+        from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+
+        masker = SensitiveDataMasker(sensitive_patterns={"key"})
+
+        if self.before_value is not None:
+            json_before_value: Optional[dict] = None
+            if isinstance(self.before_value, str):
+                json_before_value = json.loads(self.before_value)
+            elif isinstance(self.before_value, dict):
+                json_before_value = self.before_value
+
+            if json_before_value is not None:
+                json_before_value = masker.mask_dict(json_before_value)
+                self.before_value = json.dumps(json_before_value, default=str)
+
+        if self.updated_values is not None:
+            json_updated_values: Optional[dict] = None
+            if isinstance(self.updated_values, str):
+                json_updated_values = json.loads(self.updated_values)
+            elif isinstance(self.updated_values, dict):
+                json_updated_values = self.updated_values
+
+            if json_updated_values is not None:
+                json_updated_values = masker.mask_dict(json_updated_values)
+                self.updated_values = json.dumps(json_updated_values, default=str)
+
+        return self
 
 
 class LiteLLM_SpendLogs_ResponseObject(LiteLLMPydanticObjectBase):
