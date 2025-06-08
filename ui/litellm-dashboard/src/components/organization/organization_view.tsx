@@ -30,6 +30,7 @@ import UserSearchModal from "../common_components/user_search_modal";
 import MemberModal from "../team/edit_membership";
 import ObjectPermissionsView from "../object_permissions_view";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import { getCurrencyCode } from "@/utils/currencyUtils";
 
 interface OrganizationInfoProps {
   organizationId: string;
@@ -390,7 +391,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                     </Select>
                   </Form.Item>
 
-                  <Form.Item label="Max Budget (USD)" name="max_budget">
+                  <Form.Item label={`Max Budget (${getCurrencyCode()})`} name="max_budget">
                     <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
                   </Form.Item>
 

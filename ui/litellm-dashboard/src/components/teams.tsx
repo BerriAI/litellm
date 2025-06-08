@@ -96,7 +96,7 @@ import {
   v2TeamListCall
 } from "./networking";
 import { updateExistingKeys } from "@/utils/dataUtils";
-import { getCurrencyCode } from "../utils/currencyUtils";
+import { getCurrencyCode } from '../utils/currencyUtils';
 
 interface TeamInfo {
   members_with_roles: Member[];
@@ -630,8 +630,8 @@ const Teams: React.FC<TeamProps> = ({
                         <TableHeaderCell>Team Name</TableHeaderCell>
                         <TableHeaderCell>Team ID</TableHeaderCell>
                         <TableHeaderCell>Created</TableHeaderCell>
-                        <TableHeaderCell>Spend (USD)</TableHeaderCell>
-                        <TableHeaderCell>Budget (USD)</TableHeaderCell>
+                        <TableHeaderCell>Spend ({getCurrencyCode()})</TableHeaderCell>
+                        <TableHeaderCell>Budget ({getCurrencyCode()})</TableHeaderCell>
                         <TableHeaderCell>Models</TableHeaderCell>
                         <TableHeaderCell>Organization</TableHeaderCell>
                         <TableHeaderCell>Info</TableHeaderCell>
@@ -1000,7 +1000,7 @@ const Teams: React.FC<TeamProps> = ({
                         </Select2>
                       </Form.Item>
 
-                      <Form.Item label="Max Budget (USD)" name="max_budget">
+                      <Form.Item label={`Max Budget (${getCurrencyCode()})`} name="max_budget">
                         <NumericalInput step={0.01} precision={2} width={200} />
                       </Form.Item>
                       <Form.Item

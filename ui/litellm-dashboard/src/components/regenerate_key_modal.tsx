@@ -5,6 +5,7 @@ import { add } from "date-fns";
 import { regenerateKeyCall } from "./networking";
 import { KeyResponse } from "./key_team_helpers/key_list";
 import { CopyToClipboard } from "react-copy-to-clipboard";
+import { getCurrencyCode } from "@/utils/currencyUtils";
 
 interface RegenerateKeyModalProps {
   selectedToken: KeyResponse | null;

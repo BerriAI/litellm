@@ -5,6 +5,7 @@ import { Tooltip } from "antd";
 import { TimeCell } from "./time_cell";
 import { Button, Badge } from "@tremor/react";
 import { Eye, EyeOff} from "lucide-react"
+import { formatCurrency } from "@/utils/currencyUtils";
 
 // Helper to get the appropriate logo URL
 const getLogoUrl = (
@@ -157,7 +158,7 @@ export const columns: ColumnDef<LogEntry>[] = [
     header: "Cost",
     accessorKey: "spend",
     cell: (info: any) => (
-      <span>${Number(info.getValue() || 0).toFixed(6)}</span>
+      <span>{formatCurrency(Number(info.getValue() || 0).toFixed(6))}</span>
     ),
   },
   {

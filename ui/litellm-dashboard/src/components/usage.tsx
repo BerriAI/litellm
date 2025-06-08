@@ -40,6 +40,7 @@ import {
 } from "./networking";
 import { start } from "repl";
 import TopKeyView from "./top_key_view";
+import { formatCurrency } from '../utils/currencyUtils';
 console.log("process.env.NODE_ENV", process.env.NODE_ENV);
 
 interface UsagePageProps {
@@ -90,7 +91,7 @@ const customTooltip = (props: CustomTooltipTypeBar) => {
               {":"}
               <span className="text-xs text-tremor-content-emphasis">
                 {" "}
-                {value ? `$${value.toFixed(2)}` : ""}
+                {value ? `${formatCurrency(value.toFixed(2))}` : ""}
               </span>
             </p>
           </div>
@@ -278,7 +279,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   console.log(`End date is ${endTime}`);
 
   const valueFormatter = (number: number) =>
-    `$ ${number.toFixed(2)}`;
+    `${formatCurrency(number.toFixed(2))}`;
 
   const fetchAndSetData = async (
     fetchFunction: () => Promise<any>,
@@ -677,7 +678,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                     layout="vertical"
                     showXAxis={false}
                     showLegend={false}
-                    valueFormatter={(value) => `$${value.toFixed(2)}`}
+                    valueFormatter={(value) => `${formatCurrency(value.toFixed(2))}`}
                   />
                 </Card>
               </Col>
@@ -697,7 +698,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                       index="provider"
                       category="spend"
                       colors={["cyan"]}
-                      valueFormatter={(value) => `$${value.toFixed(2)}`}
+                      valueFormatter={(value) => `${formatCurrency(value.toFixed(2))}`}
                     />
                   </Col>
                   <Col numColSpan={1}>
@@ -715,7 +716,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                             <TableCell>
                               {parseFloat(provider.spend.toFixed(2)) < 0.00001
                                 ? "less than 0.00"
-                                : provider.spend.toFixed(2)}
+                                : formatCurrency(provider.spend.toFixed(2))}
                             </TableCell>
                           </TableRow>
                         ))}

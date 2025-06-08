@@ -3,6 +3,7 @@ import { Badge, Grid, Icon } from "@tremor/react";
 import { Tooltip } from "antd";
 import { UserInfo } from "./types";
 import { PencilAltIcon, TrashIcon, InformationCircleIcon } from "@heroicons/react/outline";
+import { getCurrencyCode, getCurrencySymbol } from "@/utils/currencyUtils";
 
 export const columns = (
   possibleUIRoles: Record<string, Record<string, string>>,
@@ -35,7 +36,7 @@ export const columns = (
     ),
   },
   {
-    header: "User Spend ($ USD)",
+    header: `User Spend (${getCurrencySymbol()} ${getCurrencyCode()})`,
     accessorKey: "spend",
     cell: ({ row }) => (
       <span className="text-xs">
@@ -44,7 +45,7 @@ export const columns = (
     ),
   },
   {
-    header: "User Max Budget ($ USD)",
+    header: `User Max Budget (${getCurrencySymbol()} ${getCurrencyCode()})`,
     accessorKey: "max_budget",
     cell: ({ row }) => (
       <span className="text-xs">
