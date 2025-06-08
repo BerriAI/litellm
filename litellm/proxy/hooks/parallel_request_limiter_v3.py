@@ -28,29 +28,6 @@ else:
     Span = Any
     InternalUsageCache = Any
 
-RATE_LIMITER_SCRIPT = """
-local window_key = KEYS[1]
-local counter_key = KEYS[2]
-local now = ARGV[1]
-local window_size = ARGV[2]
-
--- Check if window exists and is valid
-local window_start = redis.call('GET', window_key)
-if not window_start or (tonumber(now) - tonumber(window_start)) >= tonumber(window_size) then
-    -- Reset window and counter
-    redis.call('SET', window_key, now)
-    redis.call('SET', counter_key, 1)
-    redis.call('EXPIRE', window_key, window_size)
-    redis.call('EXPIRE', counter_key, window_size)
-    return {1, now}
-end
-
--- Increment counter
-local counter = redis.call('INCR', counter_key)
-return {counter, window_start}
-"""
-
-
 BATCH_RATE_LIMITER_SCRIPT = """
 local results = {}
 local now = tonumber(ARGV[1])
@@ -105,18 +82,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def __init__(self, internal_usage_cache: InternalUsageCache):
         self.internal_usage_cache = internal_usage_cache
         if self.internal_usage_cache.dual_cache.redis_cache is not None:
-            self.rate_limiter_script = (
-                self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
-                    RATE_LIMITER_SCRIPT
-                )
-            )
             self.batch_rate_limiter_script = (
                 self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
                     BATCH_RATE_LIMITER_SCRIPT
                 )
             )
         else:
-            self.rate_limiter_script = None
             self.batch_rate_limiter_script = None
 
         self.window_size = int(os.getenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", 60))
@@ -128,76 +99,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 print(print_statement)  # noqa
         except Exception:
             pass
-
-    async def rate_limiter_script_handler(
-        self,
-        window_key: str,
-        counter_key: str,
-        now: float,
-        window_size: float,
-        parent_otel_span: Optional[Span] = None,
-    ) -> int:
-        """
-        Update Redis
-        Update in-memory cache
-        Return the new count and window value
-        """
-
-        if self.rate_limiter_script is not None:
-            result = await self.rate_limiter_script(
-                keys=[window_key, counter_key], args=[now, window_size]
-            )
-            counter_value, window_value = result
-            # Update in-memory cache
-            await self.internal_usage_cache.async_set_cache(
-                key=counter_key,
-                value=counter_value,
-                ttl=window_size,
-                litellm_parent_otel_span=parent_otel_span,
-                local_only=True,
-            )
-            await self.internal_usage_cache.async_set_cache(
-                key=window_key,
-                value=window_value,
-                ttl=window_size,
-                litellm_parent_otel_span=parent_otel_span,
-                local_only=True,
-            )
-            return counter_value
-        else:  # in-memory only implementation
-            current_window = await self.internal_usage_cache.async_get_cache(
-                key=window_key,
-                litellm_parent_otel_span=parent_otel_span,
-            )
-            if current_window is None or (now - current_window) >= window_size:
-                # Set new window start time
-                await self.internal_usage_cache.async_set_cache(
-                    key=window_key,
-                    value=now,
-                    ttl=window_size,
-                    litellm_parent_otel_span=parent_otel_span,
-                )
-                # Reset counter
-                result = await self.internal_usage_cache.async_increment_cache(
-                    key=counter_key,
-                    value=1,
-                    ttl=window_size,
-                    litellm_parent_otel_span=parent_otel_span,
-                )
-
-            else:
-                # Get current count
-                result = (
-                    await self.internal_usage_cache.async_increment_cache(
-                        key=counter_key,
-                        value=1,
-                        ttl=window_size,
-                        litellm_parent_otel_span=parent_otel_span,
-                    )
-                    or 1
-                )
-
-        return int(result)
 
     def create_rate_limit_keys(
         self,
