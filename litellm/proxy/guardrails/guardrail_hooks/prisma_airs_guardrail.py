@@ -50,7 +50,7 @@ class prisma_airs_guardrail(CustomGuardrail):
             return "Invalid input: 'messages' missing or improperly formatted."
         try:
             # Call AIRS service to scan the user prompt
-            airs_response = test_airs(user_prompt)
+            airs_response = call_airs_api(user_prompt)
 
             if airs_response.status_code != 200:
                 return f"airs call failed (HTTP {airs_response.status_code})."
@@ -60,7 +60,7 @@ class prisma_airs_guardrail(CustomGuardrail):
         except Exception as e:
             return f"Error calling AIRS {e}"
 
-def test_airs(data):
+def call_airs_api(data):
   airs_response = requests.post(os.environ.get("PRISMA_AIRS_API_BASE"),
     # "<PRISMA_AIRS_API_BASE>", 
     headers={
