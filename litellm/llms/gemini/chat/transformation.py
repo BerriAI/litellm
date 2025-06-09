@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -6,7 +6,15 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.llms.vertex_ai import ContentType, PartType, SpeechConfig, VoiceConfig, PrebuiltVoiceConfig, Tools
+from litellm.types.llms.vertex_ai import (
+    ContentType,
+    PartType,
+    SpeechConfig,
+    VoiceConfig,
+    PrebuiltVoiceConfig,
+    Tools,
+    Schema,
+)
 from litellm.utils import supports_reasoning
 
 from ...vertex_ai.gemini.transformation import _gemini_convert_messages_with_history
@@ -96,21 +104,22 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
             supported_params.append("audio")
         return supported_params
 
-    def _filter_gemini_unsupported_formats(self, schema: Dict[Any, Any]) -> Dict[Any, Any]:
+    def _filter_gemini_unsupported_formats(self, schema: Union[Schema, Dict[Any, Any]]) -> Dict[Any, Any]:
         """
         Filter out format values that are not supported by Gemini API.
-        
-        According to the Gemini API error message, only 'enum' and 'date-time' formats
-        are supported for STRING type. Other formats like 'email', 'uri', etc. should be removed.
-        
+
         Args:
-            schema: The schema dictionary to filter
-            
+            schema: The schema dictionary or Schema object to filter
+
         Returns:
             The filtered schema dictionary
         """
         if not isinstance(schema, dict):
-            return schema
+            if hasattr(schema, "to_dict"):  # Check if schema has a `to_dict` method
+                schema = schema.to_dict()
+            else:
+                # If schema is neither a dict nor has a `to_dict` method, return empty dict
+                return {}
 
         # Recursively process the schema
         filtered_schema: Dict[Any, Any] = {}
@@ -147,7 +156,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
     def _map_function(self, value: List[dict]) -> List[Tools]:
         """
         Override the parent _map_function to apply Gemini-specific format filtering.
-        
+
         This method calls the parent implementation and then filters out
         unsupported format values from the schema.
         """
