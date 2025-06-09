@@ -82,6 +82,38 @@ async def test_anthropic_bedrock_thinking_blocks_with_none_content():
         == "This is a test thinking block"
     )
 
+@pytest.mark.asyncio
+async def test_bedrock_empty_tool_arguments():
+    """Test handling empty tool arguments in Bedrock messages"""
+
+    messages = [
+        {
+            "role": "user",
+            "content": "What is the weather like?",
+        },
+        {
+            "role": "assistant", "content": "", "tool_calls": [{
+                "id": "call_123",
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "arguments": '',
+                },
+            }]
+        },
+    ]
+
+    result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        llm_provider="bedrock",
+    )
+
+    # Verify the result
+    assert len(result) == 2
+    assert result[1]["role"] == "assistant"
+    assert result[1]["content"][0]["toolUse"]["input"] == {}
+
 
 def test_bedrock_validate_format_image_or_video():
     """Test the _validate_format method for images, videos, and documents"""
