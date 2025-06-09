@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -96,7 +96,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
             supported_params.append("audio")
         return supported_params
 
-    def _filter_gemini_unsupported_formats(self, schema: dict) -> dict:
+    def _filter_gemini_unsupported_formats(self, schema: Dict[Any, Any]) -> Dict[Any, Any]:
         """
         Filter out format values that are not supported by Gemini API.
         
@@ -111,9 +111,9 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         """
         if not isinstance(schema, dict):
             return schema
-            
+
         # Recursively process the schema
-        filtered_schema = {}
+        filtered_schema: Dict[Any, Any] = {}
         for key, value in schema.items():
             if key == "format" and isinstance(value, str):
                 # Only keep 'enum' and 'date-time' formats for Gemini API
@@ -124,6 +124,8 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                 # Recursively filter properties
                 filtered_schema[key] = {
                     prop_key: self._filter_gemini_unsupported_formats(prop_value)
+                    if isinstance(prop_value, dict)
+                    else prop_value
                     for prop_key, prop_value in value.items()
                 }
             elif key == "items" and isinstance(value, dict):
@@ -132,11 +134,14 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
             elif key == "anyOf" and isinstance(value, list):
                 # Recursively filter anyOf items
                 filtered_schema[key] = [
-                    self._filter_gemini_unsupported_formats(item) for item in value
+                    self._filter_gemini_unsupported_formats(item)
+                    if isinstance(item, dict)
+                    else item
+                    for item in value
                 ]
             else:
                 filtered_schema[key] = value
-                
+
         return filtered_schema
 
     def _map_function(self, value: List[dict]) -> List[Tools]:
@@ -148,16 +153,18 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         """
         # First call the parent implementation to get the standard transformation
         tools = super()._map_function(value)
-        
+
         # Then apply Gemini-specific format filtering
         for tool in tools:
             if "function_declarations" in tool:
                 for func_declaration in tool["function_declarations"]:
                     if "parameters" in func_declaration:
-                        func_declaration["parameters"] = self._filter_gemini_unsupported_formats(
-                            func_declaration["parameters"]
-                        )
-        
+                        parameters = func_declaration["parameters"]
+                        if isinstance(parameters, dict):
+                            func_declaration[
+                                "parameters"
+                            ] = self._filter_gemini_unsupported_formats(parameters)
+
         return tools
 
     def map_openai_params(
