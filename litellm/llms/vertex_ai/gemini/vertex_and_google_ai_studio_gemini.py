@@ -784,6 +784,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ]:
         function: Optional[ChatCompletionToolCallFunctionChunk] = None
         _tools: List[ChatCompletionToolCallChunk] = []
+        # in a single chunk, each tool call appears as a separate part
+        # they need to be separate indexes as they are separate tool calls
+        funcCallIndex = 0
         for part in parts:
             if "functionCall" in part:
                 _function_chunk = ChatCompletionToolCallFunctionChunk(
@@ -800,6 +803,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         index=index,
                     )
                     _tools.append(_tool_response_chunk)
+                funcCallIndex += 1
         if len(_tools) == 0:
             tools: Optional[List[ChatCompletionToolCallChunk]] = None
         else:
@@ -1846,6 +1850,7 @@ class ModelResponseIterator:
 
     def chunk_parser(self, chunk: dict) -> Optional["ModelResponseStream"]:
         try:
+            print(f"RAW GEMINI CHUNK: {chunk}")
             verbose_logger.debug(f"RAW GEMINI CHUNK: {chunk}")
             from litellm.types.utils import ModelResponseStream
 
