@@ -195,7 +195,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     []
   );
   const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI);
-  const [healthCheckResponse, setHealthCheckResponse] = useState<string>("");
+  const [healthCheckResponse, setHealthCheckResponse] = useState<any>(null);
+  const [isHealthCheckLoading, setIsHealthCheckLoading] = useState<boolean>(false);
   const [editModalVisible, setEditModalVisible] = useState<boolean>(false);
 
   const [selectedModel, setSelectedModel] = useState<any>(null);
@@ -793,12 +794,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const runHealthCheck = async () => {
     try {
       message.info("Running health check...");
-      setHealthCheckResponse("");
+      setIsHealthCheckLoading(true);
+      setHealthCheckResponse(null);
       const response = await healthCheckCall(accessToken);
       setHealthCheckResponse(response);
     } catch (error) {
       console.error("Error running health check:", error);
       setHealthCheckResponse("Error running health check");
+    } finally {
+      setIsHealthCheckLoading(false);
     }
   };
 
@@ -1250,13 +1254,207 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             <TabPanel>
               <Card>
                 <Text>
-                  `/health` will run a very small request through your models
-                  configured on litellm
+                This will run a very small request through your models configured on litellm
                 </Text>
 
-                <Button onClick={runHealthCheck}>Run `/health`</Button>
+                <Button 
+                  onClick={runHealthCheck} 
+                  className="mt-4"
+                  disabled={isHealthCheckLoading}
+                >
+                  {isHealthCheckLoading ? 'Running Health Check...' : 'Run Health Check'}
+                </Button>
+                
+                {isHealthCheckLoading && (
+                  <div className="mt-3 flex items-center space-x-2">
+                    <div className="flex space-x-1">
+                      <div className="w-2 h-2 bg-indigo-500 rounded-full animate-pulse"></div>
+                      <div className="w-2 h-2 bg-indigo-500 rounded-full animate-pulse" style={{animationDelay: '0.2s'}}></div>
+                      <div className="w-2 h-2 bg-indigo-500 rounded-full animate-pulse" style={{animationDelay: '0.4s'}}></div>
+                    </div>
+                    <Text className="text-gray-600 text-sm">Running health check</Text>
+                  </div>
+                )}
+                
                 {healthCheckResponse && (
-                  <pre>{JSON.stringify(healthCheckResponse, null, 2)}</pre>
+                  <div className="mt-4">
+                    {typeof healthCheckResponse === 'string' ? (
+                      <div className="bg-red-50 border border-red-200 rounded-md p-4">
+                        <Text className="text-red-700 font-medium">Error Response</Text>
+                        <Text className="text-red-600 mt-2">{healthCheckResponse}</Text>
+                      </div>
+                    ) : (
+                      <div>
+                        <div className="flex items-center justify-between mb-6">
+                          <Title className="flex items-center gap-2">
+                            <CheckCircleIcon className="h-6 w-6 text-indigo-500" />
+                            Health Check Results
+                          </Title>
+                        </div>
+                        {healthCheckResponse.healthy_endpoints && healthCheckResponse.healthy_endpoints.length > 0 && (
+                          <div className="mb-6">
+                            <Subtitle className="mb-4 text-gray-700 flex items-center gap-2">
+                              <StatusOnlineIcon className="h-5 w-5 text-indigo-500" />
+                              Healthy Endpoints ({healthCheckResponse.healthy_endpoints.length})
+                            </Subtitle>
+                            <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
+                              <Table>
+                                <TableHead>
+                                  <TableRow className="bg-gray-50">
+                                    <TableHeaderCell className="font-semibold">Model</TableHeaderCell>
+                                    <TableHeaderCell className="font-semibold">Status</TableHeaderCell>
+                                    <TableHeaderCell className="font-semibold">Response Time</TableHeaderCell>
+                                    <TableHeaderCell className="font-semibold">Cache</TableHeaderCell>
+                                    <TableHeaderCell className="font-semibold">Max Tokens</TableHeaderCell>
+                                    <TableHeaderCell className="font-semibold">Fallbacks</TableHeaderCell>
+                                  </TableRow>
+                                </TableHead>
+                              <TableBody>
+                                {healthCheckResponse.healthy_endpoints.map((endpoint: any, idx: number) => (
+                                  <TableRow key={idx}>
+                                    <TableCell>
+                                      <div className="font-medium">{endpoint.model || 'N/A'}</div>
+                                      {endpoint.api_base && (
+                                        <div className="text-xs text-gray-500 mt-1">
+                                          {endpoint.api_base}
+                                        </div>
+                                      )}
+                                    </TableCell>
+                                    <TableCell>
+                                      <Badge color="emerald">✓ Healthy</Badge>
+                                    </TableCell>
+                                    <TableCell>
+                                      {endpoint.response_time_ms ? (
+                                        <div>
+                                          <div className="font-medium">{endpoint.response_time_ms}ms</div>
+                                          <div className="text-xs text-gray-500">
+                                            {endpoint.response_time_ms < 1000 ? '⚡ Fast' : 
+                                             endpoint.response_time_ms < 3000 ? '🔵 Normal' : '🟡 Slow'}
+                                          </div>
+                                        </div>
+                                      ) : (
+                                        <span className="text-gray-400">No data</span>
+                                      )}
+                                    </TableCell>
+                                    <TableCell>
+                                      {endpoint.cache?.['no-cache'] ? (
+                                        <Badge color="gray">No Cache</Badge>
+                                      ) : (
+                                        <Badge color="blue">Cached</Badge>
+                                      )}
+                                    </TableCell>
+                                    <TableCell>{endpoint.max_tokens || 'N/A'}</TableCell>
+                                    <TableCell>
+                                      {endpoint.fallbacks && endpoint.fallbacks.length > 0 ? (
+                                        <div className="max-w-32">
+                                          <Text className="text-xs text-gray-600">
+                                            {endpoint.fallbacks.length} fallback{endpoint.fallbacks.length > 1 ? 's' : ''}
+                                          </Text>
+                                          <div className="text-xs text-gray-500 truncate">
+                                            {endpoint.fallbacks.slice(0, 2).join(', ')}
+                                            {endpoint.fallbacks.length > 2 && '...'}
+                                          </div>
+                                        </div>
+                                      ) : (
+                                        <Text className="text-xs text-gray-500">None</Text>
+                                      )}
+                                    </TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                            </div>
+                          </div>
+                        )}
+                        
+                        {healthCheckResponse.unhealthy_endpoints && healthCheckResponse.unhealthy_endpoints.length > 0 && (
+                          <div className="mb-6">
+                            <Subtitle className="mb-4 text-gray-700 flex items-center gap-2">
+                              <XCircleIcon className="h-5 w-5 text-indigo-500" />
+                              Unhealthy Endpoints ({healthCheckResponse.unhealthy_endpoints.length})
+                            </Subtitle>
+                                                         <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
+                                                          <Table>
+                                <TableHead>
+                                  <TableRow className="bg-gray-50">
+                                    <TableHeaderCell className="font-semibold">Model</TableHeaderCell>
+                                    <TableHeaderCell className="font-semibold">Status</TableHeaderCell>
+                                    <TableHeaderCell className="font-semibold">Error Details</TableHeaderCell>
+                                  </TableRow>
+                                </TableHead>
+                              <TableBody>
+                                {healthCheckResponse.unhealthy_endpoints.map((endpoint: any, idx: number) => (
+                                  <TableRow key={idx}>
+                                    <TableCell>
+                                      <div className="font-medium">{endpoint.model || 'N/A'}</div>
+                                      {endpoint.api_base && (
+                                        <div className="text-xs text-gray-500 mt-1">
+                                          {endpoint.api_base}
+                                        </div>
+                                      )}
+                                    </TableCell>
+                                    <TableCell>
+                                      <Badge color="rose">✗ Unhealthy</Badge>
+                                    </TableCell>
+                                    <TableCell>
+                                      <div className="max-w-lg">
+                                        <Text className="text-red-600 text-sm font-medium">
+                                          {endpoint.error || endpoint.exception || 'Unknown error'}
+                                        </Text>
+                                      </div>
+                                    </TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Summary Statistics */}
+                        <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-6">
+                          <Card className="p-6 bg-white border border-gray-200 shadow-sm">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <Metric className="text-gray-900">{healthCheckResponse.healthy_count ?? healthCheckResponse.healthy_endpoints?.length ?? 0}</Metric>
+                                <Text className="text-gray-600 font-medium">Healthy Endpoints</Text>
+                              </div>
+                              <CheckCircleIcon className="h-8 w-8 text-indigo-500" />
+                            </div>
+                          </Card>
+                          
+                          <Card className="p-6 bg-white border border-gray-200 shadow-sm">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <Metric className="text-gray-900">{healthCheckResponse.unhealthy_count ?? healthCheckResponse.unhealthy_endpoints?.length ?? 0}</Metric>
+                                <Text className="text-gray-600 font-medium">Unhealthy Endpoints</Text>
+                              </div>
+                              <XCircleIcon className="h-8 w-8 text-indigo-500" />
+                            </div>
+                          </Card>
+                          
+                          <Card className="p-6 bg-white border border-gray-200 shadow-sm">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <Metric className="text-gray-900">
+                                  {(() => {
+                                    const healthy = healthCheckResponse.healthy_count ?? healthCheckResponse.healthy_endpoints?.length ?? 0;
+                                    const unhealthy = healthCheckResponse.unhealthy_count ?? healthCheckResponse.unhealthy_endpoints?.length ?? 0;
+                                    const total = healthy + unhealthy;
+                                    return total > 0 ? `${Math.round((healthy / total) * 100)}%` : '0%';
+                                  })()}
+                                </Metric>
+                                <Text className="text-gray-600 font-medium">Success Rate</Text>
+                              </div>
+                              <StatusOnlineIcon className="h-8 w-8 text-indigo-500" />
+                            </div>
+                          </Card>
+                        </div>
+
+
+                      </div>
+                    )}
+                  </div>
                 )}
               </Card>
             </TabPanel>
