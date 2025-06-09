@@ -7,7 +7,7 @@ import requests # Need to import requests to mock its exceptions
 import json # To create valid JSON responses for mock
 
 # Import the guardrail class and types from your file
-from prisma_airs_guardrail import prisma_airs_guardrail, test_airs
+from prisma_airs_guardrail import prisma_airs_guardrail, call_airs_api
 
 # Mock LiteLLM types for the hook signature
 from litellm.proxy._types import UserAPIKeyAuth
@@ -36,11 +36,11 @@ class TestPrismaAirsGuardrail(unittest.IsolatedAsyncioTestCase):
 
     @mock.patch('prisma_airs_guardrail.requests.post')
     @mock.patch('prisma_airs_guardrail.os.environ.get')
-    def test_airs_success_no_block(self, mock_getenv, mock_post):
+    def call_airs_api_success_no_block(self, mock_getenv, mock_post):
         """
-        Tests the test_airs function when the API call is successful and no block is returned.
+        Tests the call_airs_api function when the API call is successful and no block is returned.
         """
-        print("\n--- Running test_airs_success_no_block ---")
+        print("\n--- Running call_airs_api_success_no_block ---")
 
         mock_getenv.side_effect = {
             "PRISMA_AIRS_API_BASE": self.mock_api_base,
@@ -53,7 +53,7 @@ class TestPrismaAirsGuardrail(unittest.IsolatedAsyncioTestCase):
         mock_response.json.return_value = {"action": "allow"}
         mock_post.return_value = mock_response
 
-        response = test_airs("Hello, how are you?")
+        response = call_airs_api("Hello, how are you?")
 
         mock_post.assert_called_once()
         self.assertEqual(response.status_code, 200)
@@ -84,12 +84,12 @@ class TestPrismaAirsGuardrail(unittest.IsolatedAsyncioTestCase):
             timeout=5,
             verify=False
         )
-        print("--- Finished test_airs_success_no_block ---")
+        print("--- Finished call_airs_api_success_no_block ---")
 
 
-    @mock.patch('prisma_airs_guardrail.test_airs')
+    @mock.patch('prisma_airs_guardrail.call_airs_api')
     # --- IMPORTANT CHANGE HERE: Make test methods async ---
-    async def test_async_pre_call_hook_no_block(self, mock_test_airs):
+    async def test_async_pre_call_hook_no_block(self, mock_call_airs_api):
         """
         Tests async_pre_call_hook when AIRS allows the request.
         """
@@ -98,7 +98,7 @@ class TestPrismaAirsGuardrail(unittest.IsolatedAsyncioTestCase):
         mock_airs_response = mock.Mock()
         mock_airs_response.status_code = 200
         mock_airs_response.json.return_value = {"action": "allow"}
-        mock_test_airs.return_value = mock_airs_response
+        mock_call_airs_api.return_value = mock_airs_response
 
         guardrail = prisma_airs_guardrail()
 
@@ -111,13 +111,13 @@ class TestPrismaAirsGuardrail(unittest.IsolatedAsyncioTestCase):
         # --- IMPORTANT CHANGE HERE: Await the async call directly ---
         result = await guardrail.async_pre_call_hook(user_api_key_dict, cache, data, call_type)
 
-        mock_test_airs.assert_called_once_with("This is a safe prompt.")
+        mock_call_airs_api.assert_called_once_with("This is a safe prompt.")
         self.assertIsNone(result)
         print("--- Finished test_async_pre_call_hook_no_block ---")
 
 
-    @mock.patch('prisma_airs_guardrail.test_airs')
-    async def test_async_pre_call_hook_blocked_by_airs(self, mock_test_airs):
+    @mock.patch('prisma_airs_guardrail.call_airs_api')
+    async def test_async_pre_call_hook_blocked_by_airs(self, mock_call_airs_api):
         """
         Tests async_pre_call_hook when AIRS blocks the request.
         """
@@ -126,7 +126,7 @@ class TestPrismaAirsGuardrail(unittest.IsolatedAsyncioTestCase):
         mock_airs_response = mock.Mock()
         mock_airs_response.status_code = 200
         mock_airs_response.json.return_value = {"action": "block"}
-        mock_test_airs.return_value = mock_airs_response
+        mock_call_airs_api.return_value = mock_airs_response
 
         guardrail = prisma_airs_guardrail()
 
@@ -137,22 +137,22 @@ class TestPrismaAirsGuardrail(unittest.IsolatedAsyncioTestCase):
 
         result = await guardrail.async_pre_call_hook(user_api_key_dict, cache, data, call_type)
 
-        mock_test_airs.assert_called_once_with("This is a malicious prompt.")
+        mock_call_airs_api.assert_called_once_with("This is a malicious prompt.")
         self.assertEqual(result, "Request blocked by security policy.")
 
         print("--- Finished test_async_pre_call_hook_blocked_by_airs ---")
 
-    @mock.patch('prisma_airs_guardrail.test_airs')
-    async def test_async_pre_call_hook_api_error(self, mock_test_airs):
+    @mock.patch('prisma_airs_guardrail.call_airs_api')
+    async def test_async_pre_call_hook_api_error(self, mock_call_airs_api):
         """
-        Tests async_pre_call_hook when the AIRS API call fails (e.g., HTTP error from test_airs).
+        Tests async_pre_call_hook when the AIRS API call fails (e.g., HTTP error from call_airs_api).
         """
         print("\n--- Running test_async_pre_call_hook_api_error ---")
 
         mock_airs_response = mock.Mock()
         mock_airs_response.status_code = 500
         mock_airs_response.json.return_value = {"error": "Internal Server Error"}
-        mock_test_airs.return_value = mock_airs_response
+        mock_call_airs_api.return_value = mock_airs_response
 
         guardrail = prisma_airs_guardrail()
         data = {"messages": [{"role": "user", "content": "Any prompt."}]}
@@ -162,18 +162,18 @@ class TestPrismaAirsGuardrail(unittest.IsolatedAsyncioTestCase):
 
         result = await guardrail.async_pre_call_hook(user_api_key_dict, cache, data, call_type)
 
-        mock_test_airs.assert_called_once_with("Any prompt.")
+        mock_call_airs_api.assert_called_once_with("Any prompt.")
         self.assertEqual(result, "airs call failed (HTTP 500).")
         print("--- Finished test_async_pre_call_hook_api_error ---")
 
-    @mock.patch('prisma_airs_guardrail.test_airs')
-    async def test_async_pre_call_hook_exception(self, mock_test_airs):
+    @mock.patch('prisma_airs_guardrail.call_airs_api')
+    async def test_async_pre_call_hook_exception(self, mock_call_airs_api):
         """
         Tests async_pre_call_hook when an unexpected exception occurs during the AIRS call.
         """
         print("\n--- Running test_async_pre_call_hook_exception ---")
 
-        mock_test_airs.side_effect = requests.exceptions.ConnectionError("Mocked connection failed")
+        mock_call_airs_api.side_effect = requests.exceptions.ConnectionError("Mocked connection failed")
 
         guardrail = prisma_airs_guardrail()
         data = {"messages": [{"role": "user", "content": "Another prompt."}]}
@@ -183,12 +183,12 @@ class TestPrismaAirsGuardrail(unittest.IsolatedAsyncioTestCase):
 
         result = await guardrail.async_pre_call_hook(user_api_key_dict, cache, data, call_type)
 
-        mock_test_airs.assert_called_once_with("Another prompt.")
+        mock_call_airs_api.assert_called_once_with("Another prompt.")
         self.assertIn("Error calling AIRS Mocked connection failed", result)
         print("--- Finished test_async_pre_call_hook_exception ---")
 
-    @mock.patch('prisma_airs_guardrail.test_airs')
-    async def test_async_pre_call_hook_invalid_input(self, mock_test_airs):
+    @mock.patch('prisma_airs_guardrail.call_airs_api')
+    async def test_async_pre_call_hook_invalid_input(self, mock_call_airs_api):
         """
         Tests async_pre_call_hook with invalid input data (missing messages).
         """
@@ -202,7 +202,7 @@ class TestPrismaAirsGuardrail(unittest.IsolatedAsyncioTestCase):
 
         result = await guardrail.async_pre_call_hook(user_api_key_dict, cache, data, call_type)
 
-        mock_test_airs.assert_not_called()
+        mock_call_airs_api.assert_not_called()
         self.assertEqual(result, "Invalid input: 'messages' missing or improperly formatted.")
         print("--- Finished test_async_pre_call_hook_invalid_input ---")
 
