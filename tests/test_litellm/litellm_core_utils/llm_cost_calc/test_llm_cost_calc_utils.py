@@ -341,24 +341,108 @@ def test_string_cost_values_with_threshold():
         "input_cost_per_token_above_200k_tokens": "5e-7",  # String threshold cost (lower)
         "output_cost_per_token_above_200k_tokens": "1e-6",  # String threshold cost (lower)
     }
-    
+
     # Test usage above threshold
     usage = Usage(
         prompt_tokens=250000,  # Above 200k threshold
         completion_tokens=1000,
         total_tokens=251000,
     )
-    
+
     with patch('litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info', return_value=mock_model_info):
         prompt_cost, completion_cost = generic_cost_per_token(
             model="test-model",
             usage=usage,
             custom_llm_provider="test-provider"
         )
-    
+
     # Expected costs using threshold pricing (string values converted to float)
     expected_prompt_cost = 250000 * 5e-7  # threshold cost
     expected_completion_cost = 1000 * 1e-6  # threshold cost
-    
+
     assert round(prompt_cost, 12) == round(expected_prompt_cost, 12)
     assert round(completion_cost, 12) == round(expected_completion_cost, 12)
+
+
+
+
+def test_cache_read_cost_above_200k_tokens():
+    model = "gemini-2.5-pro-preview-06-05"
+    custom_llm_provider = "gemini"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_cost_map = litellm.model_cost[model].copy()
+
+    litellm.model_cost[model] = model_cost_map
+
+    prompt_tokens = 210_000
+    cache_hit_tokens = 50_000
+    text_tokens = prompt_tokens - cache_hit_tokens
+    completion_tokens = 0
+
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=cache_hit_tokens,
+            text_tokens=text_tokens
+        )
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    expected_prompt_cost = (
+        text_tokens * model_cost_map["input_cost_per_token_above_200k_tokens"]
+    ) + (
+        cache_hit_tokens * model_cost_map["cache_read_input_token_cost_above_200k_tokens"]
+    )
+
+    assert round(prompt_cost, 10) == round(expected_prompt_cost, 10)
+    assert round(completion_cost, 10) == 0.0
+
+
+def test_cache_read_cost_below_200k_tokens():
+    model = "gemini-2.5-pro-preview-06-05"
+    custom_llm_provider = "gemini"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_cost_map = litellm.model_cost[model].copy()
+
+    litellm.model_cost[model] = model_cost_map
+
+    prompt_tokens = 190_000
+    cache_hit_tokens = 30_000
+    text_tokens = prompt_tokens - cache_hit_tokens
+    completion_tokens = 0
+
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=cache_hit_tokens,
+            text_tokens=text_tokens,
+        ),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    expected_prompt_cost = (
+        text_tokens * model_cost_map["input_cost_per_token"]
+    ) + (
+        cache_hit_tokens * model_cost_map["cache_read_input_token_cost"]
+    )
+
+    assert round(prompt_cost, 10) == round(expected_prompt_cost, 10)
+    assert round(completion_cost, 10) == 0.0
