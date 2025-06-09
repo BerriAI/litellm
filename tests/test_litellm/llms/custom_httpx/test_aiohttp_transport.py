@@ -75,7 +75,6 @@ async def test_aiohttp_response_stream_normal_flow():
 async def test_transfer_encoding_error_no_httpx_read_error():
     """Test that TransferEncodingError doesn't get converted to httpx.ReadError"""
     import logging
-    from unittest.mock import patch
 
     # Create a TransferEncodingError wrapped in ClientPayloadError (like in real scenarios)
     transfer_error = aiohttp.http_exceptions.TransferEncodingError(
