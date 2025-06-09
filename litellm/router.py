@@ -4740,13 +4740,9 @@ class Router:
                     or deployment.litellm_params.vertex_credentials
                 )
 
-                if (
-                    vertex_project is None
-                    or vertex_location is None
-                    or vertex_credentials is None
-                ):
+                if vertex_project is None or vertex_location is None:
                     raise ValueError(
-                        "vertex_project, vertex_location, and vertex_credentials must be set in litellm_params for pass-through endpoints"
+                        "vertex_project, and vertex_location must be set in litellm_params for pass-through endpoints."
                     )
                 passthrough_endpoint_router.add_vertex_credentials(
                     project_id=vertex_project,

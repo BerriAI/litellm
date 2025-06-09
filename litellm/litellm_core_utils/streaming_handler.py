@@ -85,9 +85,9 @@ class CustomStreamWrapper:
 
         self.system_fingerprint: Optional[str] = None
         self.received_finish_reason: Optional[str] = None
-        self.intermittent_finish_reason: Optional[str] = (
-            None  # finish reasons that show up mid-stream
-        )
+        self.intermittent_finish_reason: Optional[
+            str
+        ] = None  # finish reasons that show up mid-stream
         self.special_tokens = [
             "<|assistant|>",
             "<|system|>",
@@ -135,6 +135,7 @@ class CustomStreamWrapper:
             []
         )  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
+        self.created: Optional[int] = None
 
     def __iter__(self):
         return self
@@ -621,6 +622,13 @@ class CustomStreamWrapper:
             model_response.id = self.response_id
         if self.system_fingerprint is not None:
             model_response.system_fingerprint = self.system_fingerprint
+
+        if (
+            self.created is not None
+        ):  # maintain same 'created' across all chunks - https://github.com/BerriAI/litellm/issues/11437
+            model_response.created = self.created
+        else:
+            self.created = model_response.created
         if hidden_params is not None:
             model_response._hidden_params = hidden_params
         model_response._hidden_params["custom_llm_provider"] = _logging_obj_llm_provider
@@ -914,7 +922,6 @@ class CustomStreamWrapper:
     def chunk_creator(self, chunk: Any):  # type: ignore  # noqa: PLR0915
         model_response = self.model_response_creator()
         response_obj: Dict[str, Any] = {}
-
         try:
             # return this for all models
             completion_obj: Dict[str, Any] = {"content": ""}
@@ -1309,9 +1316,9 @@ class CustomStreamWrapper:
                             _json_delta = delta.model_dump()
                             print_verbose(f"_json_delta: {_json_delta}")
                             if "role" not in _json_delta or _json_delta["role"] is None:
-                                _json_delta["role"] = (
-                                    "assistant"  # mistral's api returns role as None
-                                )
+                                _json_delta[
+                                    "role"
+                                ] = "assistant"  # mistral's api returns role as None
                             if "tool_calls" in _json_delta and isinstance(
                                 _json_delta["tool_calls"], list
                             ):
@@ -1480,6 +1487,7 @@ class CustomStreamWrapper:
         try:
             if self.completion_stream is None:
                 self.fetch_sync_stream()
+
             while True:
                 if (
                     isinstance(self.completion_stream, str)
@@ -1701,9 +1709,9 @@ class CustomStreamWrapper:
                         chunk = next(self.completion_stream)
                     if chunk is not None and chunk != b"":
                         print_verbose(f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}")
-                        processed_chunk: Optional[ModelResponseStream] = (
-                            self.chunk_creator(chunk=chunk)
-                        )
+                        processed_chunk: Optional[
+                            ModelResponseStream
+                        ] = self.chunk_creator(chunk=chunk)
                         print_verbose(
                             f"PROCESSED CHUNK POST CHUNK CREATOR: {processed_chunk}"
                         )
