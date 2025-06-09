@@ -422,7 +422,7 @@ def test_anthropic_tool_helper(cache_control_location):
     else:
         tool["cache_control"] = {"type": "ephemeral"}
 
-    tool = AnthropicConfig()._map_tool_helper(tool=tool)
+    tool, _ = AnthropicConfig()._map_tool_helper(tool=tool)
 
     assert tool["cache_control"] == {"type": "ephemeral"}
 
@@ -1273,3 +1273,59 @@ def test_anthropic_text_editor():
 
     assert response is not None
 
+@pytest.mark.parametrize("spec", ["anthropic", "openai"])
+def test_anthropic_mcp_server_tool_use(spec: str):
+    litellm._turn_on_debug()
+
+    if spec == "anthropic":
+        tools = [
+            {
+                "type": "url",
+                "url": "https://mcp.deepwiki.com/mcp",
+                "name": "deepwiki-mcp",
+            }
+        ]
+    elif spec == "openai":
+        tools=[
+            {
+                "type": "mcp",
+                "server_label": "deepwiki",
+                "server_url": "https://mcp.deepwiki.com/mcp",
+                "require_approval": "never",
+            },
+        ]
+
+    params = {
+        "model": "anthropic/claude-sonnet-4-20250514",
+        "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
+        "tools": tools
+    }
+
+    try:
+        response = litellm.completion(**params)
+    except litellm.InternalServerError as e:
+        print(e)
+
+    assert response is not None
+
+@pytest.mark.parametrize("model", ["openai/gpt-4.1", "anthropic/claude-sonnet-4-20250514"])
+def test_anthropic_mcp_server_responses_api(model: str):
+    from litellm import responses
+    
+    tools=[
+            {
+                "type": "mcp",
+                "server_label": "deepwiki",
+                "server_url": "https://mcp.deepwiki.com/mcp",
+                "require_approval": "never",
+            },
+        ]
+
+    response = litellm.responses(
+        model=model,
+        input="Who won the World Cup in 2022?",
+        max_output_tokens=100,
+        tools=tools
+    )
+
+    assert response is not None
