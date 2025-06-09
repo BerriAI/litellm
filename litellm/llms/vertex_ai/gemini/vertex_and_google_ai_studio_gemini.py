@@ -1850,7 +1850,6 @@ class ModelResponseIterator:
 
     def chunk_parser(self, chunk: dict) -> Optional["ModelResponseStream"]:
         try:
-            print(f"RAW GEMINI CHUNK: {chunk}")
             verbose_logger.debug(f"RAW GEMINI CHUNK: {chunk}")
             from litellm.types.utils import ModelResponseStream
 
