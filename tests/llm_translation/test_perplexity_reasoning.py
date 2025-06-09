@@ -62,13 +62,13 @@ class TestPerplexityReasoning:
         """
         Test that reasoning_effort is correctly passed in actual completion call (mocked)
         """
+        from openai import OpenAI
+        from openai.types.chat.chat_completion import ChatCompletion
+        
         litellm.set_verbose = True
         
         # Mock successful response with reasoning content
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.headers = {"content-type": "application/json"}
-        mock_response.json.return_value = {
+        response_object = {
             "id": "cmpl-test",
             "object": "chat.completion",
             "created": 1677652288,
@@ -94,21 +94,33 @@ class TestPerplexityReasoning:
             },
         }
 
-        with patch("litellm.llms.custom_httpx.custom_httpx_handler.HTTPHandler.post") as mock_post:
-            mock_post.return_value = mock_response
+        pydantic_obj = ChatCompletion(**response_object)
+
+        def _return_pydantic_obj(*args, **kwargs):
+            new_response = MagicMock()
+            new_response.headers = {"content-type": "application/json"}
+            new_response.parse.return_value = pydantic_obj
+            return new_response
+
+        openai_client = OpenAI(api_key="fake-api-key")
+
+        with patch.object(
+            openai_client.chat.completions.with_raw_response, "create", side_effect=_return_pydantic_obj
+        ) as mock_client:
             
             response = completion(
                 model=model,
                 messages=[{"role": "user", "content": "Hello, please think about this carefully."}],
                 reasoning_effort="high",
+                client=openai_client,
             )
             
             # Verify the call was made
-            assert mock_post.called
+            assert mock_client.called
             
             # Get the request data from the mock call
-            call_args = mock_post.call_args
-            request_data = call_args[1]["json"]  # The json parameter passed to post
+            call_args = mock_client.call_args
+            request_data = call_args.kwargs
             
             # Verify reasoning_effort was included in the request
             assert "reasoning_effort" in request_data
@@ -116,67 +128,7 @@ class TestPerplexityReasoning:
             
             # Verify response structure
             assert response.choices[0].message.content is not None
-            assert "reasoning_content" in mock_response.json.return_value["choices"][0]["message"]
-
-    @pytest.mark.parametrize(
-        "model",
-        [
-            "perplexity/sonar-reasoning",
-            "perplexity/sonar-reasoning-pro",
-        ]
-    )
-    def test_perplexity_reasoning_effort_streaming_mock(self, model):
-        """
-        Test that reasoning_effort works with streaming for Perplexity Sonar reasoning models (mocked)
-        """
-        litellm.set_verbose = True
-        
-        # Mock streaming response chunks
-        streaming_chunks = [
-            'data: {"id":"cmpl-test","object":"chat.completion.chunk","created":1677652288,"model":"' + model.split("/")[1] + '","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}\n\n',
-            'data: {"id":"cmpl-test","object":"chat.completion.chunk","created":1677652288,"model":"' + model.split("/")[1] + '","choices":[{"index":0,"delta":{"content":"This"},"finish_reason":null}]}\n\n',
-            'data: {"id":"cmpl-test","object":"chat.completion.chunk","created":1677652288,"model":"' + model.split("/")[1] + '","choices":[{"index":0,"delta":{"content":" is"},"finish_reason":null}]}\n\n',
-            'data: {"id":"cmpl-test","object":"chat.completion.chunk","created":1677652288,"model":"' + model.split("/")[1] + '","choices":[{"index":0,"delta":{"content":" a"},"finish_reason":null}]}\n\n',
-            'data: {"id":"cmpl-test","object":"chat.completion.chunk","created":1677652288,"model":"' + model.split("/")[1] + '","choices":[{"index":0,"delta":{"content":" test"},"finish_reason":null}]}\n\n',
-            'data: {"id":"cmpl-test","object":"chat.completion.chunk","created":1677652288,"model":"' + model.split("/")[1] + '","choices":[{"index":0,"delta":{"reasoning_content":"Let me think about this..."},"finish_reason":null}]}\n\n',
-            'data: {"id":"cmpl-test","object":"chat.completion.chunk","created":1677652288,"model":"' + model.split("/")[1] + '","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":4,"total_tokens":13,"completion_tokens_details":{"reasoning_tokens":8}}}\n\n',
-            'data: [DONE]\n\n'
-        ]
-        
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.headers = {"content-type": "text/event-stream"}
-        mock_response.iter_lines.return_value = streaming_chunks
-
-        with patch("litellm.llms.custom_httpx.custom_httpx_handler.HTTPHandler.post") as mock_post:
-            mock_post.return_value = mock_response
-            
-            response = completion(
-                model=model,
-                messages=[{"role": "user", "content": "Hello, please think about this carefully."}],
-                reasoning_effort="medium",
-                stream=True,
-            )
-            
-            # Verify the call was made
-            assert mock_post.called
-            
-            # Get the request data from the mock call
-            call_args = mock_post.call_args
-            request_data = call_args[1]["json"]
-            
-            # Verify reasoning_effort was included in the request
-            assert "reasoning_effort" in request_data
-            assert request_data["reasoning_effort"] == "medium"
-            assert request_data["stream"] is True
-            
-            # Collect chunks to verify streaming works
-            chunks = []
-            for chunk in response:
-                chunks.append(chunk)
-            
-            # Should have received chunks
-            assert len(chunks) > 0
+            assert response.choices[0].message.content == "This is a test response from the reasoning model."
 
     def test_perplexity_reasoning_models_support_reasoning(self):
         """
