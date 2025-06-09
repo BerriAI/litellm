@@ -543,7 +543,7 @@ class PrometheusLogger(CustomLogger):
         user_id: Optional[str],
         enum_values: UserAPIKeyLabelValues,
     ):
-        verbose_logger.debug(f"prometheus Logging - Enters token metrics function")
+        verbose_logger.debug("prometheus Logging - Enters token metrics function")
         # token metrics
 
         if standard_logging_payload is not None and isinstance(
