@@ -12,6 +12,10 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class PerplexityChatConfig(OpenAIGPTConfig):
+    @property
+    def custom_llm_provider(self) -> Optional[str]:
+        return "perplexity"
+
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
