@@ -1,4 +1,3 @@
-import json
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, Optional
 from urllib.parse import urlparse
@@ -9,7 +8,6 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
-from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
