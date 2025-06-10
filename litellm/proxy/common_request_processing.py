@@ -330,6 +330,7 @@ class ProxyBaseLLMRequestProcessing:
             "adelete_responses",
             "atext_completion",
             "aimage_edit",
+            "alist_input_items",
         ],
         proxy_logging_obj: ProxyLogging,
         general_settings: dict,
