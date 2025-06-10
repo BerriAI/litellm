@@ -1335,7 +1335,6 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
     model_max_budget: Optional[dict] = None
     budget_duration: Optional[str] = None
-    budget_reset_at: Optional[datetime] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
