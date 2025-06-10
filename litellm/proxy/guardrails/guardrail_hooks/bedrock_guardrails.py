@@ -79,9 +79,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         if messages:
             for message in messages:
-                message_text_content: Optional[
-                    List[str]
-                ] = self.get_content_for_message(message=message)
+                message_text_content: Optional[List[str]] = (
+                    self.get_content_for_message(message=message)
+                )
                 if message_text_content is None:
                     continue
                 for text_content in message_text_content:
@@ -241,11 +241,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self, response: BedrockGuardrailResponse
     ) -> bool:
         """
-        By default always raise an exception when a guardrail intervention is detected.
+        Only raise exception for "BLOCKED" actions, not for "ANONYMIZED" actions.
 
         If `self.mask_request_content` or `self.mask_response_content` is set to `True`, then use the output from the guardrail to mask the request or response content.
-        
-        Updated behavior: Only raise exception for "BLOCKED" actions, not for "ANONYMIZED" actions.
         """
 
         # if user opted into masking, return False. since we'll use the masked output from the guardrail
@@ -359,11 +357,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 2. Update the messages with the guardrail response ##########
         #########################################################
-        data[
-            "messages"
-        ] = self._update_messages_with_updated_bedrock_guardrail_response(
-            messages=new_messages,
-            bedrock_guardrail_response=bedrock_guardrail_response,
+        data["messages"] = (
+            self._update_messages_with_updated_bedrock_guardrail_response(
+                messages=new_messages,
+                bedrock_guardrail_response=bedrock_guardrail_response,
+            )
         )
 
         #########################################################
@@ -413,11 +411,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 2. Update the messages with the guardrail response ##########
         #########################################################
-        data[
-            "messages"
-        ] = self._update_messages_with_updated_bedrock_guardrail_response(
-            messages=new_messages,
-            bedrock_guardrail_response=bedrock_guardrail_response,
+        data["messages"] = (
+            self._update_messages_with_updated_bedrock_guardrail_response(
+                messages=new_messages,
+                bedrock_guardrail_response=bedrock_guardrail_response,
+            )
         )
 
         #########################################################
@@ -467,11 +465,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 2. Update the messages with the guardrail response ##########
         #########################################################
-        data[
-            "messages"
-        ] = self._update_messages_with_updated_bedrock_guardrail_response(
-            messages=new_messages,
-            bedrock_guardrail_response=bedrock_guardrail_response,
+        data["messages"] = (
+            self._update_messages_with_updated_bedrock_guardrail_response(
+                messages=new_messages,
+                bedrock_guardrail_response=bedrock_guardrail_response,
+            )
         )
 
         #########################################################
@@ -503,7 +501,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         masked_texts = self._extract_masked_texts_from_response(
             bedrock_guardrail_response
         )
-        
+
         # If guardrail provided masked output, use it regardless of masking flags
         # because the guardrail has already determined this content needs anonymization
         if masked_texts:
@@ -513,14 +511,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return self._apply_masking_to_messages(
                 messages=messages, masked_texts=masked_texts
             )
-        
+
         # If masking is enabled but no masked texts available, still try to apply
         # (this maintains backward compatibility for edge cases)
         if self.mask_request_content or self.mask_response_content:
             verbose_proxy_logger.debug(
                 "Masking enabled but no masked output from guardrail, returning original messages"
             )
-        
+
         return messages
 
     async def async_post_call_streaming_iterator_hook(
@@ -672,42 +670,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     new_content.append(item)
 
         return new_content, masking_index
-
-    def _has_anonymized_actions(
-        self, response: BedrockGuardrailResponse
-    ) -> bool:
-        """
-        Check if the guardrail response contains any ANONYMIZED actions.
-        
-        Args:
-            response: Response from Bedrock guardrail
-            
-        Returns:
-            True if any actions were ANONYMIZED, False otherwise
-        """
-        if response.get("action") != "GUARDRAIL_INTERVENED":
-            return False
-            
-        assessments = response.get("assessments", [])
-        if not assessments:
-            return False
-
-        for assessment in assessments:
-            # Check sensitive information policy for ANONYMIZED actions
-            sensitive_info_policy = assessment.get("sensitiveInformationPolicy")
-            if sensitive_info_policy:
-                pii_entities = sensitive_info_policy.get("piiEntities", [])
-                if pii_entities:
-                    for pii_entity in pii_entities:
-                        if pii_entity.get("action") == "ANONYMIZED":
-                            return True
-                regexes = sensitive_info_policy.get("regexes", [])
-                if regexes:
-                    for regex in regexes:
-                        if regex.get("action") == "ANONYMIZED":
-                            return True
-
-        return False
 
     def get_content_for_message(self, message: AllMessageValues) -> Optional[List[str]]:
         """
