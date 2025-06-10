@@ -811,6 +811,86 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     }
   };
 
+  // Helper function to extract meaningful error information
+  const extractMeaningfulError = (error: any): string => {
+    if (!error) return 'Health check failed';
+    
+    let errorStr = typeof error === 'string' ? error : JSON.stringify(error);
+    
+    // Common error patterns and their simplified versions
+    const errorPatterns = [
+      {
+        pattern: /Missing Anthropic API Key/i,
+        replacement: 'Missing Anthropic API Key'
+      },
+      {
+        pattern: /Missing OpenAI API Key/i,
+        replacement: 'Missing OpenAI API Key'
+      },
+      {
+        pattern: /Connection timeout/i,
+        replacement: 'Connection timeout'
+      },
+      {
+        pattern: /403.*Forbidden/i,
+        replacement: 'Access forbidden - check API key permissions'
+      },
+      {
+        pattern: /401.*Unauthorized/i,
+        replacement: 'Unauthorized - invalid API key'
+      },
+      {
+        pattern: /429.*rate limit/i,
+        replacement: 'Rate limit exceeded'
+      },
+      {
+        pattern: /500.*Internal Server Error/i,
+        replacement: 'Provider internal server error'
+      },
+      {
+        pattern: /Network.*not.*ok/i,
+        replacement: 'Network connection failed'
+      },
+      {
+        pattern: /litellm\.AuthenticationError/i,
+        replacement: 'Authentication failed'
+      },
+      {
+        pattern: /litellm\.RateLimitError/i,
+        replacement: 'Rate limit exceeded'
+      },
+      {
+        pattern: /litellm\.APIError/i,
+        replacement: 'API error'
+      }
+    ];
+    
+    // Check for specific error patterns
+    for (const { pattern, replacement } of errorPatterns) {
+      if (pattern.test(errorStr)) {
+        return replacement;
+      }
+    }
+    
+    // Extract first meaningful line (skip traceback noise)
+    const lines = errorStr.split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed && 
+          !trimmed.startsWith('File ') && 
+          !trimmed.startsWith('  ') && 
+          !trimmed.includes('traceback') &&
+          !trimmed.includes('Traceback') &&
+          trimmed.length > 10) {
+        // Limit length to avoid super long errors
+        return trimmed.length > 100 ? trimmed.substring(0, 97) + '...' : trimmed;
+      }
+    }
+    
+    // Fallback to truncated original error
+    return errorStr.length > 100 ? errorStr.substring(0, 97) + '...' : errorStr;
+  };
+
   const runIndividualHealthCheck = async (modelName: string) => {
     if (!accessToken) return;
     
@@ -837,7 +917,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           }
         }));
       } else {
-        const errorMessage = response.unhealthy_endpoints?.[0]?.error || 'Health check failed';
+        const rawError = response.unhealthy_endpoints?.[0]?.error || 'Health check failed';
+        const errorMessage = extractMeaningfulError(rawError);
         setModelHealthStatuses(prev => ({
           ...prev,
           [modelName]: {
@@ -850,7 +931,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       }
     } catch (error) {
       const currentTime = new Date().toLocaleString();
-      const errorMessage = error instanceof Error ? error.message : 'Connection timeout';
+      const errorMessage = extractMeaningfulError(error instanceof Error ? error.message : error);
       setModelHealthStatuses(prev => ({
         ...prev,
         [modelName]: {
@@ -866,9 +947,65 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const runAllHealthChecks = async () => {
     const modelsToCheck = selectedModelsForHealth.length > 0 ? selectedModelsForHealth : all_models_on_proxy;
     
-    for (const modelName of modelsToCheck) {
-      await runIndividualHealthCheck(modelName);
-    }
+    // Set all models to loading state
+    const loadingStatuses = modelsToCheck.reduce((acc, modelName) => {
+      acc[modelName] = {
+        ...modelHealthStatuses[modelName],
+        loading: true,
+        status: 'checking'
+      };
+      return acc;
+    }, {} as typeof modelHealthStatuses);
+    
+    setModelHealthStatuses(prev => ({ ...prev, ...loadingStatuses }));
+    
+    // Run all health checks in parallel
+    const healthCheckPromises = modelsToCheck.map(async (modelName) => {
+      if (!accessToken) return;
+      
+      try {
+        const response = await individualModelHealthCheckCall(accessToken, modelName);
+        const currentTime = new Date().toLocaleString();
+        
+        if (response.healthy_count > 0) {
+          setModelHealthStatuses(prev => ({
+            ...prev,
+            [modelName]: {
+              status: 'healthy',
+              lastCheck: currentTime,
+              loading: false
+            }
+          }));
+        } else {
+          const rawError = response.unhealthy_endpoints?.[0]?.error || 'Health check failed';
+          const errorMessage = extractMeaningfulError(rawError);
+          setModelHealthStatuses(prev => ({
+            ...prev,
+            [modelName]: {
+              status: 'unhealthy',
+              lastCheck: currentTime,
+              loading: false,
+              error: errorMessage
+            }
+          }));
+        }
+      } catch (error) {
+        const currentTime = new Date().toLocaleString();
+        const errorMessage = extractMeaningfulError(error instanceof Error ? error.message : error);
+        setModelHealthStatuses(prev => ({
+          ...prev,
+          [modelName]: {
+            status: 'unhealthy',
+            lastCheck: currentTime,
+            loading: false,
+            error: errorMessage
+          }
+        }));
+      }
+    });
+    
+    // Wait for all health checks to complete
+    await Promise.allSettled(healthCheckPromises);
   };
 
   const handleModelSelection = (modelName: string, checked: boolean) => {
@@ -1408,12 +1545,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                   <Text className="text-gray-600 text-sm">Checking...</Text>
                                 </div>
                               ) : (
-                                <div>
-                                  {getStatusBadge(healthStatus.status)}
-                                  {healthStatus.error && (
-                                    <div className="text-xs text-red-600 mt-1">
-                                      {healthStatus.error.includes('Connection timeout') ? 'Failed - Connection timeout' : healthStatus.error}
-                                    </div>
+                                <div className="flex items-center space-x-2">
+                                  {healthStatus.error ? (
+                                    <Tooltip title={healthStatus.error} placement="top">
+                                      <div>
+                                        {getStatusBadge(healthStatus.status)}
+                                      </div>
+                                    </Tooltip>
+                                  ) : (
+                                    getStatusBadge(healthStatus.status)
                                   )}
                                 </div>
                               )}
