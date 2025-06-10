@@ -440,7 +440,14 @@ class CustomStreamWrapper:
                 else:  # function/tool calling chunk - when content is None. in this case we just return the original chunk from openai
                     pass
                 if str_line.choices[0].finish_reason:
-                    is_finished = True
+                    is_finished = (
+                        True  # check if str_line._hidden_params["is_finished"] is True
+                    )
+                    if (
+                        hasattr(str_line, "_hidden_params")
+                        and str_line._hidden_params.get("is_finished") is not None
+                    ):
+                        is_finished = str_line._hidden_params.get("is_finished")
                     finish_reason = str_line.choices[0].finish_reason
 
                 # checking for logprobs
@@ -1195,7 +1202,6 @@ class CustomStreamWrapper:
                 if response_obj is None:
                     return
                 completion_obj["content"] = response_obj["text"]
-                print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]:
                     if response_obj["finish_reason"] == "error":
                         raise Exception(

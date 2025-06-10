@@ -3942,3 +3942,20 @@ def test_vertex_ai_streaming_response_id():
         iterator = iter(iterator)
         first_chunk = next(iterator)
         assert first_chunk.id == "vertex_ai_response_stream_123"
+
+
+def test_vertex_ai_gemini_2_5_pro_streaming():
+    load_vertex_ai_credentials()
+    # litellm._turn_on_debug()
+    response = completion(
+        model="vertex_ai/gemini-2.5-pro-preview-06-05",
+        messages=[{"role": "user", "content": "Hi!"}],
+        vertex_location="global",
+        stream=True,
+    )
+    has_real_content = False
+    for chunk in response:
+        print(chunk)
+        if chunk.choices[0].delta.content is not None and len(chunk.choices[0].delta.content) > 0:
+            has_real_content = True
+    assert has_real_content

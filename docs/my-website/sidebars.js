@@ -153,6 +153,7 @@ const sidebars = {
               "proxy/guardrails/aim_security",
               "proxy/guardrails/aporia_api",
               "proxy/guardrails/bedrock",
+              "proxy/guardrails/lasso_security",
               "proxy/guardrails/guardrails_ai",
               "proxy/guardrails/lakera_ai",
               "proxy/guardrails/pangea",

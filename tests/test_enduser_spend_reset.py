@@ -13,13 +13,6 @@ from litellm.caching.caching import DualCache
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
-
-load_dotenv()
-
-
 async def create_budget(session, data):
     url = "http://0.0.0.0:4000/budget/new"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
@@ -193,7 +186,7 @@ async def budget_and_enduser_setup(prisma_client):
         await delete_budget(session, id_budget_x)
         await delete_budget(session, id_budget_y)
 
-
+# @pytest.mark.skip(reason="Skipping this test as it requires a local proxy to be running")
 @pytest.mark.asyncio
 async def test_reset_budget_for_endusers(
     reset_budget_job, prisma_client, budget_and_enduser_setup

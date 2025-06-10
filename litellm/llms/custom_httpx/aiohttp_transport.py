@@ -77,11 +77,10 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
 
     async def __aiter__(self) -> typing.AsyncIterator[bytes]:
         try:
-            with map_aiohttp_exceptions():
-                async for chunk in self._aiohttp_response.content.iter_chunked(
-                    self.CHUNK_SIZE
-                ):
-                    yield chunk
+            async for chunk in self._aiohttp_response.content.iter_chunked(
+                self.CHUNK_SIZE
+            ):
+                yield chunk
         except (
             aiohttp.ClientPayloadError,
             aiohttp.client_exceptions.ClientPayloadError,

@@ -911,6 +911,7 @@ class NewUserRequest(GenerateRequestBase):
     )
     send_invite_email: Optional[bool] = None
     sso_user_id: Optional[str] = None
+    organizations: Optional[List[str]] = None
 
 
 class NewUserResponse(GenerateKeyResponse):
@@ -1342,7 +1343,6 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
 class LiteLLM_BudgetTableFull(LiteLLM_BudgetTable):
     """Represents all params for a LiteLLM_BudgetTable record"""
 
-    budget_id: str
     created_at: datetime
 
 
@@ -2317,7 +2317,7 @@ class CommonProxyErrors(str, enum.Enum):
     )
     no_llm_router = "No models configured on proxy"
     not_allowed_access = "Admin-only endpoint. Not allowed to access this."
-    not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. Get a 7 day trial key here: https://www.litellm.ai/#trial. \nPricing: https://www.litellm.ai/#pricing"
+    not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. Get a 7 day trial key here: https://www.litellm.ai/enterprise#trial. \nPricing: https://www.litellm.ai/#pricing"
     max_parallel_request_limit_reached = (
         "Crossed TPM / RPM / Max Parallel Request Limit"
     )
@@ -2519,7 +2519,10 @@ class OrgMemberAddRequest(LiteLLMPydanticObjectBase):
         member_data = data.get("member")
         if isinstance(member_data, list):
             # If member is a list of dictionaries, convert each dictionary to a Member object
-            members = [OrgMember(**item) for item in member_data]
+            if all(isinstance(item, dict) for item in member_data):
+                members = [OrgMember(**item) for item in member_data]
+            else:
+                members = [item for item in member_data]
             # Replace member_data with the list of Member objects
             data["member"] = members
         elif isinstance(member_data, dict):
@@ -3080,3 +3083,10 @@ class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
     model_object_id: str
     file_purpose: Literal["batch", "fine-tune"]
     file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob]
+
+
+class EnterpriseLicenseData(TypedDict, total=False):
+    expiration_date: str
+    user_id: str
+    allowed_features: List[str]
+    max_users: int
