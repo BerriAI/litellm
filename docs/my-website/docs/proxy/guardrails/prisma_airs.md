@@ -44,6 +44,8 @@ guardrails:
         path : prisma_airs_guardrail.py
         mode: "pre_call"
         default_on: true
+        api_key: os.environ/PRISMA_AIRS_API_BASE 
+        api_base: os.environ/PRISMA_AIRS_API_KEY
 ```
 #### Supported values for `mode`
 
