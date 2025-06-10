@@ -7,7 +7,7 @@ import TabItem from '@theme/TabItem';
 
 # PANW PRISMA AIRS
 
-Use this is you want to write code to run Palo Alto Networks PRISMA AIRS as custom guardrail on litellm gateway.
+Palo Alto Networks PRISMA AIRS as custom guardrail on litellm gateway.
 
 ## Quick Start 
 
