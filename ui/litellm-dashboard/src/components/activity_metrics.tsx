@@ -106,18 +106,6 @@ const CustomLegend = ({ categories, colors }: { categories: string[], colors: st
 };
 
 const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: ModelActivityData }) => {
-  const chartData = metrics.daily_data.map(d => ({
-    date: d.date,
-    PromptTokens: d.metrics.prompt_tokens,
-    CompletionTokens: d.metrics.completion_tokens,
-    TotalTokens: d.metrics.total_tokens,
-    APIRequests: d.metrics.api_requests,
-    Spend: d.metrics.spend,
-    SuccessfulRequests: d.metrics.successful_requests,
-    FailedRequests: d.metrics.failed_requests,
-    CacheRead: d.metrics.cache_read_input_tokens || 0,
-    CacheCreation: d.metrics.cache_creation_input_tokens || 0,
-  }));
   return (
     <div className="space-y-2">
       {/* Summary Cards */}
