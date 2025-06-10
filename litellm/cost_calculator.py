@@ -1161,34 +1161,76 @@ def default_image_cost_calculator(
 
     # Check if this is a token-based pricing model (like gpt-image-1)
     if "input_cost_per_token" in cost_info or "output_cost_per_token" in cost_info:
-        # For token-based pricing, we need to calculate based on actual usage
-        # This is a fallback calculation for when usage data is not available
-        # Real cost should be calculated from actual token usage in response
-        
-        # For gpt-image-1, estimate output tokens based on quality and size
-        base_model_str = model.split("/")[-1] if "/" in model else model
-        if "gpt-image-1" in base_model_str:
-            # Use actual token counts if available and non-zero, otherwise estimate
-            if prompt_tokens is not None and completion_tokens is not None and (prompt_tokens > 0 or completion_tokens > 0):
-                # Use actual token usage from response
-                text_input_tokens = prompt_tokens
-                output_tokens = completion_tokens
-            else:
-                # Fallback to estimation when actual usage is not available or zero
-                output_tokens = _estimate_gpt_image_1_output_tokens(quality, height, width)
-                text_input_tokens = 50  # Conservative estimate for average prompt
-            
-            input_cost = text_input_tokens * cost_info.get("input_cost_per_token", 0)
-            output_cost = output_tokens * cost_info.get("output_cost_per_token", 0)
-            
-            return (input_cost + output_cost) * n
-        else:
-            # For other token-based image models, use a simple fallback
-            estimated_tokens = 1000  # Default estimate
-            return estimated_tokens * cost_info.get("output_cost_per_token", 0) * n
+        return _calculate_token_based_image_cost(
+            model=model,
+            cost_info=cost_info,
+            quality=quality,
+            height=height,
+            width=width,
+            n=n,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
     else:
         # Pixel-based pricing (legacy models like DALL-E 2/3)
         return cost_info["input_cost_per_pixel"] * height * width * n
+
+
+def _calculate_token_based_image_cost(
+    model: str,
+    cost_info: dict,
+    quality: Optional[str],
+    height: int,
+    width: int,
+    n: int,
+    prompt_tokens: Optional[int] = None,
+    completion_tokens: Optional[int] = None,
+) -> float:
+    """
+    Calculate the cost for token-based gpt-image-1 models.
+    
+    Supports both OpenAI and Azure deployments by extracting the base model name.
+    Requires actual token usage from the API response - no estimation fallbacks.
+    
+    Args:
+        model: Model name (e.g., "gpt-image-1", "azure/gpt-image-1", "azure/deployment-name")
+        cost_info: Cost information dictionary from model_prices_and_context_window.json
+        quality: Image quality setting ("low", "medium", "high") - unused but kept for API compatibility
+        height: Image height in pixels - unused but kept for API compatibility
+        width: Image width in pixels - unused but kept for API compatibility
+        n: Number of images to generate
+        prompt_tokens: Actual prompt tokens from response (required)
+        completion_tokens: Actual completion tokens from response (required)
+        
+    Returns:
+        float: Total cost for the image generation
+        
+    Raises:
+        ValueError: If model is not a gpt-image-1 variant or if token counts are not provided
+    """
+    # Extract base model name to handle both OpenAI and Azure variants
+    # Examples: "gpt-image-1" -> "gpt-image-1"
+    #          "azure/gpt-image-1" -> "gpt-image-1"
+    #          "azure/deployment-name" -> "deployment-name" (might contain gpt-image-1)
+    base_model_str = model.split("/")[-1] if "/" in model else model
+    
+    # Check if this is a gpt-image-1 model (works for both OpenAI and Azure)
+    if "gpt-image-1" in base_model_str or "gpt-image-1" in model:
+        # Always require actual token counts - no fallbacks
+        if prompt_tokens is None or completion_tokens is None:
+            raise ValueError(f"Token counts are required for gpt-image-1 cost calculation. prompt_tokens={prompt_tokens}, completion_tokens={completion_tokens}")
+        
+        text_input_tokens = prompt_tokens
+        output_tokens = completion_tokens
+        
+        input_cost = text_input_tokens * cost_info.get("input_cost_per_token", 0)
+        output_cost = output_tokens * cost_info.get("output_cost_per_token", 0)
+        
+        return (input_cost + output_cost) * n
+    else:
+        # For other token-based image models, we should not have reached this point
+        # This function should only be called for models with token-based pricing
+        raise ValueError(f"Model {model} does not support token-based pricing or is not a gpt-image-1 variant")
 
 
 def _estimate_gpt_image_1_output_tokens(

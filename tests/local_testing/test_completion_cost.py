@@ -320,15 +320,38 @@ def test_cost_openai_image_gen():
 
 
 def test_cost_gpt_image_1_token_based():
-    """Test GPT-image-1 token-based cost calculation"""
+    """Test GPT-image-1 token-based cost calculation with actual response data"""
     import json
+    from litellm import ImageResponse, Usage
+    
     # Load the local model cost map directly
     with open('model_prices_and_context_window.json', 'r') as f:
         litellm.model_cost = json.load(f)
     
-    # Test different quality levels
+    # Create mock image responses with actual token usage based on quality
+    # Token counts based on gpt-image-1 quality levels (from original test expectations)
+    low_response = ImageResponse(
+        created=1234567890,
+        data=[{"url": "http://example.com/image.png"}]
+    )
+    low_response.usage = Usage(prompt_tokens=50, completion_tokens=272, total_tokens=322)
+    
+    medium_response = ImageResponse(
+        created=1234567890,
+        data=[{"url": "http://example.com/image.png"}]
+    )
+    medium_response.usage = Usage(prompt_tokens=50, completion_tokens=1056, total_tokens=1106)
+    
+    high_response = ImageResponse(
+        created=1234567890,
+        data=[{"url": "http://example.com/image.png"}]
+    )
+    high_response.usage = Usage(prompt_tokens=50, completion_tokens=4160, total_tokens=4210)
+    
+    # Test different quality levels with actual response data
     cost_low = litellm.completion_cost(
         model="gpt-image-1",
+        completion_response=low_response,
         size="1024x1024",
         quality="low",
         n=1,
@@ -336,7 +359,8 @@ def test_cost_gpt_image_1_token_based():
     )
     
     cost_medium = litellm.completion_cost(
-        model="gpt-image-1", 
+        model="gpt-image-1",
+        completion_response=medium_response,
         size="1024x1024",
         quality="medium",
         n=1,
@@ -345,7 +369,8 @@ def test_cost_gpt_image_1_token_based():
     
     cost_high = litellm.completion_cost(
         model="gpt-image-1",
-        size="1024x1024", 
+        completion_response=high_response,
+        size="1024x1024",
         quality="high",
         n=1,
         call_type="image_generation",
