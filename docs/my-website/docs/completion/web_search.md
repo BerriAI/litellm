@@ -308,10 +308,58 @@ print(response.output_text)
 </TabItem>
 </Tabs>
 
+## Configuring Web Search in config.yaml
 
+You can set default web search options directly in your proxy config file:
 
+<Tabs>
+<TabItem value="default" label="Default Web Search">
 
+```yaml
+model_list:
+  # Enable web search by default for all requests to this model
+  - model_name: grok-3
+    litellm_params:
+      model: xai/grok-3
+      api_key: os.environ/XAI_API_KEY
+      web_search_options: {}  # Enables web search with default settings
+```
 
+</TabItem>
+<TabItem value="custom" label="Custom Search Context">
+
+```yaml
+model_list:
+  # Set custom web search context size
+  - model_name: grok-3
+    litellm_params:
+      model: xai/grok-3
+      api_key: os.environ/XAI_API_KEY
+      web_search_options:
+        search_context_size: "high"  # Options: "low", "medium", "high"
+  
+  # Different context size for different models
+  - model_name: gpt-4o-search-preview
+    litellm_params:
+      model: openai/gpt-4o-search-preview
+      api_key: os.environ/OPENAI_API_KEY
+      web_search_options:
+        search_context_size: "low"
+  
+  # Gemini with medium context (default)
+  - model_name: gemini-2-flash
+    litellm_params:
+      model: gemini-2.0-flash
+      vertex_project: your-project-id
+      vertex_location: us-central1
+      web_search_options:
+        search_context_size: "medium"
+```
+
+</TabItem>
+</Tabs>
+
+**Note:** When `web_search_options` is set in the config, it applies to all requests to that model. Users can still override these settings by passing `web_search_options` in their API requests.
 
 ## Checking if a model supports web search
 

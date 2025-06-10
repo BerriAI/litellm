@@ -46,6 +46,9 @@ from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     UserListResponse,
 )
 
+if TYPE_CHECKING:
+    from litellm.proxy.proxy_server import PrismaClient
+
 router = APIRouter()
 
 
@@ -120,6 +123,41 @@ async def _check_duplicate_user_email(
             )
 
 
+async def _add_user_to_organizations(
+    user_id: str,
+    organizations: List[str],
+    prisma_client: "PrismaClient",
+    user_api_key_dict: UserAPIKeyAuth,
+):
+    """
+    Add a user to organizations
+    """
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        organization_member_add,
+    )
+
+    tasks = []
+    for organization_id in organizations:
+        tasks.append(
+            organization_member_add(
+                data=OrganizationMemberAddRequest(
+                    organization_id=organization_id,
+                    member=[
+                        OrgMember(
+                            user_id=user_id,
+                            role=LitellmUserRoles.INTERNAL_USER,
+                        )
+                    ],
+                ),
+                http_request=Request(
+                    scope={"type": "http", "path": "/user/new"},
+                ),
+                user_api_key_dict=user_api_key_dict,
+            )
+        )
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 @router.post(
     "/user/new",
     tags=["Internal User management"],
@@ -169,6 +207,7 @@ async def new_user(
     - key_alias: Optional[str] - Alias for the key auto-created on `/user/new`. Default is None.
     - sso_user_id: Optional[str] - The id of the user in the SSO provider.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - organizations: List[str] - List of organization id's the user is a member of
     Returns:
     - key: (str) The generated api key for the user
     - expires: (datetime) Datetime object for when key expires.
@@ -188,13 +227,35 @@ async def new_user(
     ```
     """
     try:
-        from litellm.proxy.proxy_server import prisma_client
+        from litellm.proxy.proxy_server import _license_check, prisma_client
 
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=400, detail=CommonProxyErrors.db_not_connected_error.value
+            )
+
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail=CommonProxyErrors.db_not_connected_error.value,
+            )
         # Check for duplicate email
         await _check_duplicate_user_email(data.user_email, prisma_client)
 
+        # Check if license is over limit
+        total_users = await prisma_client.db.litellm_usertable.count()
+        if total_users and _license_check.is_over_limit(total_users=total_users):
+            raise HTTPException(
+                status_code=403,
+                detail="License is over limit. Please contact support@berri.ai to upgrade your license.",
+            )
+
         data_json = data.json()  # type: ignore
         data_json = _update_internal_new_user_params(data_json, data)
+        organization_ids = cast(
+            Optional[List[str]], data_json.pop("organizations", None)
+        )
+
         response = await generate_key_helper_fn(request_type="user", **data_json)
         # Admin UI Logic
         # Add User to Team and Organization
@@ -240,6 +301,16 @@ async def new_user(
                     )
                 else:
                     raise e
+
+        user_id = cast(Optional[str], response.get("user_id", None))
+
+        if organization_ids is not None and user_id is not None:
+            await _add_user_to_organizations(
+                user_id=user_id,
+                organizations=organization_ids,
+                prisma_client=prisma_client,
+                user_api_key_dict=user_api_key_dict,
+            )
 
         special_keys = ["token", "token_id"]
         response_dict = {}
