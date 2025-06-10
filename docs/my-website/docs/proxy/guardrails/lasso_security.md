@@ -12,7 +12,7 @@ Use [Lasso Security](https://www.lasso.security/) to protect your LLM applicatio
 
 Define your guardrails under the `guardrails` section:
 
-```yaml
+```yaml showLineNumbers title="config.yaml"
 model_list:
   - model_name: claude-3.5
     litellm_params:
@@ -28,43 +28,10 @@ guardrails:
       api_base: os.environ/LASSO_API_BASE
 ```
 
-#### Example with Local Models
-
-Here's an example configuration with local Ollama models:
-
-```yaml
-guardrails:
-  - guardrail_name: "lasso-guard"
-    litellm_params:
-      guardrail: "lasso"
-      mode: "pre_call"
-      api_key: "YOUR_LASSO_API_KEY"
-      default_on: true
-
-model_list:
-  # Ollama model configurations
-  - model_name: "llama3.1-local"
-    litellm_params:
-      model: "ollama/llama3.1"
-      api_base: "http://localhost:11434"
-      
-  - model_name: "llama3.2-local"
-    litellm_params:
-      model: "ollama/llama3.2"
-      api_base: "http://localhost:11434"
-      temperature: 0.1
-      num_ctx: 4096
-
-general_settings:
-  default_model: "llama3.1-local"
-  log_level: "DEBUG"
-  log: true
-  verbose: true
-```
-
 #### Supported values for `mode`
 
 - `pre_call` Run **before** LLM call, on **input**
+- `during_call` Run **during** LLM call, on **input** Same as `pre_call` but runs in parallel as LLM call.  Response not returned until guardrail check completes
 
 ### 2. Start LiteLLM Gateway 
 
