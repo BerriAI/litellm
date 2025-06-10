@@ -496,3 +496,22 @@ def construct_target_url(
 
     updated_url = new_base_url.copy_with(path=updated_requested_route)
     return updated_url
+
+
+# Models that are only available in the global region
+GLOBAL_ONLY_VERTEX_MODELS = {
+    "gemini-2.5-pro-preview-05-06",
+}
+
+
+def is_global_only_vertex_model(model: str) -> bool:
+    """
+    Check if a model is only available in the global region.
+
+    Args:
+        model: The model name to check
+
+    Returns:
+        True if the model is only available in global region, False otherwise
+    """
+    return model in GLOBAL_ONLY_VERTEX_MODELS
