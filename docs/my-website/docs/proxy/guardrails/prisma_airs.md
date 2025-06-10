@@ -49,7 +49,7 @@ guardrails:
 
 - `pre_call` runs **before** LLM call, on **input**
 
-### 3. Start LiteLLM Gateway with Helm
+### 3. Start LiteLLM Gateway
 
 ```shell
 litellm --config config.yaml
@@ -64,8 +64,8 @@ helm package [CHART_PATH]
 helm upgrade --install litellm-gateway litellm
 ```
 
-### 4. Test it 
-#### Test `"prisma_airs_guardrail blocking model call"`
+### 4. Make your first request
+#### Test  `"prisma_airs_guardrail blocking model call on finding malicious prompt"`
 
 <Tabs>
 
