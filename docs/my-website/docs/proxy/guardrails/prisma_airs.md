@@ -141,7 +141,7 @@ curl --location 'http://litellm-service/chat/completions' \
 }'
 ```
 
-`"Expected sucessful call response after prisma_airs_guardrail"`
+`"Expected:sucessful call & response to model"`
 
 ```json
 {
@@ -191,4 +191,4 @@ curl --location 'http://litellm-service/chat/completions' \
 | `async_pre_call_hook` | A hook that runs before the LLM API call | ✅ | INPUT | ✅ | ❌ | ✅ |
 
 
-### More documents on[PRISMA AIRS](https://pan.dev/ai-runtime-security/scan/api/)
+### More documents on [PRISMA AIRS](https://pan.dev/ai-runtime-security/scan/api/)
