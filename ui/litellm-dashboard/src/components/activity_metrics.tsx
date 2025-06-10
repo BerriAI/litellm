@@ -110,8 +110,8 @@ const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: Mode
           <BarChart
             data={metrics.daily_data}
             index="date"
-            categories={["metrics.successful_requests"]}
-            colors={["green"]}
+            categories={["metrics.api_requests"]}
+            colors={["blue"]}
             valueFormatter={valueFormatter}
             customTooltip={CustomTooltip}
           />
