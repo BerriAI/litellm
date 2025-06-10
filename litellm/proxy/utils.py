@@ -2456,6 +2456,181 @@ class PrismaClient:
             value=_num_spend_logs_rows,
         )
 
+    # Health Check Database Methods
+    async def save_health_check_result(
+        self,
+        model_name: str,
+        status: str,
+        healthy_count: int = 0,
+        unhealthy_count: int = 0,
+        error_message: Optional[str] = None,
+        response_time_ms: Optional[float] = None,
+        details: Optional[dict] = None,
+        checked_by: Optional[str] = None,
+        model_id: Optional[str] = None,
+    ):
+        """
+        Save a health check result to the database
+        """
+        try:
+            # Clean and validate the data before saving
+            health_check_data = {
+                "model_name": str(model_name),
+                "status": str(status),
+                "healthy_count": int(healthy_count) if healthy_count is not None else 0,
+                "unhealthy_count": int(unhealthy_count) if unhealthy_count is not None else 0,
+            }
+            
+            # Validate and clean error_message
+            if error_message is not None:
+                # Truncate and clean error message
+                clean_error = str(error_message)[:500].replace('\x00', '').strip()
+                if clean_error:
+                    health_check_data["error_message"] = clean_error
+            
+            # Validate response_time_ms
+            if response_time_ms is not None:
+                try:
+                    # Ensure it's a valid float and not NaN or infinite
+                    time_val = float(response_time_ms)
+                    if not (time_val != time_val or time_val == float('inf') or time_val == float('-inf')):  # Check for NaN and infinity
+                        health_check_data["response_time_ms"] = time_val
+                except (ValueError, TypeError):
+                    verbose_proxy_logger.warning(f"Invalid response_time_ms value: {response_time_ms}")
+            
+            # Clean and validate details JSON
+            if details is not None and isinstance(details, dict):
+                try:
+                    # Serialize and deserialize to ensure valid JSON and remove unsupported values
+                    serialized = json.dumps(details, default=str)
+                    clean_details = json.loads(serialized)
+                    clean_details = self._clean_json_data(clean_details)
+                    health_check_data["details"] = clean_details
+                except Exception as detail_error:
+                    verbose_proxy_logger.warning(f"Failed to clean details JSON: {detail_error}")
+                    health_check_data["details"] = {}
+            else:
+                health_check_data["details"] = {}
+            
+            # Add optional fields if they have valid values
+            if checked_by is not None:
+                health_check_data["checked_by"] = str(checked_by)
+            
+            if model_id is not None:
+                health_check_data["model_id"] = str(model_id)
+            
+            verbose_proxy_logger.debug(f"Saving health check data: {health_check_data}")
+            
+            result = await self.db.litellm_healthchecktable.create(
+                data=health_check_data
+            )
+            return result
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error saving health check result for model {model_name}: {e}")
+            # Don't re-raise the exception to avoid breaking the health check flow
+            return None
+
+    def _clean_json_data(self, data):
+        """
+        Recursively clean JSON data to remove problematic values
+        """
+        if isinstance(data, dict):
+            cleaned = {}
+            for key, value in data.items():
+                try:
+                    clean_key = str(key)[:100]  # Limit key length
+                    cleaned[clean_key] = self._clean_json_data(value)
+                except Exception:
+                    continue  # Skip problematic keys
+            return cleaned
+        elif isinstance(data, list):
+            cleaned = []
+            for item in data[:100]:  # Limit list length
+                try:
+                    cleaned.append(self._clean_json_data(item))
+                except Exception:
+                    continue  # Skip problematic items
+            return cleaned
+        elif isinstance(data, (str, int, bool, type(None))):
+            if isinstance(data, str):
+                # Truncate long strings and remove null bytes
+                return str(data)[:1000].replace('\x00', '')
+            return data
+        elif isinstance(data, float):
+            # Check for NaN and infinity
+            if data != data or data == float('inf') or data == float('-inf'):
+                return None
+            return data
+        else:
+            # Convert other types to string, truncated
+            try:
+                return str(data)[:500]
+            except Exception:
+                return None
+
+    async def get_latest_health_check(self, model_name: str):
+        """
+        Get the latest health check result for a specific model
+        """
+        try:
+            result = await self.db.litellm_healthchecktable.find_first(
+                where={"model_name": model_name},
+                order={"checked_at": "desc"}
+            )
+            return result
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error getting latest health check: {e}")
+            return None
+
+    async def get_health_check_history(
+        self,
+        model_name: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+        status_filter: Optional[str] = None,
+    ):
+        """
+        Get health check history with optional filtering
+        """
+        try:
+            where_clause = {}
+            if model_name:
+                where_clause["model_name"] = model_name
+            if status_filter:
+                where_clause["status"] = status_filter
+
+            results = await self.db.litellm_healthchecktable.find_many(
+                where=where_clause,
+                order={"checked_at": "desc"},
+                take=limit,
+                skip=offset,
+            )
+            return results
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error getting health check history: {e}")
+            return []
+
+    async def get_all_latest_health_checks(self):
+        """
+        Get the latest health check for each model
+        """
+        try:
+            # Get all unique model names first
+            all_checks = await self.db.litellm_healthchecktable.find_many(
+                order={"checked_at": "desc"}
+            )
+            
+            # Group by model_name and get the latest for each
+            latest_checks = {}
+            for check in all_checks:
+                if check.model_name not in latest_checks:
+                    latest_checks[check.model_name] = check
+            
+            return list(latest_checks.values())
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error getting all latest health checks: {e}")
+            return []
+
 
 ### HELPER FUNCTIONS ###
 async def _cache_user_row(user_id: str, cache: DualCache, db: PrismaClient):

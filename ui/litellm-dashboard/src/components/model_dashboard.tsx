@@ -63,6 +63,8 @@ import {
   adminGlobalActivityExceptions,
   adminGlobalActivityExceptionsPerDeployment,
   allEndUsersCall,
+  healthCheckHistoryCall,
+  latestHealthChecksCall,
 } from "./networking";
 import { BarChart, AreaChart } from "@tremor/react";
 import {
@@ -525,7 +527,29 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           setProviderSettings(_providerSettings);
         }
 
-        
+        // Load latest health check data for all models
+        try {
+          const latestHealthChecks = await latestHealthChecksCall(accessToken);
+          console.log("Latest health checks:", latestHealthChecks);
+          
+          // Convert to the format expected by the UI
+          const healthStatusMap: {[key: string]: {status: string, lastCheck: string, loading: boolean, error?: string}} = {};
+          
+          if (latestHealthChecks.latest_health_checks) {
+            Object.entries(latestHealthChecks.latest_health_checks).forEach(([modelName, checkData]: [string, any]) => {
+              healthStatusMap[modelName] = {
+                status: checkData.status,
+                lastCheck: checkData.checked_at ? new Date(checkData.checked_at).toLocaleString() : 'Never checked',
+                loading: false,
+                error: checkData.error_message || undefined,
+              };
+            });
+          }
+          
+          setModelHealthStatuses(healthStatusMap);
+        } catch (healthError) {
+          console.warn("Failed to load health check history:", healthError);
+        }
 
         // loop through modelDataResponse and get all`model_name` values
         let all_model_groups: Set<string> = new Set();
@@ -904,6 +928,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     }));
 
     try {
+      // Run the health check and process the response directly
       const response = await individualModelHealthCheckCall(accessToken, modelName);
       const currentTime = new Date().toLocaleString();
       
@@ -929,6 +954,26 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           }
         }));
       }
+      
+      // Optionally try to get a more accurate timestamp from the database (non-blocking)
+      try {
+        const latestHealthChecks = await latestHealthChecksCall(accessToken);
+        const checkData = latestHealthChecks.latest_health_checks?.[modelName];
+        
+        if (checkData && checkData.checked_at) {
+          setModelHealthStatuses(prev => ({
+            ...prev,
+            [modelName]: {
+              ...prev[modelName],
+              lastCheck: new Date(checkData.checked_at).toLocaleString(),
+            }
+          }));
+        }
+      } catch (dbError) {
+        // Ignore database errors - we already have the health check result
+        console.debug("Could not fetch timestamp from database (non-critical):", dbError);
+      }
+      
     } catch (error) {
       const currentTime = new Date().toLocaleString();
       const errorMessage = extractMeaningfulError(error instanceof Error ? error.message : error);
@@ -959,14 +1004,20 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     
     setModelHealthStatuses(prev => ({ ...prev, ...loadingStatuses }));
     
-    // Run all health checks in parallel
+    // Store results from individual health checks
+    const healthCheckResults: {[key: string]: any} = {};
+    
+    // Run all health checks in parallel and collect results
     const healthCheckPromises = modelsToCheck.map(async (modelName) => {
       if (!accessToken) return;
       
       try {
+        // Run the health check and store the result
         const response = await individualModelHealthCheckCall(accessToken, modelName);
-        const currentTime = new Date().toLocaleString();
+        healthCheckResults[modelName] = response;
         
+        // Update status immediately based on response
+        const currentTime = new Date().toLocaleString();
         if (response.healthy_count > 0) {
           setModelHealthStatuses(prev => ({
             ...prev,
@@ -990,6 +1041,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           }));
         }
       } catch (error) {
+        console.error(`Health check failed for ${modelName}:`, error);
+        // Set error status for failed health checks
         const currentTime = new Date().toLocaleString();
         const errorMessage = extractMeaningfulError(error instanceof Error ? error.message : error);
         setModelHealthStatuses(prev => ({
@@ -1006,6 +1059,35 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     
     // Wait for all health checks to complete
     await Promise.allSettled(healthCheckPromises);
+    
+    // Optionally, try to fetch from database to get saved timestamps, but don't rely on it
+    try {
+      const latestHealthChecks = await latestHealthChecksCall(accessToken);
+      
+      if (latestHealthChecks.latest_health_checks) {
+        // Update timestamps from database if available, but keep the status from the actual health check
+        Object.entries(latestHealthChecks.latest_health_checks).forEach(([modelName, checkData]: [string, any]) => {
+          if (modelsToCheck.includes(modelName) && checkData) {
+            setModelHealthStatuses(prev => {
+              const currentStatus = prev[modelName];
+              if (currentStatus) {
+                return {
+                  ...prev,
+                  [modelName]: {
+                    ...currentStatus,
+                    lastCheck: checkData.checked_at ? new Date(checkData.checked_at).toLocaleString() : currentStatus.lastCheck,
+                  }
+                };
+              }
+              return prev;
+            });
+          }
+        });
+      }
+    } catch (dbError) {
+      console.warn("Failed to fetch updated health statuses from database (non-critical):", dbError);
+      // This is non-critical - we already have the health check results
+    }
   };
 
   const handleModelSelection = (modelName: string, checked: boolean) => {
@@ -1300,7 +1382,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               <Tab>Add Model</Tab>
               {all_admin_roles.includes(userRole) && <Tab>LLM Credentials</Tab>}
               {all_admin_roles.includes(userRole) && <Tab>
-                <pre>/health Models</pre>
+                Health Status
               </Tab>}
               {all_admin_roles.includes(userRole) && <Tab>Model Analytics</Tab>}
               {all_admin_roles.includes(userRole) && <Tab>Model Retry Settings</Tab>}
