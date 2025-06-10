@@ -14,7 +14,7 @@ Palo Alto Networks PRISMA AIRS as custom guardrail on litellm gateway.
 ### 1. Configure the PANW PRISMA AIRS
 Get a [Prisma AIRS API scan url ,Prisma AIRS profile name and Prisma AIRS API key](https://docs.paloaltonetworks.com/ai-runtime-security/activation-and-onboarding/ai-runtime-security-api-intercept-overview).
 
-Set Environement variables 
+Set Environement variables if running local
 ```shell
 export PRISMA_AIRS_API_BASE="<Prisma-AIRS-API-scan-url>"
 export PRISMA_AIRS_API_KEY="<Prisma-AIRS-API>"
