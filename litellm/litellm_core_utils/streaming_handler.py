@@ -443,9 +443,10 @@ class CustomStreamWrapper:
                     is_finished = (
                         True  # check if str_line._hidden_params["is_finished"] is True
                     )
-                    if hasattr(
-                        str_line, "_hidden_params"
-                    ) and str_line._hidden_params.get("is_finished"):
+                    if (
+                        hasattr(str_line, "_hidden_params")
+                        and str_line._hidden_params.get("is_finished") is not None
+                    ):
                         is_finished = str_line._hidden_params.get("is_finished")
                     finish_reason = str_line.choices[0].finish_reason
 
@@ -1201,7 +1202,6 @@ class CustomStreamWrapper:
                 if response_obj is None:
                     return
                 completion_obj["content"] = response_obj["text"]
-                print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]:
                     if response_obj["finish_reason"] == "error":
                         raise Exception(

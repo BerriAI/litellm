@@ -3946,7 +3946,7 @@ def test_vertex_ai_streaming_response_id():
 
 def test_vertex_ai_gemini_2_5_pro_streaming():
     load_vertex_ai_credentials()
-    litellm._turn_on_debug()
+    # litellm._turn_on_debug()
     response = completion(
         model="vertex_ai/gemini-2.5-pro-preview-06-05",
         messages=[{"role": "user", "content": "Hi!"}],
