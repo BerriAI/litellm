@@ -156,7 +156,7 @@ class BaseResponsesAPIConfig(ABC):
         headers: dict,
     ) -> Tuple[str, Dict]:
         pass
-    
+
     @abstractmethod
     def transform_get_response_api_response(
         self,
@@ -166,9 +166,35 @@ class BaseResponsesAPIConfig(ABC):
         pass
 
     #########################################################
+    ########## LIST INPUT ITEMS API TRANSFORMATION ##########
+    #########################################################
+    @abstractmethod
+    def transform_list_input_items_request(
+        self,
+        response_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+        after: Optional[str] = None,
+        before: Optional[str] = None,
+        include: Optional[List[str]] = None,
+        limit: int = 20,
+        order: Literal["asc", "desc"] = "desc",
+    ) -> Tuple[str, Dict]:
+        pass
+
+    @abstractmethod
+    def transform_list_input_items_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> Dict:
+        pass
+
+    #########################################################
     ########## END GET RESPONSE API TRANSFORMATION ##########
     #########################################################
-    
+
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
