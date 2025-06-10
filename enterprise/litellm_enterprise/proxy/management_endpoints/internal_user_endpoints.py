@@ -1,13 +1,10 @@
 """
 Enterprise internal user management endpoints
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.management_endpoints.internal_user_endpoints import (
-    management_endpoint_wrapper,
-    user_api_key_auth,
-)
+from litellm.proxy.management_endpoints.internal_user_endpoints import user_api_key_auth
 
 router = APIRouter()
 

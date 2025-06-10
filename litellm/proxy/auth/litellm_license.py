@@ -129,6 +129,18 @@ class LicenseCheck:
         except Exception:
             return False
 
+    def is_over_limit(self, total_users: int) -> bool:
+        """
+        Check if the license is over the limit
+        """
+        if self.airgapped_license_data is None:
+            return False
+        if "max_users" not in self.airgapped_license_data or not isinstance(
+            self.airgapped_license_data["max_users"], int
+        ):
+            return False
+        return total_users > self.airgapped_license_data["max_users"]
+
     def verify_license_without_api_request(self, public_key, license_key):
         try:
             from cryptography.hazmat.primitives import hashes
