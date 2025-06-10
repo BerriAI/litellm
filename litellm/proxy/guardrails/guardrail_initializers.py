@@ -206,3 +206,5 @@ def initialize_lasso(
         default_on=litellm_params.default_on,
     )
     litellm.logging_callback_manager.add_litellm_callback(_lasso_callback)
+
+    return _lasso_callback
