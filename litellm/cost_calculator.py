@@ -1159,6 +1159,9 @@ def default_image_cost_calculator(
             f"Model not found in cost map. Tried checking {models_to_check}"
         )
 
+    # Ensure n is never None for calculations
+    n_value = n if n is not None else 1
+
     # Check if this is a token-based pricing model (like gpt-image-1)
     if "input_cost_per_token" in cost_info or "output_cost_per_token" in cost_info:
         return _calculate_token_based_image_cost(
@@ -1167,13 +1170,13 @@ def default_image_cost_calculator(
             quality=quality,
             height=height,
             width=width,
-            n=n,
+            n=n_value,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
     else:
         # Pixel-based pricing (legacy models like DALL-E 2/3)
-        return cost_info["input_cost_per_pixel"] * height * width * n
+        return cost_info["input_cost_per_pixel"] * height * width * n_value
 
 
 def _calculate_token_based_image_cost(
