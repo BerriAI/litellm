@@ -309,6 +309,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     or "string too long. Expected a string with maximum length"
                     in error_str
                     or "model's maximum context limit" in error_str
+                    or "is longer than the model's context length" in error_str
                 ):
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
