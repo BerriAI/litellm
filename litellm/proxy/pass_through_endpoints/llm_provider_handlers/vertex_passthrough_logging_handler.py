@@ -86,6 +86,7 @@ class VertexPassthroughLoggingHandler:
             vertex_image_generation_class = VertexImageGeneration()
 
             model = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
+
             _json_response = httpx_response.json()
 
             litellm_prediction_response: Union[
@@ -119,6 +120,22 @@ class VertexPassthroughLoggingHandler:
 
             return {
                 "result": litellm_prediction_response,
+                "kwargs": kwargs,
+            }
+        elif "rawPredict" in url_route or "streamRawPredict" in url_route:
+            model = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
+
+            _json_response = httpx_response.json()
+
+            litellm_prediction_response: Union[
+                ModelResponse, EmbeddingResponse, ImageResponse
+            ] = ModelResponse()
+
+            logging_obj.model = model
+            logging_obj.model_call_details["model"] = logging_obj.model
+
+            return {
+                "result": None,
                 "kwargs": kwargs,
             }
         else:
