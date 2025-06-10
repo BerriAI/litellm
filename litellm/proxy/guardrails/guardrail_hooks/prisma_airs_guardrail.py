@@ -88,3 +88,4 @@ def call_airs_api(data):
     verify=False
   )
   return airs_response
+return data
