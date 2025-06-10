@@ -3,14 +3,7 @@ import { Text, Badge } from "@tremor/react";
 import { ServerIcon } from "@heroicons/react/outline";
 import { Tooltip } from "antd";
 import { fetchMCPServers } from "../networking";
-
-interface MCPServerDetails {
-  server_id: string;
-  alias: string;
-  description?: string;
-  url?: string;
-  transport?: string;
-}
+import { MCPServer } from '../mcp_tools/types';
 
 interface MCPServerPermissionsProps {
   mcpServers: string[];
@@ -21,7 +14,7 @@ export function MCPServerPermissions({
   mcpServers, 
   accessToken 
 }: MCPServerPermissionsProps) {
-  const [mcpServerDetails, setMCPServerDetails] = useState<MCPServerDetails[]>([]);
+  const [mcpServerDetails, setMCPServerDetails] = useState<MCPServer[]>([]);
 
   // Fetch MCP server details when component mounts
   useEffect(() => {

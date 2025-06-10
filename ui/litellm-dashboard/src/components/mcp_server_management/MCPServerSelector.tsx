@@ -1,14 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Select } from 'antd';
 import { fetchMCPServers } from '../networking';
+import { MCPServer } from '../mcp_tools/types';
 
-interface MCPServer {
-  server_id: string;
-  alias: string;
-  description?: string;
-  url?: string;
-  transport?: string;
-}
 
 interface MCPServerSelectorProps {
   onChange: (selectedMCPServers: string[]) => void;
