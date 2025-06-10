@@ -250,6 +250,7 @@ class ProxyBaseLLMRequestProcessing:
             "acancel_fine_tuning_job",
             "alist_fine_tuning_jobs",
             "aretrieve_fine_tuning_job",
+            "alist_input_items",
             "aimage_edit",
         ],
         version: Optional[str] = None,
