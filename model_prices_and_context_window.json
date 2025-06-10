@@ -23,6 +23,13 @@
             "search_context_size_medium": 0.0,
             "search_context_size_high": 0.0
         },
+        "supported_regions": [
+            "global",
+            "us-west-2",
+            "eu-west-1",
+            "ap-southeast-1",
+            "ap-northeast-1"
+        ],
         "deprecation_date": "date when the model becomes deprecated in the format YYYY-MM-DD"
     },
     "omni-moderation-latest": {
@@ -430,6 +437,23 @@
         "input_cost_per_audio_token": 0.0001,
         "output_cost_per_token": 1e-05,
         "output_cost_per_audio_token": 0.0002,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "gpt-4o-audio-preview-2025-06-03": {
+        "max_tokens": 16384,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 2.5e-06,
+        "input_cost_per_audio_token": 4.0e-5,
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_audio_token": 8.0e-5,
         "litellm_provider": "openai",
         "mode": "chat",
         "supports_function_calling": true,
@@ -6842,6 +6866,9 @@
         ],
         "supported_output_modalities": [
             "text"
+        ],
+        "supported_regions": [
+            "global"
         ],
         "source": "https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-preview",
         "supports_parallel_function_calling": true,
