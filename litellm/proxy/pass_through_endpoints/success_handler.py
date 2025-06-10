@@ -19,6 +19,9 @@ from .llm_provider_handlers.anthropic_passthrough_logging_handler import (
 from .llm_provider_handlers.assembly_passthrough_logging_handler import (
     AssemblyAIPassthroughLoggingHandler,
 )
+from .llm_provider_handlers.bedrock_passthrough_logging_handler import (
+    BedrockPassthroughLoggingHandler,
+)
 from .llm_provider_handlers.cohere_passthrough_logging_handler import (
     CoherePassthroughLoggingHandler,
 )
@@ -39,6 +42,12 @@ class PassThroughEndpointLogging:
 
         # Anthropic
         self.TRACKED_ANTHROPIC_ROUTES = ["/messages"]
+
+        # Bedrock
+        self.TRACKED_BEDROCK_ROUTES = [
+            "bedrock-runtime",
+            "bedrock-agent-runtime"
+        ]
 
         # Cohere
         self.TRACKED_COHERE_ROUTES = ["/v2/chat"]
@@ -140,6 +149,25 @@ class PassThroughEndpointLogging:
                 anthropic_passthrough_logging_handler_result["result"]
             )
             kwargs = anthropic_passthrough_logging_handler_result["kwargs"]
+        elif self.is_bedrock_route(url_route):
+            bedrock_passthrough_logging_handler_result = (
+                BedrockPassthroughLoggingHandler.bedrock_passthrough_handler(
+                    httpx_response=httpx_response,
+                    response_body=response_body or {},
+                    logging_obj=logging_obj,
+                    url_route=url_route,
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    cache_hit=cache_hit,
+                    **kwargs,
+                )
+            )
+
+            standard_logging_response_object = (
+                bedrock_passthrough_logging_handler_result["result"]
+            )
+            kwargs = bedrock_passthrough_logging_handler_result["kwargs"]
         elif self.is_cohere_route(url_route):
             cohere_passthrough_logging_handler_result = (
                 cohere_passthrough_logging_handler.passthrough_chat_handler(
@@ -203,6 +231,12 @@ class PassThroughEndpointLogging:
 
     def is_anthropic_route(self, url_route: str):
         for route in self.TRACKED_ANTHROPIC_ROUTES:
+            if route in url_route:
+                return True
+        return False
+
+    def is_bedrock_route(self, url_route: str):
+        for route in self.TRACKED_BEDROCK_ROUTES:
             if route in url_route:
                 return True
         return False

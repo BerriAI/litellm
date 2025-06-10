@@ -524,6 +524,16 @@ async def bedrock_proxy_route(
     if "stream" in str(updated_url):
         is_streaming_request = True
 
+    # Extract model information for logging
+    model = None
+    if data:
+        # Try different possible model field names in Bedrock requests
+        model = (
+            data.get("modelId") or  # Standard Bedrock field
+            data.get("model") or    # Alternative field
+            "unknown"
+        )
+
     ## CREATE PASS-THROUGH
     endpoint_func = create_pass_through_route(
         endpoint=endpoint,
@@ -537,6 +547,7 @@ async def bedrock_proxy_route(
         stream=is_streaming_request,  # type: ignore
         custom_body=data,  # type: ignore
         query_params={},  # type: ignore
+        model=model,  # type: ignore
     )
 
     return received_value

@@ -484,6 +484,7 @@ async def pass_through_request(  # noqa: PLR0915
     merge_query_params: Optional[bool] = False,
     query_params: Optional[dict] = None,
     stream: Optional[bool] = None,
+    model: Optional[str] = None,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -573,6 +574,10 @@ async def pass_through_request(  # noqa: PLR0915
             request=request,
             logging_obj=logging_obj,
         )
+        
+        # Add model to kwargs for logging handlers
+        if model:
+            kwargs["model"] = model
         # done for supporting 'parallel_request_limiter.py' with pass-through endpoints
         logging_obj.update_environment_variables(
             model="unknown",
@@ -850,6 +855,7 @@ def create_pass_through_route(
             stream: Optional[
                 bool
             ] = None,  # if pass-through endpoint is a streaming request
+            model: Optional[str] = None,
         ):
             return await pass_through_request(  # type: ignore
                 request=request,
@@ -861,6 +867,7 @@ def create_pass_through_route(
                 query_params=query_params,
                 stream=stream,
                 custom_body=custom_body,
+                model=model,
             )
 
     return endpoint_func
