@@ -102,6 +102,7 @@ import {
   TableIcon,
 } from "@heroicons/react/outline";
 import DeleteModelButton from "./delete_model_button";
+import { errorPatterns } from "@/utils/errorPatterns";
 const { Title: Title2, Link } = Typography;
 import { UploadOutlined } from "@ant-design/icons";
 import type { UploadProps } from "antd";
@@ -840,54 +841,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     if (!error) return 'Health check failed';
     
     let errorStr = typeof error === 'string' ? error : JSON.stringify(error);
-    
-    // Common error patterns and their simplified versions
-    const errorPatterns = [
-      {
-        pattern: /Missing Anthropic API Key/i,
-        replacement: 'Missing Anthropic API Key'
-      },
-      {
-        pattern: /Missing OpenAI API Key/i,
-        replacement: 'Missing OpenAI API Key'
-      },
-      {
-        pattern: /Connection timeout/i,
-        replacement: 'Connection timeout'
-      },
-      {
-        pattern: /403.*Forbidden/i,
-        replacement: 'Access forbidden - check API key permissions'
-      },
-      {
-        pattern: /401.*Unauthorized/i,
-        replacement: 'Unauthorized - invalid API key'
-      },
-      {
-        pattern: /429.*rate limit/i,
-        replacement: 'Rate limit exceeded'
-      },
-      {
-        pattern: /500.*Internal Server Error/i,
-        replacement: 'Provider internal server error'
-      },
-      {
-        pattern: /Network.*not.*ok/i,
-        replacement: 'Network connection failed'
-      },
-      {
-        pattern: /litellm\.AuthenticationError/i,
-        replacement: 'Authentication failed'
-      },
-      {
-        pattern: /litellm\.RateLimitError/i,
-        replacement: 'Rate limit exceeded'
-      },
-      {
-        pattern: /litellm\.APIError/i,
-        replacement: 'API error'
-      }
-    ];
     
     // Check for specific error patterns
     for (const { pattern, replacement } of errorPatterns) {
