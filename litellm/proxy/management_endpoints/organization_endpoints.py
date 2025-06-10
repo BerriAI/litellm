@@ -516,7 +516,7 @@ async def deprecated_info_organization(data: OrganizationRequest):
 @management_endpoint_wrapper
 async def organization_member_add(
     data: OrganizationMemberAddRequest,
-    http_request: Optional[Request] = None,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> OrganizationAddMemberResponse:
     """

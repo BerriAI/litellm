@@ -149,7 +149,9 @@ async def _add_user_to_organizations(
                         )
                     ],
                 ),
-                http_request=None,
+                http_request=Request(
+                    scope={"type": "http", "path": "/user/new"},
+                ),
                 user_api_key_dict=user_api_key_dict,
             )
         )
