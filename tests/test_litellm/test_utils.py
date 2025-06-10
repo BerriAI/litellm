@@ -451,6 +451,12 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         ],
                     },
                 },
+                "supported_regions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                    },
+                },
                 "search_context_cost_per_query": {
                     "type": "object",
                     "properties": {

@@ -18,6 +18,7 @@ Supported Providers:
 - XAI (`xai/`)
 - Google AI Studio (`google/`)
 - Vertex AI (`vertex_ai/`)
+- Perplexity (`perplexity/`)
 
 LiteLLM will standardize the `reasoning_content` in the response and `thinking_blocks` in the assistant message.
 

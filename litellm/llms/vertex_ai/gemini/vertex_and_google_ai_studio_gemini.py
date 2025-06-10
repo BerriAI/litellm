@@ -776,7 +776,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _transform_parts(
         parts: List[HttpxPartType],
-        index: int,
         is_function_call: Optional[bool],
     ) -> Tuple[
         Optional[ChatCompletionToolCallFunctionChunk],
@@ -784,6 +783,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ]:
         function: Optional[ChatCompletionToolCallFunctionChunk] = None
         _tools: List[ChatCompletionToolCallChunk] = []
+        # in a single chunk, each tool call appears as a separate part
+        # they need to be separate indexes as they are separate tool calls
+        funcCallIndex = 0
         for part in parts:
             if "functionCall" in part:
                 _function_chunk = ChatCompletionToolCallFunctionChunk(
@@ -797,9 +799,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         id=f"call_{str(uuid.uuid4())}",
                         type="function",
                         function=_function_chunk,
-                        index=index,
+                        index=funcCallIndex,
                     )
                     _tools.append(_tool_response_chunk)
+                funcCallIndex += 1
         if len(_tools) == 0:
             tools: Optional[List[ChatCompletionToolCallChunk]] = None
         else:
@@ -1113,7 +1116,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
                 functions, tools = VertexGeminiConfig._transform_parts(
                     parts=candidate["content"]["parts"],
-                    index=candidate.get("index", idx),
                     is_function_call=is_function_call(standard_optional_params),
                 )
 
@@ -1886,6 +1888,8 @@ class ModelResponseIterator:
                     ).web_search_requests = web_search_requests
 
             setattr(model_response, "usage", usage)  # type: ignore
+
+            model_response._hidden_params["is_finished"] = False
             return model_response
 
         except json.JSONDecodeError:
