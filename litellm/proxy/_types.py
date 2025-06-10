@@ -1342,6 +1342,7 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
 class LiteLLM_BudgetTableFull(LiteLLM_BudgetTable):
     """Represents all params for a LiteLLM_BudgetTable record"""
 
+    budget_reset_at: Optional[datetime] = None
     created_at: datetime
 
 
