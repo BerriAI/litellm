@@ -58,8 +58,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   onCreateSuccess,
 }) => {
   const [form] = Form.useForm();
+  const [isLoading, setIsLoading] = useState(false);
 
   const handleCreate = async (formValues: Record<string, any>) => {
+    setIsLoading(true);
     try {
       console.log(`formValues: ${JSON.stringify(formValues)}`);
 
@@ -75,12 +77,19 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         onCreateSuccess(response);
       }
     } catch (error) {
-      message.error("Error creating the team: " + error, 20);
+      message.error("Error creating MCP Server: " + error, 20);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   // state
   const [isModalVisible, setModalVisible] = useState(false);
+
+  const handleCancel = () => {
+    form.resetFields();
+    setModalVisible(false);
+  };
 
   // rendering
   if (!isAdminRole(userRole)) {
@@ -89,106 +98,175 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
   return (
     <div>
-      <Button className="mx-auto" onClick={() => setModalVisible(true)}>
+      <Button 
+        className="mx-auto" 
+        onClick={() => setModalVisible(true)}
+      >
         + Create New MCP Server
       </Button>
 
       <Modal
-        title="Create New MCP Server"
-        open={isModalVisible}
-        okType="primary"
-        width={800}
-        onCancel={() => setModalVisible(false)}
-        okButtonProps={{ style: { display: "none" } }}
-      >
-        <Form
-          form={form}
-          onFinish={handleCreate}
-          labelCol={{ span: 8 }}
-          wrapperCol={{ span: 16 }}
-          labelAlign="left"
-        >
-          <>
-            <Form.Item
-              label="MCP Server Name"
-              name="alias"
-              rules={[
-                { required: false, message: "Please enter a server name" },
-              ]}
-            >
-              <TextInput placeholder="" />
-            </Form.Item>
-            <Form.Item
-              label="MCP Description"
-              name="description"
-              rules={[
-                {
-                  required: false,
-                  message: "Please enter a server description",
-                },
-              ]}
-            >
-              <TextInput placeholder="" />
-            </Form.Item>
-            <Form.Item
-              label="MCP Server URL"
-              name="url"
-              rules={[{ required: true, message: "Please enter a server url" }]}
-            >
-              <TextInput placeholder="https://" />
-            </Form.Item>
-            <Form.Item
-              label="MCP Server Transport"
-              name="transport"
-              rules={[{ required: true, message: "Please enter a server url" }]}
-            >
-              <Select placeholder="MCP Transport Type">
-                <Select.Option value="sse">sse</Select.Option>
-                <Select.Option value="http">http</Select.Option>
-              </Select>
-            </Form.Item>
-            <Form.Item
-              label="MCP Server Auth Type"
-              name="auth_type"
-              rules={[{ required: true, message: "Please enter an auth type" }]}
-            >
-              <Select placeholder="MCP Auth Type">
-                <Select.Option value="none">None</Select.Option>
-                <Select.Option value="api_key">api_key</Select.Option>
-                <Select.Option value="bearer_token">bearer_token</Select.Option>
-                <Select.Option value="basic">basic</Select.Option>
-              </Select>
-            </Form.Item>
-            <Form.Item
-              label={
-                <span>
-                  MCP Version{" "}
-                  <Tooltip title="Supported MCP Specification Version">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                  </Tooltip>
-                </span>
-              }
-              name="spec_version"
-              rules={[
-                { required: true, message: "Please enter a spec version" },
-              ]}
-            >
-              <Select placeholder="MCP Version">
-                <Select.Option value="2025-03-26">2025-03-26</Select.Option>
-                <Select.Option value="2024-11-05">2024-11-05</Select.Option>
-              </Select>
-            </Form.Item>
-          </>
-          <div
-            style={{
-              textAlign: "right",
-              marginTop: "10px",
-              paddingBottom: "10px",
-            }}
-          >
-            <AntdButton htmlType="submit">Create MCP Server</AntdButton>
+        title={
+          <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
+            <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg flex items-center justify-center">
+              <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
+              </svg>
+            </div>
+            <div>
+              <h2 className="text-xl font-semibold text-gray-900">Create New MCP Server</h2>
+              <p className="text-sm text-gray-500 mt-1">Configure your MCP server connection</p>
+            </div>
           </div>
-        </Form>
+        }
+        open={isModalVisible}
+        width={1000}
+        onCancel={handleCancel}
+        footer={null}
+        className="top-8"
+        styles={{
+          body: { padding: '24px' },
+          header: { padding: '24px 24px 0 24px', border: 'none' },
+        }}
+      >
+        <div className="mt-6">
+          <Form
+            form={form}
+            onFinish={handleCreate}
+            layout="vertical"
+            className="space-y-6"
+          >
+            <div className="grid grid-cols-1 gap-6">
+              <Form.Item
+                label={<span className="text-sm font-medium text-gray-700">MCP Server Name</span>}
+                name="alias"
+                rules={[
+                  { required: false, message: "Please enter a server name" },
+                ]}
+              >
+                <TextInput 
+                  placeholder="Enter a descriptive name for your server" 
+                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                />
+              </Form.Item>
+
+              <Form.Item
+                label={<span className="text-sm font-medium text-gray-700">Description</span>}
+                name="description"
+                rules={[
+                  {
+                    required: false,
+                    message: "Please enter a server description",
+                  },
+                ]}
+              >
+                <TextInput 
+                  placeholder="Brief description of what this server does" 
+                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                />
+              </Form.Item>
+
+              <Form.Item
+                label={
+                  <span className="text-sm font-medium text-gray-700">
+                    MCP Server URL <span className="text-red-500">*</span>
+                  </span>
+                }
+                name="url"
+                rules={[
+                  { required: true, message: "Please enter a server URL" },
+                  { type: 'url', message: "Please enter a valid URL" }
+                ]}
+              >
+                <TextInput 
+                  placeholder="https://your-mcp-server.com" 
+                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                />
+              </Form.Item>
+
+              <div className="grid grid-cols-2 gap-4">
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700">
+                      Transport Type <span className="text-red-500">*</span>
+                    </span>
+                  }
+                  name="transport"
+                  rules={[{ required: true, message: "Please select a transport type" }]}
+                >
+                  <Select 
+                    placeholder="Select transport"
+                    className="rounded-lg"
+                    size="large"
+                  >
+                    <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
+                    <Select.Option value="http">HTTP</Select.Option>
+                  </Select>
+                </Form.Item>
+
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700">
+                      Authentication <span className="text-red-500">*</span>
+                    </span>
+                  }
+                  name="auth_type"
+                  rules={[{ required: true, message: "Please select an auth type" }]}
+                >
+                  <Select 
+                    placeholder="Select auth type"
+                    className="rounded-lg"
+                    size="large"
+                  >
+                    <Select.Option value="none">None</Select.Option>
+                    <Select.Option value="api_key">API Key</Select.Option>
+                    <Select.Option value="bearer_token">Bearer Token</Select.Option>
+                    <Select.Option value="basic">Basic Auth</Select.Option>
+                  </Select>
+                </Form.Item>
+              </div>
+
+              <Form.Item
+                label={
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    MCP Version <span className="text-red-500 ml-1">*</span>
+                    <Tooltip title="Select the MCP specification version your server supports">
+                      <InfoCircleOutlined className="ml-2 text-gray-400 hover:text-gray-600" />
+                    </Tooltip>
+                  </span>
+                }
+                name="spec_version"
+                rules={[
+                  { required: true, message: "Please select a spec version" },
+                ]}
+              >
+                <Select 
+                  placeholder="Select MCP version"
+                  className="rounded-lg"
+                  size="large"
+                >
+                  <Select.Option value="2025-03-26">2025-03-26 (Latest)</Select.Option>
+                  <Select.Option value="2024-11-05">2024-11-05</Select.Option>
+                </Select>
+              </Form.Item>
+            </div>
+
+            <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100">
+              <Button 
+                variant="secondary"
+                onClick={handleCancel}
+              >
+                Cancel
+              </Button>
+              <Button 
+                variant="primary"
+                loading={isLoading}
+              >
+                {isLoading ? 'Creating...' : 'Create MCP Server'}
+              </Button>
+            </div>
+          </Form>
+        </div>
       </Modal>
     </div>
   );
