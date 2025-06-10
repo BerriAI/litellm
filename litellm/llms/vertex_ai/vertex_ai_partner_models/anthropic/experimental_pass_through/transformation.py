@@ -93,4 +93,8 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         )
 
         anthropic_messages_request["anthropic_version"] = "vertex-2023-10-16"
+
+        anthropic_messages_request.pop(
+            "model", None
+        )  # do not pass model in request body to vertex ai
         return anthropic_messages_request
