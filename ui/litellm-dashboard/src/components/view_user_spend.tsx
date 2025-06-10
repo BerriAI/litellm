@@ -21,8 +21,9 @@ import {
   ListItem,
 
 } from "@tremor/react";
-import { Statistic } from "antd"
-import { spendUsersCall, modelAvailableCall }  from "./networking";
+import { Statistic } from "antd";
+import { spendUsersCall, modelAvailableCall } from "./networking";
+import { formatCurrency } from "@/utils/currencyUtils";
 
 // Define the props type
 interface UserSpendData {
@@ -131,8 +132,8 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessT
       modelsToDisplay = userModels;
     }
 
-
-    const displayMaxBudget = maxBudget !== null ? `$${maxBudget} limit` : "No limit";
+  const displayMaxBudget =
+    maxBudget !== null ? `${formatCurrency(maxBudget)} limit` : "No limit";
 
     const roundedSpend = spend !== undefined ? spend.toFixed(4) : null;
 
@@ -145,7 +146,7 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessT
             Total Spend
           </p>
           <p className="text-2xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">
-            ${roundedSpend}
+            {formatCurrency(roundedSpend)}
           </p>
         </div>
         <div>

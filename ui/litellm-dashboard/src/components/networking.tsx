@@ -13,6 +13,10 @@ export const defaultProxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 const defaultServerRootPath = "/";
 export let serverRootPath = defaultServerRootPath;
 export let proxyBaseUrl = defaultProxyBaseUrl;
+
+export let localeIsoCode = "en-US"; // Default locale value
+export let currencyCode = "USD"; // Default currency code value
+
 if (isLocal != true) {
   console.log = function() {};
 }
@@ -138,7 +142,24 @@ export const getUiConfig = async () => {
   console.log("jsonData in getUiConfig:", jsonData);
   updateProxyBaseUrl(jsonData.server_root_path, jsonData.proxy_base_url);
   return jsonData;
-}
+};
+
+export const getCurrencySettings = async () => {
+  /**
+   * Get the currency settings from the proxy
+   */
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/get/currency_settings`
+    : `/get/currency_settings`;
+  const response = await fetch(url);
+  const jsonData = await response.json();
+
+  localeIsoCode = jsonData.currency_Locale;
+  currencyCode = jsonData.currencyCode;
+
+  console.log("jsonData in getCurrencySettings:", jsonData);
+  return jsonData;
+};
 
 export const getOpenAPISchema = async () => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/openapi.json` : `/openapi.json`;

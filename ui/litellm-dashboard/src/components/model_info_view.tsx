@@ -24,6 +24,7 @@ import { getDisplayModelName } from "./view_model/model_name_display";
 import AddCredentialsModal from "./model_add/add_credentials_tab";
 import ReuseCredentialsModal from "./model_add/reuse_credentials";
 import CacheControlSettings from "./add_model/cache_control_settings";
+import { formatCurrency } from "@/utils/currencyUtils";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -302,8 +303,8 @@ export default function ModelInfoView({
               <Card>
                 <Text>Pricing</Text>
                 <div className="mt-2">
-                  <Text>Input: ${modelData.input_cost}/1M tokens</Text>
-                  <Text>Output: ${modelData.output_cost}/1M tokens</Text>
+                  <Text>Input: {formatCurrency(modelData.input_cost)}/1M tokens</Text>
+                  <Text>Output: {formatCurrency(modelData.output_cost)}/1M tokens</Text>
                 </div>
               </Card>
             </Grid>

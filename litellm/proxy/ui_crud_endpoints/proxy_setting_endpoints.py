@@ -1,4 +1,5 @@
 #### CRUD ENDPOINTS for UI Settings #####
+import os
 from typing import Any, Dict, List, Union
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -39,7 +40,6 @@ class InternalUserSettingsResponse(SettingsResponse):
 class DefaultTeamSettingsResponse(SettingsResponse):
     """Response model for default team settings"""
     pass
-
 
 @router.get(
     "/get/allowed_ips",
@@ -189,6 +189,19 @@ async def _get_settings_with_schema(
     return result
 
 
+@router.get('/get/currency_settings', tags=["Currency Configuration"], include_in_schema=False)
+async def get_currency_settings():
+    """
+    Get the current currency settings for frontend display.
+    Returns a dictionary with currency and locale settings.
+    """
+
+    # Load existing config
+    return ({
+        "currencyCode": os.getenv("FRONTEND_CURRENCY", "USD"),
+        "currency_Locale": os.getenv("FRONTEND_LOCALE", "en-US")
+    })
+
 @router.get(
     "/get/internal_user_settings",
     tags=["SSO Settings"],
@@ -233,6 +246,7 @@ async def get_default_team_settings():
         settings_class=DefaultTeamSSOParams,
         config=config,
     )
+
 
 
 async def _update_litellm_setting(
@@ -434,3 +448,4 @@ async def update_sso_settings(sso_config: SSOConfig):
         "status": "success",
         "settings": sso_data,
     }
+

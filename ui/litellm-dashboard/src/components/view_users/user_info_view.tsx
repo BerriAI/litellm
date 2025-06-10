@@ -18,6 +18,7 @@ import { userInfoCall, userDeleteCall, userUpdateUserCall, modelAvailableCall } 
 import { message } from "antd";
 import { rolesWithWriteAccess } from '../../utils/roles';
 import { UserEditView } from "../user_edit_view";
+import { formatCurrency } from "@/utils/currencyUtils";
 
 interface UserInfoViewProps {
   userId: string;
@@ -95,7 +96,7 @@ export default function UserInfoView({ userId, onClose, accessToken, userRole, o
       if (!accessToken || !userData) return;
 
       const response = await userUpdateUserCall(accessToken, formValues, null);
-      
+
       // Update local state with new values
       setUserData({
         ...userData,
@@ -119,8 +120,8 @@ export default function UserInfoView({ userId, onClose, accessToken, userRole, o
   if (isLoading) {
     return (
       <div className="p-4">
-        <Button 
-          icon={ArrowLeftIcon} 
+        <Button
+          icon={ArrowLeftIcon}
           variant="light"
           onClick={onClose}
           className="mb-4"
@@ -135,8 +136,8 @@ export default function UserInfoView({ userId, onClose, accessToken, userRole, o
   if (!userData) {
     return (
       <div className="p-4">
-        <Button 
-          icon={ArrowLeftIcon} 
+        <Button
+          icon={ArrowLeftIcon}
           variant="light"
           onClick={onClose}
           className="mb-4"
@@ -152,8 +153,8 @@ export default function UserInfoView({ userId, onClose, accessToken, userRole, o
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <Button 
-            icon={ArrowLeftIcon} 
+          <Button
+            icon={ArrowLeftIcon}
             variant="light"
             onClick={onClose}
             className="mb-4"
@@ -230,8 +231,15 @@ export default function UserInfoView({ userId, onClose, accessToken, userRole, o
               <Card>
                 <Text>Spend</Text>
                 <div className="mt-2">
-                  <Title>${Number(userData.user_info?.spend || 0).toFixed(4)}</Title>
-                  <Text>of {userData.user_info?.max_budget !== null ? `$${userData.user_info.max_budget}` : "Unlimited"}</Text>
+                  <Title>
+                    {formatCurrency(Number(userData.user_info?.spend || 0))}
+                  </Title>
+                  <Text>
+                    of{" "}
+                    {userData.user_info?.max_budget !== null
+                      ? `${formatCurrency(userData.user_info.max_budget)}`
+                      : "Unlimited"}
+                  </Text>
                 </div>
               </Card>
 
@@ -270,10 +278,10 @@ export default function UserInfoView({ userId, onClose, accessToken, userRole, o
               <div className="flex justify-between items-center mb-4">
                 <Title>User Settings</Title>
                 {!isEditing && userRole && rolesWithWriteAccess.includes(userRole) && (
-                  <Button variant="light" onClick={() => setIsEditing(true)}>
-                    Edit Settings
-                  </Button>
-                )}
+                    <Button variant="light" onClick={() => setIsEditing(true)}>
+                      Edit Settings
+                    </Button>
+                  )}
               </div>
 
               {isEditing && userData ? (
@@ -294,7 +302,7 @@ export default function UserInfoView({ userId, onClose, accessToken, userRole, o
                     <Text className="font-medium">User ID</Text>
                     <Text className="font-mono">{userData.user_id}</Text>
                   </div>
-                  
+
                   <div>
                     <Text className="font-medium">Email</Text>
                     <Text>{userData.user_info?.user_email || "Not Set"}</Text>
@@ -383,4 +391,4 @@ export default function UserInfoView({ userId, onClose, accessToken, userRole, o
       </TabGroup>
     </div>
   );
-} 
+}

@@ -5,6 +5,7 @@ import { add } from "date-fns";
 import { regenerateKeyCall } from "./networking";
 import { KeyResponse } from "./key_team_helpers/key_list";
 import { CopyToClipboard } from "react-copy-to-clipboard";
+import { getCurrencyCode } from "@/utils/currencyUtils";
 
 interface RegenerateKeyModalProps {
   selectedToken: KeyResponse | null;
@@ -167,7 +168,10 @@ export function RegenerateKeyModal({
           <Form.Item name="key_alias" label="Key Alias">
             <TextInput disabled={true} />
           </Form.Item>
-          <Form.Item name="max_budget" label="Max Budget (USD)">
+          <Form.Item
+            name="max_budget"
+            label={`Max Budget (${getCurrencyCode()})`}
+          >
             <InputNumber step={0.01} precision={2} style={{ width: "100%" }} />
           </Form.Item>
           <Form.Item name="tpm_limit" label="TPM Limit">

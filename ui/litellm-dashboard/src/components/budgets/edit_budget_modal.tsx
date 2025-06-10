@@ -19,6 +19,7 @@ import {
 } from "antd";
 import { budgetUpdateCall } from "../networking";
 import { budgetItem } from "./budget_panel";
+import { getCurrencyCode } from "@/utils/currencyUtils";
 
 interface BudgetModalProps {
   isModalVisible: boolean;
@@ -124,7 +125,10 @@ const EditBudgetModal: React.FC<BudgetModalProps> = ({
               <b>Optional Settings</b>
             </AccordionHeader>
             <AccordionBody>
-              <Form.Item label="Max Budget (USD)" name="max_budget">
+              <Form.Item
+                label={`Max Budget (${getCurrencyCode()})`}
+                name="max_budget"
+              >
                 <InputNumber step={0.01} precision={2} width={200} />
               </Form.Item>
               <Form.Item

@@ -26,7 +26,7 @@ import ChatUI from "@/components/chat_ui";
 import Sidebar from "@/components/leftnav";
 import Usage from "@/components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
-import { getUiConfig, proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
+import { getCurrencySettings, getUiConfig, proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
 import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
 import TransformRequestPanel from "@/components/transform_request";
@@ -88,7 +88,7 @@ function LoadingScreen() {
       <div className="text-lg font-medium py-2 pr-4 border-r border-r-gray-200">
         🚅 LiteLLM
       </div>
-      
+
       <div className="flex items-center justify-center gap-2">
         <UiLoadingSpinner className="size-4" />
         <span className="text-gray-600 text-sm">Loading...</span>
@@ -157,6 +157,12 @@ export default function CreateKeyPage() {
   }, []);
 
   useEffect(() => {
+    getCurrencySettings().then((data) => {
+      console.log("currency settings:", data);
+    });
+  }, []);
+
+  useEffect(() => {
     if (redirectToLogin) {
       window.location.href = (proxyBaseUrl || "") + "/sso/key/generate"
     }
@@ -167,7 +173,7 @@ export default function CreateKeyPage() {
       return;
     }
 
- 
+
     const decoded = jwtDecode(token) as { [key: string]: any };
     if (decoded) {
       // cast decoded to dictionary
@@ -224,7 +230,7 @@ export default function CreateKeyPage() {
     
   }, [token]);
 
-  
+
   useEffect(() => {
     if (accessToken && userID && userRole) {
       fetchUserModels(userID, userRole, accessToken, setUserModels);
@@ -238,7 +244,7 @@ export default function CreateKeyPage() {
   }, [accessToken, userID, userRole]);
 
   if (authLoading || redirectToLogin) {
-    return <LoadingScreen />
+    return <LoadingScreen />;
   }
 
   return (
@@ -369,8 +375,11 @@ export default function CreateKeyPage() {
               ) : page == "budgets" ? (
                 <BudgetPanel accessToken={accessToken} />
               ) : page == "guardrails" ? (
-                <GuardrailsPanel accessToken={accessToken} userRole={userRole} />
-              ): page == "transform-request" ? (
+                <GuardrailsPanel
+                  accessToken={accessToken}
+                  userRole={userRole}
+                />
+              ) : page == "transform-request" ? (
                 <TransformRequestPanel accessToken={accessToken} />
               ) : page == "general-settings" ? (
                 <GeneralSettings
@@ -406,7 +415,7 @@ export default function CreateKeyPage() {
                   userRole={userRole}
                   token={token}
                   accessToken={accessToken}
-                  allTeams={teams as Team[] ?? []}
+                  allTeams={(teams as Team[]) ?? []}
                   premiumUser={premiumUser}
                 />
               ) : page == "mcp-servers" ? (
