@@ -141,8 +141,8 @@ guardrails:
       mode: "pre_call"
       api_key: LASSO_API_KEY
       api_base: LASSO_API_BASE
-      user_id: LASSO_USER_ID  # Optional: Track specific users
-      conversation_id: LASSO_CONVERSATION_ID  # Optional: Track specific conversations
+      lasso_user_id: LASSO_USER_ID  # Optional: Track specific users
+      lasso_conversation_id: LASSO_CONVERSATION_ID  # Optional: Track specific conversations
 ```
 
 ## Need Help?

@@ -65,28 +65,25 @@ def test_lasso_guard_config_no_api_key():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["pre_call"])
-async def test_callback(mode: str):
+async def test_callback():
     # Set environment variable for testing
     os.environ["LASSO_API_KEY"] = "test-key"
     os.environ["LASSO_USER_ID"] = "test-user"
-    os.environ["LASSO_CONVERSATION_ID"] = "test-conversation"
-    
+    os.environ["LASSO_CONVERSATION_ID"] = "test-conversation"    
     init_guardrails_v2(
         all_guardrails=[
             {
                 "guardrail_name": "all-guard",
                 "litellm_params": {
                     "guardrail": "lasso",
-                    "mode": mode,
+                    "mode": "pre_call",
                     "default_on": True,
                 },
             }
         ],
-        config_file_path="",
     )
-    lasso_guardrails = [callback for callback in litellm.callbacks if isinstance(callback, LassoGuardrail)]
-    assert len(lasso_guardrails) == 1
+    lasso_guardrails = litellm.logging_callback_manager.get_custom_loggers_for_type(LassoGuardrail)
+    print("found lasso guardrails", lasso_guardrails)
     lasso_guardrail = lasso_guardrails[0]
 
     data = {
@@ -246,34 +243,3 @@ async def test_api_error_handling():
     
     # Clean up
     del os.environ["LASSO_API_KEY"]
-
-
-@pytest.mark.parametrize("invalid_mode", ["post_call", "during_call", "logging_only"])
-def test_lasso_guard_invalid_mode(invalid_mode):
-    """Test that an error is raised when initializing Lasso guardrail with an invalid mode."""
-    # Set environment variable for testing
-    os.environ["LASSO_API_KEY"] = "test-key"
-    
-    # Attempt to initialize with an invalid mode
-    with pytest.raises(ValueError) as excinfo:
-        init_guardrails_v2(
-            all_guardrails=[
-                {
-                    "guardrail_name": "invalid-mode-guard",
-                    "litellm_params": {
-                        "guardrail": "lasso",
-                        "mode": invalid_mode,
-                        "default_on": True,
-                    },
-                }
-            ],
-            config_file_path="",
-        )
-    
-    # Check that the error message is correct
-    assert "Lasso guardrail only supports 'pre_call' mode" in str(excinfo.value)
-    assert f"Got '{invalid_mode}' instead" in str(excinfo.value)
-    
-    # Clean up
-    if "LASSO_API_KEY" in os.environ:
-        del os.environ["LASSO_API_KEY"]

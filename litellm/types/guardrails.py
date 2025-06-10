@@ -325,10 +325,22 @@ class LakeraV2GuardrailConfigModel(BaseModel):
     )
 
 
+class LassoGuardrailConfigModel(BaseModel):
+    """Configuration parameters for the Lasso guardrail"""
+
+    lasso_user_id: Optional[str] = Field(
+        default=None, description="User ID for the Lasso guardrail"
+    )
+    lasso_conversation_id: Optional[str] = Field(
+        default=None, description="Conversation ID for the Lasso guardrail"
+    )
+
+
 class LitellmParams(
     PresidioConfigModel,
     BedrockGuardrailConfigModel,
     LakeraV2GuardrailConfigModel,
+    LassoGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str]] = Field(
