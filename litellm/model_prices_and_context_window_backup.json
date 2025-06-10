@@ -740,6 +740,25 @@
         "supports_tool_choice": true,
         "supports_reasoning": true
     },
+    "o3-pro": {
+        "max_tokens": 100000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 20e-06,
+        "input_cost_per_token_batches": 10e-06,
+        "output_cost_per_token_batches": 40e-06,
+        "output_cost_per_token": 80e-06,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": false,
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
     "o3": {
         "max_tokens": 100000,
         "max_input_tokens": 200000,
