@@ -498,12 +498,6 @@ def construct_target_url(
     return updated_url
 
 
-# Models that are only available in the global region
-GLOBAL_ONLY_VERTEX_MODELS = {
-    "gemini-2.5-pro-preview-05-06",
-}
-
-
 def is_global_only_vertex_model(model: str) -> bool:
     """
     Check if a model is only available in the global region.
@@ -514,4 +508,11 @@ def is_global_only_vertex_model(model: str) -> bool:
     Returns:
         True if the model is only available in global region, False otherwise
     """
-    return model in GLOBAL_ONLY_VERTEX_MODELS
+    from litellm.utils import get_supported_regions
+
+    supported_regions = get_supported_regions(
+        model=model, custom_llm_provider="vertex_ai"
+    )
+    if supported_regions is None:
+        return False
+    return "global" in supported_regions
