@@ -12,6 +12,7 @@ import {
   Text,
   Grid,
   Col,
+  DateRangePicker,
 } from "@tremor/react";
 import {
   CredentialItem,
@@ -1235,7 +1236,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                     <SelectItem value="all">
                                       All Models
                                     </SelectItem>
-                                    {availableModelGroups.map((group, idx) => (
+                                    <SelectItem value="wildcard">Wildcard Models (*)</SelectItem>
+                                {availableModelGroups.map((group, idx) => (
                                       <SelectItem key={idx} value={group}>
                                         {group}
                                       </SelectItem>
@@ -1322,176 +1324,164 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           </div>
                         </div>
 
-                        <ModelDataTable
-                          columns={columns(
-                            userRole,
-                            userID,
-                            premiumUser,
-                            setSelectedModelId,
-                            setSelectedTeamId,
-                            getDisplayModelName,
-                            handleEditClick,
-                            handleRefreshClick,
-                            setEditModel,
-                            expandedRows,
-                            setExpandedRows
-                          )}
-                          data={modelData.data.filter((model: any) => {
-                            // Model name filter
-                            const modelNameMatch =
-                              selectedModelGroup === "all" ||
-                              model.model_name === selectedModelGroup ||
-                              !selectedModelGroup;
-
-                            // Model access group filter
-                            const accessGroupMatch =
-                              selectedModelAccessGroupFilter === "all" ||
-                              model.model_info["access_groups"]?.includes(
-                                selectedModelAccessGroupFilter
-                              ) ||
-                              !selectedModelAccessGroupFilter;
-
-                            // Team access filter based on current team and view mode
-                            let teamAccessMatch = true;
-                            if (modelViewMode === "current_team") {
-                              if (currentTeam === "personal") {
-                                // Show only models with direct access
-                                teamAccessMatch =
-                                  model.model_info?.direct_access === true;
-                              } else {
-                                // Show only models accessible by the current team
-                                teamAccessMatch =
-                                  model.model_info?.access_via_team_ids?.includes(
-                                    currentTeam
-                                  ) === true;
-                              }
+                    <ModelDataTable
+                      columns={columns(
+                        userRole,
+                        userID,
+                        premiumUser,
+                        setSelectedModelId,
+                        setSelectedTeamId,
+                        getDisplayModelName,
+                        handleEditClick,
+                        handleRefreshClick,
+                        setEditModel,
+                        expandedRows,
+                        setExpandedRows
+                      )}
+                      data={modelData.data.filter(
+                        (model: any) => {
+                          // Model name filter
+                          const modelNameMatch = selectedModelGroup === "all" ||
+                          model.model_name === selectedModelGroup ||
+                          !selectedModelGroup || (selectedModelGroup === "wildcard" && model.model_name.includes('*'));
+                           // Model access group filter
+                           const accessGroupMatch =
+                           selectedModelAccessGroupFilter === "all" ||
+                           model.model_info["access_groups"]?.includes(
+                             selectedModelAccessGroupFilter
+                           ) ||
+                           !selectedModelAccessGroupFilter;
+                          // Team access filter based on current team and view mode
+                          let teamAccessMatch = true;
+                          if (modelViewMode === "current_team") {
+                            if (currentTeam === "personal") {
+                              // Show only models with direct access
+                              teamAccessMatch =
+                                model.model_info?.direct_access === true;
+                            } else {
+                              // Show only models accessible by the current team
+                              teamAccessMatch =
+                                model.model_info?.access_via_team_ids?.includes(
+                                  currentTeam
+                                ) === true;
                             }
-                            // For 'all' mode, show all models (teamAccessMatch remains true)
+                          }
+                          // For 'all' mode, show all models (teamAccessMatch remains true)
 
-                            return (
-                              modelNameMatch &&
-                              accessGroupMatch &&
-                              teamAccessMatch
-                            );
-                          })}
-                          isLoading={false}
-                          table={tableRef}
-                        />
-                      </div>
-                    </div>
-                  </Grid>
-                </TabPanel>
-                <TabPanel className="h-full">
-                  <AddModelTab
-                    form={form}
-                    handleOk={handleOk}
-                    selectedProvider={selectedProvider}
-                    setSelectedProvider={setSelectedProvider}
-                    providerModels={providerModels}
-                    setProviderModelsFn={setProviderModelsFn}
-                    getPlaceholder={getPlaceholder}
-                    uploadProps={uploadProps}
-                    showAdvancedSettings={showAdvancedSettings}
-                    setShowAdvancedSettings={setShowAdvancedSettings}
-                    teams={teams}
-                    credentials={credentialsList}
-                    accessToken={accessToken}
-                    userRole={userRole}
-                  />
-                </TabPanel>
-                <TabPanel>
-                  <CredentialsPanel
-                    accessToken={accessToken}
-                    uploadProps={uploadProps}
-                    credentialList={credentialsList}
-                    fetchCredentials={fetchCredentials}
-                  />
-                </TabPanel>
-                <TabPanel>
-                  <PassThroughSettings
-                    accessToken={accessToken}
-                    userRole={userRole}
-                    userID={userID}
-                    modelData={modelData}
-                  />
-                </TabPanel>
-                <TabPanel>
-                  <HealthCheckComponent
-                    accessToken={accessToken}
-                    modelData={modelData}
-                    all_models_on_proxy={all_models_on_proxy}
-                    getDisplayModelName={getDisplayModelName}
-                    setSelectedModelId={setSelectedModelId}
-                  />
-                </TabPanel>
-                <TabPanel>
-                  <Grid numItems={4} className="mt-2 mb-2">
-                    <Col>
-                      <UsageDatePicker
-                        value={dateValue}
-                        className="mr-2"
-                        onValueChange={(value) => {
-                          setDateValue(value);
-                          updateModelMetrics(
-                            selectedModelGroup,
-                            value.from,
-                            value.to
+                          return (
+                            modelNameMatch &&
+                            accessGroupMatch &&
+                            teamAccessMatch
                           );
-                        }}
-                      />
-                    </Col>
-                    <Col className="ml-2">
-                      <Text>Select Model Group</Text>
-                      <Select
-                        defaultValue={
-                          selectedModelGroup
-                            ? selectedModelGroup
-                            : availableModelGroups[0]
-                        }
-                        value={
-                          selectedModelGroup
-                            ? selectedModelGroup
-                            : availableModelGroups[0]
+                        })}
+                      isLoading={false}
+                      table={tableRef}
+                    />
+                  </div>
+                </div>
+              </Grid>
+            </TabPanel>
+            <TabPanel className="h-full">
+              <AddModelTab
+                form={form}
+                handleOk={handleOk}
+                selectedProvider={selectedProvider}
+                setSelectedProvider={setSelectedProvider}
+                providerModels={providerModels}
+                setProviderModelsFn={setProviderModelsFn}
+                getPlaceholder={getPlaceholder}
+                uploadProps={uploadProps}
+                showAdvancedSettings={showAdvancedSettings}
+                setShowAdvancedSettings={setShowAdvancedSettings}
+                teams={teams}
+                credentials={credentialsList}
+                accessToken={accessToken}
+                userRole={userRole}
+              />
+            </TabPanel>
+            <TabPanel>
+              <CredentialsPanel accessToken={accessToken} uploadProps={uploadProps} credentialList={credentialsList} fetchCredentials={fetchCredentials} />
+            </TabPanel>
+            <TabPanel>
+              <Card>
+                <Text>
+                  `/health` will run a very small request through your models
+                  configured on litellm
+                </Text>
+
+                <Button onClick={runHealthCheck}>Run `/health`</Button>
+                {healthCheckResponse && (
+                  <pre>{JSON.stringify(healthCheckResponse, null, 2)}</pre>
+                )}
+              </Card>
+            </TabPanel>
+            <TabPanel>
+              <Grid numItems={4} className="mt-2 mb-2">
+                <Col>
+                  <Text>Select Time Range</Text>
+                  <DateRangePicker
+                    enableSelect={true}
+                    value={dateValue}
+                    className="mr-2"
+                    onValueChange={(value) => {
+                      setDateValue(value);
+                      updateModelMetrics(
+                        selectedModelGroup,
+                        value.from,
+                        value.to
+                      ); // Call updateModelMetrics with the new date range
+                    }}
+                  />
+                </Col>
+                <Col className="ml-2">
+                  <Text>Select Model Group</Text>
+                  <Select
+                    defaultValue={
+                      selectedModelGroup
+                        ? selectedModelGroup
+                        : availableModelGroups[0]
+                    }
+                    value={
+                      selectedModelGroup
+                        ? selectedModelGroup
+                        : availableModelGroups[0]
+                    }
+                  >
+                    {availableModelGroups.map((group, idx) => (
+                      <SelectItem
+                        key={idx}
+                        value={group}
+                        onClick={() =>
+                          updateModelMetrics(group, dateValue.from, dateValue.to)
                         }
                       >
-                        {availableModelGroups.map((group, idx) => (
-                          <SelectItem
-                            key={idx}
-                            value={group}
-                            onClick={() =>
-                              updateModelMetrics(
-                                group,
-                                dateValue.from,
-                                dateValue.to
-                              )
-                            }
-                          >
-                            {group}
-                          </SelectItem>
-                        ))}
-                      </Select>
-                    </Col>
-                    <Col>
-                      <Popover
-                        trigger="click"
-                        content={FilterByContent}
-                        overlayStyle={{
-                          width: "20vw",
-                        }}
-                      >
-                        <Button
-                          icon={FilterIcon}
-                          size="md"
-                          variant="secondary"
-                          className="mt-4 ml-2"
-                          style={{
-                            border: "none",
-                          }}
-                          onClick={() => setShowAdvancedFilters(true)}
-                        ></Button>
-                      </Popover>
-                    </Col>
-                  </Grid>
+                        {group}
+                      </SelectItem>
+                    ))}
+                  </Select>
+                </Col>
+                <Col>
+                <Popover
+                  trigger="click" content={FilterByContent}
+                  overlayStyle={{
+                    width: "20vw"
+                  }}
+                  >
+                <Button
+                icon={FilterIcon}
+                size="md"
+                variant="secondary"
+                className="mt-4 ml-2"
+                style={{
+                  border: "none",
+                }}
+                onClick={() => setShowAdvancedFilters(true)}
+                  >
+                </Button>      
+                </Popover>
+                </Col>
+
+                </Grid>
 
                   <Grid numItems={2}>
                     <Col>
