@@ -1494,12 +1494,16 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                         Run health checks on individual models to verify they are working correctly
                       </Text>
                     </div>
-                    <Button 
+                    <Button
+                      size="sm"
+                      variant="secondary"
                       onClick={runAllHealthChecks}
-                      className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700"
                       disabled={Object.values(modelHealthStatuses).some(status => status.loading)}
+                      className="px-3 py-1 text-sm"
                     >
-                      Run All Checks
+                      {selectedModelsForHealth.length > 0 && selectedModelsForHealth.length < all_models_on_proxy.length 
+                        ? 'Run Checks' 
+                        : 'Run All Checks'}
                     </Button>
                   </div>
                 </div>
