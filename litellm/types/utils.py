@@ -894,8 +894,6 @@ class Usage(CompletionUsage):
     cost: Optional[float] = None
     is_byok: Optional[bool] = None
 
-    model_config = ConfigDict(extra="allow", protected_namespaces=())
-
     _cache_creation_input_tokens: int = PrivateAttr(
         0
     )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
