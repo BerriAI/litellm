@@ -21,7 +21,7 @@ Example trace in Langfuse using multiple models via LiteLLM:
 ### Pre-Requisites
 Ensure you have run `pip install langfuse` for this integration
 ```shell
-pip install langfuse>=2.0.0 litellm
+pip install langfuse==2.45.0 litellm
 ```
 
 ### Quick Start
