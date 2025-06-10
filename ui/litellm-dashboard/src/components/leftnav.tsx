@@ -30,6 +30,7 @@ const { Sider } = Layout;
 
 // Define the props type
 interface SidebarProps {
+  accessToken: string | null;
   setPage: (page: string) => void;
   userRole: string;
   defaultSelectedKey: string;
@@ -48,6 +49,7 @@ interface MenuItem {
 
 
 const Sidebar: React.FC<SidebarProps> = ({
+  accessToken,
   setPage,
   userRole,
   defaultSelectedKey,
@@ -163,7 +165,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             } : undefined
           }))}
         />
-        <UsageIndicator />
+        <UsageIndicator accessToken={accessToken} width={220}/>
       </Sider>
     </Layout>
   );
