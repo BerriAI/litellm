@@ -989,7 +989,10 @@ def _gemini_tool_call_invoke_helper(
 ) -> Optional[VertexFunctionCall]:
     name = function_call_params.get("name", "") or ""
     arguments = function_call_params.get("arguments", "")
-    arguments_dict = json.loads(arguments)
+    if isinstance(arguments, str) and len(arguments) == 0:
+        arguments_dict = None
+    else:
+        arguments_dict = json.loads(arguments)
     function_call = VertexFunctionCall(
         name=name,
         args=arguments_dict,
