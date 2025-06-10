@@ -1116,6 +1116,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                 value={selectedModelGroup ?? "all"}
                               >
                                 <SelectItem value="all">All Models</SelectItem>
+                                <SelectItem value="wildcard">Wildcard Models (*)</SelectItem>
                                 {availableModelGroups.map((group, idx) => (
                                   <SelectItem
                                     key={idx}
@@ -1215,7 +1216,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       )}
                       data={modelData.data.filter(
                         (model: any) => (
-                          (selectedModelGroup === "all" || model.model_name === selectedModelGroup || !selectedModelGroup) &&
+                          (
+                            selectedModelGroup === "all" || 
+                            !selectedModelGroup ||
+                            (selectedModelGroup === "wildcard" && model.model_name.includes('*')) ||
+                            model.model_name === selectedModelGroup
+                          ) &&
                           (selectedTeamFilter === "all" || model.model_info["team_id"] === selectedTeamFilter || !selectedTeamFilter)
                         )
                       )}
