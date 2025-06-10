@@ -346,7 +346,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 _description = openai_function_object.get("description", None)
                 _parameters = openai_function_object.get("parameters", None)
                 if isinstance(_parameters, str) and len(_parameters) == 0:
-                    _parameters = None
+                    _parameters = {
+                        "type": "object",
+                    }
                 if _description is not None:
                     gtool_func_declaration["description"] = _description
                 if _parameters is not None:

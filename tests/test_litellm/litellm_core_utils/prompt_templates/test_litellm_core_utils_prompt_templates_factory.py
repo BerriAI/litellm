@@ -305,4 +305,6 @@ def test_vertex_ai_transform_empty_function_call_arguments():
     }
     result: VertexFunctionCall = _gemini_tool_call_invoke_helper(function_call)
     print(result)
-    assert result["args"] == None
+    assert result["args"] == {
+        "type": "object",
+    }
