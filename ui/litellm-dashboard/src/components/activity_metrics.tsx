@@ -15,6 +15,15 @@ interface ChartDataPoint {
   metrics: SpendMetrics;
 }
 
+const colorNameToHex: { [key: string]: string } = {
+    blue: '#3b82f6',
+    cyan: '#06b6d4',
+    indigo: '#6366f1',
+    green: '#22c55e',
+    red: '#ef4444',
+    purple: '#8b5cf6',
+};
+
 export const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
   if (active && payload && payload.length) {
     const formatCategoryName = (name: string): string => {
@@ -48,10 +57,13 @@ export const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) =>
               ? `$${rawValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
               : rawValue.toLocaleString()
             : 'N/A';
+          
+          const colorName = item.color as keyof typeof colorNameToHex;
+          const hexColor = colorNameToHex[colorName] || item.color;
           return (
             <div key={dataKey} className="flex items-center justify-between space-x-4">
               <div className="flex items-center space-x-2">
-                <span className={`h-3 w-3 shrink-0 rounded-full`} style={{backgroundColor: item.color}} />
+                <span className={`h-2 w-2 shrink-0 rounded-full ring-2 ring-white drop-shadow-md`} style={{backgroundColor: hexColor}} />
                 <p className="font-medium text-tremor-content dark:text-dark-tremor-content">{formatCategoryName(dataKey)}</p>
               </div>
               <p className="font-medium text-tremor-content-emphasis dark:text-dark-tremor-content-emphasis">
@@ -66,7 +78,46 @@ export const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) =>
   return null;
 };
 
+const CustomLegend = ({ categories, colors }: { categories: string[], colors: string[] }) => {
+    const formatCategoryName = (name: string): string => {
+        return name.replace('metrics.', '')
+                   .replace(/_/g, ' ')
+                   .split(' ')
+                   .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+                   .join(' ');
+    };
+
+    return (
+        <div className="flex items-center justify-end space-x-4">
+            {categories.map((category, idx) => {
+                const colorName = colors[idx] as keyof typeof colorNameToHex;
+                const hexColor = colorNameToHex[colorName] || colors[idx];
+                return (
+                    <div key={category} className="flex items-center space-x-2">
+                        <span className={`h-2 w-2 shrink-0 rounded-full ring-4 ring-white`} style={{backgroundColor: hexColor}} />
+                        <p className="text-sm text-tremor-content dark:text-dark-tremor-content">
+                            {formatCategoryName(category)}
+                        </p>
+                    </div>
+                );
+            })}
+        </div>
+    );
+};
+
 const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: ModelActivityData }) => {
+  const chartData = metrics.daily_data.map(d => ({
+    date: d.date,
+    PromptTokens: d.metrics.prompt_tokens,
+    CompletionTokens: d.metrics.completion_tokens,
+    TotalTokens: d.metrics.total_tokens,
+    APIRequests: d.metrics.api_requests,
+    Spend: d.metrics.spend,
+    SuccessfulRequests: d.metrics.successful_requests,
+    FailedRequests: d.metrics.failed_requests,
+    CacheRead: d.metrics.cache_read_input_tokens || 0,
+    CacheCreation: d.metrics.cache_creation_input_tokens || 0,
+  }));
   return (
     <div className="space-y-2">
       {/* Summary Cards */}
@@ -94,14 +145,19 @@ const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: Mode
       {/* Charts */}
       <Grid numItems={2} className="gap-4">
         <Card>
-          <Title>Total Tokens</Title>
-          <AreaChart    
+          <div className="flex justify-between items-center">
+            <Title>Total Tokens</Title>
+            <CustomLegend categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]} colors={["blue", "cyan", "indigo"]} />
+          </div>
+          <AreaChart
+            className="mt-4"
             data={metrics.daily_data}
             index="date"
             categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]}
             colors={["blue", "cyan", "indigo"]}
             valueFormatter={valueFormatter}
             customTooltip={CustomTooltip}
+            showLegend={false}
           />
         </Card>
 
@@ -130,8 +186,12 @@ const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: Mode
         </Card>
 
         <Card>
-          <Title>Success vs Failed Requests</Title>
+          <div className="flex justify-between items-center">
+            <Title>Success vs Failed Requests</Title>
+            <CustomLegend categories={["metrics.successful_requests", "metrics.failed_requests"]} colors={["green", "red"]} />
+          </div>
           <AreaChart
+            className="mt-4"
             data={metrics.daily_data}
             index="date"
             categories={["metrics.successful_requests", "metrics.failed_requests"]}
@@ -139,22 +199,28 @@ const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: Mode
             valueFormatter={valueFormatter}
             stack
             customTooltip={CustomTooltip}
+            showLegend={false}
           />
         </Card>
         
         <Card>
-          <Title>Prompt Caching Metrics</Title>
+          <div className="flex justify-between items-center">
+            <Title>Prompt Caching Metrics</Title>
+            <CustomLegend categories={["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"]} colors={["cyan", "purple"]} />
+          </div>
           <div className="mb-2">
             <Text>Cache Read: {metrics.total_cache_read_input_tokens?.toLocaleString() || 0} tokens</Text>
             <Text>Cache Creation: {metrics.total_cache_creation_input_tokens?.toLocaleString() || 0} tokens</Text>
           </div>
           <AreaChart
+            className="mt-4"
             data={metrics.daily_data}
             index="date"
             categories={["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"]}
             colors={["cyan", "purple"]}
             valueFormatter={valueFormatter}
             customTooltip={CustomTooltip}
+            showLegend={false}
           />
         </Card>
       </Grid>
@@ -257,19 +323,28 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
 
         <Grid numItems={2} className="gap-4">
           <Card>
-            <Title>Total Tokens Over Time</Title>
-            <AreaChart    
+            <div className="flex justify-between items-center">
+              <Title>Total Tokens Over Time</Title>
+              <CustomLegend categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]} colors={["blue", "cyan", "indigo"]} />
+            </div>
+            <AreaChart
+              className="mt-4"
               data={sortedDailyData}
               index="date"
               categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]}
               colors={["blue", "cyan", "indigo"]}
               valueFormatter={valueFormatter}
               customTooltip={CustomTooltip}
+              showLegend={false}
             />
           </Card>
           <Card>
-            <Title>Total Requests Over Time</Title>
+            <div className="flex justify-between items-center">
+              <Title>Total Requests Over Time</Title>
+              <CustomLegend categories={["metrics.successful_requests", "metrics.failed_requests"]} colors={["green", "red"]} />
+            </div>
             <AreaChart
+              className="mt-4"
               data={sortedDailyData}
               index="date"
               categories={["metrics.successful_requests", "metrics.failed_requests"]}
@@ -277,6 +352,7 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
               valueFormatter={valueFormatter}
               stack
               customTooltip={CustomTooltip}
+              showLegend={false}
             />
           </Card>
         </Grid>
