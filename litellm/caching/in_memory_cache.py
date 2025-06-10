@@ -11,7 +11,10 @@ Has 4 methods:
 import json
 import sys
 import time
-from typing import Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
+
+if TYPE_CHECKING:
+    from litellm.types.caching import RedisPipelineIncrementOperation
 
 from pydantic import BaseModel
 
@@ -140,7 +143,7 @@ class InMemoryCache(BaseCache):
         self.cache_dict[key] = value
         if self.allow_ttl_override(key):  # if ttl is not set, set it to default ttl
             if "ttl" in kwargs and kwargs["ttl"] is not None:
-                self.ttl_dict[key] = time.time() + kwargs["ttl"]
+                self.ttl_dict[key] = time.time() + float(kwargs["ttl"])
             else:
                 self.ttl_dict[key] = time.time() + self.default_ttl
 
@@ -218,6 +221,17 @@ class InMemoryCache(BaseCache):
         value = init_value + value
         await self.async_set_cache(key, value, **kwargs)
         return value
+
+    async def async_increment_pipeline(
+        self, increment_list: List["RedisPipelineIncrementOperation"], **kwargs
+    ) -> Optional[List[float]]:
+        results = []
+        for increment in increment_list:
+            result = await self.async_increment(
+                increment["key"], increment["increment_value"], **kwargs
+            )
+            results.append(result)
+        return results
 
     def flush_cache(self):
         self.cache_dict.clear()
