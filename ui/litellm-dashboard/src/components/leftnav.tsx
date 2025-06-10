@@ -25,11 +25,12 @@ import {
   TagsOutlined,
 } from '@ant-design/icons';
 import { old_admin_roles, v2_admin_role_names, all_admin_roles, rolesAllowedToSeeUsage, rolesWithWriteAccess, internalUserRoles } from '../utils/roles';
-
+import UsageIndicator from './usage_indicator';
 const { Sider } = Layout;
 
 // Define the props type
 interface SidebarProps {
+  accessToken: string | null;
   setPage: (page: string) => void;
   userRole: string;
   defaultSelectedKey: string;
@@ -48,6 +49,7 @@ interface MenuItem {
 
 
 const Sidebar: React.FC<SidebarProps> = ({
+  accessToken,
   setPage,
   userRole,
   defaultSelectedKey,
@@ -163,6 +165,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             } : undefined
           }))}
         />
+        <UsageIndicator accessToken={accessToken} width={220}/>
       </Sider>
     </Layout>
   );
