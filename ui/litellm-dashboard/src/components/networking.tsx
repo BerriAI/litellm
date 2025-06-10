@@ -4282,6 +4282,34 @@ export const healthCheckCall = async (accessToken: String) => {
   }
 };
 
+export const individualModelHealthCheckCall = async (accessToken: String, modelName: string) => {
+  /**
+   * Run health check for a specific model
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/health?model=${encodeURIComponent(modelName)}` : `/health?model=${encodeURIComponent(modelName)}`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error(errorData || "Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error(`Failed to call /health for model ${modelName}:`, error);
+    throw error;
+  }
+};
+
 export const cachingHealthCheckCall = async (accessToken: String) => {
   /**
    * Get all the models user has access to
