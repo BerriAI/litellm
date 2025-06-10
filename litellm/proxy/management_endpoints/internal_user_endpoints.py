@@ -16,6 +16,7 @@ import traceback
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union, cast
+from urllib.parse import unquote_plus
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -314,8 +315,25 @@ async def new_user(
 
         special_keys = ["token", "token_id"]
         response_dict = {}
+
+        # Get model fields safely - handle both Pydantic v1 and v2
+        model_fields_dict = {}
+        try:
+            if hasattr(NewUserResponse, "model_fields"):
+                # Pydantic v2
+                fields = NewUserResponse.model_fields
+                if callable(fields):
+                    model_fields_dict = fields()
+                else:
+                    model_fields_dict = fields
+            elif hasattr(NewUserResponse, "__fields__"):
+                # Pydantic v1
+                model_fields_dict = NewUserResponse.__fields__
+        except Exception:
+            model_fields_dict = {}
+
         for key, value in response.items():
-            if key in NewUserResponse.model_fields.keys() and key not in special_keys:
+            if key in model_fields_dict and key not in special_keys:
                 response_dict[key] = value
 
         response_dict["key"] = response.get("token", "")
@@ -400,6 +418,7 @@ def get_team_from_list(
 )
 @management_endpoint_wrapper
 async def user_info(
+    request: Request,
     user_id: Optional[str] = fastapi.Query(
         default=None, description="User ID in the request parameters"
     ),
@@ -421,6 +440,21 @@ async def user_info(
     from litellm.proxy.proxy_server import prisma_client
 
     try:
+        # Handle URL encoding properly by getting user_id from the original request
+        if user_id is not None:
+            # Get the raw query string and parse it properly to handle + characters
+            query_string = str(request.url.query)
+            if "user_id=" in query_string:
+                # Extract the user_id value from the raw query string
+                import re
+                from urllib.parse import unquote
+
+                match = re.search(r"user_id=([^&]*)", query_string)
+                if match:
+                    # Use unquote instead of unquote_plus to preserve + characters
+                    raw_user_id = unquote(match.group(1))
+                    user_id = raw_user_id
+
         if prisma_client is None:
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
@@ -433,10 +467,12 @@ async def user_info(
         elif user_id is None:
             user_id = user_api_key_dict.user_id
         ## GET USER ROW ##
+
         if user_id is not None:
             user_info = await prisma_client.get_data(user_id=user_id)
         else:
             user_info = None
+
         ## GET ALL TEAMS ##
         team_list = []
         team_id_list = []

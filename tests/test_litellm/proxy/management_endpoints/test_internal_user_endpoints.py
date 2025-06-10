@@ -297,3 +297,55 @@ async def test_new_user_license_over_limit(mocker):
 
     # Verify that the license check was called with the correct user count
     mock_license_check.is_over_limit.assert_called_once_with(total_users=1000)
+
+
+@pytest.mark.asyncio
+async def test_user_info_url_encoding_plus_character(mocker):
+    """
+    Test that /user/info endpoint properly handles email addresses with + characters
+    when passed in the URL query parameters.
+
+    Issue: + characters in emails get converted to spaces due to URL encoding
+    Solution: Parse the raw query string to preserve + characters
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info
+
+    # Mock the prisma client
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.get_data = mocker.AsyncMock()
+
+    # Patch the prisma client import in the endpoint
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Create a mock request with the raw query string containing +
+    mock_request = mocker.MagicMock(spec=Request)
+    mock_request.url.query = "user_id=machine-user+alp-air-admin-b58-b@tempus.com"
+
+    # Mock user_api_key_dict
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="test_admin", user_role="proxy_admin"
+    )
+
+    # Call user_info function with the URL-decoded user_id (as FastAPI would pass it)
+    # FastAPI would normally convert + to space, but our fix should handle this
+    decoded_user_id = (
+        "machine-user alp-air-admin-b58-b@tempus.com"  # What FastAPI gives us
+    )
+    expected_user_id = "machine-user+alp-air-admin-b58-b@tempus.com"
+    try:
+        response = await user_info(
+            user_id=decoded_user_id,
+            user_api_key_dict=mock_user_api_key_dict,
+            request=mock_request,
+        )
+    except Exception as e:
+        print(f"Error in user_info: {e}")
+
+    # Verify that the response contains the correct user data
+    print(
+        f"mock_prisma_client.get_data.call_args: {mock_prisma_client.get_data.call_args.kwargs}"
+    )
+    assert mock_prisma_client.get_data.call_args.kwargs["user_id"] == expected_user_id
