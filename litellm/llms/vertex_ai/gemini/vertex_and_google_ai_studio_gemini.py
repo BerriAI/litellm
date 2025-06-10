@@ -776,7 +776,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _transform_parts(
         parts: List[HttpxPartType],
-        index: int,
         is_function_call: Optional[bool],
     ) -> Tuple[
         Optional[ChatCompletionToolCallFunctionChunk],
@@ -1117,7 +1116,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
                 functions, tools = VertexGeminiConfig._transform_parts(
                     parts=candidate["content"]["parts"],
-                    index=candidate.get("index", idx),
                     is_function_call=is_function_call(standard_optional_params),
                 )
 
