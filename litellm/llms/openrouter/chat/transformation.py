@@ -14,7 +14,7 @@ from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.openrouter import OpenRouterErrorMessage
-from litellm.types.utils import ModelResponse, ModelResponseStream
+from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import OpenRouterException
@@ -37,12 +37,16 @@ class OpenrouterConfig(OpenAIGPTConfig):
         transforms = non_default_params.pop("transforms", None)
         models = non_default_params.pop("models", None)
         route = non_default_params.pop("route", None)
+        stream_options = non_default_params.pop("stream_options", {})
         if transforms is not None:
             extra_body["transforms"] = transforms
         if models is not None:
             extra_body["models"] = models
         if route is not None:
             extra_body["route"] = route
+        if stream_options is not None and stream_options.get("include_usage"):
+            extra_body["usage"] = {"include": True}
+
         mapped_openai_params[
             "extra_body"
         ] = extra_body  # openai client supports `extra_body` param
@@ -93,6 +97,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
 
 class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+        print(f"OpenRouter Raw Chunk: {chunk}")
         try:
             ## HANDLE ERROR IN CHUNK ##
             if "error" in chunk:
@@ -116,11 +121,41 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
             for choice in chunk["choices"]:
                 choice["delta"]["reasoning_content"] = choice["delta"].get("reasoning")
                 new_choices.append(choice)
+
+            # Get usage information from the chunk
+            usage_from_chunk = chunk.get("usage")
+            final_usage = None
+            if usage_from_chunk:
+                # Extract all usage fields from OpenRouter response
+                usage_kwargs = {
+                    "prompt_tokens": usage_from_chunk.get("prompt_tokens", 0),
+                    "completion_tokens": usage_from_chunk.get("completion_tokens", 0),
+                    "total_tokens": usage_from_chunk.get("total_tokens", 0),
+                    "cost": usage_from_chunk.get("cost"),
+                    "is_byok": usage_from_chunk.get("is_byok"),
+                }
+                
+                # Handle prompt_tokens_details if present
+                if "prompt_tokens_details" in usage_from_chunk:
+                    usage_kwargs["prompt_tokens_details"] = usage_from_chunk["prompt_tokens_details"]
+                
+                # Handle completion_tokens_details if present
+                if "completion_tokens_details" in usage_from_chunk:
+                    usage_kwargs["completion_tokens_details"] = usage_from_chunk["completion_tokens_details"]
+                
+                # Pass any additional fields that might be present in usage_from_chunk
+                # This handles fields like cost_details that might be present
+                for key, value in usage_from_chunk.items():
+                    if key not in usage_kwargs and value is not None:
+                        usage_kwargs[key] = value
+                
+                final_usage = Usage(**usage_kwargs)
+
             return ModelResponseStream(
                 id=chunk["id"],
                 object="chat.completion.chunk",
                 created=chunk["created"],
-                usage=chunk.get("usage"),
+                usage=final_usage,
                 model=chunk["model"],
                 choices=new_choices,
             )

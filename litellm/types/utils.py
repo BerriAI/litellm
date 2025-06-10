@@ -886,6 +886,16 @@ class ServerToolUse(BaseModel):
 
 
 class Usage(CompletionUsage):
+    # Override with our wrappers
+    prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = Field(None)
+    completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = Field(None)
+
+    # Optional Openroute usage parameters when include_usage = true
+    cost: Optional[float] = None
+    is_byok: Optional[bool] = None
+
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
+
     _cache_creation_input_tokens: int = PrivateAttr(
         0
     )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
