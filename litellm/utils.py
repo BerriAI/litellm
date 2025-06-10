@@ -2096,7 +2096,17 @@ def get_supported_regions(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-        return model_info.get("supported_regions", None)
+        supported_regions = model_info.get("supported_regions", None)
+        if supported_regions is None:
+            return None
+
+        #########################################################
+        # Ensure only list supported regions are returned
+        #########################################################
+        if isinstance(supported_regions, list):
+            return supported_regions
+        else:
+            return None
     except Exception as e:
         verbose_logger.debug(
             f"Model not found or error in checking supported_regions support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
