@@ -911,6 +911,7 @@ class NewUserRequest(GenerateRequestBase):
     )
     send_invite_email: Optional[bool] = None
     sso_user_id: Optional[str] = None
+    organizations: Optional[List[str]] = None
 
 
 class NewUserResponse(GenerateKeyResponse):
@@ -1342,7 +1343,6 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
 class LiteLLM_BudgetTableFull(LiteLLM_BudgetTable):
     """Represents all params for a LiteLLM_BudgetTable record"""
 
-    budget_id: str
     created_at: datetime
 
 
@@ -2519,7 +2519,10 @@ class OrgMemberAddRequest(LiteLLMPydanticObjectBase):
         member_data = data.get("member")
         if isinstance(member_data, list):
             # If member is a list of dictionaries, convert each dictionary to a Member object
-            members = [OrgMember(**item) for item in member_data]
+            if all(isinstance(item, dict) for item in member_data):
+                members = [OrgMember(**item) for item in member_data]
+            else:
+                members = [item for item in member_data]
             # Replace member_data with the list of Member objects
             data["member"] = members
         elif isinstance(member_data, dict):
