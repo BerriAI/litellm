@@ -1888,6 +1888,8 @@ class ModelResponseIterator:
                     ).web_search_requests = web_search_requests
 
             setattr(model_response, "usage", usage)  # type: ignore
+
+            model_response._hidden_params["is_finished"] = False
             return model_response
 
         except json.JSONDecodeError:
