@@ -591,3 +591,39 @@ def test_is_global_only_vertex_model(supported_regions, expected_result):
         mock_get_supported_regions.assert_called_once_with(
             model="test-model", custom_llm_provider="vertex_ai"
         )
+
+
+@pytest.mark.parametrize(
+    "model_is_global_only, vertex_region, expected_region",
+    [
+        (True, None, "global"),  # Global-only model with no region specified
+        (True, "us-central1", "global"),  # Global-only model overrides specified region
+        (True, "europe-west1", "global"),  # Global-only model overrides any region
+        (False, None, "us-central1"),  # Non-global model defaults to us-central1
+        (
+            False,
+            "europe-west1",
+            "europe-west1",
+        ),  # Non-global model uses specified region
+        (False, "us-east1", "us-east1"),  # Non-global model uses specified region
+    ],
+)
+def test_get_vertex_region_global_only_model(
+    model_is_global_only, vertex_region, expected_region
+):
+    """Test get_vertex_region ensures global-only models default to 'global' region"""
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    vertex_base = VertexBase()
+
+    with patch(
+        "litellm.llms.vertex_ai.vertex_llm_base.is_global_only_vertex_model"
+    ) as mock_is_global_only:
+        mock_is_global_only.return_value = model_is_global_only
+
+        result = vertex_base.get_vertex_region(
+            vertex_region=vertex_region, model="test-model"
+        )
+
+        assert result == expected_region
+        mock_is_global_only.assert_called_once_with("test-model")
