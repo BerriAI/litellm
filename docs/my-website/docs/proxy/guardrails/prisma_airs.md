@@ -40,7 +40,7 @@ general_settings:
 guardrails:
     - guardrail_name: "prisma_airs_guardrail"
     litellm_params:
-        guardrail: prisma_airs_guardrail.prisma_airs_guardrail
+        guardrail: prisma_airs_guardrail
         path : prisma_airs_guardrail.py
         mode: "pre_call"
         default_on: true
