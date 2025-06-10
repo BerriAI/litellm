@@ -244,17 +244,76 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         By default always raise an exception when a guardrail intervention is detected.
 
         If `self.mask_request_content` or `self.mask_response_content` is set to `True`, then use the output from the guardrail to mask the request or response content.
+        
+        Updated behavior: Only raise exception for "BLOCKED" actions, not for "ANONYMIZED" actions.
         """
 
         # if user opted into masking, return False. since we'll use the masked output from the guardrail
         if self.mask_request_content or self.mask_response_content:
             return False
 
-        # if intervention, return True
-        if response.get("action") == "GUARDRAIL_INTERVENED":
-            return True
-
         # if no intervention, return False
+        if response.get("action") != "GUARDRAIL_INTERVENED":
+            return False
+
+        # Check assessments to determine if any actions were BLOCKED (vs ANONYMIZED)
+        assessments = response.get("assessments", [])
+        if not assessments:
+            return False
+
+        for assessment in assessments:
+            # Check topic policy
+            topic_policy = assessment.get("topicPolicy")
+            if topic_policy:
+                topics = topic_policy.get("topics", [])
+                for topic in topics:
+                    if topic.get("action") == "BLOCKED":
+                        return True
+
+            # Check content policy
+            content_policy = assessment.get("contentPolicy")
+            if content_policy:
+                filters = content_policy.get("filters", [])
+                for filter_item in filters:
+                    if filter_item.get("action") == "BLOCKED":
+                        return True
+
+            # Check word policy
+            word_policy = assessment.get("wordPolicy")
+            if word_policy:
+                custom_words = word_policy.get("customWords", [])
+                for custom_word in custom_words:
+                    if custom_word.get("action") == "BLOCKED":
+                        return True
+                managed_words = word_policy.get("managedWordLists", [])
+                for managed_word in managed_words:
+                    if managed_word.get("action") == "BLOCKED":
+                        return True
+
+            # Check sensitive information policy
+            sensitive_info_policy = assessment.get("sensitiveInformationPolicy")
+            if sensitive_info_policy:
+                pii_entities = sensitive_info_policy.get("piiEntities", [])
+                if pii_entities:
+                    for pii_entity in pii_entities:
+                        if pii_entity.get("action") == "BLOCKED":
+                            return True
+                regexes = sensitive_info_policy.get("regexes", [])
+                if regexes:
+                    for regex in regexes:
+                        if regex.get("action") == "BLOCKED":
+                            return True
+
+            # Check contextual grounding policy
+            contextual_grounding_policy = assessment.get("contextualGroundingPolicy")
+            if contextual_grounding_policy:
+                filters = contextual_grounding_policy.get("filters", [])
+                for filter_item in filters:
+                    if filter_item.get("action") == "BLOCKED":
+                        return True
+
+        # If we got here, intervention occurred but no BLOCKED actions found
+        # This means all actions were ANONYMIZED or NONE, so don't raise exception
         return False
 
     @log_guardrail_information
