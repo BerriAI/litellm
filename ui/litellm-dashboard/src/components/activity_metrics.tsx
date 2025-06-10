@@ -162,26 +162,36 @@ const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: Mode
         </Card>
 
         <Card>
-          <Title>Requests per day</Title>
+          <div className="flex justify-between items-center">
+            <Title>Requests per day</Title>
+            <CustomLegend categories={["metrics.api_requests"]} colors={["blue"]} />
+          </div>
           <BarChart
+            className="mt-4"
             data={metrics.daily_data}
             index="date"
             categories={["metrics.api_requests"]}
             colors={["blue"]}
             valueFormatter={valueFormatter}
             customTooltip={CustomTooltip}
+            showLegend={false}
           />
         </Card>
 
         <Card>
-          <Title>Spend per day</Title>
+          <div className="flex justify-between items-center">
+            <Title>Spend per day</Title>
+            <CustomLegend categories={["metrics.spend"]} colors={["green"]} />
+          </div>
           <BarChart
+            className="mt-4"
             data={metrics.daily_data}
             index="date"
             categories={["metrics.spend"]}
             colors={["green"]}
             valueFormatter={valueFormatterSpend}
             customTooltip={CustomTooltip}
+            showLegend={false}
           />
         </Card>
 
