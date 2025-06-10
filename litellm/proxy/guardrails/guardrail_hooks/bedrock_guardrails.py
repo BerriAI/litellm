@@ -241,11 +241,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self, response: BedrockGuardrailResponse
     ) -> bool:
         """
-        By default always raise an exception when a guardrail intervention is detected.
+        Only raise exception for "BLOCKED" actions, not for "ANONYMIZED" actions.
 
         If `self.mask_request_content` or `self.mask_response_content` is set to `True`, then use the output from the guardrail to mask the request or response content.
-        
-        Updated behavior: Only raise exception for "BLOCKED" actions, not for "ANONYMIZED" actions.
         """
 
         # if user opted into masking, return False. since we'll use the masked output from the guardrail
