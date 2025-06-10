@@ -60,6 +60,7 @@ class prisma_airs_guardrail(CustomGuardrail):
                  #return airs_response
         except Exception as e:
             return f"Error calling AIRS {e}"
+        return data
 
 def call_airs_api(data):
   airs_response = requests.post(os.environ.get("PRISMA_AIRS_API_BASE"),
@@ -88,4 +89,3 @@ def call_airs_api(data):
     verify=False
   )
   return airs_response
-return data
