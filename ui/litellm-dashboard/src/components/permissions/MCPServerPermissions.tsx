@@ -1,12 +1,15 @@
 import React, { useState, useEffect } from "react";
 import { Text, Badge } from "@tremor/react";
 import { ServerIcon } from "@heroicons/react/outline";
+import { Tooltip } from "antd";
 import { fetchMCPServers } from "../networking";
 
 interface MCPServerDetails {
-  mcp_server_id: string;
-  mcp_server_name?: string;
-  server_name?: string;
+  server_id: string;
+  alias: string;
+  description?: string;
+  url?: string;
+  transport?: string;
 }
 
 interface MCPServerPermissionsProps {
@@ -27,12 +30,12 @@ export function MCPServerPermissions({
       
       try {
         const response = await fetchMCPServers(accessToken);
-        if (response.data) {
-          setMCPServerDetails(response.data.map((server: any) => ({
-            mcp_server_id: server.mcp_server_id || server.id,
-            mcp_server_name: server.mcp_server_name || server.server_name,
-            server_name: server.server_name
-          })));
+        if (response && Array.isArray(response)) {
+          // Direct array response
+          setMCPServerDetails(response);
+        } else if (response.data && Array.isArray(response.data)) {
+          // Response with data wrapper
+          setMCPServerDetails(response.data);
         }
       } catch (error) {
         console.error("Error fetching MCP servers:", error);
@@ -44,9 +47,13 @@ export function MCPServerPermissions({
 
   // Function to get display name for MCP server
   const getMCPServerDisplayName = (serverId: string) => {
-    const serverDetail = mcpServerDetails.find(server => server.mcp_server_id === serverId);
+    const serverDetail = mcpServerDetails.find(server => server.server_id === serverId);
     if (serverDetail) {
-      return `${serverDetail.mcp_server_name || serverDetail.server_name || serverDetail.mcp_server_id} (${serverDetail.mcp_server_id})`;
+      // Truncate server ID: first 3 chars + "..." + last 4 chars
+      const truncatedId = serverId.length > 7 
+        ? `${serverId.slice(0, 3)}...${serverId.slice(-4)}`
+        : serverId;
+      return `${serverDetail.alias} (${truncatedId})`;
     }
     return serverId;
   };
@@ -64,12 +71,13 @@ export function MCPServerPermissions({
       {mcpServers.length > 0 ? (
         <div className="flex flex-wrap gap-2">
           {mcpServers.map((server, index) => (
-            <div
-              key={index}
-              className="inline-flex items-center px-3 py-1.5 rounded-lg bg-green-50 border border-green-200 text-green-800 text-sm font-medium"
-            >
-              {getMCPServerDisplayName(server)}
-            </div>
+            <Tooltip key={index} title={`Full ID: ${server}`} placement="top">
+              <div
+                className="inline-flex items-center px-3 py-1.5 rounded-lg bg-green-50 border border-green-200 text-green-800 text-sm font-medium cursor-help"
+              >
+                {getMCPServerDisplayName(server)}
+              </div>
+            </Tooltip>
           ))}
         </div>
       ) : (
