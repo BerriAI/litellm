@@ -13,6 +13,17 @@ class LiteLLM_UserScimMetadata(BaseModel):
     familyName: Optional[str] = None
 
 
+# SCIM Error Response Model
+class SCIMErrorResponse(BaseModel):
+    """
+    SCIM error response according to RFC 7644 Section 3.12
+    """
+    schemas: List[str] = ["urn:ietf:params:scim:api:messages:2.0:Error"]
+    scimType: Optional[str] = None  # Error codes like "uniqueness", "invalidFilter", etc.
+    detail: Optional[str] = None    # Human-readable description
+    status: str                     # HTTP status code as string
+
+
 # SCIM Resource Models
 class SCIMResource(BaseModel):
     schemas: List[str]

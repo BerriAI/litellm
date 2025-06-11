@@ -169,22 +169,49 @@ async def create_user(
 
     try:
         verbose_proxy_logger.debug("SCIM CREATE USER request: %s", user)
+        
         # Extract email from SCIM user
         user_email = None
         if user.emails and len(user.emails) > 0:
             user_email = user.emails[0].value
 
-        # Check if user already exists
-        existing_user = None
+        # Check if user already exists by userName
+        existing_user_by_username = None
         if user.userName:
-            existing_user = await prisma_client.db.litellm_usertable.find_unique(
+            existing_user_by_username = await prisma_client.db.litellm_usertable.find_unique(
                 where={"user_id": user.userName}
             )
 
-        if existing_user:
+        # Check if user already exists by email
+        existing_user_by_email = None
+        if user_email:
+            existing_user_by_email = await prisma_client.db.litellm_usertable.find_first(
+                where={"user_email": str(user_email)}
+            )
+
+        # Handle conflicts according to SCIM specification
+        if existing_user_by_username:
+            # Return SCIM-compliant error response for userName conflict
+            error_response = SCIMErrorResponse(
+                scimType="uniqueness",
+                detail=f"User with userName '{user.userName}' already exists",
+                status="409"
+            )
             raise HTTPException(
                 status_code=409,
-                detail={"error": f"User already exists with username: {user.userName}"},
+                detail=error_response.model_dump()
+            )
+        
+        if existing_user_by_email:
+            # Return SCIM-compliant error response for email conflict
+            error_response = SCIMErrorResponse(
+                scimType="uniqueness", 
+                detail=f"User with email '{user_email}' already exists",
+                status="409"
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=error_response.model_dump()
             )
 
         # Create user in database
@@ -475,9 +502,15 @@ async def create_group(
         )
 
         if existing_team:
+            # Return SCIM-compliant error response for group ID conflict
+            error_response = SCIMErrorResponse(
+                scimType="uniqueness",
+                detail=f"Group with ID '{team_id}' already exists",
+                status="409"
+            )
             raise HTTPException(
                 status_code=409,
-                detail={"error": f"Group already exists with ID: {team_id}"},
+                detail=error_response.model_dump()
             )
 
         # Extract members
