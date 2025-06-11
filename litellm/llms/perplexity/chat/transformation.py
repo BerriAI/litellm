@@ -4,12 +4,18 @@ Translate from OpenAI's `/v1/chat/completions` to Perplexity's `/v1/chat/complet
 
 from typing import Optional, Tuple
 
+import litellm
+from litellm._logging import verbose_logger
 from litellm.secret_managers.main import get_secret_str
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class PerplexityChatConfig(OpenAIGPTConfig):
+    @property
+    def custom_llm_provider(self) -> Optional[str]:
+        return "perplexity"
+
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
@@ -29,7 +35,7 @@ class PerplexityChatConfig(OpenAIGPTConfig):
 
         Eg. Perplexity does not support tools, tool_choice, function_call, functions, etc.
         """
-        return [
+        base_openai_params = [
             "frequency_penalty",
             "max_tokens",
             "max_completion_tokens",
@@ -41,3 +47,12 @@ class PerplexityChatConfig(OpenAIGPTConfig):
             "max_retries",
             "extra_headers",
         ]
+
+        try:
+            if litellm.supports_reasoning(
+                model=model, custom_llm_provider=self.custom_llm_provider
+            ):
+                base_openai_params.append("reasoning_effort")
+        except Exception as e:
+            verbose_logger.debug(f"Error checking if model supports reasoning: {e}")
+        return base_openai_params

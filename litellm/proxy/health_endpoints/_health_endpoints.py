@@ -567,12 +567,10 @@ async def health_readiness():
 @router.get(
     "/health/liveliness",  # Historical LiteLLM name; doesn't match k8s terminology but kept for backwards compatibility
     tags=["health"],
-    dependencies=[Depends(user_api_key_auth)],
 )
 @router.get(
     "/health/liveness",  # Kubernetes has "liveness" probes (https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/#define-a-liveness-command)
     tags=["health"],
-    dependencies=[Depends(user_api_key_auth)],
 )
 async def health_liveliness():
     """
@@ -601,12 +599,10 @@ async def health_readiness_options():
 @router.options(
     "/health/liveliness",
     tags=["health"],
-    dependencies=[Depends(user_api_key_auth)],
 )
 @router.options(
     "/health/liveness",  # Kubernetes has "liveness" probes (https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/#define-a-liveness-command)
     tags=["health"],
-    dependencies=[Depends(user_api_key_auth)],
 )
 async def health_liveliness_options():
     """

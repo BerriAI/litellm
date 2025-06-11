@@ -147,10 +147,10 @@ def check_file_size_under_limit(
 
     if llm_router is not None and request_data["model"] in router_model_names:
         try:
-            deployment: Optional[Deployment] = (
-                llm_router.get_deployment_by_model_group_name(
-                    model_group_name=request_data["model"]
-                )
+            deployment: Optional[
+                Deployment
+            ] = llm_router.get_deployment_by_model_group_name(
+                model_group_name=request_data["model"]
             )
             if (
                 deployment
@@ -197,7 +197,6 @@ async def get_form_data(request: Request) -> Dict[str, Any]:
     form_data = dict(form)
     parsed_form_data: dict[str, Any] = {}
     for key, value in form_data.items():
-
         # OpenAI SDKs pass form keys as `timestamp_granularities[]="word"` instead of `timestamp_granularities=["word", "sentence"]`
         if key.endswith("[]"):
             clean_key = key[:-2]
@@ -205,3 +204,20 @@ async def get_form_data(request: Request) -> Dict[str, Any]:
         else:
             parsed_form_data[key] = value
     return parsed_form_data
+
+
+async def get_request_body(request: Request) -> Dict[str, Any]:
+    """
+    Read the request body and parse it as JSON.
+    """
+    if request.headers.get("content-type") == "application/json":
+        return await _read_request_body(request)
+    elif (
+        request.headers.get("content-type") == "multipart/form-data"
+        or request.headers.get("content-type") == "application/x-www-form-urlencoded"
+    ):
+        return await get_form_data(request)
+    else:
+        raise ValueError(
+            f"Unsupported content type: {request.headers.get('content-type')}"
+        )

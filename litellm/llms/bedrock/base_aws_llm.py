@@ -336,6 +336,36 @@ class BaseAWSLLM:
 
         return aws_region_name
 
+    def get_aws_region_name_for_non_llm_api_calls(
+        self,
+        aws_region_name: Optional[str] = None,
+    ):
+        """
+        Get the AWS region name for non-llm api calls.
+
+        LLM API calls check the model arn and end up using that as the region name.
+
+        For non-llm api calls eg. Guardrails, Vector Stores we just need to check the dynamic param or env vars.
+        """
+        if aws_region_name is None:
+            # check env #
+            litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
+
+            if litellm_aws_region_name is not None and isinstance(
+                litellm_aws_region_name, str
+            ):
+                aws_region_name = litellm_aws_region_name
+
+            standard_aws_region_name = get_secret("AWS_REGION", None)
+            if standard_aws_region_name is not None and isinstance(
+                standard_aws_region_name, str
+            ):
+                aws_region_name = standard_aws_region_name
+
+            if aws_region_name is None:
+                aws_region_name = "us-west-2"
+        return aws_region_name
+
     @tracer.wrap()
     def _auth_with_web_identity_token(
         self,
@@ -527,6 +557,7 @@ class BaseAWSLLM:
         api_base: Optional[str],
         aws_bedrock_runtime_endpoint: Optional[str],
         aws_region_name: str,
+        endpoint_type: Optional[Literal["runtime", "agent"]] = "runtime",
     ) -> Tuple[str, str]:
         env_aws_bedrock_runtime_endpoint = get_secret("AWS_BEDROCK_RUNTIME_ENDPOINT")
         if api_base is not None:
@@ -540,7 +571,10 @@ class BaseAWSLLM:
         ):
             endpoint_url = env_aws_bedrock_runtime_endpoint
         else:
-            endpoint_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
+            endpoint_url = self._select_default_endpoint_url(
+                endpoint_type=endpoint_type,
+                aws_region_name=aws_region_name,
+            )
 
         # Determine proxy_endpoint_url
         if env_aws_bedrock_runtime_endpoint and isinstance(
@@ -555,6 +589,19 @@ class BaseAWSLLM:
             proxy_endpoint_url = endpoint_url
 
         return endpoint_url, proxy_endpoint_url
+
+    def _select_default_endpoint_url(
+        self, endpoint_type: Optional[Literal["runtime", "agent"]], aws_region_name: str
+    ) -> str:
+        """
+        Select the default endpoint url based on the endpoint type
+
+        Default endpoint url is https://bedrock-runtime.{aws_region_name}.amazonaws.com
+        """
+        if endpoint_type == "agent":
+            return f"https://bedrock-agent-runtime.{aws_region_name}.amazonaws.com"
+        else:
+            return f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
 
     def _get_boto_credentials_from_optional_params(
         self, optional_params: dict, model: Optional[str] = None

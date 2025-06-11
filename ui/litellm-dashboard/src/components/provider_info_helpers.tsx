@@ -40,7 +40,7 @@ export const provider_map: Record<string, string> = {
     Bedrock: "bedrock",
     Groq: "groq",
     MistralAI: "mistral",
-    Cohere: "cohere_chat",
+    Cohere: "cohere",
     OpenAI_Compatible: "openai",
     OpenAI_Text_Compatible: "text-completion-openai",
     Vertex_AI: "vertex_ai",
@@ -155,7 +155,7 @@ export const getPlaceholder = (selectedProvider: string): string => {
         }
       });
   
-      // Special case for cohere_chat
+      // Special case for cohere
       // we need both cohere_chat and cohere models to show on dropdown
       if (providerKey == Providers.Cohere) {
         console.log("Adding cohere chat models");
@@ -164,7 +164,7 @@ export const getPlaceholder = (selectedProvider: string): string => {
             value !== null &&
             typeof value === "object" &&
             "litellm_provider" in (value as object) &&
-            ((value as any)["litellm_provider"] === "cohere")
+            ((value as any)["litellm_provider"] === "cohere_chat")
           ) {
             providerModels.push(key);
           }

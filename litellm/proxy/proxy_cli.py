@@ -118,6 +118,7 @@ class ProxyInitializationHelpers:
         host: str,
         port: int,
         log_config: Optional[str] = None,
+        keepalive_timeout: Optional[int] = None,
     ) -> dict:
         """
         Get the arguments for `uvicorn` worker
@@ -135,6 +136,8 @@ class ProxyInitializationHelpers:
         elif litellm.json_logs:
             print("Using json logs. Setting log_config to None.")  # noqa
             uvicorn_args["log_config"] = None
+        if keepalive_timeout is not None:
+            uvicorn_args["timeout_keep_alive"] = keepalive_timeout
         return uvicorn_args
 
     @staticmethod
@@ -465,6 +468,13 @@ class ProxyInitializationHelpers:
     default=False,
     help="Skip starting the server after setup (useful for migrations only)",
 )
+@click.option(
+    "--keepalive_timeout",
+    default=None,
+    type=int,
+    help="Set the uvicorn keepalive timeout in seconds (uvicorn timeout_keep_alive parameter)",
+    envvar="KEEPALIVE_TIMEOUT",
+)
 def run_server(  # noqa: PLR0915
     host,
     port,
@@ -501,6 +511,7 @@ def run_server(  # noqa: PLR0915
     log_config,
     use_prisma_migrate,
     skip_server_startup,
+    keepalive_timeout,
 ):
     args = locals()
     if local:
@@ -774,6 +785,7 @@ def run_server(  # noqa: PLR0915
             host=host,
             port=port,
             log_config=log_config,
+            keepalive_timeout=keepalive_timeout,
         )
         if run_gunicorn is False and run_hypercorn is False:
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:

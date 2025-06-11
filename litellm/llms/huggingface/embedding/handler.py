@@ -342,7 +342,7 @@ class HuggingFaceEmbedding(BaseLLM):
             messages=[],
             litellm_params=litellm_params,
         )
-        task_type = optional_params.pop("input_type", None)
+        task_type = optional_params.get("input_type", None)
         task = get_hf_task_embedding_for_model(
             model=model, task_type=task_type, api_base=HF_HUB_URL
         )

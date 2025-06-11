@@ -41,10 +41,15 @@ export default function OnboardingModal({
   };
 
   const getInvitationUrl = () => {
+    const baseUrlObj = new URL(baseUrl);
+    const basePath = baseUrlObj.pathname; // This will be "/litellm" or ""
+    const path = basePath && basePath !== "/" ? `${basePath}/ui` : 'ui';
+    // Get the path from the base URL
     if (invitationLinkData?.has_user_setup_sso) {
-      return new URL("/ui", baseUrl).toString();
+        return new URL(path, baseUrl).toString();
     }
-    return new URL(`/ui?invitation_id=${invitationLinkData?.id}`, baseUrl).toString();
+    const url = new URL(`${path}?invitation_id=${invitationLinkData?.id}`, baseUrl).toString();
+    return url;
   };
 
   return (

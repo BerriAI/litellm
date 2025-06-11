@@ -639,7 +639,8 @@ async def test_proxy_config_update_from_db():
         }
 
 
-def test_prepare_key_update_data():
+@pytest.mark.asyncio
+async def test_prepare_key_update_data():
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         prepare_key_update_data,
     )
@@ -647,15 +648,15 @@ def test_prepare_key_update_data():
 
     existing_key_row = MagicMock()
     data = UpdateKeyRequest(key="test_key", models=["gpt-4"], duration="120s")
-    updated_data = prepare_key_update_data(data, existing_key_row)
+    updated_data = await prepare_key_update_data(data, existing_key_row)
     assert "expires" in updated_data
 
     data = UpdateKeyRequest(key="test_key", metadata={})
-    updated_data = prepare_key_update_data(data, existing_key_row)
+    updated_data = await prepare_key_update_data(data, existing_key_row)
     assert updated_data["metadata"] == {}
 
     data = UpdateKeyRequest(key="test_key", metadata=None)
-    updated_data = prepare_key_update_data(data, existing_key_row)
+    updated_data = await prepare_key_update_data(data, existing_key_row)
     assert updated_data["metadata"] is None
 
 

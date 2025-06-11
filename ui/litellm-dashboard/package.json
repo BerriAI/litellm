@@ -23,6 +23,7 @@
     "fs": "^0.0.1-security",
     "jsonwebtoken": "^9.0.2",
     "jwt-decode": "^4.0.0",
+    "lucide-react": "^0.513.0",
     "moment": "^2.30.1",
     "next": "^14.2.26",
     "openai": "^4.93.0",

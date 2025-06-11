@@ -3,6 +3,7 @@ from typing import List, Optional, Tuple
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    filter_value_from_dict,
     strip_name_from_messages,
 )
 from litellm.secret_managers.main import get_secret_str
@@ -44,6 +45,7 @@ class XAIChatConfig(OpenAIGPTConfig):
             "top_logprobs",
             "top_p",
             "user",
+            "web_search_options",
         ]
         try:
             if litellm.supports_reasoning(
@@ -66,6 +68,14 @@ class XAIChatConfig(OpenAIGPTConfig):
         for param, value in non_default_params.items():
             if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
+            elif param == "tools" and value is not None:
+                tools = []
+                for tool in value:
+                    tool = filter_value_from_dict(tool, "strict")
+                    if tool is not None:
+                        tools.append(tool)
+                if len(tools) > 0:
+                    optional_params["tools"] = tools
             elif param in supported_openai_params:
                 if value is not None:
                     optional_params[param] = value

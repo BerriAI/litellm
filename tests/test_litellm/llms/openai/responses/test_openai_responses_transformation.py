@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
@@ -10,6 +10,8 @@ sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
 
+import litellm
+from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import (
     OutputTextDeltaEvent,
@@ -18,6 +20,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
+from litellm.types.router import GenericLiteLLMParams
 
 
 class TestOpenAIResponsesAPIConfig:
@@ -271,3 +274,340 @@ class TestOpenAIResponsesAPIConfig:
         )
         assert isinstance(result, GenericEvent)
         assert result.type == "test"
+
+
+class TestTransformListInputItemsRequest:
+    """Test suite for transform_list_input_items_request function"""
+
+    def setup_method(self):
+        """Setup test fixtures"""
+        self.openai_config = OpenAIResponsesAPIConfig()
+        self.azure_config = AzureOpenAIResponsesAPIConfig()
+        self.response_id = "resp_abc123"
+        self.api_base = "https://api.openai.com/v1/responses"
+        self.litellm_params = GenericLiteLLMParams()
+        self.headers = {"Authorization": "Bearer test-key"}
+
+    def test_openai_transform_list_input_items_request_minimal(self):
+        """Test OpenAI implementation with minimal parameters"""
+        # Execute
+        url, params = self.openai_config.transform_list_input_items_request(
+            response_id=self.response_id,
+            api_base=self.api_base,
+            litellm_params=self.litellm_params,
+            headers=self.headers,
+        )
+
+        # Assert
+        expected_url = f"{self.api_base}/{self.response_id}/input_items"
+        assert url == expected_url
+        assert params == {"limit": 20, "order": "desc"}
+
+    def test_openai_transform_list_input_items_request_all_params(self):
+        """Test OpenAI implementation with all optional parameters"""
+        # Execute
+        url, params = self.openai_config.transform_list_input_items_request(
+            response_id=self.response_id,
+            api_base=self.api_base,
+            litellm_params=self.litellm_params,
+            headers=self.headers,
+            after="cursor_after_123",
+            before="cursor_before_456",
+            include=["metadata", "content"],
+            limit=50,
+            order="asc",
+        )
+
+        # Assert
+        expected_url = f"{self.api_base}/{self.response_id}/input_items"
+        expected_params = {
+            "after": "cursor_after_123",
+            "before": "cursor_before_456",
+            "include": "metadata,content",  # Should be comma-separated string
+            "limit": 50,
+            "order": "asc",
+        }
+        assert url == expected_url
+        assert params == expected_params
+
+    def test_openai_transform_list_input_items_request_include_list_formatting(self):
+        """Test that include list is properly formatted as comma-separated string"""
+        # Execute
+        url, params = self.openai_config.transform_list_input_items_request(
+            response_id=self.response_id,
+            api_base=self.api_base,
+            litellm_params=self.litellm_params,
+            headers=self.headers,
+            include=["metadata", "content", "annotations"],
+        )
+
+        # Assert
+        assert params["include"] == "metadata,content,annotations"
+
+    def test_openai_transform_list_input_items_request_none_values(self):
+        """Test OpenAI implementation with None values for optional parameters"""
+        # Execute - pass only required parameters and explicit None for truly optional params
+        url, params = self.openai_config.transform_list_input_items_request(
+            response_id=self.response_id,
+            api_base=self.api_base,
+            litellm_params=self.litellm_params,
+            headers=self.headers,
+            after=None,
+            before=None,
+            include=None,
+        )
+
+        # Assert
+        expected_url = f"{self.api_base}/{self.response_id}/input_items"
+        expected_params = {
+            "limit": 20,
+            "order": "desc",
+        }  # Default values should be present
+        assert url == expected_url
+        assert params == expected_params
+
+    def test_openai_transform_list_input_items_request_empty_include_list(self):
+        """Test OpenAI implementation with empty include list"""
+        # Execute
+        url, params = self.openai_config.transform_list_input_items_request(
+            response_id=self.response_id,
+            api_base=self.api_base,
+            litellm_params=self.litellm_params,
+            headers=self.headers,
+            include=[],
+        )
+
+        # Assert
+        assert "include" not in params  # Empty list should not be included
+
+    def test_azure_transform_list_input_items_request_minimal(self):
+        """Test Azure implementation with minimal parameters"""
+        # Setup
+        azure_api_base = "https://test.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
+
+        # Execute
+        url, params = self.azure_config.transform_list_input_items_request(
+            response_id=self.response_id,
+            api_base=azure_api_base,
+            litellm_params=self.litellm_params,
+            headers=self.headers,
+        )
+
+        # Assert
+        assert self.response_id in url
+        assert "/input_items" in url
+        assert params == {"limit": 20, "order": "desc"}
+
+    def test_azure_transform_list_input_items_request_url_construction(self):
+        """Test Azure implementation URL construction with response_id in path"""
+        # Setup
+        azure_api_base = "https://test.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
+
+        # Execute
+        url, params = self.azure_config.transform_list_input_items_request(
+            response_id=self.response_id,
+            api_base=azure_api_base,
+            litellm_params=self.litellm_params,
+            headers=self.headers,
+        )
+
+        # Assert
+        # The Azure implementation should construct URL with response_id in path
+        assert self.response_id in url
+        assert "/input_items" in url
+        assert "api-version=2024-05-01-preview" in url
+
+    def test_azure_transform_list_input_items_request_with_all_params(self):
+        """Test Azure implementation with all optional parameters"""
+        # Setup
+        azure_api_base = "https://test.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
+
+        # Execute
+        url, params = self.azure_config.transform_list_input_items_request(
+            response_id=self.response_id,
+            api_base=azure_api_base,
+            litellm_params=self.litellm_params,
+            headers=self.headers,
+            after="cursor_after_123",
+            before="cursor_before_456",
+            include=["metadata", "content"],
+            limit=100,
+            order="asc",
+        )
+
+        # Assert
+        expected_params = {
+            "after": "cursor_after_123",
+            "before": "cursor_before_456",
+            "include": "metadata,content",
+            "limit": 100,
+            "order": "asc",
+        }
+        assert params == expected_params
+
+    @patch("litellm.router.Router")
+    def test_mock_litellm_router_with_transform_list_input_items_request(
+        self, mock_router
+    ):
+        """Mock test using litellm.router for transform_list_input_items_request"""
+        # Setup mock router
+        mock_router_instance = Mock()
+        mock_router.return_value = mock_router_instance
+
+        # Mock the provider config
+        mock_provider_config = Mock(spec=OpenAIResponsesAPIConfig)
+        mock_provider_config.transform_list_input_items_request.return_value = (
+            "https://api.openai.com/v1/responses/resp_123/input_items",
+            {"limit": 20, "order": "desc"},
+        )
+
+        # Setup router mock
+        mock_router_instance.get_provider_responses_api_config.return_value = (
+            mock_provider_config
+        )
+
+        # Test parameters
+        response_id = "resp_test123"
+
+        # Execute
+        url, params = mock_provider_config.transform_list_input_items_request(
+            response_id=response_id,
+            api_base="https://api.openai.com/v1/responses",
+            litellm_params=GenericLiteLLMParams(),
+            headers={"Authorization": "Bearer test"},
+            after="cursor_123",
+            include=["metadata"],
+            limit=30,
+        )
+
+        # Assert
+        mock_provider_config.transform_list_input_items_request.assert_called_once_with(
+            response_id=response_id,
+            api_base="https://api.openai.com/v1/responses",
+            litellm_params=GenericLiteLLMParams(),
+            headers={"Authorization": "Bearer test"},
+            after="cursor_123",
+            include=["metadata"],
+            limit=30,
+        )
+        assert url == "https://api.openai.com/v1/responses/resp_123/input_items"
+        assert params == {"limit": 20, "order": "desc"}
+
+    @patch("litellm.list_input_items")
+    def test_mock_litellm_list_input_items_integration(self, mock_list_input_items):
+        """Test integration with litellm.list_input_items function"""
+        # Setup mock response
+        mock_response = {
+            "object": "list",
+            "data": [
+                {
+                    "id": "input_item_123",
+                    "object": "input_item",
+                    "type": "message",
+                    "role": "user",
+                    "content": "Test message",
+                }
+            ],
+            "has_more": False,
+            "first_id": "input_item_123",
+            "last_id": "input_item_123",
+        }
+        mock_list_input_items.return_value = mock_response
+
+        # Execute
+        result = mock_list_input_items(
+            response_id="resp_test123",
+            after="cursor_after",
+            limit=10,
+            custom_llm_provider="openai",
+        )
+
+        # Assert
+        mock_list_input_items.assert_called_once_with(
+            response_id="resp_test123",
+            after="cursor_after",
+            limit=10,
+            custom_llm_provider="openai",
+        )
+        assert result["object"] == "list"
+        assert len(result["data"]) == 1
+
+    def test_parameter_validation_edge_cases(self):
+        """Test edge cases for parameter validation"""
+        # Test with limit=0
+        url, params = self.openai_config.transform_list_input_items_request(
+            response_id=self.response_id,
+            api_base=self.api_base,
+            litellm_params=self.litellm_params,
+            headers=self.headers,
+            limit=0,
+        )
+        assert params["limit"] == 0
+
+        # Test with very large limit
+        url, params = self.openai_config.transform_list_input_items_request(
+            response_id=self.response_id,
+            api_base=self.api_base,
+            litellm_params=self.litellm_params,
+            headers=self.headers,
+            limit=1000,
+        )
+        assert params["limit"] == 1000
+
+        # Test with single item in include list
+        url, params = self.openai_config.transform_list_input_items_request(
+            response_id=self.response_id,
+            api_base=self.api_base,
+            litellm_params=self.litellm_params,
+            headers=self.headers,
+            include=["metadata"],
+        )
+        assert params["include"] == "metadata"
+
+    def test_url_construction_with_different_api_bases(self):
+        """Test URL construction with different API base formats"""
+        test_cases = [
+            {
+                "api_base": "https://api.openai.com/v1/responses",
+                "expected_suffix": "/resp_abc123/input_items",
+            },
+            {
+                "api_base": "https://api.openai.com/v1/responses/",  # with trailing slash
+                "expected_suffix": "/resp_abc123/input_items",
+            },
+            {
+                "api_base": "https://custom-api.example.com/v1/responses",
+                "expected_suffix": "/resp_abc123/input_items",
+            },
+        ]
+
+        for case in test_cases:
+            url, params = self.openai_config.transform_list_input_items_request(
+                response_id=self.response_id,
+                api_base=case["api_base"],
+                litellm_params=self.litellm_params,
+                headers=self.headers,
+            )
+            assert url.endswith(case["expected_suffix"])
+
+    def test_return_type_validation(self):
+        """Test that function returns correct types"""
+        url, params = self.openai_config.transform_list_input_items_request(
+            response_id=self.response_id,
+            api_base=self.api_base,
+            litellm_params=self.litellm_params,
+            headers=self.headers,
+        )
+
+        # Assert return types
+        assert isinstance(url, str)
+        assert isinstance(params, dict)
+
+        # Assert URL is properly formatted
+        assert url.startswith("http")
+        assert "input_items" in url
+
+        # Assert params contains expected keys with correct types
+        for key, value in params.items():
+            assert isinstance(key, str)
+            assert value is not None

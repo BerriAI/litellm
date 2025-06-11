@@ -55,11 +55,6 @@ interface FilterState {
   sort_order: 'asc' | 'desc';
 }
 
-const isLocal = process.env.NODE_ENV === "development";
-const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
-if (isLocal != true) {
-  console.log = function() {};
-}
 
 const DEFAULT_PAGE_SIZE = 25;
 

@@ -686,3 +686,31 @@ async def test_streaming_completion_start_time(logging_obj: Logging):
         logging_obj.model_call_details["completion_start_time"]
         < logging_obj.model_call_details["end_time"]
     )
+
+
+def test_streaming_handler_with_created_time_propagation(
+    initialized_custom_stream_wrapper: CustomStreamWrapper, logging_obj: Logging
+):
+    """Test that the created time is consistent across chunks"""
+    import time
+
+    bad_chunk = ModelResponseStream(
+        choices=[], created=int(time.time())
+    )  # chunk with different created time
+
+    completion_stream = ModelResponseListIterator(
+        model_responses=bedrock_chunks + [bad_chunk]
+    )
+
+    response = CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="bedrock/claude-3-5-sonnet-20240620-v1:0",
+        logging_obj=logging_obj,
+    )
+
+    created: Optional[int] = None
+    for chunk in response:
+        if created is None:
+            created = chunk.created
+        else:
+            assert created == chunk.created

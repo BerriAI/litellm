@@ -629,3 +629,64 @@ async def test_get_user_info_from_db_alternate_user_id():
         user_info = await get_user_info_from_db(**args)
         mock_get_user_object.assert_called_once()
         mock_get_user_object.call_args.kwargs["user_id"] = "krrishd-email1234"
+
+
+@pytest.mark.asyncio
+async def test_check_and_update_if_proxy_admin_id():
+    """
+    Test that a user with matching PROXY_ADMIN_ID gets their role updated to admin
+    """
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.ui_sso import (
+        check_and_update_if_proxy_admin_id,
+    )
+
+    # Mock Prisma client
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.update = AsyncMock()
+
+    # Set up test data
+    test_user_id = "test_admin_123"
+    test_user_role = "user"
+
+    with patch.dict(os.environ, {"PROXY_ADMIN_ID": test_user_id}):
+        # Act
+        updated_role = await check_and_update_if_proxy_admin_id(
+            user_role=test_user_role, user_id=test_user_id, prisma_client=mock_prisma
+        )
+
+        # Assert
+        assert updated_role == LitellmUserRoles.PROXY_ADMIN.value
+        mock_prisma.db.litellm_usertable.update.assert_called_once_with(
+            where={"user_id": test_user_id},
+            data={"user_role": LitellmUserRoles.PROXY_ADMIN.value},
+        )
+
+
+@pytest.mark.asyncio
+async def test_check_and_update_if_proxy_admin_id_already_admin():
+    """
+    Test that a user who is already an admin doesn't get their role updated
+    """
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.ui_sso import (
+        check_and_update_if_proxy_admin_id,
+    )
+
+    # Mock Prisma client
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.update = AsyncMock()
+
+    # Set up test data
+    test_user_id = "test_admin_123"
+    test_user_role = LitellmUserRoles.PROXY_ADMIN.value
+
+    with patch.dict(os.environ, {"PROXY_ADMIN_ID": test_user_id}):
+        # Act
+        updated_role = await check_and_update_if_proxy_admin_id(
+            user_role=test_user_role, user_id=test_user_id, prisma_client=mock_prisma
+        )
+
+        # Assert
+        assert updated_role == LitellmUserRoles.PROXY_ADMIN.value
+        mock_prisma.db.litellm_usertable.update.assert_not_called()

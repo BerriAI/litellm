@@ -12,6 +12,8 @@ sys.path.insert(
 
 from litellm.proxy._types import (
     LiteLLM_UserTableFiltered,
+    NewUserRequest,
+    ProxyException,
     UpdateUserRequest,
     UserAPIKeyAuth,
 )
@@ -20,6 +22,7 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
     _update_internal_user_params,
     get_user_key_counts,
     get_users,
+    new_user,
     ui_view_users,
 )
 from litellm.proxy.proxy_server import app
@@ -237,3 +240,112 @@ def test_update_internal_user_params_reset_spend_and_max_budget():
     assert "user_id" in non_default_values  # Should not add user_id if not provided
     assert non_default_values["user_id"] == "test_user_id"
     assert "budget_duration" not in non_default_values  # Should not add default values
+
+
+@pytest.mark.asyncio
+async def test_new_user_license_over_limit(mocker):
+    """
+    Test that /user/new endpoint raises an error when license is over the user limit
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import NewUserRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+
+    # Mock the prisma client
+    mock_prisma_client = mocker.MagicMock()
+
+    # Setup the mock count response to return a high number of users
+    async def mock_count(*args, **kwargs):
+        return 1000  # High user count
+
+    mock_prisma_client.db.litellm_usertable.count = mock_count
+
+    # Mock check_duplicate_user_email to pass
+    async def mock_check_duplicate_user_email(*args, **kwargs):
+        return None  # No duplicate found
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
+        mock_check_duplicate_user_email,
+    )
+
+    # Mock the license check to return True (over limit)
+    mock_license_check = mocker.MagicMock()
+    mock_license_check.is_over_limit.return_value = True
+
+    # Patch the imports in the endpoint
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server._license_check", mock_license_check)
+
+    # Create test request data
+    user_request = NewUserRequest(
+        user_email="test@example.com", user_role="internal_user"
+    )
+
+    # Mock user_api_key_dict
+    mock_user_api_key_dict = UserAPIKeyAuth(user_id="test_admin")
+
+    # Call new_user function and expect HTTPException
+    with pytest.raises(ProxyException) as exc_info:
+        await new_user(data=user_request, user_api_key_dict=mock_user_api_key_dict)
+
+    # Verify the exception details
+    assert exc_info.value.code == 403 or exc_info.value.code == "403"
+    assert "License is over limit" in str(exc_info.value.message)
+    assert "support@berri.ai" in str(exc_info.value.message)
+
+    # Verify that the license check was called with the correct user count
+    mock_license_check.is_over_limit.assert_called_once_with(total_users=1000)
+
+
+@pytest.mark.asyncio
+async def test_user_info_url_encoding_plus_character(mocker):
+    """
+    Test that /user/info endpoint properly handles email addresses with + characters
+    when passed in the URL query parameters.
+
+    Issue: + characters in emails get converted to spaces due to URL encoding
+    Solution: Parse the raw query string to preserve + characters
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info
+
+    # Mock the prisma client
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.get_data = mocker.AsyncMock()
+
+    # Patch the prisma client import in the endpoint
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Create a mock request with the raw query string containing +
+    mock_request = mocker.MagicMock(spec=Request)
+    mock_request.url.query = "user_id=machine-user+alp-air-admin-b58-b@tempus.com"
+
+    # Mock user_api_key_dict
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="test_admin", user_role="proxy_admin"
+    )
+
+    # Call user_info function with the URL-decoded user_id (as FastAPI would pass it)
+    # FastAPI would normally convert + to space, but our fix should handle this
+    decoded_user_id = (
+        "machine-user alp-air-admin-b58-b@tempus.com"  # What FastAPI gives us
+    )
+    expected_user_id = "machine-user+alp-air-admin-b58-b@tempus.com"
+    try:
+        response = await user_info(
+            user_id=decoded_user_id,
+            user_api_key_dict=mock_user_api_key_dict,
+            request=mock_request,
+        )
+    except Exception as e:
+        print(f"Error in user_info: {e}")
+
+    # Verify that the response contains the correct user data
+    print(
+        f"mock_prisma_client.get_data.call_args: {mock_prisma_client.get_data.call_args.kwargs}"
+    )
+    assert mock_prisma_client.get_data.call_args.kwargs["user_id"] == expected_user_id

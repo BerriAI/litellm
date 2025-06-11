@@ -1432,7 +1432,7 @@ def test_vertex_parallel_tool_calls_false_multiple_tools_error():
             parallel_tool_calls=False,
         )
     assert (
-        "`parallel_tool_calls=False` is not supported when multiple tools are provided"
+        "`parallel_tool_calls=False` is not supported by Gemini when multiple tools are"
         in str(excinfo.value)
     )
 
@@ -1445,7 +1445,7 @@ def test_vertex_parallel_tool_calls_false_multiple_tools_error():
             parallel_tool_calls=False,
         )
     assert (
-        "`parallel_tool_calls=False` is not supported when multiple tools are provided"
+        "`parallel_tool_calls=False` is not supported by Gemini when multiple tools are"
         in str(excinfo.value)
     )
 

@@ -18,7 +18,7 @@ else:
 
 class BaseAnthropicMessagesConfig(ABC):
     @abstractmethod
-    def validate_environment(
+    def validate_anthropic_messages_environment(  # use different name because return type is different from base config's validate_environment
         self,
         headers: dict,
         model: str,
@@ -27,13 +27,17 @@ class BaseAnthropicMessagesConfig(ABC):
         litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-    ) -> dict:
+    ) -> Tuple[dict, Optional[str]]:
         """
         OPTIONAL
 
         Validate the environment for the request
+
+        Returns:
+        - headers: dict
+        - api_base: Optional[str] - If the provider needs to update the api_base, return it here. Otherwise, return None.
         """
-        return headers
+        return headers, api_base
 
     @abstractmethod
     def get_complete_url(

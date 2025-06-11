@@ -1,3 +1,25 @@
+export const TRANSPORT = {
+  SSE: "sse",
+  HTTP: "http",
+};
+
+export const handleTransport = (transport?: string | null): string => {
+  console.log(transport)
+  if (transport === null || transport === undefined) {
+    return TRANSPORT.SSE;
+  }
+
+  return transport;
+};
+
+export const handleAuth = (authType?: string | null): string => {
+  if (authType === null || authType === undefined) {
+    return "none";
+  }
+
+  return authType;
+};
+
 // Define the structure for tool input schema properties
 export interface InputSchemaProperty {
     type: string;
@@ -20,7 +42,7 @@ export interface InputSchemaProperty {
   // Define the structure for a single MCP tool
   export interface MCPTool {
     name: string;
-    description: string;
+    description?: string;
     inputSchema: InputSchema | string; // API returns string "tool_input_schema" or the actual schema
     mcp_info: MCPInfo;
     // Function to select a tool (added in the component)
@@ -65,7 +87,28 @@ export interface InputSchemaProperty {
   
   // Props for the main component
   export interface MCPToolsViewerProps {
+    serverId: string;
     accessToken: string | null;
     userRole: string | null;
     userID: string | null;
   }
+
+export interface MCPServer {
+  server_id: string;
+  alias?: string | null;
+  description?: string | null;
+  url: string;
+  transport?: string | null;
+  spec_version?: string | null;
+  auth_type?: string | null;
+  created_at: string;
+  created_by: string;
+  updated_at: string;
+  updated_by: string;
+}
+
+export interface MCPServerProps {
+  accessToken: string | null;
+  userRole: string | null;
+  userID: string | null;
+}

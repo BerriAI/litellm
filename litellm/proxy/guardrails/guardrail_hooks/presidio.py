@@ -69,6 +69,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         presidio_ad_hoc_recognizers: Optional[str] = None,
         logging_only: Optional[bool] = None,
         pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]] = None,
+        presidio_language: Optional[str] = None,
         **kwargs,
     ):
         if logging_only is True:
@@ -83,6 +84,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self.pii_entities_config: Dict[PiiEntityType, PiiAction] = (
             pii_entities_config or {}
         )
+        self.presidio_language = presidio_language or "en"
         if mock_testing is True:  # for testing purposes only
             return
 
@@ -161,7 +163,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         analyze_payload: PresidioAnalyzeRequest = PresidioAnalyzeRequest(
             text=text,
-            language="en",
+            language=self.presidio_language,
         )
         ##################################################################
         ###### Check if user has configured any params for this guardrail

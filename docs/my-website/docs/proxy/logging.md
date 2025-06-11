@@ -1260,7 +1260,7 @@ model_list:
     litellm_params:
       model: gpt-3.5-turbo
 litellm_settings:
-  success_callback: ["s3"]
+  success_callback: ["s3_v2"]
   s3_callback_params:
     s3_bucket_name: logs-bucket-litellm   # AWS Bucket Name for S3
     s3_region_name: us-west-2              # AWS Region Name for S3
@@ -1304,7 +1304,7 @@ You can add the team alias to the object key by setting the `team_alias` in the 
 
 ```yaml
 litellm_settings:
-  callbacks: ["s3"]
+  callbacks: ["s3_v2"]
   enable_preview_features: true
   s3_callback_params:
     s3_bucket_name: logs-bucket-litellm
@@ -1484,12 +1484,21 @@ Expected output on Datadog
 
 Use `ddtrace-run` to enable [Datadog Tracing](https://ddtrace.readthedocs.io/en/stable/installation_quickstart.html) on litellm proxy
 
+**DD Tracer**
 Pass `USE_DDTRACE=true` to the docker run command. When `USE_DDTRACE=true`, the proxy will run `ddtrace-run litellm` as the `ENTRYPOINT` instead of just `litellm`
+
+**DD Profiler**
+
+Pass `USE_DDPROFILER=true` to the docker run command. When `USE_DDPROFILER=true`, the proxy will activate the [Datadog Profiler](https://docs.datadoghq.com/profiler/enabling/python/). This is useful for debugging CPU% and memory usage.
+
+We don't recommend using `USE_DDPROFILER` in production. It is only recommended for debugging CPU% and memory usage.
+
 
 ```bash
 docker run \
     -v $(pwd)/litellm_config.yaml:/app/config.yaml \
     -e USE_DDTRACE=true \
+    -e USE_DDPROFILER=true \
     -p 4000:4000 \
     ghcr.io/berriai/litellm:main-latest \
     --config /app/config.yaml --detailed_debug
@@ -2375,6 +2384,9 @@ pip install --upgrade sentry-sdk
 
 ```shell
 export SENTRY_DSN="your-sentry-dsn"
+# Optional: Configure Sentry sampling rates
+export SENTRY_API_SAMPLE_RATE="1.0"  # Controls what percentage of errors are sent (default: 1.0 = 100%)
+export SENTRY_API_TRACE_RATE="1.0"   # Controls what percentage of transactions are sampled for performance monitoring (default: 1.0 = 100%)
 ```
 
 ```yaml 

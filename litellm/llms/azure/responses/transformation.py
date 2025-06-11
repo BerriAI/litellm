@@ -170,3 +170,35 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         data: Dict = {}
         verbose_logger.debug(f"get response url={get_url}")
         return get_url, data
+
+    def transform_list_input_items_request(
+        self,
+        response_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+        after: Optional[str] = None,
+        before: Optional[str] = None,
+        include: Optional[List[str]] = None,
+        limit: int = 20,
+        order: Literal["asc", "desc"] = "desc",
+    ) -> Tuple[str, Dict]:
+        url = (
+            self._construct_url_for_response_id_in_path(
+                api_base=api_base, response_id=response_id
+            )
+            + "/input_items"
+        )
+        params: Dict[str, Any] = {}
+        if after is not None:
+            params["after"] = after
+        if before is not None:
+            params["before"] = before
+        if include:
+            params["include"] = ",".join(include)
+        if limit is not None:
+            params["limit"] = limit
+        if order is not None:
+            params["order"] = order
+        verbose_logger.debug(f"list input items url={url}")
+        return url, params

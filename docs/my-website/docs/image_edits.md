@@ -14,7 +14,8 @@ LiteLLM provides image editing functionality that maps to OpenAI's `/images/edit
 | Fallbacks | ✅ | Works between supported models |
 | Loadbalancing | ✅ | Works between supported models |
 | Supported operations | Create image edits | |
-| Supported LiteLLM Versions | 1.63.8+ | |
+| Supported LiteLLM SDK Versions | 1.63.8+ | |
+| Supported LiteLLM Proxy Versions | 1.71.1+ | |
 | Supported LLM providers | **OpenAI** | Currently only `openai` is supported |
 
 ## Usage

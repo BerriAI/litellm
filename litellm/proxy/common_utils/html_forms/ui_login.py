@@ -1,6 +1,9 @@
 import os
 
 url_to_redirect_to = os.getenv("PROXY_BASE_URL", "")
+server_root_path = os.getenv("SERVER_ROOT_PATH", "")
+if server_root_path != "":
+    url_to_redirect_to += server_root_path
 url_to_redirect_to += "/login"
 html_form = f"""
 <!DOCTYPE html>

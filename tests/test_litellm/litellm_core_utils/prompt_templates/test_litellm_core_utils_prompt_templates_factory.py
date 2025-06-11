@@ -288,3 +288,23 @@ def test_bedrock_validate_format_image_or_video():
 #     assert "### System:\nBe helpful\n\n" in result["prompt"]
 #     assert "### Assistant:\nI see a cat in the image.\n\n" in result["prompt"]
 #     assert result["images"] == ["http://example.com/image.jpg"]
+
+
+def test_vertex_ai_transform_empty_function_call_arguments():
+    """
+    Test that the _transform_parts method handles empty function call arguments correctly
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        VertexFunctionCall,
+        _gemini_tool_call_invoke_helper,
+    )
+
+    function_call = {
+        "name": "get_weather",
+        "arguments": "",
+    }
+    result: VertexFunctionCall = _gemini_tool_call_invoke_helper(function_call)
+    print(result)
+    assert result["args"] == {
+        "type": "object",
+    }

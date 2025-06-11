@@ -32,7 +32,7 @@ from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessin
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
 )
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import ProxyLogging, is_known_model
 from litellm.router import Router
 from litellm.types.llms.openai import (
     CREATE_FILE_REQUESTS_PURPOSE,
@@ -96,21 +96,6 @@ def get_model_from_json_obj(json_object: dict) -> Optional[str]:
     model = body.get("model")
 
     return model
-
-
-def is_known_model(model: Optional[str], llm_router: Optional[Router]) -> bool:
-    """
-    Returns True if the model is in the llm_router model names
-    """
-    if model is None or llm_router is None:
-        return False
-    model_names = llm_router.get_model_names()
-
-    is_in_list = False
-    if model in model_names:
-        is_in_list = True
-
-    return is_in_list
 
 
 async def _deprecated_loadbalanced_create_file(

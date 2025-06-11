@@ -1165,3 +1165,4 @@ async def test_embedding_with_extra_headers(sync_mode):
 
         mock_post.assert_called_once()
         assert "my-test-param" in mock_post.call_args.kwargs["headers"]
+        

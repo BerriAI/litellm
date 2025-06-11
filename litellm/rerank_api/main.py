@@ -324,7 +324,31 @@ def rerank(  # noqa: PLR0915
                 client=client,
             )
         else:
-            raise ValueError(f"Unsupported provider: {_custom_llm_provider}")
+            # Generic handler for all providers that use base_llm_http_handler
+            # Provider-specific logic (API key validation, URL generation, etc.) 
+            # is handled in the respective transformation configs
+            
+            # Check if the provider is actually supported
+            # If rerank_provider_config is a default CohereRerankConfig but the provider is not Cohere or litellm_proxy,
+            # it means the provider is not supported
+            if (isinstance(rerank_provider_config, litellm.CohereRerankConfig) or 
+                isinstance(rerank_provider_config, litellm.CohereRerankV2Config)) and _custom_llm_provider != "cohere" and _custom_llm_provider != "litellm_proxy":
+                raise ValueError(f"Unsupported provider: {_custom_llm_provider}")
+                
+            response = base_llm_http_handler.rerank(
+                model=model,
+                custom_llm_provider=_custom_llm_provider,
+                provider_config=rerank_provider_config,
+                optional_rerank_params=optional_rerank_params,
+                logging_obj=litellm_logging_obj,
+                timeout=optional_params.timeout,
+                api_key=dynamic_api_key or optional_params.api_key,
+                api_base=dynamic_api_base or optional_params.api_base,
+                _is_async=_is_async,
+                headers=headers or litellm.headers or {},
+                client=client,
+                model_response=model_response,
+            )
 
         # Placeholder return
         return response

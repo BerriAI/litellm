@@ -13,7 +13,7 @@ Here are the core requirements for any PR submitted to LiteLLM
 
 ## **Contributor License Agreement (CLA)**
 
-Before contributing code to LiteLLM, you must sign our [Contributor License Agreement (CLA)](<(https://cla-assistant.io/BerriAI/litellm)>). This is a legal requirement for all contributions to be merged into the main repository. The CLA helps protect both you and the project by clearly defining the terms under which your contributions are made.
+Before contributing code to LiteLLM, you must sign our [Contributor License Agreement (CLA)](https://cla-assistant.io/BerriAI/litellm). This is a legal requirement for all contributions to be merged into the main repository. The CLA helps protect both you and the project by clearly defining the terms under which your contributions are made.
 
 **Important:** We strongly recommend reviewing and signing the CLA before starting work on your contribution to avoid any delays in the PR process. You can find the CLA [here](https://cla-assistant.io/BerriAI/litellm) and sign it through our CLA management system when you submit your first PR.
 
@@ -39,14 +39,14 @@ That's it, your local dev environment is ready!
 
 ## 2. Adding Testing to your PR
 
-- Add your test to the [`tests/litellm/` directory](https://github.com/BerriAI/litellm/tree/main/tests/litellm)
+- Add your test to the [`tests/test_litellm/` directory](https://github.com/BerriAI/litellm/tree/main/tests/litellm)
 
 - This directory 1:1 maps the the `litellm/` directory, and can only contain mocked tests.
 - Do not add real llm api calls to this directory.
 
-### 2.1 File Naming Convention for `tests/litellm/`
+### 2.1 File Naming Convention for `tests/test_litellm/`
 
-The `tests/litellm/` directory follows the same directory structure as `litellm/`.
+The `tests/test_litellm/` directory follows the same directory structure as `litellm/`.
 
 - `litellm/proxy/test_caching_routes.py` maps to `litellm/proxy/caching_routes.py`
 - `test_{filename}.py` maps to `litellm/{filename}.py`

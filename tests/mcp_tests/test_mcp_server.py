@@ -9,7 +9,7 @@ sys.path.insert(
 
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
-    MCPSSEServer,
+    MCPServer,
 )
 
 

@@ -186,6 +186,10 @@ Set a Proxy Admin when SSO is enabled. Once SSO is enabled, the `user_id` for us
 export PROXY_ADMIN_ID="116544810872468347480"
 ```
 
+This will update the user role in the `LiteLLM_UserTable` to `proxy_admin`. 
+
+If you plan to change this ID, please update the user role via API `/user/update` or UI (Internal Users page). 
+
 #### Step 3: See all proxy keys
 
 <Image img={require('../../img/litellm_ui_admin.png')} />

@@ -658,7 +658,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             modality.lower() for modality in cast(List[str], gemini_modalities)
         ]
         if "usageMetadata" in message:
-            _chat_completion_usage = VertexGeminiConfig()._calculate_usage(
+            _chat_completion_usage = VertexGeminiConfig._calculate_usage(
                 completion_response=message,
             )
         else:

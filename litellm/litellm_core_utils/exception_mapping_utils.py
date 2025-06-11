@@ -5,7 +5,7 @@ from typing import Any, Optional
 import httpx
 
 import litellm
-from litellm import verbose_logger
+from litellm._logging import verbose_logger
 
 from ..exceptions import (
     APIConnectionError,
@@ -22,6 +22,28 @@ from ..exceptions import (
     Timeout,
     UnprocessableEntityError,
 )
+
+
+class ExceptionCheckers:
+    """
+    Helper class for checking various error conditions in exception strings.
+    """
+    
+    @staticmethod
+    def is_error_str_rate_limit(error_str: str) -> bool:
+        """
+        Check if an error string indicates a rate limit error.
+        
+        Args:
+            error_str: The error string to check
+            
+        Returns:
+            True if the error indicates a rate limit, False otherwise
+        """
+        if not isinstance(error_str, str):
+            return False
+            
+        return "429" in error_str or "rate limit" in error_str.lower()
 
 
 def get_error_message(error_obj) -> Optional[str]:
@@ -274,7 +296,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         + "Exception"
                     )
 
-                if "429" in error_str:
+                if ExceptionCheckers.is_error_str_rate_limit(error_str):
                     exception_mapping_worked = True
                     raise RateLimitError(
                         message=f"RateLimitError: {exception_provider} - {message}",
@@ -287,6 +309,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     or "string too long. Expected a string with maximum length"
                     in error_str
                     or "model's maximum context limit" in error_str
+                    or "is longer than the model's context length" in error_str
                 ):
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
@@ -446,6 +469,15 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         exception_mapping_worked = True
                         raise RateLimitError(
                             message=f"RateLimitError: {exception_provider} - {message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            response=getattr(original_exception, "response", None),
+                            litellm_debug_info=extra_information,
+                        )
+                    elif original_exception.status_code == 500:
+                        exception_mapping_worked = True
+                        raise InternalServerError(
+                            message=f"InternalServerError: {exception_provider} - {message}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             response=getattr(original_exception, "response", None),

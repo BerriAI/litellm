@@ -34,6 +34,7 @@ from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.argilla import ArgillaLogger
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
+from litellm.integrations.s3_v2 import S3Logger
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.vector_stores.bedrock_vector_store import BedrockVectorStore
 from litellm.integrations.langfuse.langfuse_prompt_management import (
@@ -88,6 +89,7 @@ callback_class_str_to_classType = {
     "resend_email": ResendEmailLogger,
     "smtp_email": SMTPEmailLogger,
     "deepeval": DeepEvalLogger,
+    "s3_v2": S3Logger,
 }
 
 expected_env_vars = {
@@ -113,6 +115,10 @@ expected_env_vars = {
     "GCS_PUBSUB_PROJECT_ID": "gcs_pubsub_project_id",
     "CONFIDENT_API_KEY": "confident_api_key",
     "LITELM_ENVIRONMENT": "development",
+    "AWS_BUCKET_NAME": "aws_bucket_name",
+    "AWS_SECRET_ACCESS_KEY": "aws_secret_access_key",
+    "AWS_ACCESS_KEY_ID": "aws_access_key_id",
+    "AWS_REGION": "aws_region",
 }
 
 

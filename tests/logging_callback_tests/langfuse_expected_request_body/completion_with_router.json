@@ -65,7 +65,8 @@
                 "model": "gpt-3.5-turbo",
                 "modelParameters": {
                     "stream": false,
-                    "max_retries": 0
+                    "max_retries": 0,
+                    "extra_body": "{}"
                 },
                 "usage": {
                     "input": 10,

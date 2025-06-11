@@ -505,20 +505,30 @@ class AsyncHTTPHandler:
     @staticmethod
     def _should_use_aiohttp_transport() -> bool:
         """
-        This is feature flagged for now and is opt in as we roll out to all users.
+        AiohttpTransport is the default transport for litellm.
 
-        Controlled by either
-        - litellm.use_aiohttp_transport or os.getenv("USE_AIOHTTP_TRANSPORT") = "True"
+        Httpx can be used by the following
+            - litellm.disable_aiohttp_transport = True
+            - os.getenv("DISABLE_AIOHTTP_TRANSPORT") = "True"
         """
+        import os
+
         from litellm.secret_managers.main import str_to_bool
 
+        #########################################################
+        # Check if user disabled aiohttp transport
+        ########################################################
         if (
-            str_to_bool(os.getenv("USE_AIOHTTP_TRANSPORT", "False"))
-            or litellm.use_aiohttp_transport
+            litellm.disable_aiohttp_transport is True
+            or str_to_bool(os.getenv("DISABLE_AIOHTTP_TRANSPORT", "False")) is True
         ):
-            verbose_logger.debug("Using AiohttpTransport...")
-            return True
-        return False
+            return False
+
+        #########################################################
+        # Default: Use AiohttpTransport
+        ########################################################
+        verbose_logger.debug("Using AiohttpTransport...")
+        return True
 
     @staticmethod
     def _create_aiohttp_transport(

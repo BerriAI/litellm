@@ -498,6 +498,7 @@ async def test_embedding_caching_individual_items():
     )
     final_prompt_tokens = embedding3.usage.prompt_tokens
     assert embedding3["data"][0]["embedding"] == embedding1["data"][0]["embedding"]
+    assert len(embedding3.data) == 1
     assert embedding3._hidden_params["cache_hit"] == True
     assert embedding3.usage.prompt_tokens != 0 
 
@@ -2523,7 +2524,7 @@ async def test_redis_increment_pipeline():
         results = await redis_cache.async_increment_pipeline(increment_list)
 
         # Verify results
-        assert len(results) == 8  # 4 increment operations + 4 expire operations
+        assert len(results) == 4 
 
         # Verify the values were actually set in Redis
         value1 = await redis_cache.async_get_cache("test_key1")

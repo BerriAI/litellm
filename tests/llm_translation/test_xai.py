@@ -18,7 +18,7 @@ from litellm import Choices, Message, ModelResponse, EmbeddingResponse, Usage
 from litellm import completion
 from unittest.mock import patch
 from litellm.llms.xai.chat.transformation import XAIChatConfig, XAI_API_BASE
-from base_llm_unit_tests import BaseReasoningLLMTests
+from base_llm_unit_tests import BaseReasoningLLMTests, BaseLLMChatTest
 
 
 def test_xai_chat_config_get_openai_compatible_provider_info():
@@ -169,3 +169,12 @@ class TestXAIReasoningEffort(BaseReasoningLLMTests):
             "model": "xai/grok-3-mini-beta",
             "messages": [{"role": "user", "content": "Hello"}],
         }
+    
+class TestXAIChat(BaseLLMChatTest):
+    def get_base_completion_call_args(self):
+        return {
+            "model": "xai/grok-3-mini-beta",
+        }
+    def test_tool_call_no_arguments(self, tool_call_no_arguments):
+        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
+        pass

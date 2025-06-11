@@ -34,7 +34,6 @@ from litellm.types.vector_stores import (
     VectorStoreSearchResponse,
     VectorStoreSearchResult,
 )
-from litellm.utils import load_credentials_from_list
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -258,22 +257,49 @@ class BedrockVectorStore(BaseVectorStore, BaseAWSLLM):
         from fastapi import HTTPException
 
         non_default_params = non_default_params or {}
-        load_credentials_from_list(kwargs=non_default_params)
+        credentials_dict: Dict[str, Any] = {}
+        if litellm.vector_store_registry is not None:
+            credentials_dict = (
+                litellm.vector_store_registry.get_credentials_for_vector_store(
+                    knowledge_base_id
+                )
+            )
+
         credentials = self.get_credentials(
-            aws_access_key_id=non_default_params.get("aws_access_key_id", None),
-            aws_secret_access_key=non_default_params.get("aws_secret_access_key", None),
-            aws_session_token=non_default_params.get("aws_session_token", None),
-            aws_region_name=non_default_params.get("aws_region_name", None),
-            aws_session_name=non_default_params.get("aws_session_name", None),
-            aws_profile_name=non_default_params.get("aws_profile_name", None),
-            aws_role_name=non_default_params.get("aws_role_name", None),
-            aws_web_identity_token=non_default_params.get(
-                "aws_web_identity_token", None
+            aws_access_key_id=credentials_dict.get(
+                "aws_access_key_id", non_default_params.get("aws_access_key_id", None)
             ),
-            aws_sts_endpoint=non_default_params.get("aws_sts_endpoint", None),
+            aws_secret_access_key=credentials_dict.get(
+                "aws_secret_access_key",
+                non_default_params.get("aws_secret_access_key", None),
+            ),
+            aws_session_token=credentials_dict.get(
+                "aws_session_token", non_default_params.get("aws_session_token", None)
+            ),
+            aws_region_name=credentials_dict.get(
+                "aws_region_name", non_default_params.get("aws_region_name", None)
+            ),
+            aws_session_name=credentials_dict.get(
+                "aws_session_name", non_default_params.get("aws_session_name", None)
+            ),
+            aws_profile_name=credentials_dict.get(
+                "aws_profile_name", non_default_params.get("aws_profile_name", None)
+            ),
+            aws_role_name=credentials_dict.get(
+                "aws_role_name", non_default_params.get("aws_role_name", None)
+            ),
+            aws_web_identity_token=credentials_dict.get(
+                "aws_web_identity_token",
+                non_default_params.get("aws_web_identity_token", None),
+            ),
+            aws_sts_endpoint=credentials_dict.get(
+                "aws_sts_endpoint", non_default_params.get("aws_sts_endpoint", None)
+            ),
         )
-        aws_region_name = self._get_aws_region_name(
-            optional_params=self.optional_params
+        aws_region_name = self.get_aws_region_name_for_non_llm_api_calls(
+            aws_region_name=credentials_dict.get(
+                "aws_region_name", non_default_params.get("aws_region_name", None)
+            ),
         )
 
         # Prepare request data
