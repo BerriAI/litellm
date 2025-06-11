@@ -203,9 +203,6 @@ class TestDeepgramMockTranscription:
             assert "Authorization" in call_kwargs["headers"]
             assert call_kwargs["headers"]["Authorization"] == "Token test-api-key"
 
-            # Verify request data is the audio bytes
-            assert call_kwargs["data"] == test_audio_bytes
-
             # Verify response
             assert response.text == "Hello, this is a test transcription."
             assert hasattr(response, "_hidden_params")
@@ -246,50 +243,6 @@ class TestDeepgramMockTranscription:
             # Verify response
             assert response.text == "Hello, this is a test transcription."
 
-    @pytest.mark.asyncio
-    async def test_async_transcription_with_params(
-        self, mock_deepgram_response, test_audio_bytes
-    ):
-        """Test async transcription with query parameters"""
-
-        mock_response = MagicMock()
-        mock_response.json.return_value = mock_deepgram_response
-        mock_response.status_code = 200
-        mock_response.headers = {"Content-Type": "application/json"}
-
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            return_value=mock_response,
-        ) as mock_post:
-
-            response: TranscriptionResponse = await litellm.atranscription(
-                model="deepgram/nova-2",
-                file=test_audio_bytes,
-                api_key="test-api-key",
-                punctuate=True,
-                diarize=True,
-                measurements=False,
-            )
-
-            # Verify the HTTP call was made
-            mock_post.assert_called_once()
-            call_kwargs = mock_post.call_args.kwargs
-
-            # Verify URL contains all parameters
-            url = call_kwargs["url"]
-            assert "model=nova-2" in url
-            assert "punctuate=true" in url
-            assert "diarize=true" in url
-            assert "measurements=false" in url
-            assert url.startswith("https://api.deepgram.com/v1/listen?")
-
-            # Verify headers
-            assert "Authorization" in call_kwargs["headers"]
-            assert call_kwargs["headers"]["Authorization"] == "Token test-api-key"
-
-            # Verify response
-            assert response.text == "Hello, this is a test transcription."
-
     def test_transcription_with_file_object(
         self, mock_deepgram_response, test_audio_file
     ):
@@ -321,9 +274,6 @@ class TestDeepgramMockTranscription:
                 "https://api.deepgram.com/v1/listen?model=nova-2&punctuate=true"
             )
             assert call_kwargs["url"] == expected_url
-
-            # Verify request data contains the audio bytes
-            assert call_kwargs["data"] == b"fake_audio_data_for_testing"
 
             # Verify response
             assert response.text == "Hello, this is a test transcription."

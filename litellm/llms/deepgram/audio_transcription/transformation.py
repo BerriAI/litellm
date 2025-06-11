@@ -170,8 +170,14 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         # This supports parameters like punctuate, diarize, measurements, etc.
         query_params = []
         for key, value in optional_params.items():
-            # Skip parameters that are not meant for URL query strings
-            # These are OpenAI-specific params that we handle differently
+            if value is None:
+                continue
+            if key in [
+                "model",
+                "OPENAI_TRANSCRIPTION_PARAMS",
+            ]:
+                continue
+
             if key in self.get_supported_openai_params(model):
                 continue
 
