@@ -90,7 +90,7 @@ curl --location 'http://litell-service/chat/completions' \
      },
      {
        "role": "user",
-       "content": "This is a tests prompt with 72zf6.rxqfd.com/i8xps1 url"
+       "content": "This is a tests prompt with malware.com url"
      }
    ]
 }'
