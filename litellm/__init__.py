@@ -318,9 +318,8 @@ use_aiohttp_transport: bool = (
     True  # Older variable, aiohttp is now the default. use disable_aiohttp_transport instead.
 )
 disable_aiohttp_transport: bool = False  # Set this to true to use httpx instead
-force_ipv4: bool = (
-    False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
-)
+disable_aiohttp_trust_env: bool = False  # when True, aiohttp will not trust environment variables for proxy settings
+force_ipv4: bool = False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 module_level_aclient = AsyncHTTPHandler(
     timeout=request_timeout, client_alias="module level aclient"
 )
