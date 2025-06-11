@@ -392,6 +392,26 @@ def get_team_from_list(
     return None
 
 
+def get_user_id_from_request(request: Request) -> Optional[str]:
+    """
+    Get the user id from the request
+    """
+    # Get the raw query string and parse it properly to handle + characters
+    user_id: Optional[str] = None
+    query_string = str(request.url.query)
+    if "user_id=" in query_string:
+        # Extract the user_id value from the raw query string
+        import re
+        from urllib.parse import unquote
+
+        match = re.search(r"user_id=([^&]*)", query_string)
+        if match:
+            # Use unquote instead of unquote_plus to preserve + characters
+            raw_user_id = unquote(match.group(1))
+            user_id = raw_user_id
+    return user_id
+
+
 @router.get(
     "/user/info",
     tags=["Internal User management"],
@@ -400,6 +420,7 @@ def get_team_from_list(
 )
 @management_endpoint_wrapper
 async def user_info(
+    request: Request,
     user_id: Optional[str] = fastapi.Query(
         default=None, description="User ID in the request parameters"
     ),
@@ -421,6 +442,12 @@ async def user_info(
     from litellm.proxy.proxy_server import prisma_client
 
     try:
+        # Handle URL encoding properly by getting user_id from the original request
+        if (
+            user_id is not None and " " in user_id
+        ):  # if user_id is not None and contains a space, get the user_id from the request - this is to handle the case where the user_id is encoded in the url
+            user_id = get_user_id_from_request(request=request)
+
         if prisma_client is None:
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
@@ -433,10 +460,12 @@ async def user_info(
         elif user_id is None:
             user_id = user_api_key_dict.user_id
         ## GET USER ROW ##
+
         if user_id is not None:
             user_info = await prisma_client.get_data(user_id=user_id)
         else:
             user_info = None
+
         ## GET ALL TEAMS ##
         team_list = []
         team_id_list = []
