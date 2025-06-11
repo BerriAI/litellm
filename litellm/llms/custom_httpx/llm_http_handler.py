@@ -6,6 +6,7 @@ from typing import (
     Coroutine,
     Dict,
     List,
+    Literal,
     Optional,
     Tuple,
     Union,
@@ -1812,6 +1813,168 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
         )
 
+    #####################################################################
+    ################ LIST RESPONSES INPUT ITEMS HANDLER ###########################
+    #####################################################################
+    def list_responses_input_items(
+        self,
+        response_id: str,
+        responses_api_provider_config: BaseResponsesAPIConfig,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: Optional[str] = None,
+        after: Optional[str] = None,
+        before: Optional[str] = None,
+        include: Optional[List[str]] = None,
+        limit: int = 20,
+        order: Literal["asc", "desc"] = "desc",
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+    ) -> Union[Dict, Coroutine[Any, Any, Dict]]:
+        if _is_async:
+            return self.async_list_responses_input_items(
+                response_id=response_id,
+                responses_api_provider_config=responses_api_provider_config,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
+                after=after,
+                before=before,
+                include=include,
+                limit=limit,
+                order=order,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = responses_api_provider_config.validate_environment(
+            api_key=litellm_params.api_key,
+            headers=extra_headers or {},
+            model="None",
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = responses_api_provider_config.get_complete_url(
+            api_base=litellm_params.api_base,
+            litellm_params=dict(litellm_params),
+        )
+
+        url, params = responses_api_provider_config.transform_list_input_items_request(
+            response_id=response_id,
+            api_base=api_base,
+            litellm_params=litellm_params,
+            headers=headers,
+            after=after,
+            before=before,
+            include=include,
+            limit=limit,
+            order=order,
+        )
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "complete_input_dict": params,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.get(url=url, headers=headers, params=params)
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=responses_api_provider_config)
+
+        return responses_api_provider_config.transform_list_input_items_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_list_responses_input_items(
+        self,
+        response_id: str,
+        responses_api_provider_config: BaseResponsesAPIConfig,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: Optional[str] = None,
+        after: Optional[str] = None,
+        before: Optional[str] = None,
+        include: Optional[List[str]] = None,
+        limit: int = 20,
+        order: Literal["asc", "desc"] = "desc",
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    ) -> Dict:
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = responses_api_provider_config.validate_environment(
+            api_key=litellm_params.api_key,
+            headers=extra_headers or {},
+            model="None",
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = responses_api_provider_config.get_complete_url(
+            api_base=litellm_params.api_base,
+            litellm_params=dict(litellm_params),
+        )
+
+        url, params = responses_api_provider_config.transform_list_input_items_request(
+            response_id=response_id,
+            api_base=api_base,
+            litellm_params=litellm_params,
+            headers=headers,
+            after=after,
+            before=before,
+            include=include,
+            limit=limit,
+            order=order,
+        )
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "complete_input_dict": params,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.get(
+                url=url, headers=headers, params=params
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=responses_api_provider_config)
+
+        return responses_api_provider_config.transform_list_input_items_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
     def create_file(
         self,
         create_file_data: CreateFileRequest,
@@ -2134,7 +2297,10 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
+    ) -> Union[
+        ImageResponse,
+        Coroutine[Any, Any, ImageResponse],
+    ]:
         """
 
         Handles image edit requests.
