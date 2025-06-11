@@ -106,15 +106,22 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             className="space-y-6"
           >
             <div className="grid grid-cols-1 gap-6">
-              <Form.Item
-                label={<span className="text-sm font-medium text-gray-700">MCP Server Name</span>}
+            <Form.Item
+                label={
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    MCP Server Name
+                    <Tooltip title="Best practice: Use a descriptive name that indicates the server's purpose (e.g., 'GitHub Integration', 'Email Service')">
+                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                    </Tooltip>
+                  </span>
+                }
                 name="alias"
                 rules={[
                   { required: false, message: "Please enter a server name" },
                 ]}
               >
                 <TextInput 
-                  placeholder="Enter a descriptive name for your server" 
+                  placeholder="e.g., GitHub MCP, Zapier MCP, etc." 
                   className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                 />
               </Form.Item>
