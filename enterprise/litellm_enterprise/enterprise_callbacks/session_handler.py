@@ -13,7 +13,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ChatCompletionMessageToolCall, Message, ModelResponse
 
 if TYPE_CHECKING:
-    from litellm.responses.litellm_completion_transformation.transformation import (
+    from litellm.responses.litellm_completion_transformation import (
         ChatCompletionSession,
     )
 else:
@@ -28,7 +28,7 @@ class _ENTERPRISE_ResponsesSessionHandler:
         """
         Return the chat completion message history for a previous response id
         """
-        from litellm.responses.litellm_completion_transformation.transformation import (
+        from litellm.responses.litellm_completion_transformation import (
             ChatCompletionSession,
             LiteLLMCompletionResponsesConfig,
         )
