@@ -122,6 +122,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_parallel_function_calling: Optional[bool]
     supports_web_search: Optional[bool]
     supports_reasoning: Optional[bool]
+    supports_url_context: Optional[bool]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -219,6 +220,8 @@ class CallTypes(Enum):
     text_completion = "text_completion"
     image_generation = "image_generation"
     aimage_generation = "aimage_generation"
+    image_edit = "image_edit"
+    aimage_edit = "aimage_edit"
     moderation = "moderation"
     amoderation = "amoderation"
     atranscription = "atranscription"
@@ -272,6 +275,7 @@ class CallTypes(Enum):
     retrieve_fine_tuning_job = "retrieve_fine_tuning_job"
     responses = "responses"
     aresponses = "aresponses"
+    alist_input_items = "alist_input_items"
 
 
 CallTypesLiteral = Literal[
@@ -283,6 +287,8 @@ CallTypesLiteral = Literal[
     "text_completion",
     "image_generation",
     "aimage_generation",
+    "image_edit",
+    "aimage_edit",
     "moderation",
     "amoderation",
     "atranscription",
@@ -444,11 +450,28 @@ class ChatCompletionDeltaToolCall(OpenAIObject):
     type: Optional[str] = None
     index: int
 
+    def __contains__(self, key):
+        # Define custom behavior for the 'in' operator
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
+
+    def __setitem__(self, key, value):
+        # Allow dictionary-style assignment of attributes
+        setattr(self, key, value)
+
 
 class HiddenParams(OpenAIObject):
     original_response: Optional[Union[str, Any]] = None
     model_id: Optional[str] = None  # used in Router for individual deployments
     api_base: Optional[str] = None  # returns api base used for making completion call
+    _response_ms: Optional[float] = None
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
@@ -470,6 +493,12 @@ class HiddenParams(OpenAIObject):
         except Exception:
             # if using pydantic v1
             return self.dict()
+
+    def model_dump(self, **kwargs):
+        # Override model_dump to include private attributes
+        data = super().model_dump(**kwargs)
+        data["_response_ms"] = self._response_ms
+        return data
 
 
 class ChatCompletionMessageToolCall(OpenAIObject):
@@ -1577,6 +1606,8 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     Happens when their OpenAIImageResponse has the old OpenAI usage class.
     """
 
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
+
     def __init__(
         self,
         created: Optional[int] = None,
@@ -1584,6 +1615,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
         response_ms=None,
         usage: Optional[ImageUsage] = None,
         hidden_params: Optional[dict] = None,
+        **kwargs,
     ):
         if response_ms:
             _response_ms = response_ms
@@ -2177,6 +2209,7 @@ class LlmProviders(str, Enum):
     HUGGINGFACE = "huggingface"
     TOGETHER_AI = "together_ai"
     OPENROUTER = "openrouter"
+    DATAROBOT = "datarobot"
     VERTEX_AI = "vertex_ai"
     VERTEX_AI_BETA = "vertex_ai_beta"
     GEMINI = "gemini"
@@ -2226,6 +2259,7 @@ class LlmProviders(str, Enum):
     LLAMAFILE = "llamafile"
     LM_STUDIO = "lm_studio"
     GALADRIEL = "galadriel"
+    NEBIUS = "nebius"
     INFINITY = "infinity"
     DEEPGRAM = "deepgram"
     NOVITA = "novita"

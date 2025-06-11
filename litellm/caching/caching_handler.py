@@ -293,6 +293,17 @@ class LLMCachingHandler:
                     return CachingHandlerResponse(cached_result=cached_result)
         return CachingHandlerResponse(cached_result=cached_result)
 
+    def handle_kwargs_input_list_or_str(self, kwargs: Dict[str, Any]) -> List[str]:
+        """
+        Handles the input of kwargs['input'] being a list or a string
+        """
+        if isinstance(kwargs["input"], str):
+            return [kwargs["input"]]
+        elif isinstance(kwargs["input"], list):
+            return kwargs["input"]
+        else:
+            raise ValueError("input must be a string or a list")
+
     def _process_async_embedding_cached_response(
         self,
         final_embedding_cached_response: Optional[EmbeddingResponse],
@@ -325,18 +336,18 @@ class LLMCachingHandler:
         embedding_all_elements_cache_hit: bool = False
         remaining_list = []
         non_null_list = []
+        kwargs_input_as_list = self.handle_kwargs_input_list_or_str(kwargs)
         for idx, cr in enumerate(cached_result):
             if cr is None:
-                remaining_list.append(kwargs["input"][idx])
+                remaining_list.append(kwargs_input_as_list[idx])
             else:
                 non_null_list.append((idx, cr))
-        original_kwargs_input = kwargs["input"]
         kwargs["input"] = remaining_list
         if len(non_null_list) > 0:
-            print_verbose(f"EMBEDDING CACHE HIT! - {len(non_null_list)}")
+            verbose_logger.debug(f"EMBEDDING CACHE HIT! - {len(non_null_list)}")
             final_embedding_cached_response = EmbeddingResponse(
                 model=kwargs.get("model"),
-                data=[None] * len(original_kwargs_input),
+                data=[None] * len(kwargs_input_as_list),
             )
             final_embedding_cached_response._hidden_params["cache_hit"] = True
 
@@ -349,11 +360,11 @@ class LLMCachingHandler:
                         index=idx,
                         object="embedding",
                     )
-                    if isinstance(original_kwargs_input[idx], str):
+                    if isinstance(kwargs_input_as_list[idx], str):
                         from litellm.utils import token_counter
 
                         prompt_tokens += token_counter(
-                            text=original_kwargs_input[idx], count_response_tokens=True
+                            text=kwargs_input_as_list[idx], count_response_tokens=True
                         )
             ## USAGE
             usage = Usage(

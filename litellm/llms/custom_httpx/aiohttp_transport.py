@@ -5,6 +5,7 @@ from typing import Callable, Dict, Union
 
 import aiohttp
 import aiohttp.client_exceptions
+import aiohttp.http_exceptions
 import httpx
 from aiohttp.client import ClientResponse, ClientSession
 
@@ -76,17 +77,23 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
 
     async def __aiter__(self) -> typing.AsyncIterator[bytes]:
         try:
-            with map_aiohttp_exceptions():
-                async for chunk in self._aiohttp_response.content.iter_chunked(
-                    self.CHUNK_SIZE
-                ):
-                    yield chunk
-        except aiohttp.ClientPayloadError as e:
+            async for chunk in self._aiohttp_response.content.iter_chunked(
+                self.CHUNK_SIZE
+            ):
+                yield chunk
+        except (
+            aiohttp.ClientPayloadError,
+            aiohttp.client_exceptions.ClientPayloadError,
+        ) as e:
             # Handle incomplete transfers more gracefully
             # Log the error but don't re-raise if we've already yielded some data
             verbose_logger.debug(f"Transfer incomplete, but continuing: {e}")
             # If the error is due to incomplete transfer encoding, we can still
             # return what we've received so far, similar to how httpx handles it
+            return
+        except aiohttp.http_exceptions.TransferEncodingError as e:
+            # Handle transfer encoding errors gracefully
+            verbose_logger.debug(f"Transfer encoding error, but continuing: {e}")
             return
         except Exception:
             # For other exceptions, use the normal mapping
@@ -203,7 +210,6 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 data=data,
                 allow_redirects=False,
                 auto_decompress=False,
-                compress=False,
                 timeout=ClientTimeout(
                     sock_connect=timeout.get("connect"),
                     sock_read=timeout.get("read"),
