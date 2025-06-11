@@ -188,7 +188,7 @@ def initialize_pangea(litellm_params, guardrail):
 
     return _pangea_callback
 
-def initialize_prisma_airs_guardrail(litellm_params, guardrail):
+def initialize_prisma_airs(litellm_params, guardrail):
     from litellm.proxy.guardrails.guardrail_hooks.prisma_airs_guardrail import prisma_airs_guardrail
 
     _prisma_airs_guardrail_callback = prisma_airs_guardrail(
