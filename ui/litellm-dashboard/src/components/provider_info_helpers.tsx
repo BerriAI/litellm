@@ -88,7 +88,7 @@ export const providerLogoMap: Record<string, string> = {
     [Providers.Vertex_AI]: `${asset_logos_folder}google.svg`,
     [Providers.xAI]: `${asset_logos_folder}xai.svg`,
     [Providers.Triton]: `${asset_logos_folder}nvidia_triton.png`,
-    [Providers.Deepgram]: `${asset_logos_folder}deepgram.svg`
+    [Providers.Deepgram]: `${asset_logos_folder}deepgram.png`
 };
 
 export const getProviderLogoAndName = (providerValue: string): { logo: string, displayName: string } => {
