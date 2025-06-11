@@ -539,30 +539,72 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         }
 
         // Load latest health check data for all models
+        const healthStatusMap: {[key: string]: {status: string, lastCheck: string, loading: boolean, error?: string, fullError?: string}} = {};
+        
+        // First, initialize all models with default state using model names
+        modelDataResponse.data.forEach((model: any) => {
+          const modelName = model.model_name;
+          healthStatusMap[modelName] = {
+            status: 'none',
+            lastCheck: 'None',
+            loading: false,
+            error: undefined,
+            fullError: undefined,
+          };
+        });
+        
         try {
           const latestHealthChecks = await latestHealthChecksCall(accessToken);
-          console.log("Latest health checks:", latestHealthChecks);
           
-          // Convert to the format expected by the UI
-          const healthStatusMap: {[key: string]: {status: string, lastCheck: string, loading: boolean, error?: string, fullError?: string}} = {};
-          
-          if (latestHealthChecks.latest_health_checks) {
-            Object.entries(latestHealthChecks.latest_health_checks).forEach(([modelId, checkData]: [string, any]) => {
-              const fullError = checkData.error_message || undefined;
-              healthStatusMap[modelId] = {
-                status: checkData.status,
-                lastCheck: checkData.checked_at ? new Date(checkData.checked_at).toLocaleString() : 'Never checked',
-                loading: false,
-                error: fullError ? extractMeaningfulError(fullError) : undefined,
-                fullError: fullError,
-              };
+          // Then, override with actual database data if it exists
+          if (latestHealthChecks && latestHealthChecks.latest_health_checks && typeof latestHealthChecks.latest_health_checks === 'object') {
+            Object.entries(latestHealthChecks.latest_health_checks).forEach(([key, checkData]: [string, any]) => {
+              if (!checkData) {
+                return;
+              }
+              
+              let targetModelName: string | null = null;
+              
+              // The key could be either model_id or model_name, try both approaches
+              // First, check if this key directly matches a model name
+              const directModelMatch = modelDataResponse.data.find((m: any) => m.model_name === key);
+              if (directModelMatch) {
+                targetModelName = directModelMatch.model_name;
+              } else {
+                // If not a direct match, treat as model_id and find the corresponding model
+                const modelByIdMatch = modelDataResponse.data.find((m: any) => m.model_info && m.model_info.id === key);
+                if (modelByIdMatch) {
+                  targetModelName = modelByIdMatch.model_name;
+                } else {
+                  // Check if checkData contains model_name and use that
+                  if (checkData.model_name) {
+                    const modelByNameInData = modelDataResponse.data.find((m: any) => m.model_name === checkData.model_name);
+                    if (modelByNameInData) {
+                      targetModelName = modelByNameInData.model_name;
+                    }
+                  }
+                }
+              }
+              
+              if (targetModelName) {
+                const fullError = checkData.error_message || undefined;
+                
+                healthStatusMap[targetModelName] = {
+                  status: checkData.status || 'unknown',
+                  lastCheck: checkData.checked_at ? new Date(checkData.checked_at).toLocaleString() : 'None',
+                  loading: false,
+                  error: fullError ? extractMeaningfulError(fullError) : undefined,
+                  fullError: fullError,
+                };
+              }
             });
           }
-          
-          setModelHealthStatuses(healthStatusMap);
         } catch (healthError) {
-          console.warn("Failed to load health check history:", healthError);
+          console.warn("Failed to load health check history (using default states):", healthError);
         }
+        
+        // Set the health status map regardless of whether database call succeeded
+        setModelHealthStatuses(healthStatusMap);
 
         // loop through modelDataResponse and get all`model_name` values
         let all_model_groups: Set<string> = new Set();
@@ -815,7 +857,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     modelData.data[i].api_base = curr_model?.litellm_params?.api_base;
     modelData.data[i].cleanedLitellmParams = cleanedLitellmParams;
 
-    all_models_on_proxy.push(curr_model.model_info.id);
+    all_models_on_proxy.push(curr_model.model_name);
 
     console.log(modelData.data[i]);
   }
@@ -954,13 +996,13 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     return cleaned.length > 100 ? cleaned.substring(0, 97) + '...' : cleaned;
   };
 
-  const runIndividualHealthCheck = async (modelId: string) => {
+  const runIndividualHealthCheck = async (modelName: string) => {
     if (!accessToken) return;
     
     setModelHealthStatuses(prev => ({
       ...prev,
-      [modelId]: {
-        ...prev[modelId],
+      [modelName]: {
+        ...prev[modelName],
         loading: true,
         status: 'checking'
       }
@@ -968,7 +1010,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
     try {
       // Run the health check and process the response directly
-      const response = await individualModelHealthCheckCall(accessToken, modelId);
+      const response = await individualModelHealthCheckCall(accessToken, modelName);
       const currentTime = new Date().toLocaleString();
       
       // Check if there are any unhealthy endpoints (which means this specific model failed)
@@ -977,7 +1019,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         const errorMessage = extractMeaningfulError(rawError);
         setModelHealthStatuses(prev => ({
           ...prev,
-          [modelId]: {
+          [modelName]: {
             status: 'unhealthy',
             lastCheck: currentTime,
             loading: false,
@@ -988,7 +1030,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       } else {
         setModelHealthStatuses(prev => ({
           ...prev,
-          [modelId]: {
+          [modelName]: {
             status: 'healthy',
             lastCheck: currentTime,
             loading: false
@@ -996,23 +1038,33 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         }));
       }
       
-      // Optionally try to get a more accurate timestamp from the database (non-blocking)
+      // Refresh health status from database to get the saved check data including timestamp
       try {
         const latestHealthChecks = await latestHealthChecksCall(accessToken);
-        const checkData = latestHealthChecks.latest_health_checks?.[modelId];
         
-        if (checkData && checkData.checked_at) {
-          setModelHealthStatuses(prev => ({
-            ...prev,
-            [modelId]: {
-              ...prev[modelId],
-              lastCheck: new Date(checkData.checked_at).toLocaleString(),
-            }
-          }));
+        // Find the model ID for this model name to look up database data
+        const model = modelData.data.find((m: any) => m.model_name === modelName);
+        if (model) {
+          const modelId = model.model_info.id;
+          const checkData = latestHealthChecks.latest_health_checks?.[modelId];
+          
+          if (checkData) {
+            const fullError = checkData.error_message || undefined;
+            setModelHealthStatuses(prev => ({
+              ...prev,
+              [modelName]: {
+                status: checkData.status || prev[modelName]?.status || 'unknown',
+                lastCheck: checkData.checked_at ? new Date(checkData.checked_at).toLocaleString() : prev[modelName]?.lastCheck || 'None',
+                loading: false,
+                error: fullError ? extractMeaningfulError(fullError) : prev[modelName]?.error,
+                fullError: fullError || prev[modelName]?.fullError,
+              }
+            }));
+          }
         }
       } catch (dbError) {
-        // Ignore database errors - we already have the health check result
-        console.debug("Could not fetch timestamp from database (non-critical):", dbError);
+        // Ignore database errors - we already have the health check result from the API call
+        console.debug("Could not fetch updated status from database (non-critical):", dbError);
       }
       
     } catch (error) {
@@ -1021,7 +1073,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       const errorMessage = extractMeaningfulError(rawError);
       setModelHealthStatuses(prev => ({
         ...prev,
-        [modelId]: {
+        [modelName]: {
           status: 'unhealthy',
           lastCheck: currentTime,
           loading: false,
@@ -1036,9 +1088,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     const modelsToCheck = selectedModelsForHealth.length > 0 ? selectedModelsForHealth : all_models_on_proxy;
     
     // Set all models to loading state
-    const loadingStatuses = modelsToCheck.reduce((acc, modelId) => {
-      acc[modelId] = {
-        ...modelHealthStatuses[modelId],
+    const loadingStatuses = modelsToCheck.reduce((acc, modelName) => {
+      acc[modelName] = {
+        ...modelHealthStatuses[modelName],
         loading: true,
         status: 'checking'
       };
@@ -1051,13 +1103,13 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     const healthCheckResults: {[key: string]: any} = {};
     
     // Run all health checks in parallel and collect results
-    const healthCheckPromises = modelsToCheck.map(async (modelId) => {
+    const healthCheckPromises = modelsToCheck.map(async (modelName) => {
       if (!accessToken) return;
       
       try {
         // Run the health check and store the result
-        const response = await individualModelHealthCheckCall(accessToken, modelId);
-        healthCheckResults[modelId] = response;
+        const response = await individualModelHealthCheckCall(accessToken, modelName);
+        healthCheckResults[modelName] = response;
         
         // Update status immediately based on response
         const currentTime = new Date().toLocaleString();
@@ -1067,7 +1119,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           const errorMessage = extractMeaningfulError(rawError);
           setModelHealthStatuses(prev => ({
             ...prev,
-            [modelId]: {
+            [modelName]: {
               status: 'unhealthy',
               lastCheck: currentTime,
               loading: false,
@@ -1078,7 +1130,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         } else {
           setModelHealthStatuses(prev => ({
             ...prev,
-            [modelId]: {
+            [modelName]: {
               status: 'healthy',
               lastCheck: currentTime,
               loading: false
@@ -1086,14 +1138,14 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           }));
         }
       } catch (error) {
-        console.error(`Health check failed for ${modelId}:`, error);
+        console.error(`Health check failed for ${modelName}:`, error);
         // Set error status for failed health checks
         const currentTime = new Date().toLocaleString();
         const rawError = error instanceof Error ? error.message : String(error);
         const errorMessage = extractMeaningfulError(rawError);
         setModelHealthStatuses(prev => ({
           ...prev,
-          [modelId]: {
+          [modelName]: {
             status: 'unhealthy',
             lastCheck: currentTime,
             loading: false,
@@ -1107,41 +1159,45 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     // Wait for all health checks to complete
     await Promise.allSettled(healthCheckPromises);
     
-    // Optionally, try to fetch from database to get saved timestamps, but don't rely on it
+    // Refresh health statuses from database to get the saved check data including timestamps
     try {
       const latestHealthChecks = await latestHealthChecksCall(accessToken);
       
       if (latestHealthChecks.latest_health_checks) {
-        // Update timestamps from database if available, but keep the status from the actual health check
+        // Update health statuses from database, which should have the most accurate saved data
         Object.entries(latestHealthChecks.latest_health_checks).forEach(([modelId, checkData]: [string, any]) => {
-          if (modelsToCheck.includes(modelId) && checkData) {
+          // Find the model name for this model ID
+          const model = modelData.data.find((m: any) => m.model_info.id === modelId);
+          if (model && modelsToCheck.includes(model.model_name) && checkData) {
+            const modelName = model.model_name;
+            const fullError = checkData.error_message || undefined;
             setModelHealthStatuses(prev => {
-              const currentStatus = prev[modelId];
-              if (currentStatus) {
-                return {
-                  ...prev,
-                  [modelId]: {
-                    ...currentStatus,
-                    lastCheck: checkData.checked_at ? new Date(checkData.checked_at).toLocaleString() : currentStatus.lastCheck,
-                  }
-                };
-              }
-              return prev;
+              const currentStatus = prev[modelName];
+              return {
+                ...prev,
+                [modelName]: {
+                  status: checkData.status || currentStatus?.status || 'unknown',
+                  lastCheck: checkData.checked_at ? new Date(checkData.checked_at).toLocaleString() : currentStatus?.lastCheck || 'None',
+                  loading: false,
+                  error: fullError ? extractMeaningfulError(fullError) : currentStatus?.error,
+                  fullError: fullError || currentStatus?.fullError,
+                }
+              };
             });
           }
         });
       }
     } catch (dbError) {
       console.warn("Failed to fetch updated health statuses from database (non-critical):", dbError);
-      // This is non-critical - we already have the health check results
+      // This is non-critical - we already have the health check results from the API calls
     }
   };
 
-  const handleModelSelection = (modelId: string, checked: boolean) => {
+  const handleModelSelection = (modelName: string, checked: boolean) => {
     if (checked) {
-      setSelectedModelsForHealth(prev => [...prev, modelId]);
+      setSelectedModelsForHealth(prev => [...prev, modelName]);
     } else {
-      setSelectedModelsForHealth(prev => prev.filter(id => id !== modelId));
+      setSelectedModelsForHealth(prev => prev.filter(name => name !== modelName));
       setAllModelsSelected(false);
     }
   };
@@ -1163,16 +1219,14 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         return <Badge color="red">unhealthy</Badge>;
       case 'checking':
         return <Badge color="blue">checking</Badge>;
+      case 'none':
+        return <Badge color="gray">none</Badge>;
       default:
         return <Badge color="gray">unknown</Badge>;
     }
   };
 
-  const showErrorModal = (modelId: string, cleanedError: string, fullError: string) => {
-    // Find the model name for display purposes
-    const model = modelData.data.find((m: any) => m.model_info.id === modelId);
-    const modelName = model ? model.model_name : modelId;
-    
+  const showErrorModal = (modelName: string, cleanedError: string, fullError: string) => {
     setSelectedErrorDetails({
       modelName,
       cleanedError,
@@ -1681,8 +1735,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                         showErrorModal,
                       )}
                                           data={modelData.data.map((model: any) => {
-                        const modelId = model.model_info.id;
-                        const healthStatus = modelHealthStatuses[modelId] || { status: 'unknown', lastCheck: 'Never checked', loading: false };
+                        const modelName = model.model_name;
+                        const healthStatus = modelHealthStatuses[modelName] || { status: 'none', lastCheck: 'None', loading: false };
                         return {
                           model_name: model.model_name,
                           model_info: model.model_info,
