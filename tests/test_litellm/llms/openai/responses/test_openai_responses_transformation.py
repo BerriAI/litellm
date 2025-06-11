@@ -63,7 +63,7 @@ class TestOpenAIResponsesAPIConfig:
     def test_transform_responses_api_request(self):
         """Test request transformation"""
         input_text = "What is the capital of France?"
-        optional_params = {"temperature": 0.7, "stream": True}
+        optional_params = {"temperature": 0.7, "stream": True, "background": True}
 
         result = self.config.transform_responses_api_request(
             model=self.model,
@@ -79,6 +79,7 @@ class TestOpenAIResponsesAPIConfig:
             "input": input_text,
             "temperature": 0.7,
             "stream": True,
+            "background": True,
         }
 
         self.validate_responses_api_request_params(result, expected_fields)
