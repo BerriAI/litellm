@@ -10,6 +10,7 @@ sys.path.insert(
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     MCPServer,
+    MCPTransport,
 )
 
 
@@ -31,5 +32,29 @@ async def test_mcp_server_manager():
 
     result = await mcp_server_manager.call_tool(
         name="gmail_send_email", arguments={"body": "Test"}
+    )
+    print("RESULT FROM CALLING TOOL FROM MCP SERVER MANAGER== ", result)
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_manager_https_server():
+    mcp_server_manager.load_servers_from_config(
+        {
+            "zapier_mcp_server": {
+                "url": os.environ.get("ZAPIER_MCP_HTTPS_SERVER_URL"),
+                "transport": MCPTransport.http,
+            }
+        }
+    )
+    tools = await mcp_server_manager.list_tools()
+    print("TOOLS FROM MCP SERVER MANAGER== ", tools)
+
+    result = await mcp_server_manager.call_tool(
+        name="gmail_send_email",
+        arguments={
+            "body": "Test",
+            "message": "Test",
+            "instructions": "Test",
+        },
     )
     print("RESULT FROM CALLING TOOL FROM MCP SERVER MANAGER== ", result)
