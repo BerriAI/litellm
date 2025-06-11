@@ -76,16 +76,13 @@ def check_prisma_schema_diff_helper(db_url: str) -> Tuple[bool, List[str]]:
         sql_commands = extract_sql_commands(result.stdout)
 
         if sql_commands:
-            print("Changes to DB Schema detected")  # noqa: T201
-            print("Required SQL commands:")  # noqa: T201
-            for command in sql_commands:
-                print(command)  # noqa: T201
+            verbose_logger.info("Detected changes to DB Schema")
             return True, sql_commands
         else:
             return False, []
     except subprocess.CalledProcessError as e:
-        error_message = f"Failed to generate migration diff. Error: {e.stderr}"
-        print(error_message)  # noqa: T201
+        error_message = f"Failed to generate migration diff. Error: {e.stderr}. This will not block server start."
+        verbose_logger.exception(error_message)
         return False, []
 
 
@@ -97,8 +94,8 @@ def check_prisma_schema_diff(db_url: Optional[str] = None) -> None:
             raise Exception("DATABASE_URL not set")
     has_diff, message = check_prisma_schema_diff_helper(db_url)
     if has_diff:
-        verbose_logger.exception(
-            "🚨🚨🚨 prisma schema out of sync with db. Consider running these sql_commands to sync the two - {}".format(
-                message
-            )
+        error_message = "🚨🚨🚨 Prisma schema out of sync with db, and `DISABLE_PRISMA_SCHEMA_UPDATE` is enabled. Manual override is required. Consider running these sql_commands to sync the two - {}".format(
+            message
         )
+        verbose_logger.exception(error_message)
+        raise Exception(error_message)
