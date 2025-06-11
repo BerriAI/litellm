@@ -470,14 +470,24 @@ async def test_openai_pdf_url(model):
     assert "file_data" in request["raw_request_body"]["messages"][0]["content"][1]["file"]
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_openai_codex(sync_mode):
+    from litellm import acompletion
 
-def test_openai_codex():
-    from litellm import completion
+    kwargs = {
+        "model": "openai/codex-mini-latest",
+        "messages": [{"role": "user", "content": "Hey!"}],
+    }
 
-    response = completion(
-        model="openai/codex-mini-latest",
-        messages=[{"role": "user", "content": "Hey!"}],
-    )
+    if sync_mode:
+        response = litellm.completion(
+            **kwargs
+        )
+    else:
+        response = await litellm.acompletion(
+            **kwargs
+        )
     print("response: ", response)
 
     assert response.choices[0].message.content is not None

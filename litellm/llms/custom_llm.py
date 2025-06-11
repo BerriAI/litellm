@@ -13,6 +13,7 @@ from typing import (
     Any,
     AsyncIterator,
     Callable,
+    Coroutine,
     Iterator,
     Optional,
     Union,
@@ -107,7 +108,10 @@ class CustomLLM(BaseLLM):
         headers={},
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[AsyncHTTPHandler] = None,
-    ) -> ModelResponse:
+    ) -> Union[
+        Coroutine[Any, Any, Union[ModelResponse, "CustomStreamWrapper"]],
+        Union[ModelResponse, "CustomStreamWrapper"],
+    ]:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
     async def astreaming(
