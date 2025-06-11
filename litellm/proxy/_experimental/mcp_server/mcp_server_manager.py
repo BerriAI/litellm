@@ -180,7 +180,6 @@ class MCPServerManager:
             verbose_logger.debug(f"Using HTTP streamable transport for {server.url}")
             async with streamablehttp_client(
                 url=server.url,
-                timeout=timedelta(seconds=60),
             ) as (read_stream, write_stream, get_session_id):
                 async with ClientSession(read_stream, write_stream) as session:
                     await session.initialize()
@@ -245,7 +244,6 @@ class MCPServerManager:
             )
             async with streamablehttp_client(
                 url=mcp_server.url,
-                timeout=timedelta(seconds=60),
             ) as (read_stream, write_stream, get_session_id):
                 async with ClientSession(read_stream, write_stream) as session:
                     await session.initialize()
