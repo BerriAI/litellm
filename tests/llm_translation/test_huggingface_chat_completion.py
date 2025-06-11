@@ -357,3 +357,62 @@ class TestHuggingFace(BaseLLMChatTest):
     @pytest.mark.asyncio
     async def test_completion_cost(self):
         pass
+
+    def test_tgi_endpoint_with_api_base(self):
+        """Test that TGI endpoints work correctly with api_base without crashing"""
+        from litellm.llms.huggingface.chat.transformation import HuggingFaceChatConfig
+        from litellm.types.llms.openai import AllMessageValues
+        from typing import List, cast
+        
+        config = HuggingFaceChatConfig()
+        
+        # Test 1: get_complete_url should work with TGI endpoint
+        url = config.get_complete_url(
+            api_base="https://my-endpoint.endpoints.huggingface.cloud/v1/",
+            api_key="test_key",
+            model="huggingface/tgi",
+            optional_params={},
+            litellm_params={},
+            stream=False
+        )
+        assert url == "https://my-endpoint.endpoints.huggingface.cloud/v1"
+        
+        # Test 2: transform_request should work with TGI endpoint and api_base
+        # This should NOT call _fetch_inference_provider_mapping and should NOT crash
+        messages: List[AllMessageValues] = cast(List[AllMessageValues], [{"role": "user", "content": "Hello"}])
+        
+        transformed_request = config.transform_request(
+            model="huggingface/tgi",
+            messages=messages,
+            optional_params={"temperature": 0.7, "max_tokens": 100},
+            litellm_params={"api_base": "https://my-endpoint.endpoints.huggingface.cloud/v1/"},
+            headers={}
+        )
+        
+        # For TGI endpoints with api_base, the model should be passed through unchanged
+        assert transformed_request["model"] == "huggingface/tgi"
+        assert transformed_request["messages"] == messages
+        assert transformed_request["temperature"] == 0.7
+        assert transformed_request["max_tokens"] == 100
+
+    def test_tgi_endpoint_without_api_base_should_fail_gracefully(self):
+        """Test that TGI endpoint without api_base fails gracefully (expected behavior)"""
+        from litellm.llms.huggingface.chat.transformation import HuggingFaceChatConfig
+        from litellm.types.llms.openai import AllMessageValues
+        from typing import List, cast
+        
+        config = HuggingFaceChatConfig()
+        messages: List[AllMessageValues] = cast(List[AllMessageValues], [{"role": "user", "content": "Hello"}])
+        
+        # This should try to fetch provider mapping and may fail, but should not crash with ValueError
+        with pytest.raises(Exception) as exc_info:
+            config.transform_request(
+                model="huggingface/tgi",
+                messages=messages,
+                optional_params={},
+                litellm_params={},  # No api_base
+                headers={}
+            )
+        
+        # Should not be a ValueError about unpacking
+        assert "not enough values to unpack" not in str(exc_info.value)

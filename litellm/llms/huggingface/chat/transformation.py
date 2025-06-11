@@ -92,11 +92,16 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         # 4. Default construction with provider
         else:
             # Parse provider and model
-            first_part, remaining = model.split("/", 1)
-            if "/" in remaining:
-                provider = first_part
-            else:
+            if "/" not in model:
+                # Handle case where model doesn't contain "/"
                 provider = "hf-inference"
+                remaining = model
+            else:
+                first_part, remaining = model.split("/", 1)
+                if "/" in remaining:
+                    provider = first_part
+                else:
+                    provider = "hf-inference"
 
             if provider == "hf-inference":
                 route = f"{provider}/models/{model}/v1/chat/completions"
@@ -121,13 +126,33 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         if "max_retries" in optional_params:
             logger.warning("`max_retries` is not supported. It will be ignored.")
             optional_params.pop("max_retries", None)
-        first_part, remaining = model.split("/", 1)
-        if "/" in remaining:
-            provider = first_part
-            model_id = remaining
-        else:
+        
+        # Check if this is a TGI endpoint (dedicated inference endpoint)
+        # When api_base is provided and model is "huggingface/tgi", skip provider mapping
+        api_base = litellm_params.get("api_base")
+        if api_base and model.endswith("/tgi"):
+            # For TGI endpoints, we don't need provider mapping
+            # Just pass through the request with minimal transformation
+            messages = self._transform_messages(messages=messages, model=model)
+            return dict(
+                ChatCompletionRequest(
+                    model=model, messages=messages, **optional_params
+                )
+            )
+        
+        # Handle cases where model doesn't contain "/" (should not happen in normal use)
+        if "/" not in model:
             provider = "hf-inference"
             model_id = model
+        else:
+            first_part, remaining = model.split("/", 1)
+            if "/" in remaining:
+                provider = first_part
+                model_id = remaining
+            else:
+                provider = "hf-inference"
+                model_id = model
+        
         provider_mapping = _fetch_inference_provider_mapping(model_id)
         if provider not in provider_mapping:
             raise HuggingFaceError(
