@@ -19,12 +19,12 @@ import {
   Text,
   SelectItem,
   TextInput,
-  Button,
+  Button as TremorButton,
   Divider,
 } from "@tremor/react";
 import { v4 as uuidv4 } from 'uuid';
 
-import { message, Select, Spin, Typography, Tooltip, Input, Upload } from "antd";
+import { message, Select, Spin, Typography, Tooltip, Input, Upload, Modal, Button } from "antd";
 import { makeOpenAIChatCompletionRequest } from "./chat_ui/llm_calls/chat_completion";
 import { makeOpenAIImageGenerationRequest } from "./chat_ui/llm_calls/image_generation";
 import { makeOpenAIImageEditsRequest } from "./chat_ui/llm_calls/image_edits";
@@ -55,7 +55,8 @@ import {
   InfoCircleOutlined,
   SafetyOutlined,
   UploadOutlined,
-  PictureOutlined
+  PictureOutlined,
+  CodeOutlined
 } from "@ant-design/icons";
 
 const { TextArea } = Input;
@@ -97,8 +98,17 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [messageTraceId, setMessageTraceId] = useState<string | null>(null);
   const [uploadedImage, setUploadedImage] = useState<File | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
+  const [isGetCodeModalVisible, setIsGetCodeModalVisible] = useState(false);
+  const [generatedCode, setGeneratedCode] = useState("");
+  const [selectedSdk, setSelectedSdk] = useState<'openai' | 'azure'>('openai');
 
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (isGetCodeModalVisible) {
+      generateCodeSnippet();
+    }
+  }, [isGetCodeModalVisible, selectedSdk]);
 
   useEffect(() => {
     let userApiKey = apiKeySource === 'session' ? accessToken : apiKey;
@@ -151,6 +161,126 @@ const ChatUI: React.FC<ChatUIProps> = ({
       }, 100);
     }
   }, [chatHistory]);
+
+  interface CodeGenMetadata {
+    tags?: string[];
+    vector_stores?: string[];
+    guardrails?: string[];
+  }
+
+  const generateCodeSnippet = () => {
+    const effectiveApiKey = apiKeySource === 'session' ? accessToken : apiKey;
+    const apiBase = window.location.origin;
+
+    const messages = chatHistory
+      .filter(msg => !msg.isImage)
+      .map(({ role, content }) => ({ role, content }));
+
+    const metadata: CodeGenMetadata = {};
+    if (selectedTags.length > 0) metadata.tags = selectedTags;
+    if (selectedVectorStores.length > 0) metadata.vector_stores = selectedVectorStores;
+    if (selectedGuardrails.length > 0) metadata.guardrails = selectedGuardrails;
+
+    const endpointName = endpointType.charAt(0).toUpperCase() + endpointType.slice(1);
+
+    const modelNameForCode = selectedSdk === 'azure'
+      ? selectedModel || 'your-azure-deployment-name'
+      : selectedModel || 'your-model-name';
+
+    const codeTemplate = selectedSdk === 'azure'
+      ? `# Endpoint: ${endpointName}
+# Model: ${modelNameForCode} (Azure Deployment Name)
+
+import litellm
+import os
+
+# For Azure OpenAI, LiteLLM requires 3 env variables
+# Set them below
+os.environ["AZURE_API_KEY"] = "your-azure-api-key"
+os.environ["AZURE_API_BASE"] = "your-azure-api-base" # e.g. https://<your-endpoint>.openai.azure.com/
+os.environ["AZURE_API_VERSION"] = "2023-07-01-preview" # e.g. 2023-07-01-preview
+
+# The 'model' parameter should be your Azure OpenAI deployment name
+`
+      : `# Endpoint: ${endpointName}
+# Model: ${modelNameForCode}
+
+import litellm
+import os
+
+# Set the API key and base for your LiteLLM Proxy
+os.environ["LITELLM_API_KEY"] = "${effectiveApiKey || 'YOUR_LITELLM_API_KEY'}"
+os.environ["LITELLM_API_BASE"] = "${apiBase}"
+
+# The 'model' parameter is the model name you configured in LiteLLM
+`;
+
+    let endpointSpecificCode;
+    switch (endpointType) {
+      case EndpointType.CHAT:
+      case EndpointType.RESPONSES:
+        endpointSpecificCode = `
+messages = ${JSON.stringify(messages, null, 2)}
+
+metadata = ${JSON.stringify(metadata, null, 2)}
+
+response = litellm.completion(
+    model="${modelNameForCode}",
+    messages=messages,
+    metadata=metadata,
+    stream=True
+)
+
+for chunk in response:
+    print(chunk.choices[0].delta.content or "", end="")
+`;
+        break;
+      
+      case EndpointType.IMAGE:
+        endpointSpecificCode = `
+response = litellm.image_generation(
+    prompt="${inputMessage}",
+    model="${modelNameForCode}"
+)
+
+print(response)
+`;
+        break;
+
+      case EndpointType.IMAGE_EDITS:
+        endpointSpecificCode = `
+from PIL import Image
+import io
+
+# This is a placeholder for your image data.
+# In a real script, you would load your image like this:
+# with open("path/to/your/image.png", "rb") as f:
+#     image_data = f.read()
+
+# For this example, creating a dummy image.
+dummy_image = Image.new('RGB', (100, 100), color = 'red')
+img_byte_arr = io.BytesIO()
+dummy_image.save(img_byte_arr, format='PNG')
+image_data = img_byte_arr.getvalue()
+
+
+response = litellm.image_generation(
+    prompt="${inputMessage}",
+    model="${modelNameForCode}",
+    image=image_data,
+)
+
+print(response)
+`;
+        break;
+      default:
+        endpointSpecificCode = "\n# Code generation for this endpoint is not implemented yet.";
+    }
+
+    const finalCode = codeTemplate + endpointSpecificCode;
+
+    setGeneratedCode(finalCode);
+  };
 
   const updateTextUI = (role: string, chunk: string, model?: string) => {
     console.log("updateTextUI called with:", role, chunk, model);
@@ -467,10 +597,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
   return (
     <div className="w-full h-screen p-4 bg-white">
     <Card className="w-full rounded-xl shadow-md overflow-hidden">
-      <div className="flex h-[80vh] w-full">
+      <div className="flex h-[80vh] w-full gap-4">
         {/* Left Sidebar with Controls */}
-        <div className="w-1/4 p-4 border-r border-gray-200 bg-gray-50">
-          <div className="mb-6">
+        <div className="w-1/4 p-4 bg-gray-50">
+          <Title className="text-xl font-semibold mb-6 mt-2">Configurations</Title>
             <div className="space-y-6">
               <div>
                 <Text className="font-medium block mb-2 text-gray-700 flex items-center">
@@ -602,19 +732,30 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 />
               </div>
               
-              <Button
-                onClick={clearChatHistory}
-                className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300 mt-4"
-                icon={ClearOutlined}
-              >
-                Clear Chat
-              </Button>
+              <div className="space-y-2 mt-6">
+                <TremorButton
+                  onClick={clearChatHistory}
+                  className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
+                  icon={ClearOutlined}
+                >
+                  Clear Chat
+                </TremorButton>
+              </div>
             </div>
-          </div>
         </div>
         
         {/* Main Chat Area */}
         <div className="w-3/4 flex flex-col bg-white">
+          <div className="p-4 border-b border-gray-200 flex justify-between items-center">
+            <Title className="text-xl font-semibold mb-0">Test Key</Title>
+            <TremorButton
+              onClick={() => setIsGetCodeModalVisible(true)}
+              className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
+              icon={CodeOutlined}
+            >
+              Get Code
+            </TremorButton>
+          </div>
           <div className="flex-1 overflow-auto p-4 pb-0">
             {chatHistory.length === 0 && (
               <div className="h-full flex flex-col items-center justify-center text-gray-400">
@@ -774,28 +915,71 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 style={{ resize: 'none', paddingRight: '10px', paddingLeft: '10px' }}
               />
               {isLoading ? (
-                <Button
+                <TremorButton
                   onClick={handleCancelRequest}
                   className="ml-2 bg-red-50 hover:bg-red-100 text-red-600 border-red-200"
                   icon={DeleteOutlined}
                 >
                   Cancel
-                </Button>
+                </TremorButton>
               ) : (
-                <Button
+                <TremorButton
                   onClick={handleSendMessage}
                   className="ml-2 text-white"
-                  icon={endpointType === EndpointType.CHAT ? SendOutlined : RobotOutlined}
+                  icon={endpointType === EndpointType.CHAT || endpointType === EndpointType.RESPONSES ? SendOutlined : PictureOutlined}
                 >
-                  {endpointType === EndpointType.CHAT ? "Send" : 
+                  {endpointType === EndpointType.CHAT || endpointType === EndpointType.RESPONSES ? "Send" : 
                    endpointType === EndpointType.IMAGE_EDITS ? "Edit" : "Generate"}
-                </Button>
+                </TremorButton>
               )}
             </div>
           </div>
         </div>
       </div>
     </Card>
+    <Modal
+      title="Generated Code"
+      visible={isGetCodeModalVisible}
+      onCancel={() => setIsGetCodeModalVisible(false)}
+      footer={null}
+      width={800}
+    >
+      <div className="flex justify-between items-end my-4">
+        <div>
+          <Text className="font-medium block mb-1 text-gray-700">SDK Type</Text>
+          <Select
+            value={selectedSdk}
+            onChange={(value) => setSelectedSdk(value as 'openai' | 'azure')}
+            style={{ width: 150 }}
+            options={[
+                { value: 'openai', label: 'OpenAI SDK' },
+                { value: 'azure', label: 'Azure SDK' },
+            ]}
+          />
+        </div>
+        <Button 
+          onClick={() => {
+            navigator.clipboard.writeText(generatedCode);
+            message.success("Copied to clipboard!");
+          }}
+        >
+          Copy to Clipboard
+        </Button>
+      </div>
+      <SyntaxHighlighter
+        language="python"
+        style={coy as any}
+        wrapLines={true}
+        wrapLongLines={true}
+        className="rounded-md"
+        customStyle={{
+          maxHeight: '60vh',
+          overflowY: 'auto',
+        }}
+      >
+        {generatedCode}
+      </SyntaxHighlighter>
+    </Modal>
     </div>
   );
 };
