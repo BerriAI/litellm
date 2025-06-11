@@ -854,30 +854,104 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     
     let errorStr = typeof error === 'string' ? error : JSON.stringify(error);
     
-    // Check for specific error patterns
+    // First, look for explicit "ErrorType: StatusCode" patterns
+    const directPatternMatch = errorStr.match(/(\w+Error):\s*(\d{3})/i);
+    if (directPatternMatch) {
+      return `${directPatternMatch[1]}: ${directPatternMatch[2]}`;
+    }
+    
+    // Look for error types and status codes separately, then combine them
+    const errorTypeMatch = errorStr.match(/(AuthenticationError|RateLimitError|BadRequestError|InternalServerError|TimeoutError|NotFoundError|ForbiddenError|ServiceUnavailableError|BadGatewayError|ContentPolicyViolationError|\w+Error)/i);
+    const statusCodeMatch = errorStr.match(/\b(400|401|403|404|408|429|500|502|503|504)\b/);
+    
+    if (errorTypeMatch && statusCodeMatch) {
+      return `${errorTypeMatch[1]}: ${statusCodeMatch[1]}`;
+    }
+    
+    // If we have a status code but no clear error type, map it
+    if (statusCodeMatch) {
+      const statusCode = statusCodeMatch[1];
+      const statusToError: {[key: string]: string} = {
+        '400': 'BadRequestError',
+        '401': 'AuthenticationError',
+        '403': 'ForbiddenError', 
+        '404': 'NotFoundError',
+        '408': 'TimeoutError',
+        '429': 'RateLimitError',
+        '500': 'InternalServerError',
+        '502': 'BadGatewayError',
+        '503': 'ServiceUnavailableError',
+        '504': 'GatewayTimeoutError',
+      };
+      return `${statusToError[statusCode]}: ${statusCode}`;
+    }
+    
+    // If we have an error type but no status code, map error type to expected status code
+    if (errorTypeMatch) {
+      const errorType = errorTypeMatch[1];
+      const errorToStatus: {[key: string]: string} = {
+        'AuthenticationError': '401',
+        'RateLimitError': '429',
+        'BadRequestError': '400',
+        'InternalServerError': '500',
+        'TimeoutError': '408',
+        'NotFoundError': '404',
+        'ForbiddenError': '403',
+        'ServiceUnavailableError': '503',
+        'BadGatewayError': '502',
+        'GatewayTimeoutError': '504',
+        'ContentPolicyViolationError': '400',
+      };
+      
+      const mappedStatus = errorToStatus[errorType];
+      if (mappedStatus) {
+        return `${errorType}: ${mappedStatus}`;
+      }
+      return errorType;
+    }
+    
+    // Check for specific error patterns from errorPatterns
     for (const { pattern, replacement } of errorPatterns) {
       if (pattern.test(errorStr)) {
         return replacement;
       }
     }
     
-    // Extract first meaningful line (skip traceback noise)
-    const lines = errorStr.split('\n');
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (trimmed && 
-          !trimmed.startsWith('File ') && 
-          !trimmed.startsWith('  ') && 
-          !trimmed.includes('traceback') &&
-          !trimmed.includes('Traceback') &&
-          trimmed.length > 10) {
-        // Limit length to avoid super long errors
-        return trimmed.length > 100 ? trimmed.substring(0, 97) + '...' : trimmed;
-      }
+    // Look for common error keywords and provide meaningful names with status codes
+    if (/missing.*api.*key|invalid.*key|unauthorized/i.test(errorStr)) {
+      return 'AuthenticationError: 401';
+    }
+    if (/rate.*limit|too.*many.*requests/i.test(errorStr)) {
+      return 'RateLimitError: 429';
+    }
+    if (/timeout|timed.*out/i.test(errorStr)) {
+      return 'TimeoutError: 408';
+    }
+    if (/not.*found/i.test(errorStr)) {
+      return 'NotFoundError: 404';
+    }
+    if (/forbidden|access.*denied/i.test(errorStr)) {
+      return 'ForbiddenError: 403';
+    }
+    if (/internal.*server.*error/i.test(errorStr)) {
+      return 'InternalServerError: 500';
     }
     
-    // Fallback to truncated original error
-    return errorStr.length > 100 ? errorStr.substring(0, 97) + '...' : errorStr;
+    // Fallback: clean up the error string and return first meaningful part
+    const cleaned = errorStr
+      .replace(/[\n\r]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+      
+    // Try to get first meaningful sentence or phrase
+    const sentences = cleaned.split(/[.!?]/);
+    const firstSentence = sentences[0]?.trim();
+    
+    if (firstSentence && firstSentence.length > 0) {
+      return firstSentence.length > 100 ? firstSentence.substring(0, 97) + '...' : firstSentence;
+    }
+    
+    return cleaned.length > 100 ? cleaned.substring(0, 97) + '...' : cleaned;
   };
 
   const runIndividualHealthCheck = async (modelName: string) => {
@@ -1983,7 +2057,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         {selectedErrorDetails && (
           <div className="space-y-4">
             <div>
-              <Text className="font-medium">Cleaned Error:</Text>
+              <Text className="font-medium">Error:</Text>
               <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-md">
                 <Text className="text-red-800">{selectedErrorDetails.cleanedError}</Text>
               </div>
