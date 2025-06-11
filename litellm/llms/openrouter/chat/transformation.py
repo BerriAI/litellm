@@ -98,7 +98,6 @@ class OpenrouterConfig(OpenAIGPTConfig):
 
 class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
-        print(f"OpenRouter Raw Chunk: {chunk}")
         try:
             ## HANDLE ERROR IN CHUNK ##
             if "error" in chunk:

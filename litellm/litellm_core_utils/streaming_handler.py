@@ -775,7 +775,6 @@ class CustomStreamWrapper:
                 original_chunk = response_obj.get("original_chunk", None)
                 if original_chunk:
                     if len(original_chunk.choices) > 0:
-                        print(f"Raw model Response: {response_obj}")
                         choices = []
                         for choice in original_chunk.choices:
                             try:
@@ -791,7 +790,6 @@ class CustomStreamWrapper:
                         print_verbose(f"choices in streaming: {choices}")
                         setattr(model_response, "choices", choices)
                     else:
-                        print(f"\n\n######{original_chunk}")
                         return
                     model_response.system_fingerprint = (
                         original_chunk.system_fingerprint
@@ -1153,18 +1151,6 @@ class CustomStreamWrapper:
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
-                if response_obj["usage"] is not None:
-                    if self.final_usage_obj is None:
-                        self.final_usage_obj = response_obj["usage"]
-                    else:
-                        new_usage_dict = response_obj["usage"].model_dump()
-                        old_usage_dict = self.final_usage_obj.model_dump()
-
-                        for k, v in new_usage_dict.items():
-                            if v is not None:
-                                old_usage_dict[k] = v
-
-                        self.final_usage_obj = Usage(**old_usage_dict)
 
             elif self.custom_llm_provider == "text-completion-codestral":
                 if not isinstance(chunk, str):
@@ -1249,24 +1235,6 @@ class CustomStreamWrapper:
                         ].system_fingerprint
                 if response_obj["logprobs"] is not None:
                     model_response.choices[0].logprobs = response_obj["logprobs"]
-
-                if response_obj["usage"] is not None:
-                    # it has some text
-                    if self.final_usage_obj is None:
-                        self.final_usage_obj = response_obj["usage"]
-                    else:
-                        # get a dict of the new usage
-                        new_usage_dict = response_obj["usage"].model_dump()
-                        # get a dict of the old usage
-                        old_usage_dict = self.final_usage_obj.model_dump()
-
-                        # update old usage with new usage
-                        for k, v in new_usage_dict.items():
-                            if v is not None:
-                                old_usage_dict[k] = v
-
-                        # create a new usage object
-                        self.final_usage_obj = Usage(**old_usage_dict)
 
             model_response.model = self.model
             print_verbose(
@@ -1566,7 +1534,6 @@ class CustomStreamWrapper:
 
         except StopIteration:
             if self.sent_last_chunk is True:
-                # Use the final_usage_obj which contains cost information from OpenRouter
                 usage_to_use = self.final_usage_obj
                 complete_streaming_response = litellm.stream_chunk_builder(
                     chunks=self.chunks,
@@ -1609,12 +1576,9 @@ class CustomStreamWrapper:
                 self.sent_last_chunk = True
                 processed_chunk = self.finish_reason_handler()
                 if self.stream_options is None:  # add usage as hidden param
-                    # Use self.final_usage_obj which contains the cost information from OpenRouter
                     if self.final_usage_obj is not None:
                         processed_chunk._hidden_params["usage"] = self.final_usage_obj
                     else:
-                        # Fallback to building usage from chunks if no final_usage_obj
-                        # This maintains backward compatibility
                         processed_chunk._hidden_params["usage"] = None
                 ## LOGGING
                 executor.submit(
@@ -1758,7 +1722,6 @@ class CustomStreamWrapper:
         except (StopAsyncIteration, StopIteration):
             if self.sent_last_chunk is True:
                 # log the final chunk with accurate streaming values
-                # Use the final_usage_obj which contains cost information from OpenRouter
                 usage_to_use = self.final_usage_obj
                 complete_streaming_response = litellm.stream_chunk_builder(
                     chunks=self.chunks,
@@ -1805,18 +1768,6 @@ class CustomStreamWrapper:
             else:
                 self.sent_last_chunk = True
                 processed_chunk = self.finish_reason_handler()
-                if self.send_stream_usage and self.sent_stream_usage is False:
-                    self.sent_stream_usage = True
-                    model_response = self.model_response_creator()
-                    if self.final_usage_obj is not None:
-                        model_response.usage = self.final_usage_obj
-                        model_response.choices[
-                            0
-                        ].finish_reason = self.received_finish_reason
-                        model_response = self.set_model_id(
-                            self.response_id, model_response  # type: ignore
-                        )
-                    return model_response
                 return processed_chunk
         except httpx.TimeoutException as e:  # if httpx read timeout error occues
             traceback_exception = traceback.format_exc()

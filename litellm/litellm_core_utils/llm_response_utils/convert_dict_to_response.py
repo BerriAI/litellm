@@ -119,7 +119,6 @@ async def convert_to_streaming_response_async(response_object: Optional[dict] = 
     model_response_object.choices = choice_list
 
     if "usage" in response_object and response_object["usage"] is not None:
-        # Create Usage object with all fields from the usage dictionary
         usage_object = Usage(**response_object["usage"])
         setattr(model_response_object, "usage", usage_object)
 
@@ -166,7 +165,6 @@ def convert_to_streaming_response(response_object: Optional[dict] = None):
     model_response_object.choices = choice_list
 
     if "usage" in response_object and response_object["usage"] is not None:
-        # Create Usage object with all fields from the usage dictionary
         usage_object = Usage(**response_object["usage"])
         setattr(model_response_object, "usage", usage_object)
 
