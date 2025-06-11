@@ -993,7 +993,7 @@ class BaseLLMHTTPHandler:
         api_base: Optional[str],
         headers: Optional[Dict[str, Any]],
         provider_config: BaseAudioTranscriptionConfig,
-    ) -> tuple[dict, str, Optional[bytes], Optional[dict]]:
+    ) -> Tuple[dict, str, Optional[bytes], Optional[dict]]:
         """
         Shared logic for preparing audio transcription requests.
         Returns: (headers, complete_url, binary_data, json_data)
