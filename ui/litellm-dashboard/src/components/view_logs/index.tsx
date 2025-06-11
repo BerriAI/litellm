@@ -55,6 +55,14 @@ interface PrefetchedLog {
   response: any;
 }
 
+const quickSelectOptions = [
+  { label: "Last 15 Minutes", value: 15, unit: "minutes" },
+  { label: "Last Hour", value: 1, unit: "hours" },
+  { label: "Last 4 Hours", value: 4, unit: "hours" },
+  { label: "Last 24 Hours", value: 24, unit: "hours" },
+  { label: "Last 7 Days", value: 7, unit: "days" },
+];
+
 export default function SpendLogsTable({
   accessToken,
   token,
@@ -95,6 +103,7 @@ export default function SpendLogsTable({
     userRole && internalUserRoles.includes(userRole)
   );
   const [activeTab, setActiveTab] = useState("request logs");
+  const [autoRefreshTarget, setAutoRefreshTarget] = useState<string | null>(null);
 
   const [expandedRequestId, setExpandedRequestId] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
@@ -145,6 +154,23 @@ export default function SpendLogsTable({
       document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  useEffect(() => {
+    if (autoRefreshTarget) {
+      const option = quickSelectOptions.find(o => o.label === autoRefreshTarget);
+      if (!option) return;
+
+      const intervalId = setInterval(() => {
+        setStartTime(
+          moment()
+            .subtract(option.value, option.unit as any)
+            .format("YYYY-MM-DDTHH:mm")
+        );
+        setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
+      }, 5000);
+
+      return () => clearInterval(intervalId);
+    }
+  }, [autoRefreshTarget]);
 
   useEffect(() => {
     if (userRole && internalUserRoles.includes(userRole)) {
@@ -222,7 +248,6 @@ export default function SpendLogsTable({
       return response;
     },
     enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs",
-    refetchInterval: 5000,
     refetchIntervalInBackground: true,
   });
 
@@ -531,44 +556,80 @@ export default function SpendLogsTable({
                                 d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
                               />
                             </svg>
-                            {getTimeRangeDisplay(isCustomDate, startTime, endTime)}
+                            {autoRefreshTarget ? `Auto-refresh: ${autoRefreshTarget}` : getTimeRangeDisplay(isCustomDate, startTime, endTime)}
                           </button>
 
                           {quickSelectOpen && (
                             <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border p-2 z-50">
                               <div className="space-y-1">
-                                {[
-                                  { label: "Last 15 Minutes", value: 15, unit: "minutes" },
-                                  { label: "Last Hour", value: 1, unit: "hours" },
-                                  { label: "Last 4 Hours", value: 4, unit: "hours" },
-                                  { label: "Last 24 Hours", value: 24, unit: "hours" },
-                                  { label: "Last 7 Days", value: 7, unit: "days" },
-                                ].map((option) => (
-                                  <button
-                                    key={option.label}
-                                    className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${
-                                      getTimeRangeDisplay(isCustomDate, startTime, endTime) === option.label ? 'bg-blue-50 text-blue-600' : ''
-                                    }`}
-                                    onClick={() => {
-                                      setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
-                                      setStartTime(
-                                        moment()
-                                          .subtract(option.value, option.unit as any)
-                                          .format("YYYY-MM-DDTHH:mm")
-                                      );
-                                      setQuickSelectOpen(false);
-                                      setIsCustomDate(false);
-                                    }}
-                                  >
-                                    {option.label}
-                                  </button>
-                                ))}
+                                {quickSelectOptions.map((option) => {
+                                  const isAutoRefreshing = autoRefreshTarget === option.label;
+                                  return (
+                                    <div key={option.label} className="flex items-center justify-between group">
+                                      <button
+                                        className={`flex-grow px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${
+                                          getTimeRangeDisplay(isCustomDate, startTime, endTime) === option.label ? 'bg-blue-50 text-blue-600' : ''
+                                        }`}
+                                        onClick={() => {
+                                          setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
+                                          setStartTime(
+                                            moment()
+                                              .subtract(option.value, option.unit as any)
+                                              .format("YYYY-MM-DDTHH:mm")
+                                          );
+                                          setQuickSelectOpen(false);
+                                          setIsCustomDate(false);
+                                          setAutoRefreshTarget(null);
+                                        }}
+                                      >
+                                        {option.label}
+                                      </button>
+                                      <Tooltip title={isAutoRefreshing ? `Disable auto-refresh` : `Enable auto-refresh for ${option.label}. The logs will update automatically.`}>
+                                        <button
+                                          onClick={() => {
+                                            if (isAutoRefreshing) {
+                                              setAutoRefreshTarget(null);
+                                            } else {
+                                              setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
+                                              setStartTime(
+                                                  moment()
+                                                      .subtract(option.value, option.unit as any)
+                                                      .format("YYYY-MM-DDTHH:mm")
+                                              );
+                                              setAutoRefreshTarget(option.label);
+                                              setIsCustomDate(false);
+                                              setQuickSelectOpen(false);
+                                            }
+                                          }}
+                                          className={`ml-2 p-1 rounded-md ${isAutoRefreshing ? 'text-blue-600 bg-blue-100 hover:bg-blue-200' : 'text-green-500 hover:bg-green-100 opacity-0 group-hover:opacity-100'}`}
+                                        >
+                                          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
+                                            {isAutoRefreshing ? (
+                                              <path strokeLinecap="round" strokeLinejoin="round" d="M14.25 9v6m-4.5 0V9M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                            ) : (
+                                              <>
+                                                <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                                <path strokeLinecap="round" strokeLinejoin="round" d="M15.91 11.672a.375.375 0 010 .656l-5.603 3.113a.375.375 0 01-.557-.328V8.887c0-.286.307-.466.557-.327l5.603 3.112z" />
+                                              </>
+                                            )}
+                                          </svg>
+                                        </button>
+                                      </Tooltip>
+                                    </div>
+                                  );
+                                })}
                                 <div className="border-t my-2" />
                                 <button
                                   className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${
                                     isCustomDate ? 'bg-blue-50 text-blue-600' : ''
                                   }`}
-                                  onClick={() => setIsCustomDate(!isCustomDate)}
+                                  onClick={() => {
+                                      setIsCustomDate(!isCustomDate)
+                                      if (!isCustomDate) { // if it's about to become true
+                                          setAutoRefreshTarget(null);
+                                      }
+                                    }
+                                  }
                                 >
                                   Custom Range
                                 </button>
