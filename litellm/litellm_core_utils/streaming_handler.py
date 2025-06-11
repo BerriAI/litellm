@@ -1255,15 +1255,15 @@ class CustomStreamWrapper:
                                 prompt_tokens=response_obj["usage"].get(
                                     "prompt_tokens", None
                                 )
-                                              or None,
+                                or None,
                                 completion_tokens=response_obj["usage"].get(
                                     "completion_tokens", None
                                 )
-                                                  or None,
+                                or None,
                                 total_tokens=response_obj["usage"].get(
                                     "total_tokens", None
                                 )
-                                             or None,
+                                or None,
                             ),
                         )
                     elif isinstance(response_obj["usage"], Usage):
@@ -1789,7 +1789,7 @@ class CustomStreamWrapper:
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
                     return response
-                
+
                 asyncio.create_task(
                     self.logging_obj.async_success_handler(
                         complete_streaming_response,
