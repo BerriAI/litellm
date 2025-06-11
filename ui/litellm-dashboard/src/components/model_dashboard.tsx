@@ -9,12 +9,9 @@ import {
   TableHeaderCell,
   TableCell,
   TableBody,
-  Metric,
   Text,
   Grid,
-  Accordion,
-  AccordionHeader,
-  AccordionBody,
+  Col
 } from "@tremor/react";
 import { CredentialItem, credentialListCall, CredentialsResponse } from "./networking";
 
@@ -73,11 +70,6 @@ import {
   Select as AntdSelect,
   InputNumber,
   message,
-  Descriptions,
-  Tooltip,
-  Space,
-  Row,
-  Col,
 } from "antd";
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
@@ -257,6 +249,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<TableInstance<any>>(null);
+  const [selectedTabIndex, setSelectedTabIndex] = useState(0);
 
   const setProviderModelsFn = (provider: Providers) => {
     const _providerModels = getProviderModels(provider, modelMap);
@@ -1026,267 +1019,512 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   }
 
   return (
-    <div style={{ width: "100%", height: "100%" }}>
-      {selectedModelId ? (
-        <ModelInfoView 
-          modelId={selectedModelId}
-          editModel={true}
-          onClose={() => {
-            setSelectedModelId(null);
-            setEditModel(false);
-          }}
-          modelData={modelData.data.find((model: any) => model.model_info.id === selectedModelId)}
-          accessToken={accessToken}
-          userID={userID}
-          userRole={userRole}
-          setEditModalVisible={setEditModalVisible}
-          setSelectedModel={setSelectedModel}
-          onModelUpdate={(updatedModel) => {
-            // Update the model in the modelData.data array
-            const updatedModelData = {
-              ...modelData,
-              data: modelData.data.map((model: any) => 
-                model.model_info.id === updatedModel.model_info.id ? updatedModel : model
-              )
-            };
-            setModelData(updatedModelData);
-            // Trigger a refresh to update UI
-            handleRefreshClick();
-          }}
-        />
-      ) : (
-        <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
-          
-          <TabList className="flex justify-between mt-2 w-full items-center">
-            <div className="flex">
-              {all_admin_roles.includes(userRole) ? <Tab>All Models</Tab> : <Tab>Your Models</Tab>}
-              <Tab>Add Model</Tab>
-              {all_admin_roles.includes(userRole) && <Tab>LLM Credentials</Tab>}
-              {all_admin_roles.includes(userRole) && <Tab>
-                <pre>/health Models</pre>
-              </Tab>}
-              {all_admin_roles.includes(userRole) && <Tab>Model Analytics</Tab>}
-              {all_admin_roles.includes(userRole) && <Tab>Model Retry Settings</Tab>}
-              
-            </div>
+    <div className="w-full mx-4 h-[75vh]">
+      <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
+        <Col numColSpan={1} className="flex flex-col gap-2">
+        {all_admin_roles.includes(userRole || "") && (
+            <Button
+              className="w-fit"
+              onClick={() => setSelectedTabIndex(1)}
+            >
+              + Create New Model
+            </Button>
+          )}
+        {selectedModelId ? (
+          <ModelInfoView 
+            modelId={selectedModelId}
+            editModel={true}
+            onClose={() => {
+              setSelectedModelId(null);
+              setEditModel(false);
+            }}
+            modelData={modelData.data.find((model: any) => model.model_info.id === selectedModelId)}
+            accessToken={accessToken}
+            userID={userID}
+            userRole={userRole}
+            setEditModalVisible={setEditModalVisible}
+            setSelectedModel={setSelectedModel}
+            onModelUpdate={(updatedModel) => {
+              // Update the model in the modelData.data array
+              const updatedModelData = {
+                ...modelData,
+                data: modelData.data.map((model: any) => 
+                  model.model_info.id === updatedModel.model_info.id ? updatedModel : model
+                )
+              };
+              setModelData(updatedModelData);
+              // Trigger a refresh to update UI
+              handleRefreshClick();
+            }}
+          />
+        ) : (
+          <TabGroup index={selectedTabIndex} onIndexChange={setSelectedTabIndex} className="gap-2 h-[75vh] w-full ">
+            <TabList className="flex justify-between mt-2 w-full items-center">
+              <div className="flex">
+                {all_admin_roles.includes(userRole) ? <Tab>All Models</Tab> : <Tab>Your Models</Tab>}
+                <Tab>Add Model</Tab>
+                {all_admin_roles.includes(userRole) && <Tab>LLM Credentials</Tab>}
+                {all_admin_roles.includes(userRole) && <Tab>
+                  <pre>/health Models</pre>
+                </Tab>}
+                {all_admin_roles.includes(userRole) && <Tab>Model Analytics</Tab>}
+                {all_admin_roles.includes(userRole) && <Tab>Model Retry Settings</Tab>}
+                
+              </div>
 
-            <div className="flex items-center space-x-2">
-              {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
-              <Icon
-                icon={RefreshIcon} // Modify as necessary for correct icon name
-                variant="shadow"
-                size="xs"
-                className="self-center"
-                onClick={handleRefreshClick}
-              />
-            </div>
-          </TabList>
-          <TabPanels>
-            <TabPanel>
-              <Grid>
-                <div className="flex flex-col space-y-4">
-                  <div className="flex justify-between items-center mb-4">
-                    <div>
-                      <Title>Model Management</Title>
-                      {!all_admin_roles.includes(userRole) ? (
-                        <Text className="text-tremor-content">
-                          Add models for teams you are an admin for.
-                        </Text>
-                      ) : (
-                        <Text className="text-tremor-content">
-                          Add and manage models for the proxy
-                        </Text>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="bg-white rounded-lg shadow">
-                    <div className="border-b px-6 py-4">
-                      <div className="flex flex-col space-y-4">
-                        {/* Search and Filter Controls */}
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            {/* Model Name Filter */}
-                            <div className="flex items-center gap-2">
-                              <Text>Filter by Public Model Name:</Text>
-                              <Select
-                                className="w-64"
-                                defaultValue={selectedModelGroup ?? "all"}
-                                onValueChange={(value) => setSelectedModelGroup(value === "all" ? "all" : value)}
-                                value={selectedModelGroup ?? "all"}
-                              >
-                                <SelectItem value="all">All Models</SelectItem>
-                                <SelectItem value="wildcard">Wildcard Models (*)</SelectItem>
-                                {availableModelGroups.map((group, idx) => (
-                                  <SelectItem
-                                    key={idx}
-                                    value={group}
-                                  >
-                                    {group}
-                                  </SelectItem>
-                                ))}
-                              </Select>
-                            </div>
-
-                            {/* Team Filter */}
-                            <div className="flex items-center gap-2">
-                              <Text>Filter by Team:</Text>
-                              <Select
-                                className="w-64"
-                                defaultValue="all"
-                                value={selectedTeamFilter ?? "all"}
-                                onValueChange={(value) => setSelectedTeamFilter(value === "all" ? null : value)}
-                              >
-                                <SelectItem value="all">All Teams</SelectItem>
-                                {teams?.filter(team => team.team_id).map((team) => (
-                                  <SelectItem
-                                    key={team.team_id}
-                                    value={team.team_id}
-                                  >
-                                    {team.team_alias 
-                                      ? `${team.team_alias} (${team.team_id.slice(0, 8)}...)`
-                                      : `Team ${team.team_id.slice(0, 8)}...`
-                                    }
-                                  </SelectItem>
-                                ))}
-                              </Select>
-                            </div>
-                          </div>
-                          
-                          {/* Column Selector will be rendered here */}
-                          {/* <div className="relative" ref={dropdownRef}>
-                            <button
-                              onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                            >
-                              <TableIcon className="h-4 w-4" />
-                              Columns
-                            </button>
-                            {isDropdownOpen && tableRef.current && (
-                              <div className="absolute right-0 mt-2 w-56 bg-white rounded-md shadow-lg ring-1 ring-black ring-opacity-5 z-50">
-                                <div className="py-1">
-                                  {tableRef.current.getAllLeafColumns().map((column: any) => {
-                                    if (column.id === 'actions') return null;
-                                    return (
-                                      <div
-                                        key={column.id}
-                                        className="flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
-                                        onClick={() => column.toggleVisibility()}
-                                      >
-                                        <input
-                                          type="checkbox"
-                                          checked={column.getIsVisible()}
-                                          onChange={() => column.toggleVisibility()}
-                                          className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                                        />
-                                        <span className="ml-2">
-                                          {typeof column.columnDef.header === 'string' 
-                                            ? column.columnDef.header 
-                                            : column.columnDef.header?.props?.children || column.id}
-                                        </span>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            )}
-                          </div> */}
-                        </div>
-
-                        {/* Results Count */}
-                        <div className="flex justify-between items-center">
-                          <Text className="text-sm text-gray-700">
-                            Showing {modelData && modelData.data.length > 0 ? modelData.data.length : 0} results
+              <div className="flex items-center space-x-2">
+                {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
+                <Icon
+                  icon={RefreshIcon} // Modify as necessary for correct icon name
+                  variant="shadow"
+                  size="xs"
+                  className="self-center"
+                  onClick={handleRefreshClick}
+                />
+              </div>
+            </TabList>
+            <TabPanels>
+              <TabPanel>
+                <Grid>
+                  <div className="flex flex-col space-y-4">
+                    <div className="flex justify-between items-center mb-4">
+                      <div>
+                        <Title>Model Management</Title>
+                        {!all_admin_roles.includes(userRole) ? (
+                          <Text className="text-tremor-content">
+                            Add models for teams you are an admin for.
                           </Text>
-                        </div>
+                        ) : (
+                          <Text className="text-tremor-content">
+                            Add and manage models for the proxy
+                          </Text>
+                        )}
                       </div>
                     </div>
 
-                    <ModelDataTable
-                      columns={columns(
-                        userRole,
-                        userID,
-                        premiumUser,
-                        setSelectedModelId,
-                        setSelectedTeamId,
-                        getDisplayModelName,
-                        handleEditClick,
-                        handleRefreshClick,
-                        setEditModel,
-                      )}
-                      data={modelData.data.filter(
-                        (model: any) => (
-                          (
-                            selectedModelGroup === "all" || 
-                            !selectedModelGroup ||
-                            (selectedModelGroup === "wildcard" && model.model_name.includes('*')) ||
-                            model.model_name === selectedModelGroup
-                          ) &&
-                          (selectedTeamFilter === "all" || model.model_info["team_id"] === selectedTeamFilter || !selectedTeamFilter)
-                        )
-                      )}
-                      isLoading={false}
-                      table={tableRef}
-                    />
-                  </div>
-                </div>
-              </Grid>
-            </TabPanel>
-            <TabPanel className="h-full">
-              <AddModelTab
-                form={form}
-                handleOk={handleOk}
-                selectedProvider={selectedProvider}
-                setSelectedProvider={setSelectedProvider}
-                providerModels={providerModels}
-                setProviderModelsFn={setProviderModelsFn}
-                getPlaceholder={getPlaceholder}
-                uploadProps={uploadProps}
-                showAdvancedSettings={showAdvancedSettings}
-                setShowAdvancedSettings={setShowAdvancedSettings}
-                teams={teams}
-                credentials={credentialsList}
-                accessToken={accessToken}
-                userRole={userRole}
-              />
-            </TabPanel>
-            <TabPanel>
-              <CredentialsPanel accessToken={accessToken} uploadProps={uploadProps} credentialList={credentialsList} fetchCredentials={fetchCredentials} />
-            </TabPanel>
-            <TabPanel>
-              <Card>
-                <Text>
-                  `/health` will run a very small request through your models
-                  configured on litellm
-                </Text>
+                    <div className="bg-white rounded-lg shadow">
+                      <div className="border-b px-6 py-4">
+                        <div className="flex flex-col space-y-4">
+                          {/* Search and Filter Controls */}
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              {/* Model Name Filter */}
+                              <div className="flex items-center gap-2">
+                                <Text>Filter by Public Model Name:</Text>
+                                <Select
+                                  className="w-64"
+                                  defaultValue={selectedModelGroup ?? "all"}
+                                  onValueChange={(value) => setSelectedModelGroup(value === "all" ? "all" : value)}
+                                  value={selectedModelGroup ?? "all"}
+                                >
+                                  <SelectItem value="all">All Models</SelectItem>
+                                  <SelectItem value="wildcard">Wildcard Models (*)</SelectItem>
+                                  {availableModelGroups.map((group, idx) => (
+                                    <SelectItem
+                                      key={idx}
+                                      value={group}
+                                    >
+                                      {group}
+                                    </SelectItem>
+                                  ))}
+                                </Select>
+                              </div>
 
-                <Button onClick={runHealthCheck}>Run `/health`</Button>
-                {healthCheckResponse && (
-                  <pre>{JSON.stringify(healthCheckResponse, null, 2)}</pre>
-                )}
-              </Card>
-            </TabPanel>
-            <TabPanel>
-              <Grid numItems={4} className="mt-2 mb-2">
-                <Col>
-                  <Text>Select Time Range</Text>
-                  <DateRangePicker
-                    enableSelect={true}
-                    value={dateValue}
-                    className="mr-2"
-                    onValueChange={(value) => {
-                      setDateValue(value);
-                      updateModelMetrics(
-                        selectedModelGroup,
-                        value.from,
-                        value.to
-                      ); // Call updateModelMetrics with the new date range
+                              {/* Team Filter */}
+                              <div className="flex items-center gap-2">
+                                <Text>Filter by Team:</Text>
+                                <Select
+                                  className="w-64"
+                                  defaultValue="all"
+                                  value={selectedTeamFilter ?? "all"}
+                                  onValueChange={(value) => setSelectedTeamFilter(value === "all" ? null : value)}
+                                >
+                                  <SelectItem value="all">All Teams</SelectItem>
+                                  {teams?.filter(team => team.team_id).map((team) => (
+                                    <SelectItem
+                                      key={team.team_id}
+                                      value={team.team_id}
+                                    >
+                                      {team.team_alias 
+                                        ? `${team.team_alias} (${team.team_id.slice(0, 8)}...)`
+                                        : `Team ${team.team_id.slice(0, 8)}...`
+                                      }
+                                    </SelectItem>
+                                  ))}
+                                </Select>
+                              </div>
+                            </div>
+                            
+                            {/* Column Selector will be rendered here */}
+                            {/* <div className="relative" ref={dropdownRef}>
+                              <button
+                                onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                                className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                              >
+                                <TableIcon className="h-4 w-4" />
+                                Columns
+                              </button>
+                              {isDropdownOpen && const [selectedTabIndex, setSelectedTabIndex] = useState(0);.current && (
+                                <div className="absolute right-0 mt-2 w-56 bg-white rounded-md shadow-lg ring-1 ring-black ring-opacity-5 z-50">
+                                  <div className="py-1">
+                                    {tableRef.current.getAllLeafColumns().map((column: any) => {
+                                      if (column.id === 'actions') return null;
+                                      return (
+                                        <div
+                                          key={column.id}
+                                          className="flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+                                          onClick={() => column.toggleVisibility()}
+                                        >
+                                          <input
+                                            type="checkbox"
+                                            checked={column.getIsVisible()}
+                                            onChange={() => column.toggleVisibility()}
+                                            className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                          />
+                                          <span className="ml-2">
+                                            {typeof column.columnDef.header === 'string' 
+                                              ? column.columnDef.header 
+                                              : column.columnDef.header?.props?.children || column.id}
+                                          </span>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+                            </div> */}
+                          </div>
+
+                          {/* Results Count */}
+                          <div className="flex justify-between items-center">
+                            <Text className="text-sm text-gray-700">
+                              Showing {modelData && modelData.data.length > 0 ? modelData.data.length : 0} results
+                            </Text>
+                          </div>
+                        </div>
+                      </div>
+
+                      <ModelDataTable
+                        columns={columns(
+                          userRole,
+                          userID,
+                          premiumUser,
+                          setSelectedModelId,
+                          setSelectedTeamId,
+                          getDisplayModelName,
+                          handleEditClick,
+                          handleRefreshClick,
+                          setEditModel,
+                        )}
+                        data={modelData.data.filter(
+                          (model: any) => (
+                            (
+                              selectedModelGroup === "all" || 
+                              !selectedModelGroup ||
+                                (selectedModelGroup === "wildcard" && model.model_name.includes('*')) ||
+                              model.model_name === selectedModelGroup
+                            ) &&
+                            (selectedTeamFilter === "all" || model.model_info["team_id"] === selectedTeamFilter || !selectedTeamFilter)
+                          )
+                        )}
+                        isLoading={false}
+                        table={tableRef}
+                      />
+                    </div>
+                  </div>
+                </Grid>
+              </TabPanel>
+              <TabPanel className="h-full">
+                <AddModelTab
+                  form={form}
+                  handleOk={handleOk}
+                  selectedProvider={selectedProvider}
+                  setSelectedProvider={setSelectedProvider}
+                  providerModels={providerModels}
+                  setProviderModelsFn={setProviderModelsFn}
+                  getPlaceholder={getPlaceholder}
+                  uploadProps={uploadProps}
+                  showAdvancedSettings={showAdvancedSettings}
+                  setShowAdvancedSettings={setShowAdvancedSettings}
+                  teams={teams}
+                  credentials={credentialsList}
+                  accessToken={accessToken}
+                  userRole={userRole}
+                />
+              </TabPanel>
+              <TabPanel>
+                <CredentialsPanel accessToken={accessToken} uploadProps={uploadProps} credentialList={credentialsList} fetchCredentials={fetchCredentials} />
+              </TabPanel>
+              <TabPanel>
+                <Card>
+                  <Text>
+                    `/health` will run a very small request through your models
+                    configured on litellm
+                  </Text>
+
+                  <Button onClick={runHealthCheck}>Run `/health`</Button>
+                  {healthCheckResponse && (
+                    <pre>{JSON.stringify(healthCheckResponse, null, 2)}</pre>
+                  )}
+                </Card>
+              </TabPanel>
+              <TabPanel>
+                <Grid numItems={4} className="mt-2 mb-2">
+                  <Col>
+                    <Text>Select Time Range</Text>
+                    <DateRangePicker
+                      enableSelect={true}
+                      value={dateValue}
+                      className="mr-2"
+                      onValueChange={(value) => {
+                        setDateValue(value);
+                        updateModelMetrics(
+                          selectedModelGroup,
+                          value.from,
+                          value.to
+                        ); // Call updateModelMetrics with the new date range
+                      }}
+                    />
+                  </Col>
+                  <Col className="ml-2">
+                    <Text>Select Model Group</Text>
+                    <Select
+                      defaultValue={
+                        selectedModelGroup
+                          ? selectedModelGroup
+                          : availableModelGroups[0]
+                      }
+                      value={
+                        selectedModelGroup
+                          ? selectedModelGroup
+                          : availableModelGroups[0]
+                      }
+                    >
+                      {availableModelGroups.map((group, idx) => (
+                        <SelectItem
+                          key={idx}
+                          value={group}
+                          onClick={() =>
+                            updateModelMetrics(group, dateValue.from, dateValue.to)
+                          }
+                        >
+                          {group}
+                        </SelectItem>
+                      ))}
+                    </Select>
+                  </Col>
+                  <Col>
+                  <Popover
+                    trigger="click" content={FilterByContent}
+                    overlayStyle={{
+                      width: "20vw"
                     }}
-                  />
-                </Col>
-                <Col className="ml-2">
-                  <Text>Select Model Group</Text>
+                    >
+                  <Button
+                  icon={FilterIcon}
+                  size="md"
+                  variant="secondary"
+                  className="mt-4 ml-2"
+                  style={{
+                    border: "none",
+                  }}
+                  onClick={() => setShowAdvancedFilters(true)}
+                    >
+                  </Button>      
+                  </Popover>
+                  </Col>
+
+                  </Grid>
+
+
+                <Grid numItems={2}>
+                  <Col>
+                    <Card className="mr-2 max-h-[400px] min-h-[400px]">
+                      <TabGroup>
+                        <TabList variant="line" defaultValue="1">
+                          <Tab value="1">Avg. Latency per Token</Tab>
+                          <Tab value="2">Time to first token</Tab>
+                        </TabList>
+                        <TabPanels>
+                          <TabPanel>
+                            <p className="text-gray-500 italic"> (seconds/token)</p>
+                            <Text className="text-gray-500 italic mt-1 mb-1">
+                              average Latency for successfull requests divided by
+                              the total tokens
+                            </Text>
+                            {modelMetrics && modelMetricsCategories && (
+                              <AreaChart
+                                title="Model Latency"
+                                className="h-72"
+                                data={modelMetrics}
+                                showLegend={false}
+                                index="date"
+                                categories={modelMetricsCategories}
+                                connectNulls={true}
+                                customTooltip={customTooltip}
+                              />
+                            )}
+                          </TabPanel>
+                          <TabPanel>
+                            <TimeToFirstToken
+                              modelMetrics={streamingModelMetrics}
+                              modelMetricsCategories={
+                                streamingModelMetricsCategories
+                              }
+                              customTooltip={customTooltip}
+                              premiumUser={premiumUser}
+                            />
+                          </TabPanel>
+                        </TabPanels>
+                      </TabGroup>
+                    </Card>
+                  </Col>
+                  <Col>
+                    <Card className="ml-2 max-h-[400px] min-h-[400px]  overflow-y-auto">
+                      <Table>
+                        <TableHead>
+                          <TableRow>
+                            <TableHeaderCell>Deployment</TableHeaderCell>
+                            <TableHeaderCell>Success Responses</TableHeaderCell>
+                            <TableHeaderCell>
+                              Slow Responses <p>Success Responses taking 600+s</p>
+                            </TableHeaderCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {slowResponsesData.map((metric, idx) => (
+                            <TableRow key={idx}>
+                              <TableCell>{metric.api_base}</TableCell>
+                              <TableCell>{metric.total_count}</TableCell>
+                              <TableCell>{metric.slow_count}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </Card>
+                  </Col>
+                </Grid>
+                <Grid numItems={1} className="gap-2 w-full mt-2">
+                <Card>
+
+                <Title>All Exceptions for {selectedModelGroup}</Title>
+                
+                <BarChart
+                        className="h-60"
+                        data={modelExceptions}
+                        index="model"
+                        categories={allExceptions}
+                        stack={true}
+                        
+                        yAxisWidth={30}
+                  /> 
+                              </Card>
+              
+                </Grid>
+
+
+                <Grid numItems={1} className="gap-2 w-full mt-2">
+                    <Card>
+                    <Title>All Up Rate Limit Errors (429) for {selectedModelGroup}</Title>
+                    <Grid numItems={1}>
+                    <Col>
+                    <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Num Rate Limit Errors { (globalExceptionData.sum_num_rate_limit_exceptions)}</Subtitle>
+                    <BarChart
+                        className="h-40"
+                        data={globalExceptionData.daily_data}
+                        index="date"
+                        colors={['rose']}
+                        categories={['num_rate_limit_exceptions']}
+                        onValueChange={(v) => console.log(v)}
+                      />
+                      </Col>
+                      <Col>
+
+                  
+
+                    </Col>
+
+                    </Grid>
+                    
+
+                    </Card>
+
+                    {
+                      premiumUser ? ( 
+                        <>
+                        {globalExceptionPerDeployment.map((globalActivity, index) => (
+                      <Card key={index}>
+                        <Title>{globalActivity.api_base ? globalActivity.api_base : "Unknown API Base"}</Title>
+                        <Grid numItems={1}>
+                          <Col>
+                            <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Num Rate Limit Errors (429) {(globalActivity.sum_num_rate_limit_exceptions)}</Subtitle>
+                            <BarChart
+                              className="h-40"
+                              data={globalActivity.daily_data}
+                              index="date"
+                              colors={['rose']}
+                              categories={['num_rate_limit_exceptions']}
+                  
+                              onValueChange={(v) => console.log(v)}
+                            />
+                            
+                          </Col>
+                        </Grid>
+                      </Card>
+                    ))}
+                        </>
+                      ) : 
+                      <>
+                      {globalExceptionPerDeployment && globalExceptionPerDeployment.length > 0 &&
+                        globalExceptionPerDeployment.slice(0, 1).map((globalActivity, index) => (
+                          <Card key={index}>
+                            <Title>✨ Rate Limit Errors by Deployment</Title>
+                            <p className="mb-2 text-gray-500 italic text-[12px]">Upgrade to see exceptions for all deployments</p>
+                            <Button variant="primary" className="mb-2">
+                              <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
+                                Get Free Trial
+                              </a>
+                            </Button>
+                            <Card>
+                            <Title>{globalActivity.api_base}</Title>
+                            <Grid numItems={1}>
+                              <Col>
+                                <Subtitle
+                                  style={{
+                                    fontSize: "15px",
+                                    fontWeight: "normal",
+                                    color: "#535452",
+                                  }}
+                                >
+                                  Num Rate Limit Errors {(globalActivity.sum_num_rate_limit_exceptions)}
+                                </Subtitle>
+                                <BarChart
+                                    className="h-40"
+                                    data={globalActivity.daily_data}
+                                    index="date"
+                                    colors={['rose']}
+                                    categories={['num_rate_limit_exceptions']}
+                  
+                                    onValueChange={(v) => console.log(v)}
+                                  />
+                              </Col>
+                              
+                              
+                            </Grid>
+                            </Card>
+                          </Card>
+                        ))}
+                    </>
+                    }              
+                  </Grid>
+                  
+              </TabPanel>
+              <TabPanel>
+                <div className="flex items-center">
+                  <Text>Filter by Public Model Name</Text>
+
                   <Select
+                    className="mb-4 mt-2 ml-2 w-50"
                     defaultValue={
                       selectedModelGroup
                         ? selectedModelGroup
@@ -1297,321 +1535,89 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                         ? selectedModelGroup
                         : availableModelGroups[0]
                     }
+                    onValueChange={(value) => setSelectedModelGroup(value)}
                   >
                     {availableModelGroups.map((group, idx) => (
                       <SelectItem
                         key={idx}
                         value={group}
-                        onClick={() =>
-                          updateModelMetrics(group, dateValue.from, dateValue.to)
-                        }
+                        onClick={() => setSelectedModelGroup(group)}
                       >
                         {group}
                       </SelectItem>
                     ))}
                   </Select>
-                </Col>
-                <Col>
-                <Popover
-                  trigger="click" content={FilterByContent}
-                  overlayStyle={{
-                    width: "20vw"
-                  }}
-                  >
-                <Button
-                icon={FilterIcon}
-                size="md"
-                variant="secondary"
-                className="mt-4 ml-2"
-                style={{
-                  border: "none",
-                }}
-                onClick={() => setShowAdvancedFilters(true)}
-                  >
-                </Button>      
-                </Popover>
-                </Col>
+                </div>
 
-                </Grid>
+                <Title>Retry Policy for {selectedModelGroup}</Title>
+                <Text className="mb-6">
+                  How many retries should be attempted based on the Exception
+                </Text>
+                {retry_policy_map && (
+                  <table>
+                    <tbody>
+                      {Object.entries(retry_policy_map).map(
+                        ([exceptionType, retryPolicyKey], idx) => {
+                          let retryCount =
+                            modelGroupRetryPolicy?.[selectedModelGroup!]?.[
+                              retryPolicyKey
+                            ];
+                          if (retryCount == null) {
+                            retryCount = defaultRetry;
+                          }
 
-
-              <Grid numItems={2}>
-                <Col>
-                  <Card className="mr-2 max-h-[400px] min-h-[400px]">
-                    <TabGroup>
-                      <TabList variant="line" defaultValue="1">
-                        <Tab value="1">Avg. Latency per Token</Tab>
-                        <Tab value="2">Time to first token</Tab>
-                      </TabList>
-                      <TabPanels>
-                        <TabPanel>
-                          <p className="text-gray-500 italic"> (seconds/token)</p>
-                          <Text className="text-gray-500 italic mt-1 mb-1">
-                            average Latency for successfull requests divided by
-                            the total tokens
-                          </Text>
-                          {modelMetrics && modelMetricsCategories && (
-                            <AreaChart
-                              title="Model Latency"
-                              className="h-72"
-                              data={modelMetrics}
-                              showLegend={false}
-                              index="date"
-                              categories={modelMetricsCategories}
-                              connectNulls={true}
-                              customTooltip={customTooltip}
-                            />
-                          )}
-                        </TabPanel>
-                        <TabPanel>
-                          <TimeToFirstToken
-                            modelMetrics={streamingModelMetrics}
-                            modelMetricsCategories={
-                              streamingModelMetricsCategories
-                            }
-                            customTooltip={customTooltip}
-                            premiumUser={premiumUser}
-                          />
-                        </TabPanel>
-                      </TabPanels>
-                    </TabGroup>
-                  </Card>
-                </Col>
-                <Col>
-                  <Card className="ml-2 max-h-[400px] min-h-[400px]  overflow-y-auto">
-                    <Table>
-                      <TableHead>
-                        <TableRow>
-                          <TableHeaderCell>Deployment</TableHeaderCell>
-                          <TableHeaderCell>Success Responses</TableHeaderCell>
-                          <TableHeaderCell>
-                            Slow Responses <p>Success Responses taking 600+s</p>
-                          </TableHeaderCell>
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
-                        {slowResponsesData.map((metric, idx) => (
-                          <TableRow key={idx}>
-                            <TableCell>{metric.api_base}</TableCell>
-                            <TableCell>{metric.total_count}</TableCell>
-                            <TableCell>{metric.slow_count}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </Card>
-                </Col>
-              </Grid>
-              <Grid numItems={1} className="gap-2 w-full mt-2">
-              <Card>
-
-              <Title>All Exceptions for {selectedModelGroup}</Title>
-               
-              <BarChart
-                      className="h-60"
-                      data={modelExceptions}
-                      index="model"
-                      categories={allExceptions}
-                      stack={true}
-                      
-                      yAxisWidth={30}
-                /> 
-                            </Card>
-            
-              </Grid>
-
-
-              <Grid numItems={1} className="gap-2 w-full mt-2">
-                  <Card>
-                  <Title>All Up Rate Limit Errors (429) for {selectedModelGroup}</Title>
-                  <Grid numItems={1}>
-                  <Col>
-                  <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Num Rate Limit Errors { (globalExceptionData.sum_num_rate_limit_exceptions)}</Subtitle>
-                  <BarChart
-                      className="h-40"
-                      data={globalExceptionData.daily_data}
-                      index="date"
-                      colors={['rose']}
-                      categories={['num_rate_limit_exceptions']}
-                      onValueChange={(v) => console.log(v)}
-                    />
-                    </Col>
-                    <Col>
-
-                 
-
-                  </Col>
-
-                  </Grid>
-                  
-
-                  </Card>
-
-                  {
-                    premiumUser ? ( 
-                      <>
-                      {globalExceptionPerDeployment.map((globalActivity, index) => (
-                    <Card key={index}>
-                      <Title>{globalActivity.api_base ? globalActivity.api_base : "Unknown API Base"}</Title>
-                      <Grid numItems={1}>
-                        <Col>
-                          <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Num Rate Limit Errors (429) {(globalActivity.sum_num_rate_limit_exceptions)}</Subtitle>
-                          <BarChart
-                            className="h-40"
-                            data={globalActivity.daily_data}
-                            index="date"
-                            colors={['rose']}
-                            categories={['num_rate_limit_exceptions']}
-                
-                            onValueChange={(v) => console.log(v)}
-                          />
-                          
-                        </Col>
-                      </Grid>
-                    </Card>
-                  ))}
-                      </>
-                    ) : 
-                    <>
-                    {globalExceptionPerDeployment && globalExceptionPerDeployment.length > 0 &&
-                      globalExceptionPerDeployment.slice(0, 1).map((globalActivity, index) => (
-                        <Card key={index}>
-                          <Title>✨ Rate Limit Errors by Deployment</Title>
-                          <p className="mb-2 text-gray-500 italic text-[12px]">Upgrade to see exceptions for all deployments</p>
-                          <Button variant="primary" className="mb-2">
-                            <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
-                              Get Free Trial
-                            </a>
-                          </Button>
-                          <Card>
-                          <Title>{globalActivity.api_base}</Title>
-                          <Grid numItems={1}>
-                            <Col>
-                              <Subtitle
-                                style={{
-                                  fontSize: "15px",
-                                  fontWeight: "normal",
-                                  color: "#535452",
-                                }}
-                              >
-                                Num Rate Limit Errors {(globalActivity.sum_num_rate_limit_exceptions)}
-                              </Subtitle>
-                              <BarChart
-                                  className="h-40"
-                                  data={globalActivity.daily_data}
-                                  index="date"
-                                  colors={['rose']}
-                                  categories={['num_rate_limit_exceptions']}
-                
-                                  onValueChange={(v) => console.log(v)}
+                          return (
+                            <tr
+                              key={idx}
+                              className="flex justify-between items-center mt-2"
+                            >
+                              <td>
+                                <Text>{exceptionType}</Text>
+                              </td>
+                              <td>
+                                <InputNumber
+                                  className="ml-5"
+                                  value={retryCount}
+                                  min={0}
+                                  step={1}
+                                  onChange={(value) => {
+                                    setModelGroupRetryPolicy(
+                                      (prevModelGroupRetryPolicy) => {
+                                        const prevRetryPolicy =
+                                          prevModelGroupRetryPolicy?.[
+                                            selectedModelGroup!
+                                          ] ?? {};
+                                        return {
+                                          ...(prevModelGroupRetryPolicy ?? {}),
+                                          [selectedModelGroup!]: {
+                                            ...prevRetryPolicy,
+                                            [retryPolicyKey!]: value,
+                                          },
+                                        } as RetryPolicyObject;
+                                      }
+                                    );
+                                  }}
                                 />
-                            </Col>
-                            
-                            
-                          </Grid>
-                          </Card>
-                        </Card>
-                      ))}
-                  </>
-                  }              
-                </Grid>
-                
-            </TabPanel>
-            <TabPanel>
-              <div className="flex items-center">
-                <Text>Filter by Public Model Name</Text>
-
-                <Select
-                  className="mb-4 mt-2 ml-2 w-50"
-                  defaultValue={
-                    selectedModelGroup
-                      ? selectedModelGroup
-                      : availableModelGroups[0]
-                  }
-                  value={
-                    selectedModelGroup
-                      ? selectedModelGroup
-                      : availableModelGroups[0]
-                  }
-                  onValueChange={(value) => setSelectedModelGroup(value)}
-                >
-                  {availableModelGroups.map((group, idx) => (
-                    <SelectItem
-                      key={idx}
-                      value={group}
-                      onClick={() => setSelectedModelGroup(group)}
-                    >
-                      {group}
-                    </SelectItem>
-                  ))}
-                </Select>
-              </div>
-
-              <Title>Retry Policy for {selectedModelGroup}</Title>
-              <Text className="mb-6">
-                How many retries should be attempted based on the Exception
-              </Text>
-              {retry_policy_map && (
-                <table>
-                  <tbody>
-                    {Object.entries(retry_policy_map).map(
-                      ([exceptionType, retryPolicyKey], idx) => {
-                        let retryCount =
-                          modelGroupRetryPolicy?.[selectedModelGroup!]?.[
-                            retryPolicyKey
-                          ];
-                        if (retryCount == null) {
-                          retryCount = defaultRetry;
+                              </td>
+                            </tr>
+                          );
                         }
-
-                        return (
-                          <tr
-                            key={idx}
-                            className="flex justify-between items-center mt-2"
-                          >
-                            <td>
-                              <Text>{exceptionType}</Text>
-                            </td>
-                            <td>
-                              <InputNumber
-                                className="ml-5"
-                                value={retryCount}
-                                min={0}
-                                step={1}
-                                onChange={(value) => {
-                                  setModelGroupRetryPolicy(
-                                    (prevModelGroupRetryPolicy) => {
-                                      const prevRetryPolicy =
-                                        prevModelGroupRetryPolicy?.[
-                                          selectedModelGroup!
-                                        ] ?? {};
-                                      return {
-                                        ...(prevModelGroupRetryPolicy ?? {}),
-                                        [selectedModelGroup!]: {
-                                          ...prevRetryPolicy,
-                                          [retryPolicyKey!]: value,
-                                        },
-                                      } as RetryPolicyObject;
-                                    }
-                                  );
-                                }}
-                              />
-                            </td>
-                          </tr>
-                        );
-                      }
-                    )}
-                  </tbody>
-                </table>
-              )}
-              <Button className="mt-6 mr-8" onClick={handleSaveRetrySettings}>
-                Save
-              </Button>
-            </TabPanel>
-            
-          </TabPanels>
-        </TabGroup>
-      )}
+                      )}
+                    </tbody>
+                  </table>
+                )}
+                <Button className="mt-6 mr-8" onClick={handleSaveRetrySettings}>
+                  Save
+                </Button>
+              </TabPanel>
+              
+            </TabPanels>
+          </TabGroup>
+        )}
+        </Col>
+      
+      </Grid>
+      
     </div>  
   );
 };

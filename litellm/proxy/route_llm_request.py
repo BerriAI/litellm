@@ -22,6 +22,7 @@ ROUTE_ENDPOINT_MAPPING = {
     "amoderation": "/moderations",
     "arerank": "/rerank",
     "aresponses": "/responses",
+    "alist_input_items": "/responses/{response_id}/input_items",
     "aimage_edit": "/images/edits",
 }
 
@@ -69,6 +70,7 @@ async def route_request(
         "aresponses",
         "aget_responses",
         "adelete_responses",
+        "alist_input_items",
         "_arealtime",  # private function for realtime API
         "aimage_edit",
     ],
@@ -134,7 +136,12 @@ async def route_request(
                 or len(llm_router.pattern_router.patterns) > 0
             ):
                 return getattr(llm_router, f"{route_type}")(**data)
-            elif route_type in ["amoderation", "aget_responses", "adelete_responses"]:
+            elif route_type in [
+                "amoderation",
+                "aget_responses",
+                "adelete_responses",
+                "alist_input_items",
+            ]:
                 # moderation endpoint does not require `model` parameter
                 return getattr(llm_router, f"{route_type}")(**data)
 
