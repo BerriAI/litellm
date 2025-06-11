@@ -135,6 +135,7 @@ class VertexPassthroughLoggingHandler:
             _json_response = httpx_response.json()
 
             litellm_prediction_response = ModelResponse()
+            
             if vertex_publisher_or_api_spec is not None:
                 vertex_ai_partner_model_config = get_vertex_ai_partner_model_config(
                     model=model,
