@@ -443,7 +443,9 @@ async def user_info(
 
     try:
         # Handle URL encoding properly by getting user_id from the original request
-        if user_id is not None:
+        if (
+            user_id is not None and " " in user_id
+        ):  # if user_id is not None and contains a space, get the user_id from the request - this is to handle the case where the user_id is encoded in the url
             user_id = get_user_id_from_request(request=request)
 
         if prisma_client is None:
