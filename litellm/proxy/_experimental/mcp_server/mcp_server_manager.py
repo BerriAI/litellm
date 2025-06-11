@@ -183,7 +183,7 @@ class MCPServerManager:
                 async with ClientSession(read_stream, write_stream) as session:
                     await session.initialize()
 
-                    if get_session_id:
+                    if get_session_id is not None:
                         session_id = get_session_id()
                         if session_id:
                             verbose_logger.debug(f"HTTP session ID: {session_id}")
@@ -247,7 +247,7 @@ class MCPServerManager:
                 async with ClientSession(read_stream, write_stream) as session:
                     await session.initialize()
 
-                    if get_session_id:
+                    if get_session_id is not None:
                         session_id = get_session_id()
                         if session_id:
                             verbose_logger.debug(
