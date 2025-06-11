@@ -17,9 +17,10 @@ class ResponsesToCompletionBridgeHandlerInputKwargs(TypedDict):
     headers: dict
     model_response: "ModelResponse"
     logging_obj: "LiteLLMLoggingObj"
+    custom_llm_provider: str
 
 
-class ResponsesToCompletionBridgeHandler(CustomLLM):
+class ResponsesToCompletionBridgeHandler:
     def __init__(self):
         from .transformation import LiteLLMResponsesTransformationHandler
 
@@ -35,6 +36,10 @@ class ResponsesToCompletionBridgeHandler(CustomLLM):
         model = kwargs.get("model")
         if model is None or not isinstance(model, str):
             raise ValueError("model is required")
+
+        custom_llm_provider = kwargs.get("custom_llm_provider")
+        if custom_llm_provider is None or not isinstance(custom_llm_provider, str):
+            raise ValueError("custom_llm_provider is required")
 
         messages = kwargs.get("messages")
         if messages is None or not isinstance(messages, list):
@@ -68,12 +73,21 @@ class ResponsesToCompletionBridgeHandler(CustomLLM):
             headers=headers,
             model_response=model_response,
             logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
         )
 
     def completion(
         self, *args, **kwargs
-    ) -> Union["ModelResponse", "CustomStreamWrapper"]:
+    ) -> Union[
+        Coroutine[Any, Any, Union["ModelResponse", "CustomStreamWrapper"]],
+        "ModelResponse",
+        "CustomStreamWrapper",
+    ]:
+        if kwargs.get("acompletion") is True:
+            return self.acompletion(**kwargs)
+
         from litellm import responses
+        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
         from litellm.types.llms.openai import ResponsesAPIResponse
 
         validated_kwargs = self.validate_input_kwargs(kwargs)
@@ -84,6 +98,7 @@ class ResponsesToCompletionBridgeHandler(CustomLLM):
         headers = validated_kwargs["headers"]
         model_response = validated_kwargs["model_response"]
         logging_obj = validated_kwargs["logging_obj"]
+        custom_llm_provider = validated_kwargs["custom_llm_provider"]
 
         request_data = self.transformation_handler.transform_request(
             model=model,
@@ -111,12 +126,24 @@ class ResponsesToCompletionBridgeHandler(CustomLLM):
                 json_mode=kwargs.get("json_mode"),
             )
         else:
-            raise ValueError(f"Unexpected response type: {type(result)}")
+            completion_stream = self.transformation_handler.get_model_response_iterator(
+                streaming_response=result,  # type: ignore
+                sync_stream=True,
+                json_mode=kwargs.get("json_mode"),
+            )
+            streamwrapper = CustomStreamWrapper(
+                completion_stream=completion_stream,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging_obj,
+            )
+            return streamwrapper
 
     async def acompletion(
         self, *args, **kwargs
-    ) -> Union[ModelResponse, "CustomStreamWrapper"]:
+    ) -> Union["ModelResponse", "CustomStreamWrapper"]:
         from litellm import aresponses
+        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
         from litellm.types.llms.openai import ResponsesAPIResponse
 
         validated_kwargs = self.validate_input_kwargs(kwargs)
@@ -127,6 +154,7 @@ class ResponsesToCompletionBridgeHandler(CustomLLM):
         headers = validated_kwargs["headers"]
         model_response = validated_kwargs["model_response"]
         logging_obj = validated_kwargs["logging_obj"]
+        custom_llm_provider = validated_kwargs["custom_llm_provider"]
 
         request_data = self.transformation_handler.transform_request(
             model=model,
@@ -155,7 +183,18 @@ class ResponsesToCompletionBridgeHandler(CustomLLM):
                 json_mode=kwargs.get("json_mode"),
             )
         else:
-            raise ValueError(f"Unexpected response type: {type(result)}")
+            completion_stream = self.transformation_handler.get_model_response_iterator(
+                streaming_response=result,  # type: ignore
+                sync_stream=False,
+                json_mode=kwargs.get("json_mode"),
+            )
+            streamwrapper = CustomStreamWrapper(
+                completion_stream=completion_stream,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging_obj,
+            )
+            return streamwrapper
 
 
 responses_api_bridge = ResponsesToCompletionBridgeHandler()

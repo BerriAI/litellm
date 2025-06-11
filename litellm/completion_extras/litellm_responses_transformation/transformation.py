@@ -1,6 +1,7 @@
 """
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
+import json
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -13,8 +14,6 @@ from typing import (
     Union,
     cast,
 )
-
-import httpx
 
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
@@ -34,6 +33,7 @@ if TYPE_CHECKING:
         ChatCompletionThinkingBlock,
         OpenAIMessageContentListBlock,
     )
+    from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
 
 class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
@@ -266,11 +266,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], "ModelResponse"],
+        streaming_response: Union[
+            Iterator[str], AsyncIterator[str], "ModelResponse", "BaseModel"
+        ],
         sync_stream: bool,
         json_mode: Optional[bool] = False,
     ) -> BaseModelResponseIterator:
-        return super().get_model_response_iterator(
+        return OpenAiResponsesToChatCompletionStreamIterator(
             streaming_response, sync_stream, json_mode
         )
 
@@ -391,3 +393,159 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         }
 
         return status_mapping.get(status, "stop")
+
+
+class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
+    def __init__(
+        self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False
+    ):
+        super().__init__(streaming_response, sync_stream, json_mode)
+
+    def _handle_string_chunk(
+        self, str_line: Union[str, "BaseModel"]
+    ) -> Union["GenericStreamingChunk", "ModelResponseStream"]:
+        from pydantic import BaseModel
+
+        if isinstance(str_line, BaseModel):
+            return self.chunk_parser(str_line.model_dump())
+
+        if not str_line or str_line.startswith("event:"):
+            # ignore.
+            return GenericStreamingChunk(
+                text="", tool_use=None, is_finished=False, finish_reason="", usage=None
+            )
+        index = str_line.find("data:")
+        if index != -1:
+            str_line = str_line[index + 5 :]
+
+        return self.chunk_parser(json.loads(str_line))
+
+    def chunk_parser(
+        self, chunk: dict
+    ) -> Union["GenericStreamingChunk", "ModelResponseStream"]:
+        # Transform responses API streaming chunk to chat completion format
+        from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
+        from litellm.types.utils import (
+            ChatCompletionToolCallChunk,
+            GenericStreamingChunk,
+        )
+
+        verbose_logger.debug(
+            f"Chat provider: transform_streaming_response called with chunk: {chunk}"
+        )
+        parsed_chunk = chunk
+
+        if not parsed_chunk:
+            raise ValueError("Chat provider: Empty parsed_chunk")
+
+        if not isinstance(parsed_chunk, dict):
+            raise ValueError(f"Chat provider: Invalid chunk type {type(parsed_chunk)}")
+
+        # Handle different event types from responses API
+        event_type = parsed_chunk.get("type")
+        verbose_logger.debug(f"Chat provider: Processing event type: {event_type}")
+
+        if event_type == "response.created":
+            # Initial response creation event
+            verbose_logger.debug(f"Chat provider: response.created -> {chunk}")
+            return GenericStreamingChunk(
+                text="", tool_use=None, is_finished=False, finish_reason="", usage=None
+            )
+        elif event_type == "response.output_item.added":
+            # New output item added
+            output_item = parsed_chunk.get("item", {})
+            if output_item.get("type") == "function_call":
+                return GenericStreamingChunk(
+                    text="",
+                    tool_use=ChatCompletionToolCallChunk(
+                        id=output_item.get("call_id"),
+                        index=0,
+                        type="function",
+                        function=ChatCompletionToolCallFunctionChunk(
+                            name=parsed_chunk.get("name", None),
+                            arguments=parsed_chunk.get("arguments", ""),
+                        ),
+                    ),
+                    is_finished=False,
+                    finish_reason="",
+                    usage=None,
+                )
+            elif output_item.get("type") == "message":
+                pass
+            elif output_item.get("type") == "reasoning":
+                pass
+            else:
+                raise ValueError(f"Chat provider: Invalid output_item  {output_item}")
+        elif event_type == "response.function_call_arguments.delta":
+            content_part: Optional[str] = parsed_chunk.get("delta", None)
+            if content_part:
+                return GenericStreamingChunk(
+                    text="",
+                    tool_use=ChatCompletionToolCallChunk(
+                        id=None,
+                        index=0,
+                        type="function",
+                        function=ChatCompletionToolCallFunctionChunk(
+                            name=None, arguments=content_part
+                        ),
+                    ),
+                    is_finished=False,
+                    finish_reason="",
+                    usage=None,
+                )
+            else:
+                raise ValueError(
+                    f"Chat provider: Invalid function argument delta {parsed_chunk}"
+                )
+        elif event_type == "response.output_item.done":
+            # New output item added
+            output_item = parsed_chunk.get("item", {})
+            if output_item.get("type") == "function_call":
+                return GenericStreamingChunk(
+                    text="",
+                    tool_use=ChatCompletionToolCallChunk(
+                        id=output_item.get("call_id"),
+                        index=0,
+                        type="function",
+                        function=ChatCompletionToolCallFunctionChunk(
+                            name=parsed_chunk.get("name", None),
+                            arguments="",  # responses API sends everything again, we don't
+                        ),
+                    ),
+                    is_finished=True,
+                    finish_reason="tool_calls",
+                    usage=None,
+                )
+            elif output_item.get("type") == "message":
+                return GenericStreamingChunk(
+                    finish_reason="stop", is_finished=True, usage=None, text=""
+                )
+            elif output_item.get("type") == "reasoning":
+                pass
+            else:
+                raise ValueError(f"Chat provider: Invalid output_item  {output_item}")
+
+        elif event_type == "response.output_text.delta":
+            # Content part added to output
+            content_part: Optional[str] = parsed_chunk.get("delta", None)
+            if content_part is not None:
+                return GenericStreamingChunk(
+                    text=content_part,
+                    tool_use=None,
+                    is_finished=False,
+                    finish_reason="",
+                    usage=None,
+                )
+            else:
+                raise ValueError(f"Chat provider: Invalid text delta {parsed_chunk}")
+        else:
+            pass
+        # For any unhandled event types, create a minimal valid chunk or skip
+        verbose_logger.debug(
+            f"Chat provider: Unhandled event type '{event_type}', creating empty chunk"
+        )
+
+        # Return a minimal valid chunk for unknown events
+        return GenericStreamingChunk(
+            text="", tool_use=None, is_finished=False, finish_reason="", usage=None
+        )

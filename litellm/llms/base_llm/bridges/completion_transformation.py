@@ -5,8 +5,6 @@ Bridge for transforming API requests to another API requests
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
 
-import httpx
-
 if TYPE_CHECKING:
     from pydantic import BaseModel
 
