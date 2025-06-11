@@ -105,6 +105,8 @@ class AmazonConverseConfig(BaseConfig):
         }
 
     def get_supported_openai_params(self, model: str) -> List[str]:
+        from litellm.utils import supports_function_calling
+
         supported_params = [
             "max_tokens",
             "max_completion_tokens",
@@ -137,6 +139,9 @@ class AmazonConverseConfig(BaseConfig):
             or base_model.startswith("meta.llama3-2")
             or base_model.startswith("meta.llama3-3")
             or base_model.startswith("amazon.nova")
+            or supports_function_calling(
+                model=model, custom_llm_provider=self.custom_llm_provider
+            )
         ):
             supported_params.append("tools")
 

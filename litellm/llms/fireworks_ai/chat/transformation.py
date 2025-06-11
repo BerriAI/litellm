@@ -25,6 +25,7 @@ from litellm.types.utils import (
     ModelResponse,
     ProviderSpecificModelInfo,
 )
+from litellm.utils import supports_function_calling, supports_tool_choice
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import FireworksAIException
@@ -83,10 +84,9 @@ class FireworksAIConfig(OpenAIGPTConfig):
         return super().get_config()
 
     def get_supported_openai_params(self, model: str):
-        return [
+        # Base parameters supported by all models
+        supported_params = [
             "stream",
-            "tools",
-            "tool_choice",
             "max_completion_tokens",
             "max_tokens",
             "temperature",
@@ -102,6 +102,16 @@ class FireworksAIConfig(OpenAIGPTConfig):
             "prompt_truncate_length",
             "context_length_exceeded_behavior",
         ]
+        
+        # Only add tools for models that support function calling
+        if supports_function_calling(model=model, custom_llm_provider="fireworks_ai"):
+            supported_params.append("tools")
+        
+        # Only add tool_choice for models that explicitly support it
+        if supports_tool_choice(model=model, custom_llm_provider="fireworks_ai"):
+            supported_params.append("tool_choice")
+        
+        return supported_params
 
     def map_openai_params(
         self,

@@ -71,18 +71,20 @@ If Redis is enabled, LiteLLM uses it to make sure only one instance runs the cle
 Once cleanup starts:
 
 - It calculates the cutoff date using the configured retention period
-- Deletes logs older than the cutoff in **batches of 1000**
+- Deletes logs older than the cutoff in batches (default size `1000`)
 - Adds a short delay between batches to avoid overloading the database
 
 ### Default settings:
-- **Batch size**: 1000 logs
+- **Batch size**: 1000 logs (configurable via `SPEND_LOG_CLEANUP_BATCH_SIZE`)
 - **Max batches per run**: 500
 - **Max deletions per run**: 500,000 logs
 
-You can change the number of batches using an environment variable:
+You can change the cleanup parameters using environment variables:
 
 ```bash
 SPEND_LOG_RUN_LOOPS=200
+# optional: change batch size from the default 1000
+SPEND_LOG_CLEANUP_BATCH_SIZE=2000
 ```
 
 This would allow up to 200,000 logs to be deleted in one run.

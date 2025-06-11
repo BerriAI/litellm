@@ -30,6 +30,8 @@ class SupportedGuardrailIntegrations(Enum):
     AIM = "aim"
     PANGEA = "pangea"
     PRISMA_AIRS = "prisma_airs"
+    LASSO = "lasso"
+
 
 
 class Role(Enum):
@@ -324,10 +326,23 @@ class LakeraV2GuardrailConfigModel(BaseModel):
         description="Whether to include developer information in the response",
     )
 
+
+class LassoGuardrailConfigModel(BaseModel):
+    """Configuration parameters for the Lasso guardrail"""
+
+    lasso_user_id: Optional[str] = Field(
+        default=None, description="User ID for the Lasso guardrail"
+    )
+    lasso_conversation_id: Optional[str] = Field(
+        default=None, description="Conversation ID for the Lasso guardrail"
+    )
+
+
 class LitellmParams(
     PresidioConfigModel,
     BedrockGuardrailConfigModel,
     LakeraV2GuardrailConfigModel,
+    LassoGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str]] = Field(
@@ -372,14 +387,13 @@ class LitellmParams(
 
     # pangea params
     pangea_input_recipe: Optional[str] = Field(
-        default=None,
-        description="Recipe for input (LLM request)"
+        default=None, description="Recipe for input (LLM request)"
     )
 
     pangea_output_recipe: Optional[str] = Field(
-        default=None,
-        description="Recipe for output (LLM response)"
+        default=None, description="Recipe for output (LLM response)"
     )
+
 
 class Guardrail(TypedDict, total=False):
     guardrail_id: Optional[str]

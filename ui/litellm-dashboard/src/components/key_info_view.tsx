@@ -18,7 +18,7 @@ import {
 import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
 import { keyDeleteCall, keyUpdateCall } from "./networking";
 import { KeyResponse } from "./key_team_helpers/key_list";
-import { Form, Input, InputNumber, message, Select } from "antd";
+import { Form, Input, InputNumber, message, Select, Tooltip } from "antd";
 import { KeyEditView } from "./key_edit_view";
 import { RegenerateKeyModal } from "./regenerate_key_modal";
 import { rolesWithWriteAccess } from '../utils/roles';
@@ -34,9 +34,10 @@ interface KeyInfoViewProps {
   userID: string | null;
   userRole: string | null;
   teams: any[] | null;
+  premiumUser: boolean;
 }
 
-export default function KeyInfoView({ keyId, onClose, keyData, accessToken, userID, userRole, teams, onKeyDataUpdate, onDelete }: KeyInfoViewProps) {
+export default function KeyInfoView({ keyId, onClose, keyData, accessToken, userID, userRole, teams, onKeyDataUpdate, onDelete, premiumUser }: KeyInfoViewProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [form] = Form.useForm();
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -73,6 +74,15 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
         };
         // Remove vector_stores from the top level as it should be in object_permission
         delete formValues.vector_stores;
+      }
+
+      if (formValues.mcp_servers !== undefined) {
+        formValues.object_permission = {
+          ...keyData.object_permission,
+          mcp_servers: formValues.mcp_servers || []
+        };
+        // Remove mcp_servers from the top level as it should be in object_permission
+        delete formValues.mcp_servers;
       }
 
       // Convert metadata back to an object if it exists and is a string
@@ -150,14 +160,19 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
         </div>
         {userRole && rolesWithWriteAccess.includes(userRole) && (
           <div className="flex gap-2">
-            <Button
-              icon={RefreshIcon}
-              variant="secondary"
-              onClick={() => setIsRegenerateModalOpen(true)}
-              className="flex items-center"
-            >
-              Regenerate Key
-            </Button>
+            <Tooltip title={!premiumUser ? "This is a LiteLLM Enterprise feature, and requires a valid key to use." : ""}>
+              <span className="inline-block">
+                <Button
+                  icon={RefreshIcon}
+                  variant="secondary"
+                  onClick={() => setIsRegenerateModalOpen(true)}
+                  className="flex items-center"
+                  disabled={!premiumUser}
+                >
+                  Regenerate Key
+                </Button>
+              </span>
+            </Tooltip>
             <Button
               icon={TrashIcon}
               variant="secondary"
@@ -176,6 +191,7 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
         visible={isRegenerateModalOpen}
         onClose={() => setIsRegenerateModalOpen(false)}
         accessToken={accessToken}
+        premiumUser={premiumUser}
       />
 
       {/* Delete Confirmation Modal */}

@@ -67,7 +67,13 @@ If you decide to use Redis, DO NOT use 'redis_url'. We recommend using redis por
 
 This is still something we're investigating. Keep track of it [here](https://github.com/BerriAI/litellm/issues/3188)
 
-Recommended to do this for prod: 
+### Redis Version Requirement
+
+| Component | Minimum Version |
+|-----------|-----------------|
+| Redis     | 7.0+            |
+
+Recommended to do this for prod:
 
 ```yaml
 router_settings:

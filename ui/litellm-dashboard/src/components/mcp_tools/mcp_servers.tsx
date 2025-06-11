@@ -6,12 +6,8 @@ import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import {
   Modal,
   Tooltip,
-  Form,
-  Select,
   message,
-  Button as AntdButton,
 } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
 
 import {
   Table,
@@ -29,7 +25,6 @@ import {
 } from "@tremor/react";
 
 import {
-  createMCPServer,
   deleteMCPServer,
   fetchMCPServers,
 } from "../networking";
@@ -41,158 +36,13 @@ import {
 } from "./types";
 import { isAdminRole } from "@/utils/roles";
 import { MCPServerView } from "./mcp_server_view";
+import CreateMCPServer from "./create_mcp_server";
 
 const displayFriendlyId = (id: string) => {
   return `${id.slice(0, 7)}...`;
 };
 
-interface CreateMCPServerProps {
-  userRole: string;
-  accessToken: string | null;
-  onCreateSuccess: (newMcpServer: MCPServer) => void;
-}
 
-const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
-  userRole,
-  accessToken,
-  onCreateSuccess,
-}) => {
-  const [form] = Form.useForm();
-
-  const handleCreate = async (formValues: Record<string, any>) => {
-    try {
-      console.log(`formValues: ${JSON.stringify(formValues)}`);
-
-      if (accessToken != null) {
-        const response: MCPServer = await createMCPServer(
-          accessToken,
-          formValues
-        );
-
-        message.success("MCP Server created successfully");
-        form.resetFields();
-        setModalVisible(false);
-        onCreateSuccess(response);
-      }
-    } catch (error) {
-      message.error("Error creating the team: " + error, 20);
-    }
-  };
-
-  // state
-  const [isModalVisible, setModalVisible] = useState(false);
-
-  // rendering
-  if (!isAdminRole(userRole)) {
-    return null;
-  }
-
-  return (
-    <div>
-      <Button className="mx-auto" onClick={() => setModalVisible(true)}>
-        + Create New MCP Server
-      </Button>
-
-      <Modal
-        title="Create New MCP Server"
-        open={isModalVisible}
-        okType="primary"
-        width={800}
-        onCancel={() => setModalVisible(false)}
-        okButtonProps={{ style: { display: "none" } }}
-      >
-        <Form
-          form={form}
-          onFinish={handleCreate}
-          labelCol={{ span: 8 }}
-          wrapperCol={{ span: 16 }}
-          labelAlign="left"
-        >
-          <>
-            <Form.Item
-              label="MCP Server Name"
-              name="alias"
-              rules={[
-                { required: false, message: "Please enter a server name" },
-              ]}
-            >
-              <TextInput placeholder="" />
-            </Form.Item>
-            <Form.Item
-              label="MCP Description"
-              name="description"
-              rules={[
-                {
-                  required: false,
-                  message: "Please enter a server description",
-                },
-              ]}
-            >
-              <TextInput placeholder="" />
-            </Form.Item>
-            <Form.Item
-              label="MCP Server URL"
-              name="url"
-              rules={[{ required: true, message: "Please enter a server url" }]}
-            >
-              <TextInput placeholder="https://" />
-            </Form.Item>
-            <Form.Item
-              label="MCP Server Transport"
-              name="transport"
-              rules={[{ required: true, message: "Please enter a server url" }]}
-            >
-              <Select placeholder="MCP Transport Type">
-                <Select.Option value="sse">sse</Select.Option>
-                <Select.Option value="http">http</Select.Option>
-              </Select>
-            </Form.Item>
-            <Form.Item
-              label="MCP Server Auth Type"
-              name="auth_type"
-              rules={[{ required: true, message: "Please enter an auth type" }]}
-            >
-              <Select placeholder="MCP Auth Type">
-                <Select.Option value="none">None</Select.Option>
-                <Select.Option value="api_key">api_key</Select.Option>
-                <Select.Option value="bearer_token">bearer_token</Select.Option>
-                <Select.Option value="basic">basic</Select.Option>
-              </Select>
-            </Form.Item>
-            <Form.Item
-              label={
-                <span>
-                  MCP Version{" "}
-                  <Tooltip title="Supported MCP Specification Version">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                  </Tooltip>
-                </span>
-              }
-              name="spec_version"
-              rules={[
-                { required: true, message: "Please enter a spec version" },
-              ]}
-            >
-              <Select placeholder="MCP Version">
-                <Select.Option value="2025-03-26">2025-03-26</Select.Option>
-                <Select.Option value="2024-11-05">2024-11-05</Select.Option>
-              </Select>
-            </Form.Item>
-          </>
-          <div
-            style={{
-              textAlign: "right",
-              marginTop: "10px",
-              paddingBottom: "10px",
-            }}
-          >
-            <AntdButton htmlType="submit">Create MCP Server</AntdButton>
-          </div>
-        </Form>
-      </Modal>
-    </div>
-  );
-};
 
 interface DeleteModalProps {
   isModalOpen: boolean;

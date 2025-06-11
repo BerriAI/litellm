@@ -223,16 +223,20 @@ def _filter_anyof_fields(schema_dict: Dict[str, Any]) -> Dict[str, Any]:
     E.g. {"anyOf": [{"type": "string"}, {"type": "null"}], "default": "test", "title": "test"} -> {"anyOf": [{"type": "string", "title": "test"}, {"type": "null", "title": "test"}]}
     """
     title = schema_dict.get("title", None)
+    description = schema_dict.get("description", None)
 
     if isinstance(schema_dict, dict) and schema_dict.get("anyOf"):
         any_of = schema_dict["anyOf"]
         if (
-            title
+            (title or description)
             and isinstance(any_of, list)
             and all(isinstance(item, dict) for item in any_of)
         ):
             for item in any_of:
-                item["title"] = title
+                if title:
+                    item["title"] = title
+                if description:
+                    item["description"] = description
             return {"anyOf": any_of}
         else:
             return schema_dict
@@ -492,3 +496,23 @@ def construct_target_url(
 
     updated_url = new_base_url.copy_with(path=updated_requested_route)
     return updated_url
+
+
+def is_global_only_vertex_model(model: str) -> bool:
+    """
+    Check if a model is only available in the global region.
+
+    Args:
+        model: The model name to check
+
+    Returns:
+        True if the model is only available in global region, False otherwise
+    """
+    from litellm.utils import get_supported_regions
+
+    supported_regions = get_supported_regions(
+        model=model, custom_llm_provider="vertex_ai"
+    )
+    if supported_regions is None:
+        return False
+    return "global" in supported_regions

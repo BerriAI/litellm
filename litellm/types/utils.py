@@ -122,6 +122,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_parallel_function_calling: Optional[bool]
     supports_web_search: Optional[bool]
     supports_reasoning: Optional[bool]
+    supports_url_context: Optional[bool]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -274,6 +275,7 @@ class CallTypes(Enum):
     retrieve_fine_tuning_job = "retrieve_fine_tuning_job"
     responses = "responses"
     aresponses = "aresponses"
+    alist_input_items = "alist_input_items"
 
 
 CallTypesLiteral = Literal[

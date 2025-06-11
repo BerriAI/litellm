@@ -134,3 +134,24 @@ def test_get_cost_for_anthropic_web_search():
         standard_built_in_tools_params=None,
     )
     assert cost > 0.0
+
+
+@pytest.mark.parametrize(
+    "model", ["gemini/gemini-2.0-flash-001", "gemini-2.0-flash-001"]
+)
+def test_get_cost_for_gemini_web_search(model):
+    """
+    Test that the cost for a web search is 0.00 when no response object is provided
+    """
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    usage = Usage(
+        prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=1)
+    )
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=usage,
+        response_object=None,
+        standard_built_in_tools_params=None,
+    )
+    assert cost > 0.0

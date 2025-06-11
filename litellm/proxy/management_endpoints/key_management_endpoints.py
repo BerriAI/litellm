@@ -1405,6 +1405,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
 
     try:
         # Create a new verification token (you may want to enhance this logic based on your needs)
+
         user_data = {
             "max_budget": max_budget,
             "user_email": user_email,

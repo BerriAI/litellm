@@ -274,6 +274,7 @@ export default function CreateKeyPage() {
             <div className="flex flex-1 overflow-auto">
               <div className="mt-8">
                 <Sidebar
+                  accessToken={accessToken}
                   setPage={updatePage}
                   userRole={userRole}
                   defaultSelectedKey={page}
@@ -405,7 +406,8 @@ export default function CreateKeyPage() {
                   userRole={userRole}
                   token={token}
                   accessToken={accessToken}
-                  allTeams={(teams as Team[]) ?? []}
+                  allTeams={teams as Team[] ?? []}
+                  premiumUser={premiumUser}
                 />
               ) : page == "mcp-servers" ? (
                 <MCPServers
@@ -431,6 +433,7 @@ export default function CreateKeyPage() {
                   userRole={userRole}
                   accessToken={accessToken}
                   teams={(teams as Team[]) ?? []}
+                  premiumUser={premiumUser}
                 />
               ) : (
                 <Usage
