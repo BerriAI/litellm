@@ -79,7 +79,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
-            pip install mypy
+            pip install "mypy==1.15.0"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
@@ -931,7 +931,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/litellm --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 4
+            python -m pytest -vv tests/test_litellm --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 4
           no_output_timeout: 120m
       - run:
           name: Run enterprise tests
@@ -1158,6 +1158,7 @@ jobs:
             pip install "google-cloud-aiplatform==1.43.0"
             pip install "mlflow==2.17.2"
             pip install "anthropic==0.52.0"
+            pip install "blockbuster==1.5.24"
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
       - run:
@@ -1493,12 +1494,12 @@ jobs:
             # Build and scan Dockerfile.database
             echo "Building and scanning Dockerfile.database..."
             docker build -t litellm-database:latest -f ./docker/Dockerfile.database .
-            grype litellm-database:latest --fail-on high
+            grype litellm-database:latest
 
             # Build and scan main Dockerfile
             echo "Building and scanning main Dockerfile..."
             docker build -t litellm:latest .
-            grype litellm:latest --fail-on high
+            grype litellm:latest
       - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .

@@ -4,6 +4,10 @@ from typing import List, Literal
 ROUTER_MAX_FALLBACKS = int(os.getenv("ROUTER_MAX_FALLBACKS", 5))
 DEFAULT_BATCH_SIZE = int(os.getenv("DEFAULT_BATCH_SIZE", 512))
 DEFAULT_FLUSH_INTERVAL_SECONDS = int(os.getenv("DEFAULT_FLUSH_INTERVAL_SECONDS", 5))
+DEFAULT_S3_FLUSH_INTERVAL_SECONDS = int(
+    os.getenv("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", 10)
+)
+DEFAULT_S3_BATCH_SIZE = int(os.getenv("DEFAULT_S3_BATCH_SIZE", 512))
 DEFAULT_MAX_RETRIES = int(os.getenv("DEFAULT_MAX_RETRIES", 2))
 DEFAULT_MAX_RECURSE_DEPTH = int(os.getenv("DEFAULT_MAX_RECURSE_DEPTH", 100))
 DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER = int(
@@ -32,6 +36,9 @@ SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD = int(
     os.getenv("SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD", 1000)
 )  # Minimum number of requests to consider "reasonable traffic". Used for single-deployment cooldown logic.
 
+DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET = int(
+    os.getenv("DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET", 0)
+)
 DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET", 1024)
 )
@@ -154,7 +161,10 @@ FIREWORKS_AI_80_B = int(os.getenv("FIREWORKS_AI_80_B", 80))
 #### Logging callback constants ####
 REDACTED_BY_LITELM_STRING = "REDACTED_BY_LITELM"
 MAX_LANGFUSE_INITIALIZED_CLIENTS = int(
-    os.getenv("MAX_LANGFUSE_INITIALIZED_CLIENTS", 20)
+    os.getenv("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50)
+)
+DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE = os.getenv(
+    "DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE", "streaming.chunk.yield"
 )
 
 ############### LLM Provider Constants ###############
@@ -180,6 +190,7 @@ LITELLM_CHAT_PROVIDERS = [
     "replicate",
     "huggingface",
     "together_ai",
+    "datarobot",
     "openrouter",
     "vertex_ai",
     "vertex_ai_beta",
@@ -231,12 +242,14 @@ LITELLM_CHAT_PROVIDERS = [
     "meta_llama",
     "featherless_ai",
     "nscale",
+    "nebius",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
     "openai",
     "azure",
     "hosted_vllm",
+    "nebius",
 ]
 
 
@@ -282,6 +295,21 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "web_search_options",
 ]
 
+OPENAI_TRANSCRIPTION_PARAMS = [
+    "language",
+    "response_format",
+    "timestamp_granularities",
+]
+
+OPENAI_EMBEDDING_PARAMS = ["dimensions", "encoding_format", "user"]
+
+DEFAULT_EMBEDDING_PARAM_VALUES = {
+    **{k: None for k in OPENAI_EMBEDDING_PARAMS},
+    "model": None,
+    "custom_llm_provider": "",
+    "input": None,
+}
+
 DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "functions": None,
     "function_call": None,
@@ -321,7 +349,6 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "web_search_options": None,
 }
 
-
 openai_compatible_endpoints: List = [
     "api.perplexity.ai",
     "api.endpoints.anyscale.com/v1",
@@ -341,6 +368,7 @@ openai_compatible_endpoints: List = [
     "api.llama.com/compat/v1/",
     "api.featherless.ai/v1",
     "inference.api.nscale.com/v1",
+    "api.studio.nebius.ai/v1",
 ]
 
 
@@ -375,6 +403,7 @@ openai_compatible_providers: List = [
     "meta_llama",
     "featherless_ai",
     "nscale",
+    "nebius",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -384,6 +413,7 @@ openai_text_completion_compatible_providers: List = (
         "meta_llama",
         "llamafile",
         "featherless_ai",
+        "nebius",
     ]
 )
 _openai_like_providers: List = [
@@ -542,6 +572,27 @@ featherless_ai_models: List = [
     "ProdeusUnity/Stellar-Odyssey-12b-v0.0",
 ]
 
+nebius_models: List = [
+    "Qwen/Qwen3-235B-A22B",
+    "Qwen/Qwen3-30B-A3B-fast",
+    "Qwen/Qwen3-32B",
+    "Qwen/Qwen3-14B",
+    "nvidia/Llama-3_1-Nemotron-Ultra-253B-v1",
+    "deepseek-ai/DeepSeek-V3-0324",
+    "deepseek-ai/DeepSeek-V3-0324-fast",
+    "deepseek-ai/DeepSeek-R1",
+    "deepseek-ai/DeepSeek-R1-fast",
+    "meta-llama/Llama-3.3-70B-Instruct-fast",
+    "Qwen/Qwen2.5-32B-Instruct-fast",
+    "Qwen/Qwen2.5-Coder-32B-Instruct-fast",
+]
+
+nebius_embedding_models: List = [
+    "BAAI/bge-en-icl",
+    "BAAI/bge-multilingual-gemma2",
+    "intfloat/e5-mistral-7b-instruct",
+]
+
 BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "cohere",
     "anthropic",
@@ -556,6 +607,7 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
 
 open_ai_embedding_models: List = ["text-embedding-ada-002"]
 cohere_embedding_models: List = [
+    "embed-v4.0",
     "embed-english-v3.0",
     "embed-english-light-v3.0",
     "embed-multilingual-v3.0",
@@ -682,6 +734,7 @@ DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
 PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME = "prometheus_emit_budget_metrics"
 SPEND_LOG_CLEANUP_JOB_NAME = "spend_log_cleanup"
 SPEND_LOG_RUN_LOOPS = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
+SPEND_LOG_CLEANUP_BATCH_SIZE = int(os.getenv("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000))
 DEFAULT_CRON_JOB_LOCK_TTL_SECONDS = int(
     os.getenv("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60)
 )  # 1 minute

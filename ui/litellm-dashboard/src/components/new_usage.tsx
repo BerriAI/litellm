@@ -33,13 +33,15 @@ interface NewUsagePageProps {
   userRole: string | null;
   userID: string | null;
   teams: Team[];
+  premiumUser: boolean;
 }
 
 const NewUsagePage: React.FC<NewUsagePageProps> = ({
   accessToken,
   userRole,
   userID,
-  teams
+  teams,
+  premiumUser
 }) => {
   const [userSpendData, setUserSpendData] = useState<{
     results: DailyData[];
@@ -386,6 +388,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                           userID={userID}
                           userRole={userRole}
                           teams={null}
+                          premiumUser={premiumUser}
                         />
                       </Card>
                     </Col>
@@ -506,6 +509,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                 label: team.team_alias,
                 value: team.team_id
               })) || null}
+              premiumUser={premiumUser}
             />
           </TabPanel>
 
@@ -517,6 +521,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               userID={userID}
               userRole={userRole}
               entityList={allTags}
+              premiumUser={premiumUser}
             />
           </TabPanel>
 

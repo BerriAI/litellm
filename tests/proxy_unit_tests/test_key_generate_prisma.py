@@ -234,6 +234,7 @@ async def test_new_user_response(prisma_client):
 )
 def test_generate_and_call_with_valid_key(prisma_client, api_route):
     # 1. Generate a Key, and use it to make a call
+    from unittest.mock import MagicMock
 
     print("prisma client=", prisma_client)
 
@@ -256,8 +257,9 @@ def test_generate_and_call_with_valid_key(prisma_client, api_route):
             user_id = key.user_id
 
             # check /user/info to verify user_role was set correctly
+            request_mock = MagicMock()
             new_user_info = await user_info(
-                user_id=user_id, user_api_key_dict=user_api_key_dict
+                request=request_mock, user_id=user_id, user_api_key_dict=user_api_key_dict
             )
             new_user_info = new_user_info.user_info
             print("new_user_info=", new_user_info)

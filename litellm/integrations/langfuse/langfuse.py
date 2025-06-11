@@ -141,6 +141,9 @@ class LangFuseLogger:
             )
         langfuse_client = Langfuse(**parameters)
         litellm.initialized_langfuse_clients += 1
+        verbose_logger.debug(
+            f"Created langfuse client number {litellm.initialized_langfuse_clients}"
+        )
         return langfuse_client
 
     @staticmethod

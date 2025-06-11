@@ -102,6 +102,7 @@ const sidebars = {
           items: [
             "proxy/ui",
             "proxy/admin_ui_sso",
+            "proxy/custom_root_ui",
             "proxy/self_serve",
             "proxy/public_teams",
             "tutorials/scim_litellm",
@@ -152,8 +153,10 @@ const sidebars = {
               "proxy/guardrails/aim_security",
               "proxy/guardrails/aporia_api",
               "proxy/guardrails/bedrock",
+              "proxy/guardrails/lasso_security",
               "proxy/guardrails/guardrails_ai",
               "proxy/guardrails/lakera_ai",
+              "proxy/guardrails/pangea",
               "proxy/guardrails/pii_masking_v2",
               "proxy/guardrails/secret_detection",
               "proxy/guardrails/custom_guardrail",
@@ -328,6 +331,7 @@ const sidebars = {
           label: "Bedrock",
           items: [
             "providers/bedrock",
+            "providers/bedrock_agents",
             "providers/bedrock_vector_store",
           ]
         },
@@ -337,7 +341,14 @@ const sidebars = {
         "providers/codestral",
         "providers/cohere",
         "providers/anyscale",
-        "providers/huggingface",
+        {
+          type: "category",
+          label: "HuggingFace",
+          items: [
+            "providers/huggingface",
+            "providers/huggingface_rerank",
+          ]
+        },
         "providers/databricks",
         "providers/deepgram",
         "providers/watsonx",
@@ -379,7 +390,8 @@ const sidebars = {
         "providers/custom_llm_server",
         "providers/petals",
         "providers/snowflake",
-        "providers/featherless_ai"
+        "providers/featherless_ai",
+        "providers/nebius"
       ],
     },
     {
@@ -504,6 +516,7 @@ const sidebars = {
       items: [
         "tutorials/openweb_ui",
         "tutorials/openai_codex",
+        "tutorials/anthropic_file_usage",
         "tutorials/msft_sso",
         "tutorials/prompt_caching",
         "tutorials/tag_management",

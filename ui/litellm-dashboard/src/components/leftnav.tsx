@@ -25,11 +25,12 @@ import {
   TagsOutlined,
 } from '@ant-design/icons';
 import { old_admin_roles, v2_admin_role_names, all_admin_roles, rolesAllowedToSeeUsage, rolesWithWriteAccess, internalUserRoles } from '../utils/roles';
-
+import UsageIndicator from './usage_indicator';
 const { Sider } = Layout;
 
 // Define the props type
 interface SidebarProps {
+  accessToken: string | null;
   setPage: (page: string) => void;
   userRole: string;
   defaultSelectedKey: string;
@@ -48,6 +49,7 @@ interface MenuItem {
 
 
 const Sidebar: React.FC<SidebarProps> = ({
+  accessToken,
   setPage,
   userRole,
   defaultSelectedKey,
@@ -74,7 +76,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         { key: "9", page: "caching", label: "Caching", icon: <DatabaseOutlined />, roles: all_admin_roles },
         { key: "10", page: "budgets", label: "Budgets", icon: <BankOutlined />, roles: all_admin_roles },
         { key: "20", page: "transform-request", label: "API Playground", icon: <ApiOutlined />, roles: [...all_admin_roles, ...internalUserRoles] },
-        { key: "18", page: "mcp-tools", label: "MCP Tools", icon: <ToolOutlined />, roles: all_admin_roles },
+        { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined />, roles: all_admin_roles },
         { key: "19", page: "tag-management", label: "Tag Management", icon: <TagsOutlined />, roles: all_admin_roles },
         { key: "21", page: "vector-stores", label: "Vector Stores", icon: <DatabaseOutlined />, roles: all_admin_roles },
         { key: "4", page: "usage", label: "Old Usage", icon: <BarChartOutlined /> },
@@ -163,6 +165,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             } : undefined
           }))}
         />
+        <UsageIndicator accessToken={accessToken} width={220}/>
       </Sider>
     </Layout>
   );
