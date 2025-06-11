@@ -8,7 +8,7 @@ Based on the MCP Streamable HTTP specification and using StreamableHTTPSessionMa
 """
 
 import contextlib
-from typing import Any, AsyncIterator, Awaitable, Callable, Optional
+from typing import Any, AsyncIterator, Awaitable, Callable, MutableMapping, Optional
 
 from litellm._logging import verbose_logger
 
@@ -24,6 +24,12 @@ except ImportError as e:
     # Define dummy types for when not available
     StreamableHTTPSessionManager = None
     Server = None
+
+# ASGI types
+Scope = MutableMapping[str, Any]
+Message = MutableMapping[str, Any]
+Receive = Callable[[], Awaitable[Message]]
+Send = Callable[[Message], Awaitable[None]]
 
 
 class HttpServerTransport:
@@ -90,9 +96,9 @@ class HttpServerTransport:
 
     async def handle_request(
         self,
-        scope: dict,
-        receive: Callable[[], Awaitable[dict]],
-        send: Callable[[dict], Awaitable[None]],
+        scope: Scope,
+        receive: Receive,
+        send: Send,
     ) -> None:
         """
         Handle MCP requests through Streamable HTTP.

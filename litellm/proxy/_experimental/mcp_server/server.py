@@ -39,13 +39,26 @@ except ImportError as e:
 # Routes
 @router.get(
     "/enabled",
-    description="Returns if the MCP server is enabled",
+    description="Returns if the MCP server is enabled and which transports are available",
 )
-def get_mcp_server_enabled() -> Dict[str, bool]:
+def get_mcp_server_enabled() -> Dict[str, Any]:
     """
-    Returns if the MCP server is enabled
+    Returns if the MCP server is enabled and which transports are available
     """
-    return {"enabled": MCP_AVAILABLE}
+    enabled_info = {
+        "enabled": MCP_AVAILABLE,
+        "transports": {"sse": MCP_AVAILABLE, "http_streamable": False},
+    }
+
+    if MCP_AVAILABLE:
+        try:
+            from .http_transport import STREAMABLE_HTTP_AVAILABLE
+
+            enabled_info["transports"]["http_streamable"] = STREAMABLE_HTTP_AVAILABLE
+        except ImportError:
+            pass
+
+    return enabled_info
 
 
 if MCP_AVAILABLE:
@@ -56,6 +69,7 @@ if MCP_AVAILABLE:
     from mcp.types import TextContent as MCPTextContent
     from mcp.types import Tool as MCPTool
 
+    from .http_transport import STREAMABLE_HTTP_AVAILABLE, HttpServerTransport
     from .mcp_server_manager import global_mcp_server_manager
     from .sse_transport import SseServerTransport
     from .tool_registry import global_mcp_tool_registry
@@ -78,6 +92,18 @@ if MCP_AVAILABLE:
     ########################################################
     server: Server = Server("litellm-mcp-server")
     sse: SseServerTransport = SseServerTransport("/mcp/sse/messages")
+
+    # Initialize HTTP Streamable transport if available
+    http_transport: Optional[HttpServerTransport] = None
+    if STREAMABLE_HTTP_AVAILABLE:
+        try:
+            http_transport = HttpServerTransport(server, "/mcp/http", stateless=True)
+            verbose_logger.info("HTTP Streamable transport initialized successfully")
+        except Exception as e:
+            verbose_logger.warning(f"Failed to initialize HTTP transport: {e}")
+            http_transport = None
+    else:
+        verbose_logger.debug("HTTP Streamable transport not available")
 
     ########################################################
     ############### MCP Server Routes #######################
@@ -157,15 +183,15 @@ if MCP_AVAILABLE:
             "litellm_logging_obj", None
         )
         if litellm_logging_obj:
-            litellm_logging_obj.model_call_details[
-                "mcp_tool_call_metadata"
-            ] = standard_logging_mcp_tool_call
-            litellm_logging_obj.model_call_details[
-                "model"
-            ] = f"{MCP_TOOL_NAME_PREFIX}: {standard_logging_mcp_tool_call.get('name') or ''}"
-            litellm_logging_obj.model_call_details[
-                "custom_llm_provider"
-            ] = standard_logging_mcp_tool_call.get("mcp_server_name")
+            litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
+                standard_logging_mcp_tool_call
+            )
+            litellm_logging_obj.model_call_details["model"] = (
+                f"{MCP_TOOL_NAME_PREFIX}: {standard_logging_mcp_tool_call.get('name') or ''}"
+            )
+            litellm_logging_obj.model_call_details["custom_llm_provider"] = (
+                standard_logging_mcp_tool_call.get("mcp_server_name")
+            )
 
         # Try managed server tool first
         if name in global_mcp_server_manager.tool_name_to_mcp_server_name_mapping:
@@ -218,27 +244,103 @@ if MCP_AVAILABLE:
         except Exception as e:
             return [MCPTextContent(text=f"Error: {str(e)}", type="text")]
 
-    @router.get("/", response_class=StreamingResponse)
-    async def handle_sse(request: Request):
-        verbose_logger.info("new incoming SSE connection established")
-        async with sse.connect_sse(request) as streams:
+    @router.get("/")
+    @router.post("/")
+    async def handle_mcp_root(request: Request):
+        """
+        Main MCP endpoint using HTTP Streamable transport.
+        Falls back to SSE if HTTP transport is not available.
+
+        This endpoint supports both POST and GET methods according to the
+        Streamable HTTP specification:
+        - POST: Client sends JSON-RPC messages to server
+        - GET: Optional SSE stream for server-to-client communication
+        """
+        if STREAMABLE_HTTP_AVAILABLE and http_transport is not None:
+            verbose_logger.info(
+                f"Incoming MCP {request.method} request (HTTP Streamable)"
+            )
+            # Type guard to ensure http_transport is not None
+            if http_transport is None:
+                raise HTTPException(
+                    status_code=503, detail="HTTP transport not available"
+                )
+
             try:
-                await server.run(streams[0], streams[1], options)
-            except BrokenResourceError:
-                pass
-            except asyncio.CancelledError:
-                pass
-            except ValidationError:
-                pass
-            except Exception:
-                raise
-        await request.close()
+                await http_transport.handle_request(
+                    request.scope, request.receive, request._send
+                )
+            except Exception as e:
+                verbose_logger.error(f"Error in HTTP Streamable transport: {e}")
+                raise HTTPException(status_code=500, detail="Internal server error")
+            finally:
+                await request.close()
+        else:
+            # Fallback to SSE transport for backwards compatibility
+            verbose_logger.info("Falling back to SSE transport")
+
+            verbose_logger.info("new incoming SSE connection established")
+            async with sse.connect_sse(request) as streams:
+                try:
+                    await server.run(streams[0], streams[1], options)  # type: ignore
+                except BrokenResourceError:
+                    pass
+                except asyncio.CancelledError:
+                    pass
+                except ValidationError:
+                    pass
+                except Exception:
+                    raise
+            await request.close()
 
     @router.post("/sse/messages")
     async def handle_messages(request: Request):
         verbose_logger.info("incoming SSE message received")
         await sse.handle_post_message(request.scope, request.receive, request._send)
         await request.close()
+
+    # HTTP Streamable transport routes
+    if STREAMABLE_HTTP_AVAILABLE and http_transport is not None:
+
+        @router.post("/http")
+        @router.get("/http")
+        async def handle_http_streamable(request: Request):
+            """
+            Handle HTTP Streamable transport requests.
+
+            This endpoint supports both POST and GET methods according to the
+            Streamable HTTP specification:
+            - POST: Client sends JSON-RPC messages to server
+            - GET: Optional SSE stream for server-to-client communication
+            """
+            verbose_logger.info(f"Incoming HTTP Streamable {request.method} request")
+            # Type guard to ensure http_transport is not None
+            if http_transport is None:
+                raise HTTPException(
+                    status_code=503, detail="HTTP transport not available"
+                )
+
+            try:
+                await http_transport.handle_request(
+                    request.scope, request.receive, request._send
+                )
+            except Exception as e:
+                verbose_logger.error(f"Error in HTTP Streamable transport: {e}")
+                raise HTTPException(status_code=500, detail="Internal server error")
+            finally:
+                await request.close()
+
+        @router.get("/http/health")
+        async def http_transport_health():
+            """
+            Health check endpoint for HTTP Streamable transport.
+            """
+            return {
+                "status": "healthy",
+                "transport": "http_streamable",
+                "available": STREAMABLE_HTTP_AVAILABLE,
+                "endpoint": "/mcp/http",
+            }
 
     ########################################################
     ############ MCP Server REST API Routes #################
