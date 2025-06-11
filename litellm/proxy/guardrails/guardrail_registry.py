@@ -30,7 +30,7 @@ from .guardrail_initializers import (
     initialize_lakera_v2,
     initialize_presidio,
     initialize_pangea,
-    initialize_prisma_airs_guardrail,
+    initialize_prisma_airs,
 )
 
 guardrail_initializer_registry = {
