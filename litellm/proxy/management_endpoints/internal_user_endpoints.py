@@ -318,19 +318,8 @@ async def new_user(
 
         # Get model fields safely - handle both Pydantic v1 and v2
         model_fields_dict = {}
-        try:
-            if hasattr(NewUserResponse, "model_fields"):
-                # Pydantic v2
-                fields = NewUserResponse.model_fields
-                if callable(fields):
-                    model_fields_dict = fields()
-                else:
-                    model_fields_dict = fields
-            elif hasattr(NewUserResponse, "__fields__"):
-                # Pydantic v1
-                model_fields_dict = NewUserResponse.__fields__
-        except Exception:
-            model_fields_dict = {}
+        # Pydantic v2
+        model_fields_dict = NewUserResponse.model_fields
 
         for key, value in response.items():
             if key in model_fields_dict and key not in special_keys:
