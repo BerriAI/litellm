@@ -83,6 +83,13 @@ async def make_text_completion_request():
         api_base="https://exampleopenaiendpoint-production.up.railway.app/",
     )
 
+def make_streaming_completion_request():
+    return litellm.acompletion(
+        model="openai/gpt-4o",
+        messages=[{"role": "user", "content": "Test message for memory usage"}],
+        stream=True,
+    )
+
 
 @pytest.mark.asyncio
 @pytest.mark.skip(
@@ -101,6 +108,20 @@ async def test_atext_completion_memory():
     """Test memory usage for litellm.atext_completion"""
     await run_memory_test(make_text_completion_request, "atext_completion")
 
+
+@pytest.mark.skip(
+    reason="This test is too slow to run on every commit. We can use this after nightly release"
+)
+def test_streaming_completion_memory():
+    """Test memory usage for streaming litellm.acompletion"""
+    run_memory_test(make_streaming_completion_request,"completion")
+
+@pytest.mark.skip(
+    reason="This test is too slow to run on every commit. We can use this after nightly release"
+)    
+def test_streaming_acompletion_memory():
+    """Test memory usage for streaming litellm.atext_completion"""
+    run_memory_test(make_streaming_completion_request,"acompletion")
 
 litellm_router = Router(
     model_list=[
