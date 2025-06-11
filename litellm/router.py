@@ -3169,6 +3169,11 @@ class Router:
         original_function: Callable,
         **kwargs,
     ):
+        # Set model_group in metadata for logging purposes
+        model = kwargs.get("model")
+        if model:
+            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            
         if kwargs.get("model") and self.get_model_list(model_name=kwargs["model"]):
             deployment = await self.async_get_available_deployment(
                 model=kwargs["model"],
