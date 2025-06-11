@@ -1038,6 +1038,17 @@ class BaseLLMHTTPHandler:
         else:
             json_data = data
 
+        ## LOGGING
+        logging_obj.pre_call(
+            input=optional_params.get("query", ""),
+            api_key=api_key,
+            additional_args={
+                "complete_input_dict": {},
+                "api_base": complete_url,
+                "headers": headers,
+            },
+        )
+
         try:
             # Make the POST request
             response = client.post(
