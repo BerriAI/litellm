@@ -11,6 +11,7 @@ from typing import (
     Iterator,
     List,
     Optional,
+    Tuple,
     Union,
     cast,
 )
@@ -44,20 +45,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     def __init__(self):
         pass
 
-    def transform_request(
-        self,
-        model: str,
-        messages: List["AllMessageValues"],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
-        from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
-
+    def convert_chat_completion_messages_to_responses_api(
+        self, messages: List["AllMessageValues"]
+    ) -> Tuple[List[Any], Optional[str]]:
         input_items: List[Any] = []
-
-        # Process messages to extract system instructions and convert to responses format
         instructions: Optional[str] = None
+
         for msg in messages:
             role = msg.get("role")
             content = msg.get("content", "")
@@ -103,6 +96,23 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         "content": self._convert_content_to_responses_format(content),
                     }
                 )
+
+        return input_items, instructions
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List["AllMessageValues"],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+
+        (
+            input_items,
+            instructions,
+        ) = self.convert_chat_completion_messages_to_responses_api(messages)
 
         # Build responses API request using the reverse transformation logic
         responses_api_request = ResponsesAPIOptionalRequestParams()

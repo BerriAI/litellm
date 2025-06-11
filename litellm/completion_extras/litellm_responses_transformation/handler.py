@@ -3,8 +3,6 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 """
 from typing import TYPE_CHECKING, Any, Coroutine, TypedDict, Union
 
-from litellm import CustomLLM
-
 if TYPE_CHECKING:
     from litellm import CustomStreamWrapper, LiteLLMLoggingObj, ModelResponse
 
