@@ -36,6 +36,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             "previous_response_id",
             "reasoning",
             "store",
+            "background",
             "stream",
             "temperature",
             "text",
