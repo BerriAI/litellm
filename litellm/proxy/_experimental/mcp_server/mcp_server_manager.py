@@ -29,7 +29,7 @@ from litellm.proxy._types import (
 try:
     from mcp.client.streamable_http import streamablehttp_client
 except ImportError:
-    streamablehttp_client = None
+    streamablehttp_client = None  # type: ignore
 
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 
