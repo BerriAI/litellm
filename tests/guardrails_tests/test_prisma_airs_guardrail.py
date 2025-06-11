@@ -84,7 +84,6 @@ class TestPrismaAirsGuardrail(unittest.IsolatedAsyncioTestCase):
 
 
     @mock.patch('prisma_airs_guardrail.call_airs_api')
-    # --- IMPORTANT CHANGE HERE: Make test methods async ---
     async def test_async_pre_call_hook_no_block(self, mock_call_airs_api):
         """
         Tests async_pre_call_hook when AIRS allows the request.
@@ -103,10 +102,7 @@ class TestPrismaAirsGuardrail(unittest.IsolatedAsyncioTestCase):
         cache = DualCache()
         data = {"messages": [{"role": "user", "content": "This is a safe prompt."}]}
         call_type = "completion"
-
-        # --- IMPORTANT CHANGE HERE: Await the async call directly ---
         result = await guardrail.async_pre_call_hook(user_api_key_dict, cache, data, call_type)
-
         mock_call_airs_api.assert_called_once_with("This is a safe prompt.")
         self.assertIsNone(result)
         print("--- Finished test_async_pre_call_hook_no_block ---")
