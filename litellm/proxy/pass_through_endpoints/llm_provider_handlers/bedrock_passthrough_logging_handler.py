@@ -36,7 +36,15 @@ class BedrockPassthroughLoggingHandler:
         """
         Transforms Bedrock response to LiteLLM response, generates a standard logging object so downstream logging can be handled
         """
-        model = kwargs.get("model", "unknown")
+        base_model = kwargs.get("model", "unknown")
+
+        # Reconstruct the full model name with route prefix from URL
+        if "/converse" in url_route:
+            model = f"converse/{base_model}"
+        elif "/invoke" in url_route:
+            model = f"invoke/{base_model}"
+        else:
+            model = base_model  # fallback
 
         # Get the appropriate Bedrock configuration
         bedrock_config = ProviderConfigManager.get_provider_chat_config(
