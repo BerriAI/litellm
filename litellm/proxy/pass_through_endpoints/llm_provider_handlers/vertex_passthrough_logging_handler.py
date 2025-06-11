@@ -127,9 +127,7 @@ class VertexPassthroughLoggingHandler:
 
             _json_response = httpx_response.json()
 
-            litellm_prediction_response: Union[
-                ModelResponse, EmbeddingResponse, ImageResponse
-            ] = ModelResponse()
+            litellm_prediction_response = ModelResponse()
 
             logging_obj.model = model
             logging_obj.model_call_details["model"] = logging_obj.model
