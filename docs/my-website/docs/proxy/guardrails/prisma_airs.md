@@ -75,7 +75,6 @@ helm upgrade --install litellm-gateway litellm
 ```shell
 curl --location 'http://litell-service/chat/completions' \
 --header 'Content-Type: application/json' \
---header 'Authorization: Bearer sk-litellm-master-key' \
 --data '
 {
    "model": "vertex_ai/gemini-2.0-flash-lite-001",
@@ -102,7 +101,7 @@ curl --location 'http://litell-service/chat/completions' \
 ```json
 {
     "error": {
-        "message": "{'error': 'Request blocked by security policy.'}",
+        "message": "{'error': 'Request blocked by security policy.Scan ID:xxx'}",
         "type": "None",
         "param": "None",
         "code": "400"
@@ -186,6 +185,7 @@ curl --location 'http://litellm-service/chat/completions' \
 
 
 ### 5. Miscellaneous 
+## Note:The scanID is a unique identifier generated for each scan request made to the Prisma AIRS API. It acts as a transaction ID for that specific evaluation.
 ##  `Prisma_airs_guardrail for async_pre_call_hook`
 | Component | Description | Optional | Checked Data | Can Modify Input | Can Modify Output | Can Fail Call |
 |-----------|-------------|----------|--------------|------------------|-------------------|----------------|
