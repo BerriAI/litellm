@@ -69,7 +69,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         className="mx-auto" 
         onClick={() => setModalVisible(true)}
       >
-        + Create New MCP Server
+        + Add New MCP Server
       </Button>
 
       <Modal
@@ -83,7 +83,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               />
             </div>
             <div>
-              <h2 className="text-xl font-semibold text-gray-900">Create New MCP Server</h2>
+              <h2 className="text-xl font-semibold text-gray-900">Add New MCP Server</h2>
               <p className="text-sm text-gray-500 mt-1">Configure your MCP server connection</p>
             </div>
           </div>
