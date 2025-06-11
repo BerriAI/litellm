@@ -29,14 +29,14 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         """
         if "Authorization" not in headers:
             vertex_ai_project = (
-                optional_params.pop("vertex_project", None)
-                or optional_params.pop("vertex_ai_project", None)
+                litellm_params.pop("vertex_project", None)
+                or litellm_params.pop("vertex_ai_project", None)
                 or litellm.vertex_project
                 or get_secret_str("VERTEXAI_PROJECT")
             )
             vertex_credentials = (
-                optional_params.pop("vertex_credentials", None)
-                or optional_params.pop("vertex_ai_credentials", None)
+                litellm_params.pop("vertex_credentials", None)
+                or litellm_params.pop("vertex_ai_credentials", None)
                 or get_secret_str("VERTEXAI_CREDENTIALS")
             )
 
@@ -50,7 +50,7 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
 
             api_base = self.get_complete_vertex_url(
                 custom_api_base=api_base,
-                vertex_location=optional_params.pop("vertex_location", None),
+                vertex_location=litellm_params.pop("vertex_location", None),
                 vertex_project=vertex_ai_project,
                 project_id=project_id,
                 partner=VertexPartnerProvider.claude,
@@ -93,4 +93,8 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         )
 
         anthropic_messages_request["anthropic_version"] = "vertex-2023-10-16"
+
+        anthropic_messages_request.pop(
+            "model", None
+        )  # do not pass model in request body to vertex ai
         return anthropic_messages_request
