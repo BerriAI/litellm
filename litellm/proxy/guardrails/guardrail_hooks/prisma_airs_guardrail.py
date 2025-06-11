@@ -2,15 +2,10 @@
 
 import requests
 import os
-#from typing import Any, Dict, List, Literal, Optional, Union
 from typing import Literal, Optional, Union
-#import litellm
-#from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
-#from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
-#from litellm.types.guardrails import GuardrailEventHooks
 
 
 class prisma_airs_guardrail(CustomGuardrail):
@@ -42,7 +37,6 @@ class prisma_airs_guardrail(CustomGuardrail):
         """
         Runs before the LLM API call
         Runs on only Input
-        Use this if you want to MODIFY the input
         """
 
         try:
@@ -64,7 +58,6 @@ class prisma_airs_guardrail(CustomGuardrail):
 
 def call_airs_api(data):
   airs_response = requests.post(os.environ.get("PRISMA_AIRS_API_BASE"),
-    # "<PRISMA_AIRS_API_BASE>", 
     headers={
         "x-pan-token": os.environ.get("PRISMA_AIRS_API_KEY"), 
         "Content-Type": "application/json"
@@ -80,7 +73,6 @@ def call_airs_api(data):
                 "prompt": data
             }
         ],
-        #"tr_id": "1234",
         "ai_profile": {
             "profile_name": os.environ.get("PRISMA_AIRS_PROFILE_NAME")
         }
