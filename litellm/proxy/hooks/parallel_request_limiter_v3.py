@@ -6,7 +6,17 @@ This is currently in development and not yet ready for production.
 import os
 import sys
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, TypedDict, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    TypedDict,
+    Union,
+    cast,
+)
 
 from fastapi import HTTPException
 
@@ -76,6 +86,11 @@ class RateLimitDescriptor(TypedDict):
 class RateLimitResponse(TypedDict):
     overall_code: str
     statuses: List[Dict[str, Any]]
+
+
+class RateLimitResponseWithDescriptors(TypedDict):
+    descriptors: List[RateLimitDescriptor]
+    response: RateLimitResponse
 
 
 class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
@@ -417,6 +432,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         },  # Retry after 1 minute
                     )
 
+        else:
+            # add descriptors to request headers
+            data["litellm_proxy_rate_limit_response"] = {
+                "descriptors": descriptors,
+                "response": response,
+            }
+
     def _create_pipeline_operations(
         self,
         key: str,
@@ -602,60 +624,49 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Post-call hook to update rate limit headers in the response.
         """
         try:
-            descriptors = []
+            from pydantic import BaseModel
 
-            # API Key
-            if user_api_key_dict.api_key:
-                descriptors.append(
-                    RateLimitDescriptor(
-                        key="api_key",
-                        value=user_api_key_dict.api_key,
-                        rate_limit={
-                            "requests_per_unit": user_api_key_dict.rpm_limit
-                            or sys.maxsize,
-                            "window_size": self.window_size,
-                        },
+            litellm_proxy_rate_limit_response = cast(
+                Optional[RateLimitResponseWithDescriptors],
+                data.get("litellm_proxy_rate_limit_response", None),
+            )
+            if litellm_proxy_rate_limit_response is not None:
+                rate_limit_response = litellm_proxy_rate_limit_response["response"]
+                descriptors = litellm_proxy_rate_limit_response["descriptors"]
+
+                # Update response headers
+                if hasattr(response, "_hidden_params"):
+                    _hidden_params = getattr(response, "_hidden_params")
+                else:
+                    _hidden_params = None
+
+                if _hidden_params is not None and (
+                    isinstance(_hidden_params, BaseModel)
+                    or isinstance(_hidden_params, dict)
+                ):
+                    if isinstance(_hidden_params, BaseModel):
+                        _hidden_params = _hidden_params.model_dump()
+
+                    _additional_headers = (
+                        _hidden_params.get("additional_headers", {}) or {}
                     )
-                )
 
-            # Check rate limits
-            # rate_limit_response = await self.should_rate_limit(
-            #     descriptors=descriptors,
-            #     parent_otel_span=user_api_key_dict.parent_otel_span,
-            #     read_only=True,
-            # )
+                    # Add rate limit headers
+                    for i, status in enumerate(rate_limit_response["statuses"]):
+                        descriptor = descriptors[i]
+                        prefix = f"x-ratelimit-{descriptor['key']}"
+                        _additional_headers[f"{prefix}-remaining-requests"] = status[
+                            "limit_remaining"
+                        ]
+                        _additional_headers[f"{prefix}-limit-requests"] = status[
+                            "current_limit"
+                        ]
 
-            # # Update response headers
-            # if hasattr(response, "_hidden_params"):
-            #     _hidden_params = getattr(response, "_hidden_params")
-            # else:
-            #     _hidden_params = None
-
-            # if _hidden_params is not None and (
-            #     isinstance(_hidden_params, BaseModel)
-            #     or isinstance(_hidden_params, dict)
-            # ):
-            #     if isinstance(_hidden_params, BaseModel):
-            #         _hidden_params = _hidden_params.model_dump()
-
-            #     _additional_headers = _hidden_params.get("additional_headers", {}) or {}
-
-            #     # Add rate limit headers
-            #     for i, status in enumerate(rate_limit_response["statuses"]):
-            #         descriptor = descriptors[i]
-            #         prefix = f"x-ratelimit-{descriptor['key']}"
-            #         _additional_headers[f"{prefix}-remaining-requests"] = status[
-            #             "limit_remaining"
-            #         ]
-            #         _additional_headers[f"{prefix}-limit-requests"] = status[
-            #             "current_limit"
-            #         ]
-
-            #     setattr(
-            #         response,
-            #         "_hidden_params",
-            #         {**_hidden_params, "additional_headers": _additional_headers},
-            #     )
+                    setattr(
+                        response,
+                        "_hidden_params",
+                        {**_hidden_params, "additional_headers": _additional_headers},
+                    )
 
         except Exception as e:
             verbose_proxy_logger.exception(
