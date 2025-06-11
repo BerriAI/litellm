@@ -1151,6 +1151,16 @@ class CustomStreamWrapper:
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
+                if response_obj["usage"] is not None:
+                    setattr(
+                        model_response,
+                        "usage",
+                        litellm.Usage(
+                            prompt_tokens=response_obj["usage"].prompt_tokens,
+                            completion_tokens=response_obj["usage"].completion_tokens,
+                            total_tokens=response_obj["usage"].total_tokens,
+                        ),
+                    )
 
             elif self.custom_llm_provider == "text-completion-codestral":
                 if not isinstance(chunk, str):
@@ -1235,6 +1245,39 @@ class CustomStreamWrapper:
                         ].system_fingerprint
                 if response_obj["logprobs"] is not None:
                     model_response.choices[0].logprobs = response_obj["logprobs"]
+
+                if response_obj["usage"] is not None:
+                    if isinstance(response_obj["usage"], dict):
+                        setattr(
+                            model_response,
+                            "usage",
+                            litellm.Usage(
+                                prompt_tokens=response_obj["usage"].get(
+                                    "prompt_tokens", None
+                                )
+                                              or None,
+                                completion_tokens=response_obj["usage"].get(
+                                    "completion_tokens", None
+                                )
+                                                  or None,
+                                total_tokens=response_obj["usage"].get(
+                                    "total_tokens", None
+                                )
+                                             or None,
+                            ),
+                        )
+                    elif isinstance(response_obj["usage"], Usage):
+                        setattr(
+                            model_response,
+                            "usage",
+                            response_obj["usage"],
+                        )
+                    elif isinstance(response_obj["usage"], BaseModel):
+                        setattr(
+                            model_response,
+                            "usage",
+                            litellm.Usage(**response_obj["usage"].model_dump()),
+                        )
 
             model_response.model = self.model
             print_verbose(
