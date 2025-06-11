@@ -97,53 +97,45 @@ class TestDeepgramMockTranscription:
     """Test Deepgram transcription with mocked HTTP requests"""
 
     @pytest.mark.parametrize(
-        "optional_params,expected_url,test_id",
+        "optional_params,expected_url",
         [
             # Basic transcription without parameters
-            ({}, "https://api.deepgram.com/v1/listen?model=nova-2", "basic"),
+            ({}, "https://api.deepgram.com/v1/listen?model=nova-2"),
             # Single parameters
             (
                 {"punctuate": True},
                 "https://api.deepgram.com/v1/listen?model=nova-2&punctuate=true",
-                "punctuate_true",
             ),
             (
                 {"diarize": True},
                 "https://api.deepgram.com/v1/listen?model=nova-2&diarize=true",
-                "diarize_true",
             ),
             (
                 {"measurements": True},
                 "https://api.deepgram.com/v1/listen?model=nova-2&measurements=true",
-                "measurements_true",
             ),
             (
                 {"diarize": False},
                 "https://api.deepgram.com/v1/listen?model=nova-2&diarize=false",
-                "diarize_false",
             ),
             # String parameters
             (
                 {"tier": "enhanced"},
                 "https://api.deepgram.com/v1/listen?model=nova-2&tier=enhanced",
-                "tier_enhanced",
             ),
             (
                 {"version": "latest"},
                 "https://api.deepgram.com/v1/listen?model=nova-2&version=latest",
-                "version_latest",
             ),
             # Language parameter should be excluded
             (
                 {"language": "en", "punctuate": True},
                 "https://api.deepgram.com/v1/listen?model=nova-2&punctuate=true",
-                "language_excluded",
             ),
             # Multiple parameters with boolean conversion
             (
                 {"punctuate": True, "diarize": False},
                 "https://api.deepgram.com/v1/listen?model=nova-2&punctuate=true&diarize=false",
-                "boolean_conversion",
             ),
             # Multiple mixed parameters
             (
@@ -155,7 +147,6 @@ class TestDeepgramMockTranscription:
                     "tier": "enhanced",
                 },
                 None,
-                "multiple_params",
             ),  # We'll check contains for this one since order may vary
         ],
     )
@@ -165,7 +156,6 @@ class TestDeepgramMockTranscription:
         test_audio_bytes,
         optional_params,
         expected_url,
-        test_id,
     ):
         """Test transcription URL generation with various parameters"""
 
@@ -207,7 +197,7 @@ class TestDeepgramMockTranscription:
             else:
                 assert (
                     actual_url == expected_url
-                ), f"Test {test_id}: Expected {expected_url}, got {actual_url}"
+                ), f"Expected {expected_url}, got {actual_url}"
 
             # Verify headers
             assert "Authorization" in call_kwargs["headers"]
