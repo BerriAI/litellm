@@ -1288,10 +1288,15 @@ def completion(  # type: ignore # noqa: PLR0915
                 timeout=timeout,
             )
 
-        ## RESPONSES API BRIDGE LOGIC ## - check if model has 'model: responses' in litellm.model_cost map
-        model_info = _get_model_info_helper(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
+        ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
+        try:
+            model_info = _get_model_info_helper(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+        except Exception as e:
+            verbose_logger.debug("Error getting model info: {}".format(e))
+            model_info = {}
+
         if model_info.get("mode") == "responses":
             from litellm.completion_extras import responses_api_bridge
 
