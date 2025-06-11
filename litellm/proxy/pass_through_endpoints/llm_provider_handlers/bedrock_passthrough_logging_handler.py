@@ -37,12 +37,12 @@ class BedrockPassthroughLoggingHandler:
         Transforms Bedrock response to LiteLLM response, generates a standard logging object so downstream logging can be handled
         """
         model = kwargs.get("model", "unknown")
-        
+
         # Get the appropriate Bedrock configuration
         bedrock_config = ProviderConfigManager.get_provider_chat_config(
             model=model, provider=litellm.LlmProviders.BEDROCK
         )
-        
+
         if bedrock_config is None:
             verbose_proxy_logger.error(
                 f"No Bedrock configuration found for model {model}"
@@ -51,7 +51,7 @@ class BedrockPassthroughLoggingHandler:
                 "result": None,
                 "kwargs": kwargs,
             }
-        
+
         # Use existing LiteLLM transformation infrastructure
         litellm_model_response = bedrock_config.transform_response(
             raw_response=httpx_response,
@@ -80,7 +80,7 @@ class BedrockPassthroughLoggingHandler:
             "result": litellm_model_response,
             "kwargs": kwargs,
         }
-    
+
     @staticmethod
     def _create_bedrock_response_logging_payload(
         litellm_model_response: litellm.ModelResponse,
@@ -103,7 +103,7 @@ class BedrockPassthroughLoggingHandler:
             kwargs["response_cost"] = response_cost
             kwargs["model"] = model
             kwargs["custom_llm_provider"] = "bedrock"
-            
+
             passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (
                 kwargs.get("passthrough_logging_payload")
             )
@@ -122,20 +122,15 @@ class BedrockPassthroughLoggingHandler:
             litellm_model_response.model = model
             logging_obj.model_call_details["model"] = model
             logging_obj.model_call_details["custom_llm_provider"] = "bedrock"
-            
+
             return kwargs
         except Exception as e:
             verbose_proxy_logger.exception(
                 "Error creating Bedrock response logging payload: %s", e
             )
             return kwargs
-    
+
     @staticmethod
     def _get_user_from_metadata(metadata: dict) -> Optional[str]:
         """Extract user ID from metadata if available"""
         return metadata.get("user")
-    
-    @staticmethod
-    def _should_log_request(kwargs: dict) -> bool:
-        """Determine if this request should be logged"""
-        return kwargs.get("should_log", True)
