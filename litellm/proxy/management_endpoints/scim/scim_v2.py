@@ -230,7 +230,97 @@ async def update_user(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No database connected"})
     try:
-        return None
+        # Check if user exists
+        existing_user = await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": user_id}
+        )
+
+        if not existing_user:
+            raise HTTPException(
+                status_code=404, detail={"error": f"User not found with ID: {user_id}"}
+            )
+
+        # Extract email from SCIM user
+        user_email = None
+        if user.emails and len(user.emails) > 0:
+            user_email = user.emails[0].value
+
+        # Extract team memberships
+        team_ids = []
+        if user.groups:
+            for group in user.groups:
+                # Verify team exists
+                team = await prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": group.value}
+                )
+                if team:
+                    team_ids.append(group.value)
+
+        # Prepare update data
+        update_data = {}
+        if user_email:
+            update_data["user_email"] = user_email
+        if user.name and user.name.givenName:
+            update_data["user_alias"] = user.name.givenName
+        
+        # Update metadata with SCIM information
+        existing_metadata = existing_user.metadata or {}
+        scim_metadata = LiteLLM_UserScimMetadata(
+            givenName=user.name.givenName if user.name else None,
+            familyName=user.name.familyName if user.name else None,
+        )
+        update_data["metadata"] = {
+            **existing_metadata, 
+            "scim_metadata": scim_metadata.model_dump()
+        }
+        
+        # Update teams if different
+        current_teams = set(existing_user.teams or [])
+        new_teams = set(team_ids)
+        
+        if current_teams != new_teams:
+            update_data["teams"] = team_ids
+            
+            # Handle team membership changes
+            # Remove user from teams they're no longer in
+            for team_id in current_teams - new_teams:
+                team = await prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": team_id}
+                )
+                if team:
+                    current_members = team.members or []
+                    if user_id in current_members:
+                        new_members = [m for m in current_members if m != user_id]
+                        await prisma_client.db.litellm_teamtable.update(
+                            where={"team_id": team_id}, 
+                            data={"members": new_members}
+                        )
+            
+            # Add user to new teams
+            for team_id in new_teams - current_teams:
+                team = await prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": team_id}
+                )
+                if team:
+                    current_members = team.members or []
+                    if user_id not in current_members:
+                        new_members = current_members + [user_id]
+                        await prisma_client.db.litellm_teamtable.update(
+                            where={"team_id": team_id}, 
+                            data={"members": new_members}
+                        )
+
+        # Update user
+        updated_user = await prisma_client.db.litellm_usertable.update(
+            where={"user_id": user_id},
+            data=update_data,
+        )
+
+        # Convert to SCIM format and return
+        scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(
+            updated_user
+        )
+        return scim_user
     except Exception as e:
         raise handle_exception_on_proxy(e)
 
@@ -320,7 +410,109 @@ async def patch_user(
                 status_code=404, detail={"error": f"User not found with ID: {user_id}"}
             )
 
-        return None
+        update_data = {}
+        existing_metadata = existing_user.metadata or {}
+        current_scim_metadata = existing_metadata.get("scim_metadata", {})
+        
+        for operation in patch_ops.Operations:
+            op = operation.op.lower()
+            path = operation.path
+            value = operation.value
+
+            if op == "replace":
+                if path == "active":
+                    # Handle user activation/deactivation
+                    # For now, we don't have an 'active' field in our user table
+                    # but we could store this in metadata
+                    update_data["metadata"] = {
+                        **existing_metadata,
+                        "scim_active": bool(value),
+                        "scim_metadata": current_scim_metadata
+                    }
+                elif path == "displayName":
+                    update_data["user_alias"] = str(value)
+                elif path == "emails":
+                    if isinstance(value, list) and len(value) > 0:
+                        email_value = value[0].get("value") if isinstance(value[0], dict) else str(value[0])
+                        update_data["user_email"] = email_value
+                elif path == "name.givenName":
+                    current_scim_metadata["givenName"] = str(value)
+                    update_data["metadata"] = {
+                        **existing_metadata,
+                        "scim_metadata": current_scim_metadata
+                    }
+                elif path == "name.familyName":
+                    current_scim_metadata["familyName"] = str(value)
+                    update_data["metadata"] = {
+                        **existing_metadata,
+                        "scim_metadata": current_scim_metadata
+                    }
+
+            elif op == "add":
+                if path == "groups" or (path is None and "groups" in str(value)):
+                    # Adding user to groups/teams
+                    groups_to_add = []
+                    if isinstance(value, list):
+                        groups_to_add = [g.get("value") if isinstance(g, dict) else str(g) for g in value]
+                    elif isinstance(value, dict) and "groups" in value:
+                        groups_to_add = [g.get("value") if isinstance(g, dict) else str(g) for g in value["groups"]]
+                    
+                    current_teams = set(existing_user.teams or [])
+                    for group_id in groups_to_add:
+                        if group_id not in current_teams:
+                            # Add team to user
+                            current_teams.add(group_id)
+                            # Add user to team
+                            team = await prisma_client.db.litellm_teamtable.find_unique(
+                                where={"team_id": group_id}
+                            )
+                            if team:
+                                current_members = team.members or []
+                                if user_id not in current_members:
+                                    await prisma_client.db.litellm_teamtable.update(
+                                        where={"team_id": group_id},
+                                        data={"members": current_members + [user_id]}
+                                    )
+                    update_data["teams"] = list(current_teams)
+
+            elif op == "remove":
+                if "groups" in (path or ""):
+                    # Removing user from groups/teams
+                    # Parse path like 'groups[value eq "team-id"]'
+                    import re
+                    match = re.search(r'groups\[value eq "([^"]+)"\]', path or "")
+                    if match:
+                        group_id = match.group(1)
+                        current_teams = set(existing_user.teams or [])
+                        if group_id in current_teams:
+                            current_teams.remove(group_id)
+                            update_data["teams"] = list(current_teams)
+                            # Remove user from team
+                            team = await prisma_client.db.litellm_teamtable.find_unique(
+                                where={"team_id": group_id}
+                            )
+                            if team:
+                                current_members = team.members or []
+                                if user_id in current_members:
+                                    await prisma_client.db.litellm_teamtable.update(
+                                        where={"team_id": group_id},
+                                        data={"members": [m for m in current_members if m != user_id]}
+                                    )
+
+        # Apply updates if any
+        if update_data:
+            updated_user = await prisma_client.db.litellm_usertable.update(
+                where={"user_id": user_id},
+                data=update_data,
+            )
+        else:
+            updated_user = existing_user
+
+        # Convert to SCIM format and return
+        scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(
+            updated_user
+        )
+        return scim_user
 
     except Exception as e:
         raise handle_exception_on_proxy(e)
@@ -480,16 +672,33 @@ async def create_group(
                 detail={"error": f"Group already exists with ID: {team_id}"},
             )
 
-        # Extract members
+        # Extract members and validate they exist
         members_with_roles: List[Member] = []
         if group.members:
             for member in group.members:
-                # Check if user exists
+                # Try to find user by user_id first, then by email
                 user = await prisma_client.db.litellm_usertable.find_unique(
                     where={"user_id": member.value}
                 )
+                
+                # If not found by user_id, try by email
+                if not user:
+                    user = await prisma_client.db.litellm_usertable.find_unique(
+                        where={"user_email": member.value}
+                    )
+                
                 if user:
-                    members_with_roles.append(Member(user_id=member.value, role="user"))
+                    members_with_roles.append(
+                        Member(
+                            user_id=user.user_id, 
+                            user_email=user.user_email,
+                            role="user"
+                        )
+                    )
+                else:
+                    verbose_proxy_logger.warning(
+                        f"SCIM create_group: User not found for member value: {member.value}"
+                    )
 
         # Create team in database
         created_team = await new_team(
@@ -707,6 +916,139 @@ async def patch_group(
                 status_code=404,
                 detail={"error": f"Group not found with ID: {group_id}"},
             )
-        return None
+
+        update_data = {}
+        current_members = existing_team.members or []
+        
+        for operation in patch_ops.Operations:
+            op = operation.op.lower()
+            path = operation.path
+            value = operation.value
+
+            if op == "replace":
+                if path == "displayName":
+                    update_data["team_alias"] = str(value)
+                elif path == "members":
+                    # Replace all members
+                    new_member_ids = []
+                    if isinstance(value, list):
+                        for member in value:
+                            member_value = member.get("value") if isinstance(member, dict) else str(member)
+                            # Try to find user by user_id first, then by email
+                            user = await prisma_client.db.litellm_usertable.find_unique(
+                                where={"user_id": member_value}
+                            )
+                            if not user:
+                                user = await prisma_client.db.litellm_usertable.find_unique(
+                                    where={"user_email": member_value}
+                                )
+                            if user:
+                                new_member_ids.append(user.user_id)
+                    
+                    # Update team members
+                    update_data["members"] = new_member_ids
+                    
+                    # Handle user-team relationships
+                    # Remove team from users no longer in the team
+                    for member_id in current_members:
+                        if member_id not in new_member_ids:
+                            user = await prisma_client.db.litellm_usertable.find_unique(
+                                where={"user_id": member_id}
+                            )
+                            if user:
+                                current_user_teams = user.teams or []
+                                if group_id in current_user_teams:
+                                    new_teams = [t for t in current_user_teams if t != group_id]
+                                    await prisma_client.db.litellm_usertable.update(
+                                        where={"user_id": member_id}, 
+                                        data={"teams": new_teams}
+                                    )
+                    
+                    # Add team to new users
+                    for member_id in new_member_ids:
+                        if member_id not in current_members:
+                            user = await prisma_client.db.litellm_usertable.find_unique(
+                                where={"user_id": member_id}
+                            )
+                            if user:
+                                current_user_teams = user.teams or []
+                                if group_id not in current_user_teams:
+                                    await prisma_client.db.litellm_usertable.update(
+                                        where={"user_id": member_id},
+                                        data={"teams": current_user_teams + [group_id]}
+                                    )
+
+            elif op == "add":
+                if path == "members" or (path is None and "members" in str(value)):
+                    # Adding members to group
+                    members_to_add = []
+                    if isinstance(value, list):
+                        members_to_add = value
+                    elif isinstance(value, dict) and "members" in value:
+                        members_to_add = value["members"]
+                    
+                    for member in members_to_add:
+                        member_value = member.get("value") if isinstance(member, dict) else str(member)
+                        # Try to find user by user_id first, then by email
+                        user = await prisma_client.db.litellm_usertable.find_unique(
+                            where={"user_id": member_value}
+                        )
+                        if not user:
+                            user = await prisma_client.db.litellm_usertable.find_unique(
+                                where={"user_email": member_value}
+                            )
+                        if user and user.user_id not in current_members:
+                            current_members.append(user.user_id)
+                            # Add team to user
+                            current_user_teams = user.teams or []
+                            if group_id not in current_user_teams:
+                                await prisma_client.db.litellm_usertable.update(
+                                    where={"user_id": user.user_id},
+                                    data={"teams": current_user_teams + [group_id]}
+                                )
+                    update_data["members"] = current_members
+
+            elif op == "remove":
+                if "members" in (path or ""):
+                    # Removing members from group
+                    # Parse path like 'members[value eq "user-id"]'
+                    import re
+                    match = re.search(r'members\[value eq "([^"]+)"\]', path or "")
+                    if match:
+                        member_value = match.group(1)
+                        # Try to find user by user_id first, then by email
+                        user = await prisma_client.db.litellm_usertable.find_unique(
+                            where={"user_id": member_value}
+                        )
+                        if not user:
+                            user = await prisma_client.db.litellm_usertable.find_unique(
+                                where={"user_email": member_value}
+                            )
+                        if user and user.user_id in current_members:
+                            current_members.remove(user.user_id)
+                            update_data["members"] = current_members
+                            # Remove team from user
+                            current_user_teams = user.teams or []
+                            if group_id in current_user_teams:
+                                new_teams = [t for t in current_user_teams if t != group_id]
+                                await prisma_client.db.litellm_usertable.update(
+                                    where={"user_id": user.user_id}, 
+                                    data={"teams": new_teams}
+                                )
+
+        # Apply updates if any
+        if update_data:
+            updated_team = await prisma_client.db.litellm_teamtable.update(
+                where={"team_id": group_id},
+                data=update_data,
+            )
+        else:
+            updated_team = existing_team
+
+        # Convert to SCIM format and return
+        scim_group = await ScimTransformations.transform_litellm_team_to_scim_group(
+            updated_team
+        )
+        return scim_group
     except Exception as e:
         raise handle_exception_on_proxy(e)
