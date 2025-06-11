@@ -321,25 +321,7 @@ async def _save_health_check_to_db(
         
         response_time_ms = (time.time() - start_time) * 1000
         
-        # Create simplified details for database storage with extra safety
-        def safe_get_model(endpoint):
-            try:
-                model_val = endpoint.get("model", "unknown")
-                if isinstance(model_val, str) and model_val.strip():
-                    # Clean the model name - remove problematic characters
-                    clean_model = str(model_val).replace("-cache", "cache").replace("/", "_")[:100]
-                    return clean_model
-                return "unknown"
-            except Exception:
-                return "unknown"
-        
-        simplified_details = {
-            "healthy_count": len(healthy_endpoints),
-            "unhealthy_count": len(unhealthy_endpoints),
-            "healthy_models": [safe_get_model(ep) for ep in healthy_endpoints[:5]],  # Limit to 5
-            "unhealthy_models": [safe_get_model(ep) for ep in unhealthy_endpoints[:5]],  # Limit to 5
-            "health_check_timestamp": int(time.time()),  # Use int instead of float
-        }
+
         
         await prisma_client.save_health_check_result(
             model_name=model_name,
