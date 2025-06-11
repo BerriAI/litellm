@@ -183,64 +183,52 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
     const endpointName = endpointType.charAt(0).toUpperCase() + endpointType.slice(1);
 
-    const modelNameForCode = selectedSdk === 'azure'
-      ? selectedModel || 'your-azure-deployment-name'
-      : selectedModel || 'your-model-name';
+    const modelNameForCode = selectedModel || 'your-model-name';
 
-    const codeTemplate = selectedSdk === 'azure'
-      ? `# Endpoint: ${endpointName}
-# Model: ${modelNameForCode} (Azure Deployment Name)
+    const clientInitialization = selectedSdk === 'azure'
+      ? `import openai
 
-import litellm
-import os
+client = openai.AzureOpenAI(
+    api_key="${effectiveApiKey || 'YOUR_LITELLM_API_KEY'}",
+    base_url="${apiBase}"
+)`
+      : `import openai
 
-# For Azure OpenAI, LiteLLM requires 3 env variables
-# Set them below
-os.environ["AZURE_API_KEY"] = "your-azure-api-key"
-os.environ["AZURE_API_BASE"] = "your-azure-api-base" # e.g. https://<your-endpoint>.openai.azure.com/
-os.environ["AZURE_API_VERSION"] = "2023-07-01-preview" # e.g. 2023-07-01-preview
-
-# The 'model' parameter should be your Azure OpenAI deployment name
-`
-      : `# Endpoint: ${endpointName}
-# Model: ${modelNameForCode}
-
-import litellm
-import os
-
-# Set the API key and base for your LiteLLM Proxy
-os.environ["LITELLM_API_KEY"] = "${effectiveApiKey || 'YOUR_LITELLM_API_KEY'}"
-os.environ["LITELLM_API_BASE"] = "${apiBase}"
-
-# The 'model' parameter is the model name you configured in LiteLLM
-`;
+client = openai.OpenAI(
+    api_key="${effectiveApiKey || 'YOUR_LITELLM_API_KEY'}",
+    base_url="${apiBase}"
+)`;
 
     let endpointSpecificCode;
     switch (endpointType) {
       case EndpointType.CHAT:
       case EndpointType.RESPONSES:
+        const metadataIsNotEmpty = Object.keys(metadata).length > 0;
+        let extraBodyCode = '';
+        if (metadataIsNotEmpty) {
+          const extraBodyObject = { metadata };
+          const extraBodyString = JSON.stringify(extraBodyObject, null, 2);
+          const indentedExtraBodyString = extraBodyString.split('\n').map(line => ' '.repeat(4) + line).join('\n').trim();
+          
+          extraBodyCode = `,\n    extra_body=${indentedExtraBodyString}`;
+        }
+
         endpointSpecificCode = `
-messages = ${JSON.stringify(messages, null, 2)}
-
-metadata = ${JSON.stringify(metadata, null, 2)}
-
-response = litellm.completion(
+# request sent to model set on litellm proxy, \`litellm --model\`
+response = client.chat.completions.create(
     model="${modelNameForCode}",
-    messages=messages,
-    metadata=metadata,
-    stream=True
+    messages = ${JSON.stringify(messages, null, 4)}${extraBodyCode}
 )
 
-for chunk in response:
-    print(chunk.choices[0].delta.content or "", end="")
+print(response)
 `;
         break;
       
       case EndpointType.IMAGE:
         endpointSpecificCode = `
-response = litellm.image_generation(
-    prompt="${inputMessage}",
-    model="${modelNameForCode}"
+response = client.images.generate(
+    model="${modelNameForCode}",
+    prompt="${inputMessage}"
 )
 
 print(response)
@@ -249,25 +237,21 @@ print(response)
 
       case EndpointType.IMAGE_EDITS:
         endpointSpecificCode = `
-from PIL import Image
-import io
+# NOTE: The openai-python library uses a file read for the image.
+# You will need to save your image to a file first.
+from pathlib import Path
 
-# This is a placeholder for your image data.
-# In a real script, you would load your image like this:
-# with open("path/to/your/image.png", "rb") as f:
-#     image_data = f.read()
+# Create a dummy image file. In your code, you would use the path to your actual image.
+image_path = Path("image.png")
+with open(image_path, "wb") as f:
+    # This is a placeholder for your image data.
+    # Replace this with f.write(your_image_bytes)
+    f.write(b'\\x89PNG\\r\\n\\x1a\\n\\x00\\x00\\x00\\rIHDR\\x00\\x00\\x00\\x01\\x00\\x00\\x00\\x01\\x08\\x06\\x00\\x00\\x00\\x1f\\x15\\xc4\\x89\\x00\\x00\\x00\\nIDATx\\x9c\\xed\\xc1\\x01\\x01\\x00\\x00\\x00\\xc2\\xa0\\xf7Om\\x00\\x00\\x00\\x00IEND\\xaeB\`\\x82') # 1x1 black pixel png
 
-# For this example, creating a dummy image.
-dummy_image = Image.new('RGB', (100, 100), color = 'red')
-img_byte_arr = io.BytesIO()
-dummy_image.save(img_byte_arr, format='PNG')
-image_data = img_byte_arr.getvalue()
-
-
-response = litellm.image_generation(
-    prompt="${inputMessage}",
+response = client.images.edit(
     model="${modelNameForCode}",
-    image=image_data,
+    prompt="${inputMessage}",
+    image=open(image_path, "rb")
 )
 
 print(response)
@@ -277,7 +261,7 @@ print(response)
         endpointSpecificCode = "\n# Code generation for this endpoint is not implemented yet.";
     }
 
-    const finalCode = codeTemplate + endpointSpecificCode;
+    const finalCode = `${clientInitialization}\n${endpointSpecificCode}`;
 
     setGeneratedCode(finalCode);
   };
