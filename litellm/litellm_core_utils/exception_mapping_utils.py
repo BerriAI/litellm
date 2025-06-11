@@ -5,7 +5,7 @@ from typing import Any, Optional
 import httpx
 
 import litellm
-from litellm import verbose_logger
+from litellm._logging import verbose_logger
 
 from ..exceptions import (
     APIConnectionError,
