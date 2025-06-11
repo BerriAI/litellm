@@ -9,20 +9,14 @@ import json # To create valid JSON responses for mock
 
 sys.path.insert(0, os.path.abspath("../.."))
 import litellm
-# Import the guardrail class and types from your file
 from litellm.proxy.guardrails.guardrail_hooks.prisma_airs_guardrail import prisma_airs_guardrail, call_airs_api
-
-# Mock LiteLLM types for the hook signature
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching.caching import DualCache
-#from litellm.types.guardrails import GuardrailResponse
 
 
-# --- IMPORTANT CHANGE HERE: Inherit from IsolatedAsyncioTestCase ---
 class TestPrismaAirsGuardrail(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
-        # Set up mock environment variables for initialization
         self.mock_api_key = "mock-api-key"
         self.mock_api_base = "http://mock-airs-api.com"
         self.mock_profile_name = "default_profile"
@@ -32,7 +26,6 @@ class TestPrismaAirsGuardrail(unittest.IsolatedAsyncioTestCase):
         os.environ["PRISMA_AIRS_PROFILE_NAME"] = self.mock_profile_name
 
     def tearDown(self):
-        # Clean up environment variables after each test
         del os.environ["PRISMA_AIRS_API_BASE"]
         del os.environ["PRISMA_AIRS_API_KEY"]
         del os.environ["PRISMA_AIRS_PROFILE_NAME"]
