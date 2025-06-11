@@ -4,6 +4,7 @@ Translates from OpenAI's `/v1/audio/transcriptions` to Deepgram's `/v1/listen`
 
 import io
 from typing import List, Optional, Union
+from urllib.parse import urlencode, urlparse, urlunparse
 
 from httpx import Headers, Response
 
@@ -163,36 +164,95 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             )
         api_base = api_base.rstrip("/")  # Remove trailing slash if present
 
-        # Start with base URL and model parameter
-        url = f"{api_base}/listen?model={model}"
+        # Build query parameters including the model
+        all_query_params = {"model": model}
 
-        # Add any additional query parameters from optional_params
-        # This supports parameters like punctuate, diarize, measurements, etc.
-        query_params = []
-        for key, value in optional_params.items():
-            if value is None:
-                continue
-            if key in [
-                "model",
-                "OPENAI_TRANSCRIPTION_PARAMS",
-            ]:
-                continue
+        # Add filtered optional parameters
+        additional_params = self._build_query_params(optional_params, model)
+        all_query_params.update(additional_params)
 
-            if key in self.get_supported_openai_params(model):
-                continue
-
-            # Convert boolean values to lowercase strings
-            if isinstance(value, bool):
-                value = str(value).lower()
-
-            # Add the parameter to query string
-            query_params.append(f"{key}={value}")
-
-        # Append query parameters to URL
-        if query_params:
-            url += "&" + "&".join(query_params)
+        # Construct URL with proper query string encoding
+        base_url = f"{api_base}/listen"
+        query_string = urlencode(all_query_params)
+        url = f"{base_url}?{query_string}"
 
         return url
+
+    def _should_exclude_param(
+        self,
+        param_name: str,
+        model: str,
+    ) -> bool:
+        """
+        Determines if a parameter should be excluded from the query string.
+
+        Args:
+            param_name: Parameter name
+            model: Model name
+
+        Returns:
+            True if the parameter should be excluded
+        """
+        # Parameters that are handled elsewhere or not relevant to Deepgram API
+        excluded_params = {
+            "model",  # Already in the URL path
+            "OPENAI_TRANSCRIPTION_PARAMS",  # Internal litellm parameter
+        }
+
+        # Skip if it's an excluded parameter
+        if param_name in excluded_params:
+            return True
+
+        # Skip if it's an OpenAI-specific parameter that we handle separately
+        if param_name in self.get_supported_openai_params(model):
+            return True
+
+        return False
+
+    def _format_param_value(self, value) -> str:
+        """
+        Formats a parameter value for use in query string.
+
+        Args:
+            value: The parameter value to format
+
+        Returns:
+            Formatted string value
+        """
+        if isinstance(value, bool):
+            return str(value).lower()
+        return str(value)
+
+    def _build_query_params(self, optional_params: dict, model: str) -> dict:
+        """
+        Builds a dictionary of query parameters from optional_params.
+
+        Args:
+            optional_params: Dictionary of optional parameters
+            model: Model name
+
+        Returns:
+            Dictionary of filtered and formatted query parameters
+        """
+        query_params = {}
+
+        for key, value in optional_params.items():
+            # Skip None values
+            if value is None:
+                continue
+
+            # Skip excluded parameters
+            if self._should_exclude_param(
+                param_name=key,
+                model=model,
+            ):
+                continue
+
+            # Format and add the parameter
+            formatted_value = self._format_param_value(value)
+            query_params[key] = formatted_value
+
+        return query_params
 
     def validate_environment(
         self,
