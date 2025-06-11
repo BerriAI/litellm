@@ -315,14 +315,8 @@ async def new_user(
 
         special_keys = ["token", "token_id"]
         response_dict = {}
-
-        # Get model fields safely - handle both Pydantic v1 and v2
-        model_fields_dict = {}
-        # Pydantic v2
-        model_fields_dict = NewUserResponse.model_fields
-
         for key, value in response.items():
-            if key in model_fields_dict and key not in special_keys:
+            if key in NewUserResponse.model_fields.keys() and key not in special_keys:
                 response_dict[key] = value
 
         response_dict["key"] = response.get("token", "")
