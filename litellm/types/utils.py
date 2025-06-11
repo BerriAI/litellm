@@ -275,6 +275,7 @@ class CallTypes(Enum):
     retrieve_fine_tuning_job = "retrieve_fine_tuning_job"
     responses = "responses"
     aresponses = "aresponses"
+    alist_input_items = "alist_input_items"
 
 
 CallTypesLiteral = Literal[
