@@ -3962,7 +3962,7 @@ def test_vertex_ai_gemini_2_5_pro_streaming():
 
 
 def test_vertex_ai_gemini_audio_ogg():
-    #load_vertex_ai_credentials()
+    load_vertex_ai_credentials()
     litellm._turn_on_debug()
     response = completion(
         model="vertex_ai/gemini-2.0-flash",
