@@ -45,8 +45,8 @@ class PassThroughEndpointLogging:
 
         # Bedrock
         self.TRACKED_BEDROCK_ROUTES = [
-            "bedrock-runtime",
-            "bedrock-agent-runtime"
+            "/invoke",
+            "/converse"
         ]
 
         # Cohere
