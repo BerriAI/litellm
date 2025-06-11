@@ -6,7 +6,7 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
+from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload, cast
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
@@ -251,17 +251,17 @@ Then provide a clear, concise answer based on your reasoning."""
                 if msg.get("role") == "system":
                     existing_content = msg.get("content", "")
                     reasoning_prompt = self._get_mistral_reasoning_system_prompt()
-                    messages[i] = {
+                    messages[i] = cast(AllMessageValues, {
                         **msg,
                         "content": f"{reasoning_prompt}\n\n{existing_content}"
-                    }
+                    })
                     break
         else:
             # Add new system message with reasoning instructions
-            reasoning_message: AllMessageValues = {
+            reasoning_message: AllMessageValues = cast(AllMessageValues, {
                 "role": "system",
                 "content": self._get_mistral_reasoning_system_prompt()
-            }
+            })
             messages = [reasoning_message] + messages
         
         # Remove the internal flag
