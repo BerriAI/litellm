@@ -1274,6 +1274,7 @@ async def test_user_info_team_list(prisma_client):
 
         try:
             await user_info(
+                request=MagicMock(),
                 user_id=None,
                 user_api_key_dict=UserAPIKeyAuth(
                     api_key="sk-1234", user_id="default_user_id"
