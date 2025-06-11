@@ -1,7 +1,7 @@
 """
 MCP Client Manager
 
-This class is responsible for managing MCP SSE clients.
+This class is responsible for managing MCP clients with support for both SSE and HTTP streamable transports.
 
 This is a Proxy
 """
@@ -9,10 +9,12 @@ This is a Proxy
 import asyncio
 import json
 import uuid
+from datetime import timedelta
 from typing import Any, Dict, List, Optional, cast
 
 from mcp import ClientSession
 from mcp.client.sse import sse_client
+from mcp.client.streamable_http import streamablehttp_client
 from mcp.types import CallToolResult
 from mcp.types import Tool as MCPTool
 
@@ -175,10 +177,31 @@ class MCPServerManager:
 
                     return tools_result.tools
         elif server.transport == MCPTransport.http:
-            # TODO: implement http transport
-            return []
+            verbose_logger.debug(f"Using HTTP streamable transport for {server.url}")
+            async with streamablehttp_client(
+                url=server.url,
+                timeout=timedelta(seconds=60),
+            ) as (read_stream, write_stream, get_session_id):
+                async with ClientSession(read_stream, write_stream) as session:
+                    await session.initialize()
+                    
+                    if get_session_id:
+                        session_id = get_session_id()
+                        if session_id:
+                            verbose_logger.debug(f"HTTP session ID: {session_id}")
+
+                    tools_result = await session.list_tools()
+                    verbose_logger.debug(f"Tools from {server.name}: {tools_result}")
+
+                    # Update tool to server mapping
+                    for tool in tools_result.tools:
+                        self.tool_name_to_mcp_server_name_mapping[
+                            tool.name
+                        ] = server.name
+
+                    return tools_result.tools
         else:
-            # TODO: throw error on transport found or skip
+            verbose_logger.warning(f"Unsupported transport type: {server.transport}")
             return []
 
     def initialize_tool_name_to_mcp_server_name_mapping(self):
@@ -217,8 +240,20 @@ class MCPServerManager:
                     await session.initialize()
                     return await session.call_tool(name, arguments)
         elif mcp_server.transport == MCPTransport.http:
-            # TODO: implement http transport
-            raise NotImplementedError("HTTP transport is not implemented yet")
+            verbose_logger.debug(f"Using HTTP streamable transport for tool call: {name}")
+            async with streamablehttp_client(
+                url=mcp_server.url,
+                timeout=timedelta(seconds=60),
+            ) as (read_stream, write_stream, get_session_id):
+                async with ClientSession(read_stream, write_stream) as session:
+                    await session.initialize()
+                    
+                    if get_session_id:
+                        session_id = get_session_id()
+                        if session_id:
+                            verbose_logger.debug(f"HTTP session ID for tool call: {session_id}")
+                    
+                    return await session.call_tool(name, arguments)
         else:
             return CallToolResult(content=[], isError=True)
 
