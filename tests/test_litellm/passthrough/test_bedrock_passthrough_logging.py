@@ -127,6 +127,148 @@ class TestBedrockPassthroughLoggingHandler:
         assert mock_logging_obj.model_call_details["custom_llm_provider"] == "bedrock"
 
     @patch("litellm.completion_cost")
+    def test_converse_route_model_naming(
+        self, mock_completion_cost, mock_httpx_response, mock_anthropic_bedrock_response, mock_logging_obj
+    ):
+        """Test that converse route properly prefixes model name"""
+        mock_completion_cost.return_value = 0.00025
+        mock_httpx_response.json.return_value = mock_anthropic_bedrock_response
+        mock_httpx_response.status_code = 200
+        mock_httpx_response.text = json.dumps(mock_anthropic_bedrock_response)
+
+        start_time = datetime.now()
+        end_time = datetime.now()
+        base_model = "anthropic.claude-3-sonnet-20240229-v1:0"
+
+        kwargs = {"model": base_model}
+
+        with patch("litellm.utils.ProviderConfigManager.get_provider_chat_config") as mock_get_config:
+            mock_config = Mock()
+            mock_config.transform_response.return_value = Mock(spec=ModelResponse)
+            mock_get_config.return_value = mock_config
+
+            result = BedrockPassthroughLoggingHandler.bedrock_passthrough_handler(
+                httpx_response=mock_httpx_response,
+                response_body=mock_anthropic_bedrock_response,
+                logging_obj=mock_logging_obj,
+                url_route="/model/anthropic.claude-3-sonnet-20240229-v1:0/converse",
+                result="",
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=False,
+                **kwargs,
+            )
+
+            # Verify that get_provider_chat_config was called with converse-prefixed model
+            expected_model = f"converse/{base_model}"
+            mock_get_config.assert_called_once_with(
+                model=expected_model,
+                provider=litellm.LlmProviders.BEDROCK
+            )
+
+    @patch("litellm.completion_cost")
+    def test_invoke_route_model_naming(
+        self, mock_completion_cost, mock_httpx_response, mock_anthropic_bedrock_response, mock_logging_obj
+    ):
+        """Test that invoke route properly prefixes model name"""
+        mock_completion_cost.return_value = 0.00025
+        mock_httpx_response.json.return_value = mock_anthropic_bedrock_response
+        mock_httpx_response.status_code = 200
+        mock_httpx_response.text = json.dumps(mock_anthropic_bedrock_response)
+
+        start_time = datetime.now()
+        end_time = datetime.now()
+        base_model = "anthropic.claude-3-sonnet-20240229-v1:0"
+
+        kwargs = {"model": base_model}
+
+        with patch("litellm.utils.ProviderConfigManager.get_provider_chat_config") as mock_get_config:
+            mock_config = Mock()
+            mock_config.transform_response.return_value = Mock(spec=ModelResponse)
+            mock_get_config.return_value = mock_config
+
+            result = BedrockPassthroughLoggingHandler.bedrock_passthrough_handler(
+                httpx_response=mock_httpx_response,
+                response_body=mock_anthropic_bedrock_response,
+                logging_obj=mock_logging_obj,
+                url_route="/model/anthropic.claude-3-sonnet-20240229-v1:0/invoke",
+                result="",
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=False,
+                **kwargs,
+            )
+
+            # Verify that get_provider_chat_config was called with invoke-prefixed model
+            expected_model = f"invoke/{base_model}"
+            mock_get_config.assert_called_once_with(
+                model=expected_model,
+                provider=litellm.LlmProviders.BEDROCK
+            )
+
+    def test_unknown_route_model_naming(
+        self, mock_httpx_response, mock_anthropic_bedrock_response, mock_logging_obj
+    ):
+        """Test that unknown routes use base model name without prefix"""
+        start_time = datetime.now()
+        end_time = datetime.now()
+        base_model = "anthropic.claude-3-sonnet-20240229-v1:0"
+
+        kwargs = {"model": base_model}
+
+        with patch("litellm.utils.ProviderConfigManager.get_provider_chat_config") as mock_get_config:
+            mock_config = Mock()
+            mock_config.transform_response.return_value = Mock(spec=ModelResponse)
+            mock_get_config.return_value = mock_config
+
+            result = BedrockPassthroughLoggingHandler.bedrock_passthrough_handler(
+                httpx_response=mock_httpx_response,
+                response_body=mock_anthropic_bedrock_response,
+                logging_obj=mock_logging_obj,
+                url_route="/model/anthropic.claude-3-sonnet-20240229-v1:0/unknown",
+                result="",
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=False,
+                **kwargs,
+            )
+
+            # Verify that get_provider_chat_config was called with base model (no prefix)
+            mock_get_config.assert_called_once_with(
+                model=base_model,
+                provider=litellm.LlmProviders.BEDROCK
+            )
+
+    def test_no_bedrock_config_found(
+        self, mock_httpx_response, mock_anthropic_bedrock_response, mock_logging_obj
+    ):
+        """Test handling when no Bedrock configuration is found"""
+        start_time = datetime.now()
+        end_time = datetime.now()
+        model = "unknown.model"
+
+        kwargs = {"model": model}
+
+        with patch("litellm.utils.ProviderConfigManager.get_provider_chat_config") as mock_get_config:
+            mock_get_config.return_value = None  # No config found
+
+            result = BedrockPassthroughLoggingHandler.bedrock_passthrough_handler(
+                httpx_response=mock_httpx_response,
+                response_body=mock_anthropic_bedrock_response,
+                logging_obj=mock_logging_obj,
+                url_route="/model/unknown.model/invoke",
+                result="",
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=False,
+                **kwargs,
+            )
+
+            # Should return None result and original kwargs when no config found
+            assert result["result"] is None
+            assert result["kwargs"] == kwargs
+
+    @patch("litellm.completion_cost")
     def test_titan_bedrock_response_transformation(
         self, mock_completion_cost, mock_httpx_response, mock_titan_bedrock_response, mock_logging_obj
     ):
@@ -266,6 +408,43 @@ class TestBedrockPassthroughLoggingHandler:
         mock_completion_cost.assert_called_once()
         assert result["kwargs"]["response_cost"] == 0.00015
 
+    @patch("litellm.completion_cost")
+    def test_cost_calculation_exception_handling(
+        self, mock_completion_cost, mock_httpx_response, mock_anthropic_bedrock_response, mock_logging_obj
+    ):
+        """Test that exceptions in cost calculation are handled gracefully"""
+        mock_completion_cost.side_effect = Exception("Cost calculation failed")
+        mock_httpx_response.json.return_value = mock_anthropic_bedrock_response
+        mock_httpx_response.status_code = 200
+        mock_httpx_response.text = json.dumps(mock_anthropic_bedrock_response)
+
+        start_time = datetime.now()
+        end_time = datetime.now()
+        model = "anthropic.claude-3-sonnet-20240229-v1:0"
+
+        kwargs = {"model": model}
+
+        with patch("litellm.utils.ProviderConfigManager.get_provider_chat_config") as mock_get_config:
+            mock_config = Mock()
+            mock_config.transform_response.return_value = Mock(spec=ModelResponse)
+            mock_get_config.return_value = mock_config
+
+            result = BedrockPassthroughLoggingHandler.bedrock_passthrough_handler(
+                httpx_response=mock_httpx_response,
+                response_body=mock_anthropic_bedrock_response,
+                logging_obj=mock_logging_obj,
+                url_route="/model/anthropic.claude-3-sonnet-20240229-v1:0/invoke",
+                result="",
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=False,
+                **kwargs,
+            )
+
+            # Should handle exception gracefully and return kwargs without response_cost
+            assert "response_cost" not in result["kwargs"]
+            assert result["kwargs"]["model"] == model
+
     def test_error_handling(
         self, mock_httpx_response, mock_logging_obj
     ):
@@ -306,6 +485,10 @@ class TestBedrockPassthroughLoggingHandler:
 
         assert BedrockPassthroughLoggingHandler._get_user_from_metadata(metadata_with_user) == "test_user_456"
         assert BedrockPassthroughLoggingHandler._get_user_from_metadata(empty_metadata) is None
+
+    def test_user_extraction_with_none_metadata(self):
+        """Test user extraction handles None metadata gracefully"""
+        assert BedrockPassthroughLoggingHandler._get_user_from_metadata({}) is None
 
     @patch("litellm.completion_cost")
     def test_user_metadata_handling(
@@ -350,6 +533,83 @@ class TestBedrockPassthroughLoggingHandler:
         assert litellm_params["proxy_server_request"]["body"]["user"] == "test_user"
 
         # Verify other kwargs
+        assert result["kwargs"]["model"] == model
+        assert result["kwargs"]["custom_llm_provider"] == "bedrock"
+        assert result["kwargs"]["response_cost"] == 0.00025
+
+    @patch("litellm.completion_cost")
+    def test_user_metadata_handling_no_user(
+        self, mock_completion_cost, mock_httpx_response, mock_anthropic_bedrock_response, mock_logging_obj
+    ):
+        """Test user metadata handling when no user is present"""
+        mock_completion_cost.return_value = 0.00025
+        mock_httpx_response.json.return_value = mock_anthropic_bedrock_response
+        mock_httpx_response.status_code = 200
+        mock_httpx_response.text = json.dumps(mock_anthropic_bedrock_response)
+
+        start_time = datetime.now()
+        end_time = datetime.now()
+        model = "anthropic.claude-3-sonnet-20240229-v1:0"
+
+        passthrough_logging_payload = {
+            "url": "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-3-sonnet-20240229-v1:0/invoke",
+            "request_body": {"modelId": model},
+            "request_method": "POST",
+        }
+
+        kwargs = {
+            "model": model,
+            "passthrough_logging_payload": passthrough_logging_payload,
+            "metadata": {},  # No user in metadata
+        }
+
+        result = BedrockPassthroughLoggingHandler.bedrock_passthrough_handler(
+            httpx_response=mock_httpx_response,
+            response_body=mock_anthropic_bedrock_response,
+            logging_obj=mock_logging_obj,
+            url_route="/model/anthropic.claude-3-sonnet-20240229-v1:0/invoke",
+            result="",
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=False,
+            **kwargs,
+        )
+
+        # Should not create proxy_server_request when no user
+        assert "litellm_params" not in result["kwargs"] or "proxy_server_request" not in result["kwargs"].get("litellm_params", {})
+
+    @patch("litellm.completion_cost")
+    def test_no_passthrough_logging_payload(
+        self, mock_completion_cost, mock_httpx_response, mock_anthropic_bedrock_response, mock_logging_obj
+    ):
+        """Test handling when no passthrough_logging_payload is provided"""
+        mock_completion_cost.return_value = 0.00025
+        mock_httpx_response.json.return_value = mock_anthropic_bedrock_response
+        mock_httpx_response.status_code = 200
+        mock_httpx_response.text = json.dumps(mock_anthropic_bedrock_response)
+
+        start_time = datetime.now()
+        end_time = datetime.now()
+        model = "anthropic.claude-3-sonnet-20240229-v1:0"
+
+        kwargs = {
+            "model": model,
+            "metadata": {"user": "test_user"},
+        }
+
+        result = BedrockPassthroughLoggingHandler.bedrock_passthrough_handler(
+            httpx_response=mock_httpx_response,
+            response_body=mock_anthropic_bedrock_response,
+            logging_obj=mock_logging_obj,
+            url_route="/model/anthropic.claude-3-sonnet-20240229-v1:0/invoke",
+            result="",
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=False,
+            **kwargs,
+        )
+
+        # Should handle gracefully without passthrough_logging_payload
         assert result["kwargs"]["model"] == model
         assert result["kwargs"]["custom_llm_provider"] == "bedrock"
         assert result["kwargs"]["response_cost"] == 0.00025
