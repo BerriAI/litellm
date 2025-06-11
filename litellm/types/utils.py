@@ -793,6 +793,13 @@ class Delta(OpenAIObject):
 
 
 class Choices(OpenAIObject):
+    finish_reason: Optional[str] = None
+    index: Optional[int] = None
+    message: Optional[Message] = None
+    logprobs: Optional[ChoiceLogprobs] = None
+
+    provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
+
     def __init__(
         self,
         finish_reason=None,
@@ -800,6 +807,7 @@ class Choices(OpenAIObject):
         message: Optional[Union[Message, dict]] = None,
         logprobs: Optional[Union[ChoiceLogprobs, dict, Any]] = None,
         enhancements=None,
+        provider_specific_fields: Optional[Dict[str, Any]] = None,
         **params,
     ):
         super(Choices, self).__init__(**params)
@@ -824,6 +832,8 @@ class Choices(OpenAIObject):
                 self.logprobs = logprobs
         if enhancements is not None:
             self.enhancements = enhancements
+
+        self.provider_specific_fields = provider_specific_fields
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
