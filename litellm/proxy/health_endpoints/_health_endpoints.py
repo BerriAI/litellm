@@ -303,6 +303,65 @@ async def health_services_endpoint(  # noqa: PLR0915
         )
 
 
+async def _save_health_check_to_db(
+    prisma_client, 
+    model_name: str, 
+    healthy_endpoints: list, 
+    unhealthy_endpoints: list, 
+    start_time: float, 
+    user_id: Optional[str]
+):
+    """Helper function to save health check results to database"""
+    try:
+        status = "healthy" if len(healthy_endpoints) > 0 else "unhealthy"
+        error_message = None
+        if len(unhealthy_endpoints) > 0 and unhealthy_endpoints[0].get("error"):
+            error_message = str(unhealthy_endpoints[0]["error"])[:500]  # Limit error message length
+        
+        response_time_ms = (time.time() - start_time) * 1000
+        
+        # Create simplified details for database storage with extra safety
+        def safe_get_model(endpoint):
+            try:
+                model_val = endpoint.get("model", "unknown")
+                if isinstance(model_val, str) and model_val.strip():
+                    # Clean the model name - remove problematic characters
+                    clean_model = str(model_val).replace("-cache", "cache").replace("/", "_")[:100]
+                    return clean_model
+                return "unknown"
+            except Exception:
+                return "unknown"
+        
+        simplified_details = {
+            "healthy_count": len(healthy_endpoints),
+            "unhealthy_count": len(unhealthy_endpoints),
+            "healthy_models": [safe_get_model(ep) for ep in healthy_endpoints[:5]],  # Limit to 5
+            "unhealthy_models": [safe_get_model(ep) for ep in unhealthy_endpoints[:5]],  # Limit to 5
+            "health_check_timestamp": int(time.time()),  # Use int instead of float
+        }
+        
+        # Add more debugging
+        verbose_proxy_logger.debug(f"Attempting to save health check for model: {model_name}")
+        verbose_proxy_logger.debug(f"Simplified details: {simplified_details}")
+        verbose_proxy_logger.debug(f"Error message: {error_message}")
+        verbose_proxy_logger.debug(f"Response time: {response_time_ms}")
+        
+        await prisma_client.save_health_check_result(
+            model_name=model_name,
+            status=status,
+            healthy_count=len(healthy_endpoints),
+            unhealthy_count=len(unhealthy_endpoints),
+            error_message=error_message,
+            response_time_ms=response_time_ms,
+            details=simplified_details,
+            checked_by=user_id,
+        )
+        verbose_proxy_logger.debug("Successfully saved health check to database")
+    except Exception as db_error:
+        verbose_proxy_logger.warning(f"Failed to save health check to database for model {model_name}: {db_error}")
+        # Continue execution - don't let database save failure break health checks
+
+
 @router.get("/health", tags=["health"], dependencies=[Depends(user_api_key_auth)])
 async def health_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -348,54 +407,14 @@ async def health_endpoint(
                 
                 # Optionally save health check result to database (non-blocking)
                 if prisma_client is not None:
-                    try:
-                        status = "healthy" if len(healthy_endpoints) > 0 else "unhealthy"
-                        error_message = None
-                        if len(unhealthy_endpoints) > 0 and unhealthy_endpoints[0].get("error"):
-                            error_message = str(unhealthy_endpoints[0]["error"])[:500]  # Limit error message length
-                        
-                        response_time_ms = (time.time() - start_time) * 1000
-                        
-                        # Create simplified details for database storage with extra safety
-                        def safe_get_model(endpoint):
-                            try:
-                                model_val = endpoint.get("model", "unknown")
-                                if isinstance(model_val, str) and model_val.strip():
-                                    # Clean the model name - remove problematic characters
-                                    clean_model = str(model_val).replace("-cache", "cache").replace("/", "_")[:100]
-                                    return clean_model
-                                return "unknown"
-                            except Exception:
-                                return "unknown"
-                        
-                        simplified_details = {
-                            "healthy_count": len(healthy_endpoints),
-                            "unhealthy_count": len(unhealthy_endpoints),
-                            "healthy_models": [safe_get_model(ep) for ep in healthy_endpoints[:5]],  # Limit to 5
-                            "unhealthy_models": [safe_get_model(ep) for ep in unhealthy_endpoints[:5]],  # Limit to 5
-                            "health_check_timestamp": int(time.time()),  # Use int instead of float
-                        }
-                        
-                        # Add more debugging
-                        verbose_proxy_logger.debug(f"Attempting to save health check for model: {user_model}")
-                        verbose_proxy_logger.debug(f"Simplified details: {simplified_details}")
-                        verbose_proxy_logger.debug(f"Error message: {error_message}")
-                        verbose_proxy_logger.debug(f"Response time: {response_time_ms}")
-                        
-                        await prisma_client.save_health_check_result(
-                            model_name=user_model,
-                            status=status,
-                            healthy_count=len(healthy_endpoints),
-                            unhealthy_count=len(unhealthy_endpoints),
-                            error_message=error_message,
-                            response_time_ms=response_time_ms,
-                            details=simplified_details,
-                            checked_by=user_api_key_dict.user_id,
-                        )
-                        verbose_proxy_logger.debug("Successfully saved health check to database")
-                    except Exception as db_error:
-                        verbose_proxy_logger.warning(f"Failed to save health check to database for model {user_model}: {db_error}")
-                        # Continue execution - don't let database save failure break health checks
+                    await _save_health_check_to_db(
+                        prisma_client,
+                        user_model,
+                        healthy_endpoints,
+                        unhealthy_endpoints,
+                        start_time,
+                        user_api_key_dict.user_id
+                    )
                 
                 return {
                     "healthy_endpoints": healthy_endpoints,
@@ -422,54 +441,14 @@ async def health_endpoint(
 
             # Optionally save health check result to database (non-blocking)
             if prisma_client is not None and model is not None:
-                try:
-                    status = "healthy" if len(healthy_endpoints) > 0 else "unhealthy"
-                    error_message = None
-                    if len(unhealthy_endpoints) > 0 and unhealthy_endpoints[0].get("error"):
-                        error_message = str(unhealthy_endpoints[0]["error"])[:500]  # Limit error message length
-                    
-                    response_time_ms = (time.time() - start_time) * 1000
-                    
-                    # Create simplified details for database storage with extra safety
-                    def safe_get_model(endpoint):
-                        try:
-                            model_val = endpoint.get("model", "unknown")
-                            if isinstance(model_val, str) and model_val.strip():
-                                # Clean the model name - remove problematic characters
-                                clean_model = str(model_val).replace("-cache", "cache").replace("/", "_")[:100]
-                                return clean_model
-                            return "unknown"
-                        except Exception:
-                            return "unknown"
-                    
-                    simplified_details = {
-                        "healthy_count": len(healthy_endpoints),
-                        "unhealthy_count": len(unhealthy_endpoints),
-                        "healthy_models": [safe_get_model(ep) for ep in healthy_endpoints[:5]],  # Limit to 5
-                        "unhealthy_models": [safe_get_model(ep) for ep in unhealthy_endpoints[:5]],  # Limit to 5
-                        "health_check_timestamp": int(time.time()),  # Use int instead of float
-                    }
-                    
-                    # Add more debugging
-                    verbose_proxy_logger.debug(f"Attempting to save health check for model: {model}")
-                    verbose_proxy_logger.debug(f"Simplified details: {simplified_details}")
-                    verbose_proxy_logger.debug(f"Error message: {error_message}")
-                    verbose_proxy_logger.debug(f"Response time: {response_time_ms}")
-                    
-                    await prisma_client.save_health_check_result(
-                        model_name=model,
-                        status=status,
-                        healthy_count=len(healthy_endpoints),
-                        unhealthy_count=len(unhealthy_endpoints),
-                        error_message=error_message,
-                        response_time_ms=response_time_ms,
-                        details=simplified_details,
-                        checked_by=user_api_key_dict.user_id,
-                    )
-                    verbose_proxy_logger.debug("Successfully saved health check to database")
-                except Exception as db_error:
-                    verbose_proxy_logger.warning(f"Failed to save health check to database for model {model}: {db_error}")
-                    # Continue execution - don't let database save failure break health checks
+                await _save_health_check_to_db(
+                    prisma_client,
+                    model,
+                    healthy_endpoints,
+                    unhealthy_endpoints,
+                    start_time,
+                    user_api_key_dict.user_id
+                )
 
             return {
                 "healthy_endpoints": healthy_endpoints,
