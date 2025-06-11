@@ -1439,6 +1439,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "max_budget": key_max_budget,
             "user_id": user_id,
             "team_id": team_id,
+            "team_member_details": team_member_details,
             "max_parallel_requests": max_parallel_requests,
             "metadata": metadata_json,
             "tpm_limit": tpm_limit,

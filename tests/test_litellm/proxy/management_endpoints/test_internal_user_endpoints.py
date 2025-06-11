@@ -248,130 +248,135 @@ async def test_assign_user_team_role_at_user_creation(mocker):
         NewTeamRequest,
         NewUserRequest,
         LiteLLM_TeamTable,
-        LiteLLM_UserTable
+        LiteLLM_UserTable,
+        TeamListResponseObject,
+        LiteLLM_TeamMembership
     )
     from litellm.proxy.management_endpoints.team_endpoints import (
         new_team, 
         team_info,
-        list_team
+        list_team,
+        list_team_v2
     )
     from litellm.proxy.management_endpoints.internal_user_endpoints import (new_user, user_info)
     from types import CoroutineType
     from typing import Any
+    from datetime import datetime, timedelta, timezone
 
     # Create new team
     # test_team_data = NewTeamRequest(team_alias="test_team_1")
+    test_user_id = "test-user-id"
     test_user_email = "test_user_1@berri.ai"
     test_team_id = "test-team"
     test_team_alias = "test_team_1"
-    user_api_key_dict = UserAPIKeyAuth(user_id="test_user")
+    user_api_key_dict = UserAPIKeyAuth(user_id="test_user", user_role="proxy_admin")
+    key_data = {
+        "token": "test-token",
+        "key_alias": "test-key_alias",
+        "expires": None,
+        "models": [],
+        "aliases": {},
+        "config": {},
+        "spend": 0.0,
+        "max_budget": None,
+        "user_id": test_user_id,
+        "user_email": test_user_email,
+        "team_id": None,
+        "team_member_details": {
+            "team_id":test_team_id,
+            "team_member_role":"user"
+        },
+        "max_parallel_requests": None,
+        "metadata": {},
+        "tpm_limit": None,
+        "rpm_limit": None,
+        "budget_duration": None,
+        "budget_reset_at": None,
+        "allowed_cache_controls": [],
+        "permissions": {},
+        "model_max_budget": {},
+        "budget_id": None,
+        "blocked": None,
+        "created_by": None,
+        "updated_by": None,
+        "allowed_routes": [],
+        "object_permission_id": None,
+    }
 
     # Mock the prisma client
     mock_prisma_client = mocker.MagicMock()
 
-    # Create mock user data with null email
-    '''mock_user_row = mocker.MagicMock()
-    mock_user_row.model_dump.return_value = {
+    # Create user data
+    mock_user = mocker.MagicMock()
+
+    mock_user.model_dump.return_value = {
         "user_id": "test-user-null-email",
         "user_email": None,
         "user_role": "proxy_admin",
-        "models":[],
-        "created_at": "2024-01-01T00:00:00Z",
+        "created_at": "2025-01-01T00:00:00Z",
     }
 
-    mock_team_data = {
-        "team_id": test_team_id,
-        "team_alias":test_team_alias
-    }'''
-
-    # Mocks for internal_user_endpoints
-    ## Mock find_first response as an async function
-    async def mock_find_first(*args, **kwargs):
-        return None
-    
-    ## Mock insert_data response as an async function
-    async def mock_insert_data(*args, **kwargs):
-        return LiteLLM_UserTable(
-            user_id="test-user",
-            user_email=test_user_email,
-            team_id=test_team_id,
-            team_member_role="user",
-            models=['no-default-models'],
-            auto_create_key=False,
-            team_member_details = {
-                "team_id":test_team_id,
-                "team_member_role":"user"
-            }
-        )
-    
-    # Mock update_data response as an async function
-    async def mock_update_data(*args, **kwargs):
-        return LiteLLM_UserTable(
-            user_id="test-user",
-            user_email=test_user_email,
-            team_id=test_team_id,
-            team_member_role="user",
-            models=['no-default-models'],
-            auto_create_key=False,
-            team_member_details = {
-                "team_id":test_team_id,
-                "team_member_role":"user"
-            }
-        )
-    
     # Mock helper function _check_duplicate_user_email
     async def mock__check_duplicate_user_email(*args, **kwargs):
         return None
     
-    # Mocks for team_endpoints
-    ## Mock create response as an async function
-    async def mock_create(*args, **kwargs):
-        return LiteLLM_TeamTable(team_id=test_team_id,team_alias=test_team_alias)
+    # Mock helper function _update_internal_new_user_params
+    def mock__update_internal_new_user_params(*args, **kwargs):
+        return mock_user
     
-    ## Mock get_data response as an async function
-    async def mock_get_data(*args, **kwargs):
+    # Mock helper function generate_key_helper_fn
+    async def mock_generate_key_helper_fn(*args, **kwargs):
+        return key_data
+    
+    # Mock helper function team_call_validation_checks
+    def mock_team_call_validation_checks(*args, **kwargs):
         return None
     
-    mock_prisma_client.db.litellm_usertable.find_first = mock_find_first
-    mock_prisma_client.insert_data = mock_insert_data
-    mock_prisma_client.update_data = mock_update_data
-    mock_prisma_client.db.litellm_teamtable.create = mock_create
-    mock_prisma_client.get_data = mock_get_data
-
     # Patch the prisma client import in the endpoint
-    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+        mock_generate_key_helper_fn
+    )
 
     mocker.patch(
         "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
-        mock__check_duplicate_user_email,
+        mock__check_duplicate_user_email
     )
 
-    
-    # user_info(None, test_user_email, user_api_key_dict)
-    new_team_response = await new_team(NewTeamRequest(team_id=test_team_id, team_alias=test_team_alias), None, user_api_key_dict)
-    
+    '''
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._update_internal_new_user_params",
+        mock__update_internal_new_user_params
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.team_call_validation_checks",
+        mock_team_call_validation_checks
+    )'''
+
     # Assign team to new user and assign user role to new user
     new_user_response = await new_user(
         NewUserRequest(
             user_email=test_user_email,
-            team_id=new_team_response["team_id"],
-            team_member_role="user",
             models=['no-default-models'],
             auto_create_key=False,
             team_member_details = {
-                "team_id":new_team_response["team_id"],
+                "team_id":test_team_id,
                 "team_member_role":"user"
             }
         ), 
         user_api_key_dict
     )
 
-    print("user /new response: {0}\n".format(new_user_response))
-    print("team /new response: ", new_team_response)
+    print(f"user /new response: {new_user_response}")
 
-    assert new_user_response is not None and (new_user_response.user_email == test_user_email) # Validate that test user was created
-    assert new_team_response is not None and (new_team_response["team_id"] == test_team_id) and (new_team_response["team_alias"] == test_team_alias) # Validate test team was created
-    # assert (await list_team(None, test_user_email, None, user_api_key_dict))[0] == test_team_alias # Validate that the test 
+    assert new_user_response is not None
+    assert new_user_response.user_email == test_user_email # Validate that test user was created
+    assert new_user_response.team_member_details["team_id"] == test_team_id # Validate test user was created with test team id
+    assert new_user_response.team_member_details["team_member_role"] == "user" # Validate test user was added to test team as "user" role
+
+    print(f"user /new response: {new_user_responses}")
 
 """def test_assigning_admin_team_role_at_user_creation_returns_error():
     
