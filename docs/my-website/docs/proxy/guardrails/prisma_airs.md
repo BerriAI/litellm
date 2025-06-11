@@ -38,7 +38,7 @@ general_settings:
       set_verbose: True
 
 guardrails:
-    - guardrail_name: "prisma_airs_guardrail"
+    - guardrail_name: "prisma_airs"
     litellm_params:
         guardrail: prisma_airs_guardrail.prisma_airs_guardrail
         path : prisma_airs_guardrail.py
