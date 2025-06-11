@@ -469,3 +469,15 @@ async def test_openai_pdf_url(model):
 
     assert "file_data" in request["raw_request_body"]["messages"][0]["content"][1]["file"]
 
+
+
+def test_openai_codex():
+    from litellm import completion
+
+    response = completion(
+        model="openai/codex-mini-latest",
+        messages=[{"role": "user", "content": "Hey!"}],
+    )
+    print("response: ", response)
+
+    assert response.choices[0].message.content is not None

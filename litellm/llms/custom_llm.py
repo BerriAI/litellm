@@ -8,15 +8,26 @@
 - async_streaming
 """
 
-from typing import Any, AsyncIterator, Callable, Iterator, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Callable,
+    Iterator,
+    Optional,
+    Union,
+)
 
 import httpx
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.utils import GenericStreamingChunk
-from litellm.utils import ImageResponse, ModelResponse, EmbeddingResponse
+from litellm.utils import EmbeddingResponse, ImageResponse, ModelResponse
 
 from .base import BaseLLM
+
+if TYPE_CHECKING:
+    from litellm import CustomStreamWrapper
 
 
 class CustomLLMError(Exception):  # use this for all your exceptions
@@ -54,7 +65,7 @@ class CustomLLM(BaseLLM):
         headers={},
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[HTTPHandler] = None,
-    ) -> ModelResponse:
+    ) -> Union[ModelResponse, "CustomStreamWrapper"]:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
     def streaming(
