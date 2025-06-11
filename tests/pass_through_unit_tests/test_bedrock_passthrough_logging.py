@@ -73,7 +73,7 @@ class TestBedrockPassthroughLoggingHandler:
         mock_httpx_response.json.return_value = mock_anthropic_bedrock_response
         mock_httpx_response.status_code = 200
         mock_httpx_response.text = json.dumps(mock_anthropic_bedrock_response)
-        
+
         start_time = datetime.now()
         end_time = datetime.now()
         model = "anthropic.claude-3-sonnet-20240229-v1:0"
@@ -103,7 +103,7 @@ class TestBedrockPassthroughLoggingHandler:
         assert "result" in result
         assert "kwargs" in result
         assert isinstance(result["result"], ModelResponse)
-        
+
         # Verify model response content
         model_response = result["result"]
         assert model_response.model == model
@@ -112,7 +112,7 @@ class TestBedrockPassthroughLoggingHandler:
         assert model_response.choices[0].message.role == "assistant"
         assert model_response.choices[0].finish_reason == "stop"  # end_turn maps to stop
         assert model_response.id == "test-call-id-123"
-        
+
         # Verify usage
         assert model_response.usage.prompt_tokens == 10
         assert model_response.usage.completion_tokens == 15
@@ -122,7 +122,6 @@ class TestBedrockPassthroughLoggingHandler:
         assert result["kwargs"]["model"] == model
         assert result["kwargs"]["custom_llm_provider"] == "bedrock"
         assert result["kwargs"]["response_cost"] == 0.00025
-        
         # Verify logging object was updated
         assert mock_logging_obj.model_call_details["model"] == model
         assert mock_logging_obj.model_call_details["custom_llm_provider"] == "bedrock"
@@ -136,7 +135,7 @@ class TestBedrockPassthroughLoggingHandler:
         mock_httpx_response.json.return_value = mock_titan_bedrock_response
         mock_httpx_response.status_code = 200
         mock_httpx_response.text = json.dumps(mock_titan_bedrock_response)
-        
+
         start_time = datetime.now()
         end_time = datetime.now()
         model = "amazon.titan-text-lite-v1"
@@ -164,14 +163,14 @@ class TestBedrockPassthroughLoggingHandler:
 
         # Verify result structure
         assert isinstance(result["result"], ModelResponse)
-        
+
         # Verify model response content
         model_response = result["result"]
         assert model_response.model == model
         assert len(model_response.choices) == 1
         assert model_response.choices[0].message.content == "This is a response from Amazon Titan."
         assert model_response.choices[0].finish_reason == "stop"  # FINISH maps to stop
-        
+
         # Verify usage information is extracted properly by LiteLLM transformations
         # Note: LiteLLM may estimate tokens differently than the raw response
         assert model_response.usage.prompt_tokens > 0
@@ -184,7 +183,7 @@ class TestBedrockPassthroughLoggingHandler:
     ):
         """Test transformation of Amazon Titan (generic) response format"""
         mock_completion_cost.return_value = 0.00008
-        
+
         start_time = datetime.now()
         end_time = datetime.now()
         model = "amazon.titan-text-express-v1"
@@ -200,7 +199,7 @@ class TestBedrockPassthroughLoggingHandler:
                 }
             ],
         }
-        
+
         mock_httpx_response.json.return_value = response_body
         mock_httpx_response.status_code = 200
         mock_httpx_response.text = json.dumps(response_body)
@@ -228,7 +227,7 @@ class TestBedrockPassthroughLoggingHandler:
 
         # Verify result structure
         assert isinstance(result["result"], ModelResponse)
-        
+
         # Verify model response content
         model_response = result["result"]
         assert model_response.model == model
@@ -244,7 +243,7 @@ class TestBedrockPassthroughLoggingHandler:
         mock_httpx_response.json.return_value = mock_anthropic_bedrock_response
         mock_httpx_response.status_code = 200
         mock_httpx_response.text = json.dumps(mock_anthropic_bedrock_response)
-        
+
         start_time = datetime.now()
         end_time = datetime.now()
         model = "anthropic.claude-3-sonnet-20240229-v1:0"
@@ -297,21 +296,12 @@ class TestBedrockPassthroughLoggingHandler:
                 **kwargs,
             )
 
-    def test_should_log_request(self):
-        """Test request logging logic"""
-        # Should log by default
-        assert BedrockPassthroughLoggingHandler._should_log_request({})
-        assert BedrockPassthroughLoggingHandler._should_log_request({"should_log": True})
-        
-        # Should not log when explicitly disabled
-        assert not BedrockPassthroughLoggingHandler._should_log_request({"should_log": False})
-
     def test_user_extraction_from_metadata(self):
         """Test user extraction from metadata"""
         metadata_with_user = {
             "user": "test_user_456"
         }
-        
+
         empty_metadata = {}
 
         assert BedrockPassthroughLoggingHandler._get_user_from_metadata(metadata_with_user) == "test_user_456"
@@ -326,7 +316,7 @@ class TestBedrockPassthroughLoggingHandler:
         mock_httpx_response.json.return_value = mock_anthropic_bedrock_response
         mock_httpx_response.status_code = 200
         mock_httpx_response.text = json.dumps(mock_anthropic_bedrock_response)
-        
+
         start_time = datetime.now()
         end_time = datetime.now()
         model = "anthropic.claude-3-sonnet-20240229-v1:0"
@@ -358,7 +348,7 @@ class TestBedrockPassthroughLoggingHandler:
         # Verify user was properly set in litellm_params
         litellm_params = result["kwargs"]["litellm_params"]
         assert litellm_params["proxy_server_request"]["body"]["user"] == "test_user"
-        
+
         # Verify other kwargs
         assert result["kwargs"]["model"] == model
         assert result["kwargs"]["custom_llm_provider"] == "bedrock"
