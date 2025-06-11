@@ -4250,7 +4250,8 @@
         "source": "https://mistral.ai/news/magistral",
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true
     },
     "mistral/magistral-small-2506": {
         "max_tokens": 40000,
@@ -4263,7 +4264,8 @@
         "source": "https://mistral.ai/news/magistral",
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true
     },
     "mistral/mistral-embed": {
         "max_tokens": 8192,
