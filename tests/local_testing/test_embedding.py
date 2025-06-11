@@ -806,6 +806,10 @@ def test_fireworks_embeddings():
         assert cost > 0.0
         print(response._hidden_params)
         assert response._hidden_params["response_cost"] > 0.0
+    except litellm.RateLimitError as e:
+        pass
+    except litellm.InternalServerError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
