@@ -825,6 +825,7 @@ from .utils import (
     create_tokenizer,
     supports_function_calling,
     supports_web_search,
+    supports_url_context,
     supports_response_schema,
     supports_parallel_function_calling,
     supports_vision,
@@ -886,6 +887,7 @@ from .llms.triton.completion.transformation import TritonConfig
 from .llms.triton.completion.transformation import TritonGenerateConfig
 from .llms.triton.completion.transformation import TritonInferConfig
 from .llms.triton.embedding.transformation import TritonEmbeddingConfig
+from .llms.huggingface.rerank.transformation import HuggingFaceRerankConfig
 from .llms.databricks.chat.transformation import DatabricksConfig
 from .llms.databricks.embed.transformation import DatabricksEmbeddingConfig
 from .llms.predibase.chat.transformation import PredibaseConfig

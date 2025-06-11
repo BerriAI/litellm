@@ -143,8 +143,10 @@ class BaseLLMChatTest(ABC):
 
     def test_streaming(self):
         """Check if litellm handles streaming correctly"""
+        from litellm.types.utils import ModelResponseStream
+        from typing import Optional
         base_completion_call_args = self.get_base_completion_call_args()
-        litellm.set_verbose = True
+        # litellm.set_verbose = True
         messages = [
             {
                 "role": "user",
@@ -164,9 +166,14 @@ class BaseLLMChatTest(ABC):
 
         # for OpenAI the content contains the JSON schema, so we need to assert that the content is not None
         chunks = []
+        created_at: Optional[int] = None
         for chunk in response:
             print(chunk)
             chunks.append(chunk)
+            if isinstance(chunk, ModelResponseStream):
+                if created_at is None:
+                    created_at = chunk.created
+                assert chunk.created == created_at
 
         resp = litellm.stream_chunk_builder(chunks=chunks)
         print(resp)
@@ -207,6 +214,27 @@ class BaseLLMChatTest(ABC):
 
         assert response is not None
 
+        print(f"response={response}")
+
+    def test_url_context(self):
+        from litellm.utils import supports_url_context
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        litellm._turn_on_debug()
+
+        base_completion_call_args = self.get_base_completion_call_args()
+
+        if not supports_url_context(base_completion_call_args["model"], None):
+            pytest.skip("Model does not support url context")
+
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages=[{"role": "user", "content": "Summarize the content of this URL: https://en.wikipedia.org/wiki/Artificial_intelligence"}],
+            tools=[{"urlContext": {}}],
+        )
+
+        assert response is not None
         print(f"response={response}")
 
     @pytest.mark.parametrize("sync_mode", [True, False])

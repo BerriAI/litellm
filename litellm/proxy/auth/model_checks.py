@@ -108,17 +108,19 @@ def get_team_models(
     - Empty list if no models set
     - If model_access_groups is provided, only return models that are in the access groups
     """
-    all_models = []
+    all_models_set: Set[str] = set()
     if len(team_models) > 0:
-        all_models = team_models
-        if SpecialModelNames.all_team_models.value in all_models:
-            all_models = team_models
-        if SpecialModelNames.all_proxy_models.value in all_models:
-            all_models = proxy_model_list
+        all_models_set.update(team_models)
+        if SpecialModelNames.all_team_models.value in all_models_set:
+            all_models_set.update(team_models)
+        if SpecialModelNames.all_proxy_models.value in all_models_set:
+            all_models_set.update(proxy_model_list)
+
+    all_models = list(all_models_set)
 
     all_models = _get_models_from_access_groups(
         model_access_groups=model_access_groups,
-        all_models=all_models,
+        all_models=list(all_models_set),
         include_model_access_groups=include_model_access_groups,
     )
 

@@ -61,6 +61,7 @@ interface EntityUsageProps {
   userID: string | null;
   userRole: string | null;
   entityList: EntityList[] | null;
+  premiumUser: boolean;
 }
 
 const EntityUsage: React.FC<EntityUsageProps> = ({
@@ -69,7 +70,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   entityId,
   userID,
   userRole,
-  entityList
+  entityList,
+  premiumUser
 }) => {
   const [spendData, setSpendData] = useState<EntitySpendData>({ 
     results: [], 
@@ -472,6 +474,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                       userID={userID}
                       userRole={userRole}
                       teams={null}
+                      premiumUser={premiumUser}
                     />
                 </Card>
               </Col>

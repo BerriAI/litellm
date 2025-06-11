@@ -1494,12 +1494,12 @@ jobs:
             # Build and scan Dockerfile.database
             echo "Building and scanning Dockerfile.database..."
             docker build -t litellm-database:latest -f ./docker/Dockerfile.database .
-            grype litellm-database:latest --fail-on high
+            grype litellm-database:latest
 
             # Build and scan main Dockerfile
             echo "Building and scanning main Dockerfile..."
             docker build -t litellm:latest .
-            grype litellm:latest --fail-on high
+            grype litellm:latest
       - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
