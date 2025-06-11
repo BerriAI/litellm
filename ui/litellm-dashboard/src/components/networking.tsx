@@ -4286,6 +4286,9 @@ export const individualModelHealthCheckCall = async (accessToken: String, modelN
   /**
    * Run health check for a specific model
    */
+  // TODO: use model id instead of name
+  // TODO: Reuse model table for common health check
+  // TODO: Seperate into 2 PR's --> UI (frontend and backend)and Schema changes
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/health?model=${encodeURIComponent(modelName)}` : `/health?model=${encodeURIComponent(modelName)}`;
 
@@ -4338,6 +4341,80 @@ export const cachingHealthCheckCall = async (accessToken: String) => {
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to call /cache/ping:", error);
+    throw error;
+  }
+};
+
+export const healthCheckHistoryCall = async (
+  accessToken: String,
+  model?: string,
+  statusFilter?: string,
+  limit: number = 100,
+  offset: number = 0
+) => {
+  /**
+   * Get health check history for models
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/health/history` : `/health/history`;
+    
+    const params = new URLSearchParams();
+    if (model) params.append('model', model);
+    if (statusFilter) params.append('status_filter', statusFilter);
+    params.append('limit', limit.toString());
+    params.append('offset', offset.toString());
+    
+    if (params.toString()) {
+      url += `?${params.toString()}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error(errorData);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to call /health/history:", error);
+    throw error;
+  }
+};
+
+export const latestHealthChecksCall = async (accessToken: String) => {
+  /**
+   * Get the latest health check status for all models
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/health/latest` : `/health/latest`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error(errorData);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to call /health/latest:", error);
     throw error;
   }
 };

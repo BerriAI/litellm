@@ -63,6 +63,8 @@ import {
   adminGlobalActivityExceptions,
   adminGlobalActivityExceptionsPerDeployment,
   allEndUsersCall,
+  healthCheckHistoryCall,
+  latestHealthChecksCall,
 } from "./networking";
 import { BarChart, AreaChart } from "@tremor/react";
 import {
@@ -100,6 +102,7 @@ import {
   TableIcon,
 } from "@heroicons/react/outline";
 import DeleteModelButton from "./delete_model_button";
+import { errorPatterns } from "@/utils/errorPatterns";
 const { Title: Title2, Link } = Typography;
 import { UploadOutlined } from "@ant-design/icons";
 import type { UploadProps } from "antd";
@@ -114,6 +117,7 @@ import ModelInfoView from "./model_info_view";
 import AddModelTab from "./add_model/add_model_tab";
 import { ModelDataTable } from "./model_dashboard/table";
 import { columns } from "./model_dashboard/columns";
+import { healthCheckColumns } from "./model_dashboard/health_check_columns";
 import { all_admin_roles } from "@/utils/roles";
 import { Table as TableInstance } from '@tanstack/react-table';
 
@@ -263,6 +267,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<TableInstance<any>>(null);
+  const healthTableRef = useRef<TableInstance<any>>(null);
 
   const setProviderModelsFn = (provider: Providers) => {
     const _providerModels = getProviderModels(provider, modelMap);
@@ -525,7 +530,29 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           setProviderSettings(_providerSettings);
         }
 
-        
+        // Load latest health check data for all models
+        try {
+          const latestHealthChecks = await latestHealthChecksCall(accessToken);
+          console.log("Latest health checks:", latestHealthChecks);
+          
+          // Convert to the format expected by the UI
+          const healthStatusMap: {[key: string]: {status: string, lastCheck: string, loading: boolean, error?: string}} = {};
+          
+          if (latestHealthChecks.latest_health_checks) {
+            Object.entries(latestHealthChecks.latest_health_checks).forEach(([modelName, checkData]: [string, any]) => {
+              healthStatusMap[modelName] = {
+                status: checkData.status,
+                lastCheck: checkData.checked_at ? new Date(checkData.checked_at).toLocaleString() : 'Never checked',
+                loading: false,
+                error: checkData.error_message || undefined,
+              };
+            });
+          }
+          
+          setModelHealthStatuses(healthStatusMap);
+        } catch (healthError) {
+          console.warn("Failed to load health check history:", healthError);
+        }
 
         // loop through modelDataResponse and get all`model_name` values
         let all_model_groups: Set<string> = new Set();
@@ -817,54 +844,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     
     let errorStr = typeof error === 'string' ? error : JSON.stringify(error);
     
-    // Common error patterns and their simplified versions
-    const errorPatterns = [
-      {
-        pattern: /Missing Anthropic API Key/i,
-        replacement: 'Missing Anthropic API Key'
-      },
-      {
-        pattern: /Missing OpenAI API Key/i,
-        replacement: 'Missing OpenAI API Key'
-      },
-      {
-        pattern: /Connection timeout/i,
-        replacement: 'Connection timeout'
-      },
-      {
-        pattern: /403.*Forbidden/i,
-        replacement: 'Access forbidden - check API key permissions'
-      },
-      {
-        pattern: /401.*Unauthorized/i,
-        replacement: 'Unauthorized - invalid API key'
-      },
-      {
-        pattern: /429.*rate limit/i,
-        replacement: 'Rate limit exceeded'
-      },
-      {
-        pattern: /500.*Internal Server Error/i,
-        replacement: 'Provider internal server error'
-      },
-      {
-        pattern: /Network.*not.*ok/i,
-        replacement: 'Network connection failed'
-      },
-      {
-        pattern: /litellm\.AuthenticationError/i,
-        replacement: 'Authentication failed'
-      },
-      {
-        pattern: /litellm\.RateLimitError/i,
-        replacement: 'Rate limit exceeded'
-      },
-      {
-        pattern: /litellm\.APIError/i,
-        replacement: 'API error'
-      }
-    ];
-    
     // Check for specific error patterns
     for (const { pattern, replacement } of errorPatterns) {
       if (pattern.test(errorStr)) {
@@ -904,6 +883,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     }));
 
     try {
+      // Run the health check and process the response directly
       const response = await individualModelHealthCheckCall(accessToken, modelName);
       const currentTime = new Date().toLocaleString();
       
@@ -929,6 +909,26 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           }
         }));
       }
+      
+      // Optionally try to get a more accurate timestamp from the database (non-blocking)
+      try {
+        const latestHealthChecks = await latestHealthChecksCall(accessToken);
+        const checkData = latestHealthChecks.latest_health_checks?.[modelName];
+        
+        if (checkData && checkData.checked_at) {
+          setModelHealthStatuses(prev => ({
+            ...prev,
+            [modelName]: {
+              ...prev[modelName],
+              lastCheck: new Date(checkData.checked_at).toLocaleString(),
+            }
+          }));
+        }
+      } catch (dbError) {
+        // Ignore database errors - we already have the health check result
+        console.debug("Could not fetch timestamp from database (non-critical):", dbError);
+      }
+      
     } catch (error) {
       const currentTime = new Date().toLocaleString();
       const errorMessage = extractMeaningfulError(error instanceof Error ? error.message : error);
@@ -959,14 +959,20 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     
     setModelHealthStatuses(prev => ({ ...prev, ...loadingStatuses }));
     
-    // Run all health checks in parallel
+    // Store results from individual health checks
+    const healthCheckResults: {[key: string]: any} = {};
+    
+    // Run all health checks in parallel and collect results
     const healthCheckPromises = modelsToCheck.map(async (modelName) => {
       if (!accessToken) return;
       
       try {
+        // Run the health check and store the result
         const response = await individualModelHealthCheckCall(accessToken, modelName);
-        const currentTime = new Date().toLocaleString();
+        healthCheckResults[modelName] = response;
         
+        // Update status immediately based on response
+        const currentTime = new Date().toLocaleString();
         if (response.healthy_count > 0) {
           setModelHealthStatuses(prev => ({
             ...prev,
@@ -990,6 +996,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           }));
         }
       } catch (error) {
+        console.error(`Health check failed for ${modelName}:`, error);
+        // Set error status for failed health checks
         const currentTime = new Date().toLocaleString();
         const errorMessage = extractMeaningfulError(error instanceof Error ? error.message : error);
         setModelHealthStatuses(prev => ({
@@ -1006,6 +1014,35 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     
     // Wait for all health checks to complete
     await Promise.allSettled(healthCheckPromises);
+    
+    // Optionally, try to fetch from database to get saved timestamps, but don't rely on it
+    try {
+      const latestHealthChecks = await latestHealthChecksCall(accessToken);
+      
+      if (latestHealthChecks.latest_health_checks) {
+        // Update timestamps from database if available, but keep the status from the actual health check
+        Object.entries(latestHealthChecks.latest_health_checks).forEach(([modelName, checkData]: [string, any]) => {
+          if (modelsToCheck.includes(modelName) && checkData) {
+            setModelHealthStatuses(prev => {
+              const currentStatus = prev[modelName];
+              if (currentStatus) {
+                return {
+                  ...prev,
+                  [modelName]: {
+                    ...currentStatus,
+                    lastCheck: checkData.checked_at ? new Date(checkData.checked_at).toLocaleString() : currentStatus.lastCheck,
+                  }
+                };
+              }
+              return prev;
+            });
+          }
+        });
+      }
+    } catch (dbError) {
+      console.warn("Failed to fetch updated health statuses from database (non-critical):", dbError);
+      // This is non-critical - we already have the health check results
+    }
   };
 
   const handleModelSelection = (modelName: string, checked: boolean) => {
@@ -1300,7 +1337,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               <Tab>Add Model</Tab>
               {all_admin_roles.includes(userRole) && <Tab>LLM Credentials</Tab>}
               {all_admin_roles.includes(userRole) && <Tab>
-                <pre>/health Models</pre>
+                Health Status
               </Tab>}
               {all_admin_roles.includes(userRole) && <Tab>Model Analytics</Tab>}
               {all_admin_roles.includes(userRole) && <Tab>Model Retry Settings</Tab>}
@@ -1494,97 +1531,61 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                         Run health checks on individual models to verify they are working correctly
                       </Text>
                     </div>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={runAllHealthChecks}
-                      disabled={Object.values(modelHealthStatuses).some(status => status.loading)}
-                      className="px-3 py-1 text-sm"
-                    >
-                      {selectedModelsForHealth.length > 0 && selectedModelsForHealth.length < all_models_on_proxy.length 
-                        ? 'Run Checks' 
-                        : 'Run All Checks'}
-                    </Button>
+                    <div className="flex items-center gap-3">
+                      <Button
+                        size="sm"
+                        variant="light"
+                        onClick={() => handleSelectAll(selectedModelsForHealth.length === 0)}
+                        className="px-3 py-1 text-sm"
+                      >
+                        {selectedModelsForHealth.length > 0 
+                          ? `Clear Selection (${selectedModelsForHealth.length})` 
+                          : 'Select All'}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={runAllHealthChecks}
+                        disabled={Object.values(modelHealthStatuses).some(status => status.loading)}
+                        className="px-3 py-1 text-sm"
+                      >
+                        {selectedModelsForHealth.length > 0 && selectedModelsForHealth.length < all_models_on_proxy.length 
+                          ? 'Run Selected Checks' 
+                          : 'Run All Checks'}
+                      </Button>
+                    </div>
                   </div>
                 </div>
 
-                <div className="px-6 py-4">
-                  <Table>
-                    <TableHead>
-                      <TableRow className="bg-gray-50">
-                        <TableHeaderCell className="w-12">
-                          <Checkbox
-                            checked={allModelsSelected}
-                            onChange={(e) => handleSelectAll(e.target.checked)}
-                          />
-                        </TableHeaderCell>
-                        <TableHeaderCell className="font-semibold">Model Name</TableHeaderCell>
-                        <TableHeaderCell className="font-semibold">Health Status</TableHeaderCell>
-                        <TableHeaderCell className="font-semibold">Last Check</TableHeaderCell>
-                        <TableHeaderCell className="font-semibold">Actions</TableHeaderCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {all_models_on_proxy.map((modelName: string, idx: number) => {
-                        const healthStatus = modelHealthStatuses[modelName] || { status: 'unknown', lastCheck: 'Never checked', loading: false };
-                        return (
-                          <TableRow key={idx}>
-                            <TableCell>
-                              <Checkbox
-                                checked={selectedModelsForHealth.includes(modelName)}
-                                onChange={(e) => handleModelSelection(modelName, e.target.checked)}
-                              />
-                            </TableCell>
-                            <TableCell>
-                              <div className="font-medium">{modelName}</div>
-                            </TableCell>
-                            <TableCell>
-                              {healthStatus.loading ? (
-                                <div className="flex items-center space-x-2">
-                                  <div className="flex space-x-1">
-                                    <div className="w-2 h-2 bg-indigo-500 rounded-full animate-pulse"></div>
-                                    <div className="w-2 h-2 bg-indigo-500 rounded-full animate-pulse" style={{animationDelay: '0.2s'}}></div>
-                                    <div className="w-2 h-2 bg-indigo-500 rounded-full animate-pulse" style={{animationDelay: '0.4s'}}></div>
-                                  </div>
-                                  <Text className="text-gray-600 text-sm">Checking...</Text>
-                                </div>
-                              ) : (
-                                <div className="flex items-center space-x-2">
-                                  {healthStatus.error ? (
-                                    <Tooltip title={healthStatus.error} placement="top">
-                                      <div>
-                                        {getStatusBadge(healthStatus.status)}
-                                      </div>
-                                    </Tooltip>
-                                  ) : (
-                                    getStatusBadge(healthStatus.status)
-                                  )}
-                                </div>
-                              )}
-                            </TableCell>
-                            <TableCell>
-                              {healthStatus.loading ? (
-                                <Text className="text-gray-500 text-sm">Check in progress...</Text>
-                              ) : (
-                                <Text className="text-gray-600 text-sm">{healthStatus.lastCheck}</Text>
-                              )}
-                            </TableCell>
-                            <TableCell>
-                              <Button
-                                size="sm"
-                                variant="secondary"
-                                onClick={() => runIndividualHealthCheck(modelName)}
-                                disabled={healthStatus.loading}
-                                className="px-3 py-1 text-sm"
-                              >
-                                {healthStatus.loading ? 'Checking...' : 'Run Check'}
-                              </Button>
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
+                <div className="p-6">
+                  <ModelDataTable
+                    columns={healthCheckColumns(
+                      modelHealthStatuses,
+                      selectedModelsForHealth,
+                      allModelsSelected,
+                      handleModelSelection,
+                      handleSelectAll,
+                      runIndividualHealthCheck,
+                      getStatusBadge,
+                      getDisplayModelName,
+                    )}
+                    data={modelData.data.map((model: any) => {
+                      const modelName = model.model_name;
+                      const healthStatus = modelHealthStatuses[modelName] || { status: 'unknown', lastCheck: 'Never checked', loading: false };
+                      return {
+                        model_name: model.model_name,
+                        model_info: model.model_info,
+                        provider: model.provider,
+                        litellm_model_name: model.litellm_model_name,
+                        health_status: healthStatus.status,
+                        last_check: healthStatus.lastCheck,
+                        health_loading: healthStatus.loading,
+                        health_error: healthStatus.error,
+                      };
+                    })}
+                    isLoading={false}
+                    table={healthTableRef}
+                  />
                 </div>
               </div>
             </TabPanel>

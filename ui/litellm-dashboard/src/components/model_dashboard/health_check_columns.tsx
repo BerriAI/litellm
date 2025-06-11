@@ -1,0 +1,181 @@
+import { ColumnDef } from "@tanstack/react-table";
+import { Button, Badge } from "@tremor/react";
+import { Tooltip, Checkbox } from "antd";
+import { Text } from "@tremor/react";
+
+interface HealthCheckData {
+  model_name: string;
+  model_info: {
+    id: string;
+    created_at?: string;
+    team_id?: string;
+  };
+  provider?: string;
+  litellm_model_name?: string;
+  health_status: string;
+  last_check: string;
+  health_loading: boolean;
+  health_error?: string;
+}
+
+interface HealthStatus {
+  status: string;
+  lastCheck: string;
+  loading: boolean;
+  error?: string;
+}
+
+export const healthCheckColumns = (
+  modelHealthStatuses: {[key: string]: HealthStatus},
+  selectedModelsForHealth: string[],
+  allModelsSelected: boolean,
+  handleModelSelection: (modelName: string, checked: boolean) => void,
+  handleSelectAll: (checked: boolean) => void,
+  runIndividualHealthCheck: (modelName: string) => void,
+  getStatusBadge: (status: string) => JSX.Element,
+  getDisplayModelName: (model: any) => string,
+): ColumnDef<HealthCheckData>[] => [
+  {
+    header: "Model Name",
+    accessorKey: "model_name",
+    enableSorting: true,
+    sortingFn: "alphanumeric",
+    cell: ({ row }) => {
+      const model = row.original;
+      const displayName = getDisplayModelName(model) || model.model_name;
+      const modelName = model.model_name;
+      const isSelected = selectedModelsForHealth.includes(modelName);
+      
+      return (
+        <div className="flex items-center gap-2">
+          <Checkbox
+            checked={isSelected}
+            onChange={(e) => handleModelSelection(modelName, e.target.checked)}
+          />
+          <div className="font-medium text-sm">
+            <Tooltip title={displayName}>
+              <div className="truncate max-w-[200px]">
+                {displayName}
+              </div>
+            </Tooltip>
+          </div>
+        </div>
+      );
+    },
+  },
+  {
+    header: "Health Status",
+    accessorKey: "health_status",
+    enableSorting: true,
+    sortingFn: (rowA, rowB, columnId) => {
+      const statusA = rowA.getValue("health_status") as string || 'unknown';
+      const statusB = rowB.getValue("health_status") as string || 'unknown';
+      
+      // Define sorting order: healthy > checking > unknown > unhealthy
+      const statusOrder = { 'healthy': 0, 'checking': 1, 'unknown': 2, 'unhealthy': 3 };
+      const orderA = statusOrder[statusA as keyof typeof statusOrder] ?? 4;
+      const orderB = statusOrder[statusB as keyof typeof statusOrder] ?? 4;
+      
+      return orderA - orderB;
+    },
+    cell: ({ row }) => {
+      const model = row.original;
+      const healthStatus = {
+        status: model.health_status,
+        loading: model.health_loading,
+        error: model.health_error
+      };
+      
+      if (healthStatus.loading) {
+        return (
+          <div className="flex items-center space-x-2">
+            <div className="flex space-x-1">
+              <div className="w-2 h-2 bg-indigo-500 rounded-full animate-pulse"></div>
+              <div className="w-2 h-2 bg-indigo-500 rounded-full animate-pulse" style={{animationDelay: '0.2s'}}></div>
+              <div className="w-2 h-2 bg-indigo-500 rounded-full animate-pulse" style={{animationDelay: '0.4s'}}></div>
+            </div>
+            <Text className="text-gray-600 text-sm">Checking...</Text>
+          </div>
+        );
+      }
+
+      return (
+        <div className="flex items-center space-x-2">
+          {healthStatus.error ? (
+            <Tooltip title={healthStatus.error} placement="top">
+              <div>
+                {getStatusBadge(healthStatus.status)}
+              </div>
+            </Tooltip>
+          ) : (
+            getStatusBadge(healthStatus.status)
+          )}
+        </div>
+      );
+    },
+  },
+  {
+    header: "Last Check",
+    accessorKey: "last_check",
+    enableSorting: true,
+    sortingFn: (rowA, rowB, columnId) => {
+      const lastCheckA = rowA.getValue("last_check") as string || 'Never checked';
+      const lastCheckB = rowB.getValue("last_check") as string || 'Never checked';
+      
+      // Handle special cases
+      if (lastCheckA === 'Never checked' && lastCheckB === 'Never checked') return 0;
+      if (lastCheckA === 'Never checked') return 1; // Never checked goes to bottom
+      if (lastCheckB === 'Never checked') return -1;
+      if (lastCheckA === 'Check in progress...' && lastCheckB === 'Check in progress...') return 0;
+      if (lastCheckA === 'Check in progress...') return -1; // In progress goes to top
+      if (lastCheckB === 'Check in progress...') return 1;
+      
+      // Parse dates for comparison
+      const dateA = new Date(lastCheckA);
+      const dateB = new Date(lastCheckB);
+      
+      // If dates are invalid, treat as never checked
+      if (isNaN(dateA.getTime()) && isNaN(dateB.getTime())) return 0;
+      if (isNaN(dateA.getTime())) return 1;
+      if (isNaN(dateB.getTime())) return -1;
+      
+      // Sort by date (most recent first)
+      return dateB.getTime() - dateA.getTime();
+    },
+    cell: ({ row }) => {
+      const model = row.original;
+      
+      return (
+        <Text className="text-gray-600 text-sm">
+          {model.health_loading ? 'Check in progress...' : model.last_check}
+        </Text>
+      );
+    },
+  },
+  {
+    header: "Actions",
+    id: "actions",
+    cell: ({ row }) => {
+      const model = row.original;
+      const modelName = model.model_name;
+      
+      return (
+        <div 
+          className={`text-sm cursor-pointer ${
+            model.health_loading 
+              ? 'text-gray-400 cursor-not-allowed' 
+              : 'text-indigo-600 hover:text-indigo-700 hover:underline'
+          }`}
+          onClick={() => {
+            if (!model.health_loading) {
+              runIndividualHealthCheck(modelName);
+            }
+          }}
+        >
+          {model.health_loading ? 'Checking...' : 'Run Check'}
+        </div>
+      );
+    },
+    enableSorting: false,
+  },
+]; 
