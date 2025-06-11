@@ -55,3 +55,138 @@ def test_audio_file_handling(fixture_name, request):
         optional_params={},
         litellm_params={},
     )
+
+
+def test_get_complete_url_basic():
+    """Test basic URL generation without optional parameters"""
+    handler = DeepgramAudioTranscriptionConfig()
+    url = handler.get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="nova-2",
+        optional_params={},
+        litellm_params={},
+    )
+    expected_url = "https://api.deepgram.com/v1/listen?model=nova-2"
+    assert url == expected_url
+
+
+def test_get_complete_url_with_punctuate():
+    """Test URL generation with punctuate parameter"""
+    handler = DeepgramAudioTranscriptionConfig()
+    url = handler.get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="nova-2",
+        optional_params={"punctuate": True},
+        litellm_params={},
+    )
+    expected_url = "https://api.deepgram.com/v1/listen?model=nova-2&punctuate=true"
+    assert url == expected_url
+
+
+def test_get_complete_url_with_diarize():
+    """Test URL generation with diarize parameter"""
+    handler = DeepgramAudioTranscriptionConfig()
+    url = handler.get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="nova-2",
+        optional_params={"diarize": True},
+        litellm_params={},
+    )
+    expected_url = "https://api.deepgram.com/v1/listen?model=nova-2&diarize=true"
+    assert url == expected_url
+
+
+def test_get_complete_url_with_measurements():
+    """Test URL generation with measurements parameter"""
+    handler = DeepgramAudioTranscriptionConfig()
+    url = handler.get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="nova-2",
+        optional_params={"measurements": True},
+        litellm_params={},
+    )
+    expected_url = "https://api.deepgram.com/v1/listen?model=nova-2&measurements=true"
+    assert url == expected_url
+
+
+def test_get_complete_url_with_multiple_params():
+    """Test URL generation with multiple query parameters"""
+    handler = DeepgramAudioTranscriptionConfig()
+    url = handler.get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="nova-2",
+        optional_params={
+            "punctuate": True,
+            "diarize": False,
+            "measurements": True,
+            "smart_format": True,
+        },
+        litellm_params={},
+    )
+    # URL should contain all parameters
+    assert "model=nova-2" in url
+    assert "punctuate=true" in url
+    assert "diarize=false" in url
+    assert "measurements=true" in url
+    assert "smart_format=true" in url
+    assert url.startswith("https://api.deepgram.com/v1/listen?")
+
+
+def test_get_complete_url_with_language_parameter():
+    """Test that language parameter is excluded from query string (handled separately)"""
+    handler = DeepgramAudioTranscriptionConfig()
+    url = handler.get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="nova-2",
+        optional_params={
+            "language": "en",
+            "punctuate": True,
+        },
+        litellm_params={},
+    )
+    expected_url = "https://api.deepgram.com/v1/listen?model=nova-2&punctuate=true"
+    assert url == expected_url
+    # Language should NOT appear in URL as it's handled separately
+    assert "language=" not in url
+
+
+def test_get_complete_url_with_custom_api_base():
+    """Test URL generation with custom API base"""
+    handler = DeepgramAudioTranscriptionConfig()
+    url = handler.get_complete_url(
+        api_base="https://custom.deepgram.com/v2",
+        api_key=None,
+        model="nova-2",
+        optional_params={"punctuate": True},
+        litellm_params={},
+    )
+    expected_url = "https://custom.deepgram.com/v2/listen?model=nova-2&punctuate=true"
+    assert url == expected_url
+
+
+def test_get_complete_url_with_string_values():
+    """Test URL generation with string parameter values"""
+    handler = DeepgramAudioTranscriptionConfig()
+    url = handler.get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="nova-2",
+        optional_params={
+            "tier": "enhanced",
+            "version": "latest",
+            "punctuate": True,
+        },
+        litellm_params={},
+    )
+    # URL should contain all parameters
+    assert "model=nova-2" in url
+    assert "tier=enhanced" in url
+    assert "version=latest" in url
+    assert "punctuate=true" in url
+    assert url.startswith("https://api.deepgram.com/v1/listen?")
