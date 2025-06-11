@@ -23,6 +23,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 @pytest.mark.asyncio
 async def test_client_session_helper():
     """Test that the client session helper handles event loop changes correctly"""
+    transport = None
     try:
         # Create a transport with the new helper
         transport = AsyncHTTPHandler._create_aiohttp_transport()
@@ -50,9 +51,17 @@ async def test_client_session_helper():
         import traceback
         traceback.print_exc()
         return False
+    finally:
+        # Ensure proper cleanup
+        if transport and hasattr(transport, 'aclose'):
+            try:
+                await transport.aclose()  # type: ignore
+            except Exception as e:
+                print(f'Warning: Error during transport cleanup: {e}')
 
 async def test_event_loop_robustness():
     """Test behavior when event loops change (simulating CI/CD scenario)"""
+    transport = None
     try:
         # Test session creation in multiple scenarios
         transport = AsyncHTTPHandler._create_aiohttp_transport()
@@ -78,9 +87,17 @@ async def test_event_loop_robustness():
         import traceback
         traceback.print_exc()
         return False
+    finally:
+        # Ensure proper cleanup
+        if transport and hasattr(transport, 'aclose'):
+            try:
+                await transport.aclose()  # type: ignore
+            except Exception as e:
+                print(f'Warning: Error during transport cleanup: {e}')
 
 async def test_httpx_request_simulation():
     """Test that the transport can handle a simulated HTTP request"""
+    transport = None
     try:
         transport = AsyncHTTPHandler._create_aiohttp_transport()
         
@@ -110,6 +127,13 @@ async def test_httpx_request_simulation():
     except Exception as e:
         print(f'❌ Error in request simulation: {e}')
         return False
+    finally:
+        # Ensure proper cleanup
+        if transport and hasattr(transport, 'aclose'):
+            try:
+                await transport.aclose()  # type: ignore
+            except Exception as e:
+                print(f'Warning: Error during transport cleanup: {e}')
 
 if __name__ == "__main__":
     print("Testing client session helper and event loop handling fix...")
