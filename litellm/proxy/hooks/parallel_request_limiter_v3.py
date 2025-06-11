@@ -445,6 +445,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return pipeline_operations
 
+    def get_rate_limit_type(self) -> Literal["output", "input", "total"]:
+        from litellm.proxy.proxy_server import general_settings
+
+        specified_rate_limit_type = general_settings.get(
+            "token_rate_limit_type", "output"
+        )
+        if not specified_rate_limit_type or specified_rate_limit_type not in [
+            "output",
+            "input",
+            "total",
+        ]:
+            return "total"  # default to total
+        return specified_rate_limit_type
+
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
         Update TPM usage on successful API calls by incrementing counters using pipeline
@@ -457,6 +471,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
         from litellm.types.caching import RedisPipelineIncrementOperation
         from litellm.types.utils import ModelResponse, Usage
+
+        rate_limit_type = self.get_rate_limit_type()
 
         litellm_parent_otel_span: Union[Span, None] = _get_parent_otel_span_from_kwargs(
             kwargs
@@ -482,7 +498,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if isinstance(response_obj, ModelResponse):
                 _usage = getattr(response_obj, "usage", None)
                 if _usage and isinstance(_usage, Usage):
-                    total_tokens = _usage.total_tokens
+                    if rate_limit_type == "output":
+                        total_tokens = _usage.total_tokens
+                    elif rate_limit_type == "input":
+                        total_tokens = _usage.prompt_tokens
+                    elif rate_limit_type == "total":
+                        total_tokens = _usage.total_tokens
 
             # Create pipeline operations for TPM increments
             pipeline_operations: List[RedisPipelineIncrementOperation] = []
