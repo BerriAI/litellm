@@ -2,7 +2,7 @@ from typing import List, Optional, Union
 
 import litellm
 from litellm.main import stream_chunk_builder
-from litellm.responses.litellm_completion_transformation import (
+from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
 from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
@@ -144,6 +144,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             Union[ModelResponse, TextCompletionResponse]
         ] = stream_chunk_builder(chunks=self.collected_chat_completion_chunks)
         if litellm_model_response and isinstance(litellm_model_response, ModelResponse):
+
             return ResponseCompletedEvent(
                 type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
                 response=LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(

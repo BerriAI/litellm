@@ -5,6 +5,12 @@ Handler for transforming responses api requests to litellm.completion requests
 from typing import Any, Coroutine, Optional, Union
 
 import litellm
+from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+    LiteLLMCompletionStreamingIterator,
+)
+from litellm.responses.litellm_completion_transformation.transformation import (
+    LiteLLMCompletionResponsesConfig,
+)
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import (
     ResponseInputParam,
@@ -13,11 +19,9 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import ModelResponse
 
-from .streaming_iterator import LiteLLMCompletionStreamingIterator
-from .transformation import LiteLLMCompletionResponsesConfig
-
 
 class LiteLLMCompletionTransformationHandler:
+
     def response_api_handler(
         self,
         model: str,
@@ -34,13 +38,15 @@ class LiteLLMCompletionTransformationHandler:
             Any, Any, Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]
         ],
     ]:
-        litellm_completion_request: dict = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
-            model=model,
-            input=input,
-            responses_api_request=responses_api_request,
-            custom_llm_provider=custom_llm_provider,
-            stream=stream,
-            **kwargs,
+        litellm_completion_request: dict = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+                model=model,
+                input=input,
+                responses_api_request=responses_api_request,
+                custom_llm_provider=custom_llm_provider,
+                stream=stream,
+                **kwargs,
+            )
         )
 
         if _is_async:
@@ -59,10 +65,12 @@ class LiteLLMCompletionTransformationHandler:
         )
 
         if isinstance(litellm_completion_response, ModelResponse):
-            responses_api_response: ResponsesAPIResponse = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-                chat_completion_response=litellm_completion_response,
-                request_input=input,
-                responses_api_request=responses_api_request,
+            responses_api_response: ResponsesAPIResponse = (
+                LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                    chat_completion_response=litellm_completion_response,
+                    request_input=input,
+                    responses_api_request=responses_api_request,
+                )
             )
 
             return responses_api_response
@@ -81,6 +89,7 @@ class LiteLLMCompletionTransformationHandler:
         responses_api_request: ResponsesAPIOptionalRequestParams,
         **kwargs,
     ) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
+
         previous_response_id: Optional[str] = responses_api_request.get(
             "previous_response_id"
         )
@@ -98,10 +107,12 @@ class LiteLLMCompletionTransformationHandler:
         )
 
         if isinstance(litellm_completion_response, ModelResponse):
-            responses_api_response: ResponsesAPIResponse = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-                chat_completion_response=litellm_completion_response,
-                request_input=request_input,
-                responses_api_request=responses_api_request,
+            responses_api_response: ResponsesAPIResponse = (
+                LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                    chat_completion_response=litellm_completion_response,
+                    request_input=request_input,
+                    responses_api_request=responses_api_request,
+                )
             )
 
             return responses_api_response
