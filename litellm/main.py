@@ -1293,9 +1293,7 @@ def completion(  # type: ignore # noqa: PLR0915
             model=model, custom_llm_provider=custom_llm_provider
         )
         if model_info.get("mode") == "responses":
-            from litellm.completion.litellm_responses_transformation.handler import (
-                responses_api_bridge,
-            )
+            from litellm.completion_extras import responses_api_bridge
 
             return responses_api_bridge.completion(
                 model=model,
