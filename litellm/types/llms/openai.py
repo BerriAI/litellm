@@ -830,12 +830,12 @@ class OpenAIChatCompletionChunk(ChatCompletionChunk):
 
 class Hyperparameters(BaseModel):
     batch_size: Optional[Union[str, int]] = None  # "Number of examples in each batch."
-    learning_rate_multiplier: Optional[
-        Union[str, float]
-    ] = None  # Scaling factor for the learning rate
-    n_epochs: Optional[
-        Union[str, int]
-    ] = None  # "The number of epochs to train the model for"
+    learning_rate_multiplier: Optional[Union[str, float]] = (
+        None  # Scaling factor for the learning rate
+    )
+    n_epochs: Optional[Union[str, int]] = (
+        None  # "The number of epochs to train the model for"
+    )
 
 
 class FineTuningJobCreate(BaseModel):
@@ -862,18 +862,18 @@ class FineTuningJobCreate(BaseModel):
 
     model: str  # "The name of the model to fine-tune."
     training_file: str  # "The ID of an uploaded file that contains training data."
-    hyperparameters: Optional[
-        Hyperparameters
-    ] = None  # "The hyperparameters used for the fine-tuning job."
-    suffix: Optional[
-        str
-    ] = None  # "A string of up to 18 characters that will be added to your fine-tuned model name."
-    validation_file: Optional[
-        str
-    ] = None  # "The ID of an uploaded file that contains validation data."
-    integrations: Optional[
-        List[str]
-    ] = None  # "A list of integrations to enable for your fine-tuning job."
+    hyperparameters: Optional[Hyperparameters] = (
+        None  # "The hyperparameters used for the fine-tuning job."
+    )
+    suffix: Optional[str] = (
+        None  # "A string of up to 18 characters that will be added to your fine-tuned model name."
+    )
+    validation_file: Optional[str] = (
+        None  # "The ID of an uploaded file that contains validation data."
+    )
+    integrations: Optional[List[str]] = (
+        None  # "A list of integrations to enable for your fine-tuning job."
+    )
     seed: Optional[int] = None  # "The seed controls the reproducibility of the job."
 
 
@@ -938,6 +938,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     previous_response_id: Optional[str]
     reasoning: Optional[Reasoning]
     store: Optional[bool]
+    background: Optional[bool]
     stream: Optional[bool]
     temperature: Optional[float]
     text: Optional[ResponseTextConfigParam]
@@ -1641,3 +1642,12 @@ class OpenAIRealtimeTurnDetection(TypedDict, total=False):
     silence_duration_ms: int
     threshold: int
     type: str
+
+
+class OpenAIMcpServerTool(TypedDict, total=False):
+    type: Required[Literal["mcp"]]
+    server_label: Required[str]
+    server_url: Required[str]
+    require_approval: str
+    allowed_tools: Optional[List[str]]
+    headers: Optional[Dict[str, str]]

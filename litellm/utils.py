@@ -532,9 +532,9 @@ def function_setup(  # noqa: PLR0915
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Optional[
-            List[Union[str, Callable, CustomLogger]]
-        ] = kwargs.pop("callbacks", None)
+        dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]] = (
+            kwargs.pop("callbacks", None)
+        )
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
         if len(all_callbacks) > 0:
@@ -1240,9 +1240,9 @@ def client(original_function):  # noqa: PLR0915
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs[
-                        "retry_policy"
-                    ] = reset_retry_policy()  # prevent infinite loops
+                    kwargs["retry_policy"] = (
+                        reset_retry_policy()
+                    )  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -2077,6 +2077,43 @@ def supports_reasoning(model: str, custom_llm_provider: Optional[str] = None) ->
     )
 
 
+def get_supported_regions(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> Optional[List[str]]:
+    """
+    Get a list of supported regions for a given model and provider.
+
+    Parameters:
+    model (str): The model name to be checked.
+    custom_llm_provider (Optional[str]): The provider to be checked.
+    """
+    try:
+        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
+        model_info = _get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
+        supported_regions = model_info.get("supported_regions", None)
+        if supported_regions is None:
+            return None
+
+        #########################################################
+        # Ensure only list supported regions are returned
+        #########################################################
+        if isinstance(supported_regions, list):
+            return supported_regions
+        else:
+            return None
+    except Exception as e:
+        verbose_logger.debug(
+            f"Model not found or error in checking supported_regions support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
+        )
+        return None
+
+
 def supports_embedding_image_input(
     model: str, custom_llm_provider: Optional[str] = None
 ) -> bool:
@@ -2836,10 +2873,10 @@ def pre_process_non_default_params(
 
     if "response_format" in non_default_params:
         if provider_config is not None:
-            non_default_params[
-                "response_format"
-            ] = provider_config.get_json_schema_from_pydantic_object(
-                response_format=non_default_params["response_format"]
+            non_default_params["response_format"] = (
+                provider_config.get_json_schema_from_pydantic_object(
+                    response_format=non_default_params["response_format"]
+                )
             )
         else:
             non_default_params["response_format"] = type_to_response_format_param(
@@ -2966,16 +3003,16 @@ def pre_process_optional_params(
                     True  # so that main.py adds the function call to the prompt
                 )
                 if "tools" in non_default_params:
-                    optional_params[
-                        "functions_unsupported_model"
-                    ] = non_default_params.pop("tools")
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.pop("tools")
+                    )
                     non_default_params.pop(
                         "tool_choice", None
                     )  # causes ollama requests to hang
                 elif "functions" in non_default_params:
-                    optional_params[
-                        "functions_unsupported_model"
-                    ] = non_default_params.pop("functions")
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.pop("functions")
+                    )
             elif (
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
@@ -4058,9 +4095,9 @@ def _count_characters(text: str) -> int:
 
 
 def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream]) -> str:
-    _choices: Union[
-        List[Union[Choices, StreamingChoices]], List[StreamingChoices]
-    ] = response_obj.choices
+    _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
+        response_obj.choices
+    )
 
     response_str = ""
     for choice in _choices:

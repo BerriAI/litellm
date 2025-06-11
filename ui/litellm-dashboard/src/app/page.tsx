@@ -274,6 +274,7 @@ export default function CreateKeyPage() {
             <div className="flex flex-1 overflow-auto">
               <div className="mt-8">
                 <Sidebar
+                  accessToken={accessToken}
                   setPage={updatePage}
                   userRole={userRole}
                   defaultSelectedKey={page}

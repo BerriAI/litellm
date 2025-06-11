@@ -160,6 +160,9 @@ class CustomLLM(BaseLLM):
         print_verbose: Callable,
         logging_obj: Any,
         optional_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
         litellm_params=None,
     ) -> EmbeddingResponse:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
@@ -172,6 +175,9 @@ class CustomLLM(BaseLLM):
         print_verbose: Callable,
         logging_obj: Any,
         optional_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
         litellm_params=None,
     ) -> EmbeddingResponse:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")

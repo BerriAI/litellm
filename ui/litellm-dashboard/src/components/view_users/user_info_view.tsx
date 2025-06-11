@@ -13,11 +13,12 @@ import {
   Title,
   Badge,
 } from "@tremor/react";
-import { ArrowLeftIcon, TrashIcon } from "@heroicons/react/outline";
-import { userInfoCall, userDeleteCall, userUpdateUserCall, modelAvailableCall } from "../networking";
+import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
+import { userInfoCall, userDeleteCall, userUpdateUserCall, modelAvailableCall, invitationCreateCall, getProxyBaseUrl } from "../networking";
 import { message } from "antd";
 import { rolesWithWriteAccess } from '../../utils/roles';
 import { UserEditView } from "../user_edit_view";
+import OnboardingModal, { InvitationLink } from "../onboarding_link";
 
 interface UserInfoViewProps {
   userId: string;
@@ -51,6 +52,13 @@ export default function UserInfoView({ userId, onClose, accessToken, userRole, o
   const [isLoading, setIsLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
   const [userModels, setUserModels] = useState<string[]>([]);
+  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
+  const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
+  const [baseUrl, setBaseUrl] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    setBaseUrl(getProxyBaseUrl());
+  }, []);
 
   React.useEffect(() => {
     console.log(`userId: ${userId}, userRole: ${userRole}, accessToken: ${accessToken}`)
@@ -74,6 +82,21 @@ export default function UserInfoView({ userId, onClose, accessToken, userRole, o
 
     fetchData();
   }, [accessToken, userId, userRole]);
+
+  const handleResetPassword = async () => {
+    if (!accessToken) {
+      message.error("Access token not found");
+      return;
+    }
+    try {
+      message.success("Generating password reset link...");
+      const data = await invitationCreateCall(accessToken, userId);
+      setInvitationLinkData(data);
+      setIsInvitationLinkModalVisible(true);
+    } catch (error) {
+      message.error("Failed to generate password reset link");
+    }
+  };
 
   const handleDelete = async () => {
     try {
@@ -164,14 +187,24 @@ export default function UserInfoView({ userId, onClose, accessToken, userRole, o
           <Text className="text-gray-500 font-mono">{userData.user_id}</Text>
         </div>
         {userRole && rolesWithWriteAccess.includes(userRole) && (
-          <Button
-            icon={TrashIcon}
-            variant="secondary"
-            onClick={() => setIsDeleteModalOpen(true)}
-            className="flex items-center"
-          >
-            Delete User
-          </Button>
+          <div className="flex items-center space-x-2">
+            <Button
+              icon={RefreshIcon}
+              variant="secondary"
+              onClick={handleResetPassword}
+              className="flex items-center"
+            >
+              Reset Password
+            </Button>
+            <Button
+              icon={TrashIcon}
+              variant="secondary"
+              onClick={() => setIsDeleteModalOpen(true)}
+              className="flex items-center"
+            >
+              Delete User
+            </Button>
+          </div>
         )}
       </div>
 
@@ -381,6 +414,13 @@ export default function UserInfoView({ userId, onClose, accessToken, userRole, o
           </TabPanel>
         </TabPanels>
       </TabGroup>
+      <OnboardingModal
+        isInvitationLinkModalVisible={isInvitationLinkModalVisible}
+        setIsInvitationLinkModalVisible={setIsInvitationLinkModalVisible}
+        baseUrl={baseUrl || ""}
+        invitationLinkData={invitationLinkData}
+        modalType="resetPassword"
+      />
     </div>
   );
 } 

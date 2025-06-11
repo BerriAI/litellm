@@ -36,8 +36,8 @@ const updateServerRootPath = (receivedServerRootPath: string) => {
   serverRootPath = receivedServerRootPath;
 };
 
-export const getProxyBaseUrl = () => {
-  return proxyBaseUrl;
+export const getProxyBaseUrl = (): string => {
+  return proxyBaseUrl ? proxyBaseUrl : window.location.origin;  
 };
 
 const HTTP_REQUEST = {
@@ -5465,6 +5465,39 @@ export const uiAuditLogsCall = async (
     return data;
   } catch (error) {
     console.error("Failed to fetch audit logs:", error);
+    throw error;
+  }
+};
+
+export const getRemainingUsers = async (accessToken: string): Promise<{
+  total_users: number;
+  total_users_used: number;
+  total_users_remaining: number;
+} | null> => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/available_users` : `/user/available_users`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      // if 404 - return None
+      if (response.status === 404) {
+        return null;
+      }
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch remaining users:", error);
     throw error;
   }
 };
