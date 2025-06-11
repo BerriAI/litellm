@@ -51,7 +51,10 @@ from litellm.proxy.auth.auth_utils import (
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
 from litellm.proxy.auth.oauth2_check import check_oauth2_token
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (
+    _read_request_body,
+    _safe_get_request_headers,
+)
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
@@ -587,7 +590,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         _end_user_object = None
         end_user_params = {}
 
-        end_user_id = get_end_user_id_from_request_body(request_data)
+        end_user_id = get_end_user_id_from_request_body(
+            request_data, _safe_get_request_headers(request)
+        )
         if end_user_id:
             try:
                 end_user_params["end_user_id"] = end_user_id
@@ -601,23 +606,23 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     proxy_logging_obj=proxy_logging_obj,
                 )
                 if _end_user_object is not None:
-                    end_user_params[
-                        "allowed_model_region"
-                    ] = _end_user_object.allowed_model_region
+                    end_user_params["allowed_model_region"] = (
+                        _end_user_object.allowed_model_region
+                    )
                     if _end_user_object.litellm_budget_table is not None:
                         budget_info = _end_user_object.litellm_budget_table
                         if budget_info.tpm_limit is not None:
-                            end_user_params[
-                                "end_user_tpm_limit"
-                            ] = budget_info.tpm_limit
+                            end_user_params["end_user_tpm_limit"] = (
+                                budget_info.tpm_limit
+                            )
                         if budget_info.rpm_limit is not None:
-                            end_user_params[
-                                "end_user_rpm_limit"
-                            ] = budget_info.rpm_limit
+                            end_user_params["end_user_rpm_limit"] = (
+                                budget_info.rpm_limit
+                            )
                         if budget_info.max_budget is not None:
-                            end_user_params[
-                                "end_user_max_budget"
-                            ] = budget_info.max_budget
+                            end_user_params["end_user_max_budget"] = (
+                                budget_info.max_budget
+                            )
             except Exception as e:
                 if isinstance(e, litellm.BudgetExceededError):
                     raise e
@@ -1140,7 +1145,9 @@ async def user_api_key_auth(
         custom_litellm_key_header=custom_litellm_key_header,
     )
 
-    end_user_id = get_end_user_id_from_request_body(request_data)
+    end_user_id = get_end_user_id_from_request_body(
+        request_data, _safe_get_request_headers(request)
+    )
     if end_user_id is not None:
         user_api_key_auth_obj.end_user_id = end_user_id
 

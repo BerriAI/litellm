@@ -294,6 +294,36 @@ class RedisCache(BaseCache):
             )
             raise e
 
+    def async_register_script(self, script: str) -> Any:
+        """
+        Register a Lua script with Redis asynchronously.
+        Works with both standalone Redis and Redis Cluster.
+
+        Args:
+            script (str): The Lua script to register
+
+        Returns:
+            Any: A script object that can be called with keys and args
+        """
+        try:
+            _redis_client = self.init_async_client()
+            # For standalone Redis
+            if hasattr(_redis_client, "register_script"):
+                return _redis_client.register_script(script)  # type: ignore
+            # For Redis Cluster
+            elif hasattr(_redis_client, "script_load"):
+                # Load the script and get its SHA
+                script_sha = _redis_client.script_load(script)  # type: ignore
+
+                # Return a callable that uses evalsha
+                async def script_callable(keys: List[str], args: List[Any]) -> Any:
+                    return _redis_client.evalsha(script_sha, len(keys), *keys, *args)  # type: ignore
+
+                return script_callable
+        except Exception as e:
+            verbose_logger.error(f"Error registering Redis script: {str(e)}")
+            raise e
+
     async def async_set_cache(self, key, value, **kwargs):
         from redis.asyncio import Redis
 
@@ -980,8 +1010,11 @@ class RedisCache(BaseCache):
                 pipe.expire(cache_key, _td)
         # Execute the pipeline and return results
         results = await pipe.execute()
-        print_verbose(f"Increment ASYNC Redis Cache PIPELINE: results: {results}")
-        return results
+        # only return float values
+        verbose_logger.debug(
+            f"Increment ASYNC Redis Cache PIPELINE: results: {results}"
+        )
+        return [r for r in results if isinstance(r, float)]
 
     async def async_increment_pipeline(
         self, increment_list: List[RedisPipelineIncrementOperation], **kwargs
@@ -1010,8 +1043,6 @@ class RedisCache(BaseCache):
         try:
             async with _redis_client.pipeline(transaction=False) as pipe:
                 results = await self._pipeline_increment_helper(pipe, increment_list)
-
-            print_verbose(f"pipeline increment results: {results}")
 
             ## LOGGING ##
             end_time = time.time()
@@ -1122,6 +1153,21 @@ class RedisCache(BaseCache):
             )
             raise e
 
+    async def handle_lpop_count_for_older_redis_versions(
+        self, pipe: pipeline, key: str, count: int
+    ) -> List[bytes]:
+        result: List[bytes] = []
+        for _ in range(count):
+            pipe.lpop(key)
+            results = await pipe.execute()
+
+            # Filter out None values and decode bytes
+            for r in results:
+                if r is not None:
+                    result.append(r)
+
+        return result
+
     async def async_lpop(
         self,
         key: str,
@@ -1133,7 +1179,22 @@ class RedisCache(BaseCache):
         start_time = time.time()
         print_verbose(f"LPOP from Redis list: key: {key}, count: {count}")
         try:
-            result = await _redis_client.lpop(key, count)
+            major_version: int = 7
+            # Check Redis version and use appropriate method
+            if self.redis_version != "Unknown":
+                # Parse version string like "6.0.0" to get major version
+                major_version = int(self.redis_version.split(".")[0])
+
+            if count is not None and major_version < 7:
+                # For Redis < 7.0, use pipeline to execute multiple LPOP commands
+                async with _redis_client.pipeline(transaction=False) as pipe:
+                    result = await self.handle_lpop_count_for_older_redis_versions(
+                        pipe, key, count
+                    )
+            else:
+                # For Redis >= 7.0 or when count is None, use native LPOP with count
+                result = await _redis_client.lpop(key, count)
+
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time

@@ -165,6 +165,12 @@ LiteLLM Proxy works seamlessly with Langchain, LlamaIndex, OpenAI JS, Anthropic 
 
 ## Send all SDK requests to LiteLLM Proxy
 
+:::info
+
+Requires v1.72.1 or higher.
+
+:::
+
 Use this when calling LiteLLM Proxy from any library / codebase already using the LiteLLM SDK.
 
 These flags will route all requests through your LiteLLM proxy, regardless of the model specified.

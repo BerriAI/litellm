@@ -36,8 +36,8 @@ const updateServerRootPath = (receivedServerRootPath: string) => {
   serverRootPath = receivedServerRootPath;
 };
 
-export const getProxyBaseUrl = () => {
-  return proxyBaseUrl;
+export const getProxyBaseUrl = (): string => {
+  return proxyBaseUrl ? proxyBaseUrl : window.location.origin;  
 };
 
 const HTTP_REQUEST = {
@@ -5353,6 +5353,151 @@ export const updateGuardrailCall = async (
     return data;
   } catch (error) {
     console.error("Failed to update guardrail:", error);
+    throw error;
+  }
+};
+
+export const getSSOSettings = async (accessToken: string) => {
+  try {
+    // Construct base URL
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/get/sso_settings`
+      : `/get/sso_settings`;
+
+    console.log("Fetching SSO configuration from:", url);
+    
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Fetched SSO configuration:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch SSO configuration:", error);
+    throw error;
+  }
+};
+
+
+export const updateSSOSettings = async (accessToken: string, settings: Record<string, any>) => {
+  try {
+    // Construct base URL
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/update/sso_settings`
+      : `/update/sso_settings`;
+
+    console.log("Updating SSO configuration:", settings);
+    
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(settings),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Updated SSO configuration:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to update SSO configuration:", error);
+    throw error;
+  }
+};
+
+export const uiAuditLogsCall = async (
+  accessToken: String,
+  start_date?: string,
+  end_date?: string,
+  page?: number,
+  page_size?: number,
+) => {
+  try {
+    // Construct base URL
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/audit` : `/audit`;
+
+    // Add query parameters if they exist
+    const queryParams = new URLSearchParams();
+    // if (start_date) queryParams.append('start_date', start_date);
+    // if (end_date) queryParams.append('end_date', end_date);
+    if (page) queryParams.append('page', page.toString());
+    if (page_size) queryParams.append('page_size', page_size.toString());
+
+    // Append query parameters to URL if any exist
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch audit logs:", error);
+    throw error;
+  }
+};
+
+export const getRemainingUsers = async (accessToken: string): Promise<{
+  total_users: number;
+  total_users_used: number;
+  total_users_remaining: number;
+} | null> => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/available_users` : `/user/available_users`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      // if 404 - return None
+      if (response.status === 404) {
+        return null;
+      }
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch remaining users:", error);
     throw error;
   }
 };

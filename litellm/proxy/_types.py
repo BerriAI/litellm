@@ -911,6 +911,7 @@ class NewUserRequest(GenerateRequestBase):
     )
     send_invite_email: Optional[bool] = None
     sso_user_id: Optional[str] = None
+    organizations: Optional[List[str]] = None
 
 
 class NewUserResponse(GenerateKeyResponse):
@@ -990,6 +991,10 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
     model_max_budget: Optional[GenericBudgetConfigType] = Field(
         default=None,
         description="Max budget for each model (e.g. {'gpt-4o': {'max_budget': '0.0000001', 'budget_duration': '1d', 'tpm_limit': 1000, 'rpm_limit': 1000}})",
+    )
+    budget_reset_at: Optional[datetime] = Field(
+        default=None,
+        description="Datetime when the budget is reset",
     )
 
 
@@ -1332,6 +1337,13 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     budget_duration: Optional[str] = None
 
     model_config = ConfigDict(protected_namespaces=())
+
+
+class LiteLLM_BudgetTableFull(LiteLLM_BudgetTable):
+    """Represents all params for a LiteLLM_BudgetTable record"""
+
+    budget_reset_at: Optional[datetime] = None
+    created_at: datetime
 
 
 class LiteLLM_TeamMemberTable(LiteLLM_BudgetTable):
@@ -1923,6 +1935,36 @@ class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
             values["changed_by"] = str(values["changed_by"])
         return values
 
+    @model_validator(mode="after")
+    def mask_api_keys(self):
+        from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+
+        masker = SensitiveDataMasker(sensitive_patterns={"key"})
+
+        if self.before_value is not None:
+            json_before_value: Optional[dict] = None
+            if isinstance(self.before_value, str):
+                json_before_value = json.loads(self.before_value)
+            elif isinstance(self.before_value, dict):
+                json_before_value = self.before_value
+
+            if json_before_value is not None:
+                json_before_value = masker.mask_dict(json_before_value)
+                self.before_value = json.dumps(json_before_value, default=str)
+
+        if self.updated_values is not None:
+            json_updated_values: Optional[dict] = None
+            if isinstance(self.updated_values, str):
+                json_updated_values = json.loads(self.updated_values)
+            elif isinstance(self.updated_values, dict):
+                json_updated_values = self.updated_values
+
+            if json_updated_values is not None:
+                json_updated_values = masker.mask_dict(json_updated_values)
+                self.updated_values = json.dumps(json_updated_values, default=str)
+
+        return self
+
 
 class LiteLLM_SpendLogs_ResponseObject(LiteLLMPydanticObjectBase):
     response: Optional[List[Union[LiteLLM_SpendLogs, Any]]] = None
@@ -2275,7 +2317,7 @@ class CommonProxyErrors(str, enum.Enum):
     )
     no_llm_router = "No models configured on proxy"
     not_allowed_access = "Admin-only endpoint. Not allowed to access this."
-    not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. Get a 7 day trial key here: https://www.litellm.ai/#trial. \nPricing: https://www.litellm.ai/#pricing"
+    not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. Get a 7 day trial key here: https://www.litellm.ai/enterprise#trial. \nPricing: https://www.litellm.ai/#pricing"
     max_parallel_request_limit_reached = (
         "Crossed TPM / RPM / Max Parallel Request Limit"
     )
@@ -2477,7 +2519,10 @@ class OrgMemberAddRequest(LiteLLMPydanticObjectBase):
         member_data = data.get("member")
         if isinstance(member_data, list):
             # If member is a list of dictionaries, convert each dictionary to a Member object
-            members = [OrgMember(**item) for item in member_data]
+            if all(isinstance(item, dict) for item in member_data):
+                members = [OrgMember(**item) for item in member_data]
+            else:
+                members = [item for item in member_data]
             # Replace member_data with the list of Member objects
             data["member"] = members
         elif isinstance(member_data, dict):
@@ -3038,3 +3083,10 @@ class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
     model_object_id: str
     file_purpose: Literal["batch", "fine-tune"]
     file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob]
+
+
+class EnterpriseLicenseData(TypedDict, total=False):
+    expiration_date: str
+    user_id: str
+    allowed_features: List[str]
+    max_users: int

@@ -393,6 +393,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         refresh={refresh}
         selectedKeyAlias={selectedKeyAlias}
         setSelectedKeyAlias={setSelectedKeyAlias}
+        premiumUser={premiumUser}
       />
 
       {isDeleteModalOpen && (
