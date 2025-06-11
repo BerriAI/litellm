@@ -126,9 +126,9 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
             # Add additional metadata matching OpenAI format
             response["task"] = "transcribe"
-            response[
-                "language"
-            ] = "english"  # Deepgram auto-detects but doesn't return language
+            response["language"] = (
+                "english"  # Deepgram auto-detects but doesn't return language
+            )
             response["duration"] = response_json["metadata"]["duration"]
 
             # Transform words to match OpenAI format
@@ -165,27 +165,27 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         # Start with base URL and model parameter
         url = f"{api_base}/listen?model={model}"
-        
+
         # Add any additional query parameters from optional_params
         # This supports parameters like punctuate, diarize, measurements, etc.
         query_params = []
         for key, value in optional_params.items():
             # Skip parameters that are not meant for URL query strings
             # These are OpenAI-specific params that we handle differently
-            if key in ["language"]:
+            if key in self.get_supported_openai_params(model):
                 continue
-            
+
             # Convert boolean values to lowercase strings
             if isinstance(value, bool):
                 value = str(value).lower()
-            
+
             # Add the parameter to query string
             query_params.append(f"{key}={value}")
-        
+
         # Append query parameters to URL
         if query_params:
             url += "&" + "&".join(query_params)
-        
+
         return url
 
     def validate_environment(
