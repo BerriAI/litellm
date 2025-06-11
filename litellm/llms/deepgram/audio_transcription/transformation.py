@@ -4,7 +4,7 @@ Translates from OpenAI's `/v1/audio/transcriptions` to Deepgram's `/v1/listen`
 
 import io
 from typing import List, Optional, Union
-from urllib.parse import urlencode, urlparse, urlunparse
+from urllib.parse import urlencode
 
 from httpx import Headers, Response
 
