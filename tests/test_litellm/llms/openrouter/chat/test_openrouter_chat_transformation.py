@@ -45,6 +45,47 @@ class TestOpenRouterChatCompletionStreamingHandler:
         assert len(result.choices) == 1
         assert result.choices[0]["delta"]["reasoning_content"] == "test reasoning"
 
+    def test_chunk_parser_with_cost(self):
+        """
+        Test that when stream_options.include_usage is true, the cost from OpenRouter's
+        response is correctly propagated to the result.
+        """
+        handler = OpenRouterChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
+
+        # Test input chunk with cost information
+        chunk = {
+            "id": "test_id_with_cost",
+            "created": 1234567890,
+            "model": "test_model",
+            "usage": {
+                "prompt_tokens": 15, 
+                "completion_tokens": 25, 
+                "total_tokens": 40,
+                "cost": 0.0025,
+                "is_byok": False
+            },
+            "choices": [
+                {"delta": {"content": "test content"}}
+            ],
+        }
+
+        # Parse chunk
+        result = handler.chunk_parser(chunk)
+
+        # Verify response includes cost information
+        assert result.id == "test_id_with_cost"
+        assert result.object == "chat.completion.chunk"
+        assert result.created == 1234567890
+        assert result.model == "test_model"
+        assert result.usage.prompt_tokens == chunk["usage"]["prompt_tokens"]
+        assert result.usage.completion_tokens == chunk["usage"]["completion_tokens"]
+        assert result.usage.total_tokens == chunk["usage"]["total_tokens"]
+        assert result.usage.cost == chunk["usage"]["cost"]
+        assert result.usage.is_byok == chunk["usage"]["is_byok"]
+        assert len(result.choices) == 1
+
     def test_chunk_parser_error_response(self):
         handler = OpenRouterChatCompletionStreamingHandler(
             streaming_response=None, sync_stream=True

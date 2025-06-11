@@ -1025,7 +1025,6 @@ class StreamingChoices(OpenAIObject):
     ):
         # Fix Perplexity return both delta and message cause OpenWebUI repect text
         # https://github.com/BerriAI/litellm/issues/8455
-        params.pop("message", None)
         super(StreamingChoices, self).__init__(**params)
         if finish_reason:
             self.finish_reason = map_finish_reason(finish_reason)
@@ -1037,6 +1036,8 @@ class StreamingChoices(OpenAIObject):
                 self.delta = delta
             elif isinstance(delta, dict):
                 self.delta = Delta(**delta)
+        elif "message" in params and params["message"] is not None:
+            self.delta = Delta(**params["message"])
         else:
             self.delta = Delta()
         if enhancements is not None:
