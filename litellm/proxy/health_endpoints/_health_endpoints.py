@@ -309,7 +309,8 @@ async def _save_health_check_to_db(
     healthy_endpoints: list, 
     unhealthy_endpoints: list, 
     start_time: float, 
-    user_id: Optional[str]
+    user_id: Optional[str],
+    model_id: Optional[str] = None
 ):
     """Helper function to save health check results to database"""
     try:
@@ -348,6 +349,7 @@ async def _save_health_check_to_db(
         
         await prisma_client.save_health_check_result(
             model_name=model_name,
+            model_id=model_id,
             status=status,
             healthy_count=len(healthy_endpoints),
             unhealthy_count=len(unhealthy_endpoints),
@@ -367,6 +369,9 @@ async def health_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     model: Optional[str] = fastapi.Query(
         None, description="Specify the model name (optional)"
+    ),
+    model_id: Optional[str] = fastapi.Query(
+        None, description="Specify the model ID (optional)"
     ),
 ):
     """
@@ -397,6 +402,24 @@ async def health_endpoint(
 
     start_time = time.time()
     
+    # Handle model_id parameter - convert to model name for health check
+    target_model = model
+    if model_id and not model:
+        # Find the model name from model_id
+        if llm_model_list:
+            for model_item in llm_model_list:
+                if (hasattr(model_item, 'model_info') and 
+                    hasattr(model_item.model_info, 'id') and 
+                    model_item.model_info.id == model_id):
+                    target_model = model_item.model_name
+                    break
+        
+        if not target_model:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"Model with ID {model_id} not found"},
+            )
+    
     try:
         if llm_model_list is None:
             # if no router set, check if user set a model using litellm --model ollama/llama2
@@ -413,7 +436,8 @@ async def health_endpoint(
                         healthy_endpoints,
                         unhealthy_endpoints,
                         start_time,
-                        user_api_key_dict.user_id
+                        user_api_key_dict.user_id,
+                        model_id=None  # CLI model doesn't have model_id
                     )
                 
                 return {
@@ -436,18 +460,19 @@ async def health_endpoint(
             return health_check_results
         else:
             healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-                _llm_model_list, model, details=health_check_details
+                _llm_model_list, target_model, details=health_check_details
             )
 
             # Optionally save health check result to database (non-blocking)
-            if prisma_client is not None and model is not None:
+            if prisma_client is not None and target_model is not None:
                 await _save_health_check_to_db(
                     prisma_client,
-                    model,
+                    target_model,
                     healthy_endpoints,
                     unhealthy_endpoints,
                     start_time,
-                    user_api_key_dict.user_id
+                    user_api_key_dict.user_id,
+                    model_id=model_id
                 )
 
             return {
@@ -558,7 +583,9 @@ async def latest_health_checks_endpoint(
         # Convert to dict format for JSON response
         checks_data = {}
         for check in latest_checks:
-            checks_data[check.model_name] = {
+            # Use model_id as key if available, otherwise fall back to model_name
+            key = check.model_id if check.model_id else check.model_name
+            checks_data[key] = {
                 "health_check_id": check.health_check_id,
                 "model_name": check.model_name,
                 "model_id": check.model_id,

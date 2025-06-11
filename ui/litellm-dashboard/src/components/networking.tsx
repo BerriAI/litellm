@@ -4282,15 +4282,12 @@ export const healthCheckCall = async (accessToken: String) => {
   }
 };
 
-export const individualModelHealthCheckCall = async (accessToken: String, modelName: string) => {
+export const individualModelHealthCheckCall = async (accessToken: String, modelId: string) => {
   /**
-   * Run health check for a specific model
+   * Run health check for a specific model using model ID
    */
-  // TODO: use model id instead of name
-  // TODO: Reuse model table for common health check
-  // TODO: Seperate into 2 PR's --> UI (frontend and backend)and Schema changes
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/health?model=${encodeURIComponent(modelName)}` : `/health?model=${encodeURIComponent(modelName)}`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/health?model_id=${encodeURIComponent(modelId)}` : `/health?model_id=${encodeURIComponent(modelId)}`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -4308,7 +4305,7 @@ export const individualModelHealthCheckCall = async (accessToken: String, modelN
     const data = await response.json();
     return data;
   } catch (error) {
-    console.error(`Failed to call /health for model ${modelName}:`, error);
+    console.error(`Failed to call /health for model ${modelId}:`, error);
     throw error;
   }
 };

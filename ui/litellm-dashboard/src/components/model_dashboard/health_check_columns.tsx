@@ -32,12 +32,12 @@ export const healthCheckColumns = (
   modelHealthStatuses: {[key: string]: HealthStatus},
   selectedModelsForHealth: string[],
   allModelsSelected: boolean,
-  handleModelSelection: (modelName: string, checked: boolean) => void,
+  handleModelSelection: (modelId: string, checked: boolean) => void,
   handleSelectAll: (checked: boolean) => void,
-  runIndividualHealthCheck: (modelName: string) => void,
+  runIndividualHealthCheck: (modelId: string) => void,
   getStatusBadge: (status: string) => JSX.Element,
   getDisplayModelName: (model: any) => string,
-  showErrorModal?: (modelName: string, cleanedError: string, fullError: string) => void,
+  showErrorModal?: (modelId: string, cleanedError: string, fullError: string) => void,
 ): ColumnDef<HealthCheckData>[] => [
   {
     header: "Model Name",
@@ -47,14 +47,14 @@ export const healthCheckColumns = (
     cell: ({ row }) => {
       const model = row.original;
       const displayName = getDisplayModelName(model) || model.model_name;
-      const modelName = model.model_name;
-      const isSelected = selectedModelsForHealth.includes(modelName);
+      const modelId = model.model_info.id;
+      const isSelected = selectedModelsForHealth.includes(modelId);
       
       return (
         <div className="flex items-center gap-2">
           <Checkbox
             checked={isSelected}
-            onChange={(e) => handleModelSelection(modelName, e.target.checked)}
+            onChange={(e) => handleModelSelection(modelId, e.target.checked)}
           />
           <div className="font-medium text-sm">
             <Tooltip title={displayName}>
@@ -116,8 +116,8 @@ export const healthCheckColumns = (
     enableSorting: false,
     cell: ({ row }) => {
       const model = row.original;
-      const modelName = model.model_name;
-      const healthStatus = modelHealthStatuses[modelName];
+      const modelId = model.model_info.id;
+      const healthStatus = modelHealthStatuses[modelId];
       
       if (!healthStatus?.error) {
         return <Text className="text-gray-400 text-sm">No errors</Text>;
@@ -138,7 +138,7 @@ export const healthCheckColumns = (
           {showErrorModal && fullError !== cleanedError && (
             <Tooltip title="View full error details" placement="top">
               <button
-                onClick={() => showErrorModal(modelName, cleanedError, fullError)}
+                onClick={() => showErrorModal(modelId, cleanedError, fullError)}
                 className="p-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded cursor-pointer transition-colors"
               >
                 <InformationCircleIcon className="h-4 w-4" />
@@ -192,7 +192,7 @@ export const healthCheckColumns = (
     id: "actions",
     cell: ({ row }) => {
       const model = row.original;
-      const modelName = model.model_name;
+      const modelId = model.model_info.id;
       
       return (
         <div 
@@ -203,7 +203,7 @@ export const healthCheckColumns = (
           }`}
           onClick={() => {
             if (!model.health_loading) {
-              runIndividualHealthCheck(modelName);
+              runIndividualHealthCheck(modelId);
             }
           }}
         >
