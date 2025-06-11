@@ -3959,3 +3959,39 @@ def test_vertex_ai_gemini_2_5_pro_streaming():
         if chunk.choices[0].delta.content is not None and len(chunk.choices[0].delta.content) > 0:
             has_real_content = True
     assert has_real_content
+
+
+def test_vertex_ai_gemini_audio_ogg():
+    #load_vertex_ai_credentials()
+    litellm._turn_on_debug()
+    response = completion(
+        model="vertex_ai/gemini-2.0-flash",
+        messages=[
+            {
+                "content": [
+                    {
+                        "text": "generate a transcript of the speech.",
+                        "type": "text"
+                    }
+                ],
+                "role": "user"
+            },
+            {
+                "content": [
+                    {
+                        "file": {
+                            "file_id": "https://upload.wikimedia.org/wikipedia/commons/5/5f/En-us-public.ogg"
+                        },
+                        "type": "file"
+                    }
+                ],
+                "role": "user"
+            }
+        ],
+    )
+    print(response)
+
+
+
+
+
