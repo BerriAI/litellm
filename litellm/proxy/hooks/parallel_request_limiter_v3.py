@@ -499,7 +499,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 _usage = getattr(response_obj, "usage", None)
                 if _usage and isinstance(_usage, Usage):
                     if rate_limit_type == "output":
-                        total_tokens = _usage.total_tokens
+                        total_tokens = _usage.completion_tokens
                     elif rate_limit_type == "input":
                         total_tokens = _usage.prompt_tokens
                     elif rate_limit_type == "total":
