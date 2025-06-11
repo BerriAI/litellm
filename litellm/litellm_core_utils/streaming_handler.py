@@ -831,20 +831,31 @@ class CustomStreamWrapper:
                 self._optional_combine_thinking_block_in_choices(
                     model_response=model_response
                 )
-                
+
                 if response_obj.get("usage") is not None:
                     if self.final_usage_obj is None:
                         self.final_usage_obj = response_obj["usage"]
                     else:
-                        new_usage_dict = response_obj["usage"].model_dump() if hasattr(response_obj["usage"], "model_dump") else response_obj["usage"]
-                        old_usage_dict = self.final_usage_obj.model_dump() if hasattr(self.final_usage_obj, "model_dump") else self.final_usage_obj
-                        
+                        new_usage_dict = (
+                            response_obj["usage"].model_dump()
+                            if hasattr(response_obj["usage"], "model_dump")
+                            else response_obj["usage"]
+                        )
+                        old_usage_dict = (
+                            self.final_usage_obj.model_dump()
+                            if hasattr(self.final_usage_obj, "model_dump")
+                            else self.final_usage_obj
+                        )
+
                         for k, v in new_usage_dict.items():
                             if v is not None:
                                 old_usage_dict[k] = v
-                        
-                        self.final_usage_obj = Usage(**old_usage_dict)
-                    
+
+                        if isinstance(old_usage_dict, dict):
+                            self.final_usage_obj = Usage(**old_usage_dict)
+                        else:
+                            self.final_usage_obj = old_usage_dict
+
                     model_response.usage = self.final_usage_obj
 
                 print_verbose(f"returning model_response: {model_response}")
@@ -1555,9 +1566,9 @@ class CustomStreamWrapper:
                     )
                     # HANDLE STREAM OPTIONS
                     self.chunks.append(response)
-                    if hasattr(
-                        response, "usage"
-                    ) and not self.send_stream_usage:  # remove usage from chunk, only send on final chunk
+                    if (
+                        hasattr(response, "usage") and not self.send_stream_usage
+                    ):  # remove usage from chunk, only send on final chunk
                         # Convert the object to a dictionary
                         obj_dict = response.dict()
 
@@ -1714,9 +1725,9 @@ class CustomStreamWrapper:
                         input=self.response_uptil_now, model=self.model
                     )
                     self.chunks.append(processed_chunk)
-                    if hasattr(
-                        processed_chunk, "usage"
-                    ) and not self.send_stream_usage:  # remove usage from chunk, only send on final chunk
+                    if (
+                        hasattr(processed_chunk, "usage") and not self.send_stream_usage
+                    ):  # remove usage from chunk, only send on final chunk
                         # Convert the object to a dictionary
                         obj_dict = processed_chunk.dict()
 
@@ -1885,8 +1896,6 @@ class CustomStreamWrapper:
                 return chunk[_length_of_sse_data_prefix:]
 
         return chunk
-
-
 
 
 def generic_chunk_has_all_required_fields(chunk: dict) -> bool:

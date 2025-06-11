@@ -1216,7 +1216,7 @@ class BaseTokenUsageProcessor:
         Combine multiple Usage objects into a single Usage object, checking model keys for nested values.
         """
         from litellm.types.utils import (
-            CompletionTokensDetails,
+            CompletionTokensDetailsWrapper,
             PromptTokensDetailsWrapper,
             Usage,
         )
@@ -1271,7 +1271,9 @@ class BaseTokenUsageProcessor:
                     not hasattr(combined, "completion_tokens_details")
                     or not combined.completion_tokens_details
                 ):
-                    combined.completion_tokens_details = CompletionTokensDetails()
+                    combined.completion_tokens_details = (
+                        CompletionTokensDetailsWrapper()
+                    )
 
                 # Check what keys exist in the model's completion_tokens_details
                 for attr in dir(usage.completion_tokens_details):

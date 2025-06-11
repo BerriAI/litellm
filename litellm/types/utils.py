@@ -1106,6 +1106,7 @@ class ModelResponseBase(OpenAIObject):
 class ModelResponseStream(ModelResponseBase):
     choices: List[StreamingChoices]
     provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
+    usage: Optional[Usage] = Field(default=None)
 
     def __init__(
         self,

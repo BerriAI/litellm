@@ -123,7 +123,9 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
             if "choices" in chunk and len(chunk["choices"]) > 0:
                 choice = chunk["choices"][0]
                 if "delta" in choice and choice["delta"] is not None:
-                    choice["delta"]["reasoning_content"] = choice["delta"].get("reasoning")
+                    choice["delta"]["reasoning_content"] = choice["delta"].get(
+                        "reasoning"
+                    )
                     delta = Delta(**choice["delta"])
 
                 if "finish_reason" in choice:
