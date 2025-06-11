@@ -208,8 +208,3 @@ class TestPrismaAirsGuardrail(unittest.IsolatedAsyncioTestCase):
         mock_call_airs_api.assert_not_called()
         self.assertEqual(result, "Invalid input: 'messages' missing or improperly formatted.")
         print("--- Finished test_async_pre_call_hook_invalid_input ---")
-
-
-# This simple block allows running the tests directly
-#if __name__ == '__main__':
-#    unittest.main()
