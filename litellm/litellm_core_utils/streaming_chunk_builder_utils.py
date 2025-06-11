@@ -478,7 +478,7 @@ class ChunkProcessor:
         ] or token_counter(
             model=model,
             text=completion_output,
-            count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response
+            count_response_tokens=True,
         )
 
         returned_usage.total_tokens = (
