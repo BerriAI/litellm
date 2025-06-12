@@ -2516,6 +2516,30 @@
         "output_cost_per_second": 0.0001,
         "litellm_provider": "azure"
     },
+    "azure/gpt-4o-transcribe": {
+        "mode": "audio_transcription",
+        "max_input_tokens": 16000,
+        "max_output_tokens": 2000,
+        "input_cost_per_token": 2.5e-06,
+        "input_cost_per_audio_token": 6e-06,
+        "output_cost_per_token": 1e-05,
+        "litellm_provider": "azure",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
+    "azure/gpt-4o-mini-transcribe": {
+        "mode": "audio_transcription",
+        "max_input_tokens": 16000,
+        "max_output_tokens": 2000,
+        "input_cost_per_token": 1.25e-06,
+        "input_cost_per_audio_token": 3e-06,
+        "output_cost_per_token": 5e-06,
+        "litellm_provider": "azure",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
     "azure/o3-mini": {
         "max_tokens": 100000,
         "max_input_tokens": 200000,
