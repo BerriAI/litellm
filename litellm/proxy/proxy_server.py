@@ -7975,6 +7975,7 @@ async def delete_config_general_settings(
 
     return response
 
+
 @router.post(
     "/config/callback/delete",
     tags=["config.yaml"],
@@ -8058,12 +8059,10 @@ async def delete_callback(
         verbose_proxy_logger.debug(traceback.format_exc())
         raise ProxyException(
             message="Error deleting callback: " + str(e),
-            type=ProxyErrorTypes.internal_error,
+            type=ProxyErrorTypes.internal_server_error,
             param="callback_name",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-
-
 
 
 @router.get(
