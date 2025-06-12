@@ -1,5 +1,5 @@
 ---
-title: "[Pre Release] v1.72.2-stable"
+title: "v1.72.2-stable"
 slug: "v1-72-2-stable"
 date: 2025-06-07T10:00:00
 authors:
@@ -38,7 +38,7 @@ The production release will be live on Wednesday.
 docker run
 -e STORE_MODEL_IN_DB=True
 -p 4000:4000
-ghcr.io/berriai/litellm:main-v1.72.2.rc
+ghcr.io/berriai/litellm:main-v1.72.2-stable
 ```
 </TabItem>
 
