@@ -83,9 +83,16 @@ class RateLimitDescriptor(TypedDict):
     rate_limit: Optional[RateLimitDescriptorRateLimitObject]
 
 
+class RateLimitStatus(TypedDict):
+    code: str
+    current_limit: int
+    limit_remaining: int
+    rate_limit_type: Literal["requests", "tokens", "max_parallel_requests"]
+
+
 class RateLimitResponse(TypedDict):
     overall_code: str
-    statuses: List[Dict[str, Any]]
+    statuses: List[RateLimitStatus]
 
 
 class RateLimitResponseWithDescriptors(TypedDict):
@@ -137,7 +144,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         Check if the cache values are over the limit.
         """
-        statuses = []
+        statuses: List[RateLimitStatus] = []
         overall_code = "OK"
         for i in range(0, len(cache_values), 2):
             item_code = "OK"
@@ -151,53 +158,40 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             tokens_limit = key_metadata[window_key]["tokens_limit"]
 
             # Determine which limit to use for current_limit and limit_remaining
+            current_limit: Optional[int] = None
+            rate_limit_type: Optional[
+                Literal["requests", "tokens", "max_parallel_requests"]
+            ] = None
             if counter_key.endswith(":requests"):
                 current_limit = requests_limit
+                rate_limit_type = "requests"
             elif counter_key.endswith(":max_parallel_requests"):
                 current_limit = max_parallel_requests_limit
+                rate_limit_type = "max_parallel_requests"
             elif counter_key.endswith(":tokens"):
                 current_limit = tokens_limit
-            else:
-                current_limit = None
+                rate_limit_type = "tokens"
 
-            if (
-                counter_key.endswith(":requests")
-                and requests_limit is not None
-                and counter_value is not None
-                and int(counter_value) + 1 > requests_limit
-            ):
-                overall_code = "OVER_LIMIT"
-                item_code = "OVER_LIMIT"
-            elif (
-                counter_key.endswith(":max_parallel_requests")
-                and max_parallel_requests_limit is not None
-                and counter_value is not None
-                and int(counter_value) + 1 > max_parallel_requests_limit
-            ):
-                overall_code = "OVER_LIMIT"
-                item_code = "OVER_LIMIT"
-            elif (
-                counter_key.endswith(":tokens")
-                and tokens_limit is not None
-                and counter_value is not None
-                and int(counter_value) + 1 > tokens_limit
-            ):
+            if current_limit is None or rate_limit_type is None:
+                continue
+
+            if counter_value is not None and int(counter_value) + 1 > current_limit:
                 overall_code = "OVER_LIMIT"
                 item_code = "OVER_LIMIT"
 
             # Only compute limit_remaining if current_limit is not None
-            if current_limit is None:
-                limit_remaining = None
-            elif counter_value is None:
-                limit_remaining = current_limit
-            else:
-                limit_remaining = current_limit - counter_value
+            limit_remaining = (
+                current_limit - int(counter_value)
+                if counter_value is not None
+                else current_limit
+            )
 
             statuses.append(
                 {
                     "code": item_code,
                     "current_limit": current_limit,
                     "limit_remaining": limit_remaining,
+                    "rate_limit_type": rate_limit_type,
                 }
             )
 
@@ -232,16 +226,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
             window_key = f"{{{key}:{value}}}:window"
 
+            rate_limit_set = False
             if requests_limit is not None:
                 key = self.create_rate_limit_keys(key, value, "requests")
                 keys_to_fetch.extend([window_key, key])
-            elif tokens_limit is not None:
+                rate_limit_set = True
+            if tokens_limit is not None:
                 key = self.create_rate_limit_keys(key, value, "tokens")
                 keys_to_fetch.extend([window_key, key])
-            elif max_parallel_requests_limit is not None:
+                rate_limit_set = True
+            if max_parallel_requests_limit is not None:
                 key = self.create_rate_limit_keys(key, value, "max_parallel_requests")
                 keys_to_fetch.extend([window_key, key])
-            else:
+                rate_limit_set = True
+
+            if not rate_limit_set:
                 continue
 
             key_metadata[window_key] = {
@@ -434,10 +433,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         else:
             # add descriptors to request headers
-            data["litellm_proxy_rate_limit_response"] = {
-                "descriptors": descriptors,
-                "response": response,
-            }
+            data["litellm_proxy_rate_limit_response"] = response
 
     def _create_pipeline_operations(
         self,
@@ -627,14 +623,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             from pydantic import BaseModel
 
             litellm_proxy_rate_limit_response = cast(
-                Optional[RateLimitResponseWithDescriptors],
+                Optional[RateLimitResponse],
                 data.get("litellm_proxy_rate_limit_response", None),
             )
 
             if litellm_proxy_rate_limit_response is not None:
-                rate_limit_response = litellm_proxy_rate_limit_response["response"]
-                descriptors = litellm_proxy_rate_limit_response["descriptors"]
-
                 # Update response headers
                 if hasattr(response, "_hidden_params"):
                     _hidden_params = getattr(response, "_hidden_params")
@@ -653,15 +646,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     )
 
                     # Add rate limit headers
-                    for i, status in enumerate(rate_limit_response["statuses"]):
-                        descriptor = descriptors[i]
-                        prefix = f"x-ratelimit-{descriptor['key']}"
-                        _additional_headers[f"{prefix}-remaining-requests"] = status[
-                            "limit_remaining"
-                        ]
-                        _additional_headers[f"{prefix}-limit-requests"] = status[
-                            "current_limit"
-                        ]
+                    for i, status in enumerate(
+                        litellm_proxy_rate_limit_response["statuses"]
+                    ):
+                        prefix = "x-ratelimit"
+                        _additional_headers[
+                            f"{prefix}-remaining-{status['rate_limit_type']}"
+                        ] = status["limit_remaining"]
+                        _additional_headers[
+                            f"{prefix}-limit-{status['rate_limit_type']}"
+                        ] = status["current_limit"]
 
                     setattr(
                         response,
