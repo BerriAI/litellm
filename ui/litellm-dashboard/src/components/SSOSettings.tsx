@@ -31,7 +31,6 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles,
 
       try {
         const data = await getInternalUserSettings(accessToken);
-        console.log("SSO settings:", data);
         setSettings(data);
         setEditedValues(data.values || {});
         
