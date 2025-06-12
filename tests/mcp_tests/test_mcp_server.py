@@ -321,3 +321,57 @@ async def test_mcp_http_transport_tool_not_found():
         )
 
 
+@pytest.mark.asyncio
+async def test_streamable_http_mcp_handler_mock():
+    """Test the streamable HTTP MCP handler functionality"""
+    
+    # Mock the session manager and its methods
+    mock_session_manager = AsyncMock()
+    mock_session_manager.handle_request = AsyncMock()
+    
+    # Mock scope, receive, send
+    mock_scope = {"type": "http", "method": "POST", "path": "/mcp"}
+    mock_receive = AsyncMock()
+    mock_send = AsyncMock()
+    
+    with patch('litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED', True), \
+         patch('litellm.proxy._experimental.mcp_server.server.session_manager', mock_session_manager):
+        
+        from litellm.proxy._experimental.mcp_server.server import handle_streamable_http_mcp
+        
+        # Call the handler
+        await handle_streamable_http_mcp(mock_scope, mock_receive, mock_send)
+        
+        # Verify session manager handle_request was called
+        mock_session_manager.handle_request.assert_called_once_with(
+            mock_scope, mock_receive, mock_send
+        )
+
+
+@pytest.mark.asyncio
+async def test_sse_mcp_handler_mock():
+    """Test the SSE MCP handler functionality"""
+    
+    # Mock the SSE session manager and its methods
+    mock_sse_session_manager = AsyncMock()
+    mock_sse_session_manager.handle_request = AsyncMock()
+    
+    # Mock scope, receive, send
+    mock_scope = {"type": "http", "method": "GET", "path": "/mcp/sse"}
+    mock_receive = AsyncMock()
+    mock_send = AsyncMock()
+    
+    with patch('litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED', True), \
+         patch('litellm.proxy._experimental.mcp_server.server.sse_session_manager', mock_sse_session_manager):
+        
+        from litellm.proxy._experimental.mcp_server.server import handle_sse_mcp
+        
+        # Call the handler
+        await handle_sse_mcp(mock_scope, mock_receive, mock_send)
+        
+        # Verify SSE session manager handle_request was called
+        mock_sse_session_manager.handle_request.assert_called_once_with(
+            mock_scope, mock_receive, mock_send
+        )
+
+
