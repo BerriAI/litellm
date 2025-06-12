@@ -263,7 +263,7 @@ async def test_assign_user_team_role_at_user_creation(mocker):
         "user_alias": "test-user-alias",
         "user_email": test_user_email,
         "team_id": test_team_id,
-        "team_member_details": test_team_member_details,
+        "team_member_details": {},
         "organization_id": "test-organization-id",
         "user_role": "proxy_admin",
         "max_parallel_requests": None,
@@ -326,7 +326,7 @@ async def test_assign_user_team_role_at_user_creation(mocker):
 async def test_assigning_admin_team_role_at_user_creation_as_non_enterprise_user_returns_error(mocker):
     """
     Test that new_user returns error when adding a new user with admin team role.
-    Relevant Pull Request: https://github.com/BerriAI/litellm/issues/10109
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/10109
     """
     from litellm.proxy._types import (
         NewUserRequest,
@@ -350,7 +350,7 @@ async def test_assigning_admin_team_role_at_user_creation_as_non_enterprise_user
         "user_alias": "test-user-alias",
         "user_email": test_user_email,
         "team_id": test_team_id,
-        "team_member_details": test_team_member_details,
+        "team_member_details": {},
         "organization_id": "test-organization-id",
         "user_role": "proxy_admin",
         "max_parallel_requests": None,
