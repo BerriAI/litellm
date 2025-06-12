@@ -3,12 +3,15 @@ LiteLLM MCP Server Routes
 """
 
 import asyncio
-from typing import Any, Dict, List, Optional, Union
+import contextlib
+from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
 from anyio import BrokenResourceError
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ConfigDict, ValidationError
+from starlette.applications import Starlette
+from starlette.types import Receive, Scope, Send
 
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_TOOL_NAME_PREFIX
@@ -51,6 +54,7 @@ def get_mcp_server_enabled() -> Dict[str, bool]:
 if MCP_AVAILABLE:
     from mcp.server import NotificationOptions, Server
     from mcp.server.models import InitializationOptions
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     from mcp.types import EmbeddedResource as MCPEmbeddedResource
     from mcp.types import ImageContent as MCPImageContent
     from mcp.types import TextContent as MCPTextContent
@@ -76,8 +80,40 @@ if MCP_AVAILABLE:
     ########################################################
     ############ Initialize the MCP Server #################
     ########################################################
-    server: Server = Server("litellm-mcp-server")
+    server: Server = Server(
+        name="litellm-mcp-server",
+        version="1.0.0",
+    )
     sse: SseServerTransport = SseServerTransport("/mcp/sse/messages")
+
+    # Create session managers
+    session_manager = StreamableHTTPSessionManager(
+        app=server,
+        event_store=None,
+        json_response=True,  # Use JSON responses instead of SSE by default
+        stateless=True,
+    )
+
+    # Create SSE session manager
+    sse_session_manager = StreamableHTTPSessionManager(
+        app=server,
+        event_store=None,
+        json_response=False,  # Use SSE responses for this endpoint
+        stateless=True,
+    )
+
+    @contextlib.asynccontextmanager
+    async def lifespan(app: Starlette) -> AsyncIterator[None]:
+        """Application lifespan context manager."""
+        async with session_manager.run():
+            async with sse_session_manager.run():
+                verbose_logger.info(
+                    "MCP Server started with StreamableHTTP and SSE session managers!"
+                )
+                try:
+                    yield
+                finally:
+                    verbose_logger.info("MCP Server shutting down...")
 
     ########################################################
     ############### MCP Server Routes #######################
@@ -157,15 +193,15 @@ if MCP_AVAILABLE:
             "litellm_logging_obj", None
         )
         if litellm_logging_obj:
-            litellm_logging_obj.model_call_details[
-                "mcp_tool_call_metadata"
-            ] = standard_logging_mcp_tool_call
-            litellm_logging_obj.model_call_details[
-                "model"
-            ] = f"{MCP_TOOL_NAME_PREFIX}: {standard_logging_mcp_tool_call.get('name') or ''}"
-            litellm_logging_obj.model_call_details[
-                "custom_llm_provider"
-            ] = standard_logging_mcp_tool_call.get("mcp_server_name")
+            litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
+                standard_logging_mcp_tool_call
+            )
+            litellm_logging_obj.model_call_details["model"] = (
+                f"{MCP_TOOL_NAME_PREFIX}: {standard_logging_mcp_tool_call.get('name') or ''}"
+            )
+            litellm_logging_obj.model_call_details["custom_llm_provider"] = (
+                standard_logging_mcp_tool_call.get("mcp_server_name")
+            )
 
         # Try managed server tool first
         if name in global_mcp_server_manager.tool_name_to_mcp_server_name_mapping:
@@ -218,27 +254,18 @@ if MCP_AVAILABLE:
         except Exception as e:
             return [MCPTextContent(text=f"Error: {str(e)}", type="text")]
 
-    @router.get("/", response_class=StreamingResponse)
-    async def handle_sse(request: Request):
-        verbose_logger.info("new incoming SSE connection established")
-        async with sse.connect_sse(request) as streams:
-            try:
-                await server.run(streams[0], streams[1], options)
-            except BrokenResourceError:
-                pass
-            except asyncio.CancelledError:
-                pass
-            except ValidationError:
-                pass
-            except Exception:
-                raise
-        await request.close()
+    @router.get("/health")
+    async def health_check(request: Request) -> JSONResponse:
+        """Health check endpoint."""
+        return JSONResponse({"status": "healthy", "message": "MCP Server is running"})
 
-    @router.post("/sse/messages")
-    async def handle_messages(request: Request):
-        verbose_logger.info("incoming SSE message received")
-        await sse.handle_post_message(request.scope, request.receive, request._send)
-        await request.close()
+    async def handle_mcp(scope: Scope, receive: Receive, send: Send) -> None:
+        """Handle MCP requests through StreamableHTTP."""
+        await session_manager.handle_request(scope, receive, send)
+
+    async def handle_sse(scope: Scope, receive: Receive, send: Send) -> None:
+        """Handle MCP requests through SSE."""
+        await sse_session_manager.handle_request(scope, receive, send)
 
     ########################################################
     ############ MCP Server REST API Routes #################
