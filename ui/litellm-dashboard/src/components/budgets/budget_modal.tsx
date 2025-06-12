@@ -54,7 +54,7 @@ const BudgetModal: React.FC<BudgetModalProps> = ({
       setBudgetList((prevData) =>
         prevData ? [...prevData, response] : [response]
       ); // Check if prevData is null
-      message.success("API Key Created");
+      message.success("Budget Created");
       form.resetFields();
     } catch (error) {
       console.error("Error creating the key:", error);
