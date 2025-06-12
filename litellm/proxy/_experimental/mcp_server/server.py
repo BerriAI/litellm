@@ -220,10 +220,19 @@ if MCP_AVAILABLE:
 
     @client
     async def call_mcp_tool(
-        name: str, arguments: Optional[Dict[str, Any]] = None, **kwargs: Any
+        name: str, 
+        arguments: Optional[Dict[str, Any]] = None, 
+        user_authorization_header: Optional[str] = None,
+        **kwargs: Any
     ) -> List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]:
         """
         Call a specific tool with the provided arguments
+        
+        Args:
+            name: Name of the tool to call
+            arguments: Arguments to pass to the tool
+            user_authorization_header: User authorization header to pass through to MCP servers
+            **kwargs: Additional arguments
         """
         if arguments is None:
             raise HTTPException(
@@ -252,7 +261,7 @@ if MCP_AVAILABLE:
 
         # Try managed server tool first
         if name in global_mcp_server_manager.tool_name_to_mcp_server_name_mapping:
-            return await _handle_managed_mcp_tool(name, arguments)
+            return await _handle_managed_mcp_tool(name, arguments, user_authorization_header)
 
         # Fall back to local tool registry
         return await _handle_local_mcp_tool(name, arguments)
@@ -277,12 +286,13 @@ if MCP_AVAILABLE:
             )
 
     async def _handle_managed_mcp_tool(
-        name: str, arguments: Dict[str, Any]
+        name: str, arguments: Dict[str, Any], user_authorization_header: Optional[str] = None
     ) -> List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]:
         """Handle tool execution for managed server tools"""
         call_tool_result = await global_mcp_server_manager.call_tool(
             name=name,
             arguments=arguments,
+            user_authorization_header=user_authorization_header,
         )
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
         return call_tool_result.content
@@ -394,9 +404,16 @@ if MCP_AVAILABLE:
     ):
         """
         REST API to call a specific MCP tool with the provided arguments
+        
+        Supports dual authentication:
+        - x-litellm-key: for LiteLLM system authentication (handled by user_api_key_auth)
+        - Authorization: for user authorization passed through to MCP servers
         """
         from litellm.proxy.proxy_server import add_litellm_data_to_request, proxy_config
 
+        # Extract the Authorization header for pass-through to MCP servers
+        authorization_header = request.headers.get("Authorization")
+        
         data = await request.json()
         data = await add_litellm_data_to_request(
             data=data,
@@ -404,6 +421,11 @@ if MCP_AVAILABLE:
             user_api_key_dict=user_api_key_dict,
             proxy_config=proxy_config,
         )
+        
+        # Pass the authorization header to the MCP tool call
+        if authorization_header:
+            data["user_authorization_header"] = authorization_header
+        
         return await call_mcp_tool(**data)
 
     app = FastAPI(

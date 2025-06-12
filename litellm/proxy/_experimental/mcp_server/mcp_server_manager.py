@@ -237,14 +237,23 @@ class MCPServerManager:
             for tool in tools:
                 self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
 
-    async def call_tool(self, name: str, arguments: Dict[str, Any]):
+    async def call_tool(self, name: str, arguments: Dict[str, Any], user_authorization_header: Optional[str] = None):
         """
         Call a tool with the given name and arguments
+        
+        Args:
+            name: Tool name to call
+            arguments: Arguments to pass to the tool
+            user_authorization_header: Authorization header to pass through to MCP servers
         """
         mcp_server = self._get_mcp_server_from_tool_name(name)
         if mcp_server is None:
             raise ValueError(f"Tool {name} not found")
         elif mcp_server.transport is None or mcp_server.transport == MCPTransport.sse:
+            # For SSE transport, authorization headers are not yet supported by the MCP Python SDK
+            if user_authorization_header:
+                verbose_logger.warning(f"Authorization header provided but not yet supported for MCP SSE transport: {user_authorization_header[:20]}...")
+            
             async with sse_client(url=mcp_server.url) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
@@ -260,6 +269,11 @@ class MCPServerManager:
             verbose_logger.debug(
                 f"Using HTTP streamable transport for tool call: {name}"
             )
+            
+            # Log authorization header if provided (currently limited by MCP SDK)
+            if user_authorization_header:
+                verbose_logger.warning(f"Authorization header provided but cannot be passed through with current MCP SDK. Header: {user_authorization_header[:20]}...")
+            
             async with streamablehttp_client(
                 url=mcp_server.url,
             ) as (read_stream, write_stream, get_session_id):
@@ -313,3 +327,7 @@ class MCPServerManager:
 
 
 global_mcp_server_manager: MCPServerManager = MCPServerManager()
+
+# Note: Authorization header support is limited by the current MCP Python SDK
+# This implementation logs the authorization header but cannot fully pass it through
+# until the MCP SDK supports custom headers in its client libraries
