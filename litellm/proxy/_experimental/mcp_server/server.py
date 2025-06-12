@@ -141,7 +141,7 @@ if MCP_AVAILABLE:
 
     async def shutdown_session_managers():
         """Shutdown the session managers."""
-        global _session_managers_initialized, _session_manager_task
+        global _SESSION_MANAGERS_INITIALIZED, _session_manager_task
 
         if _SESSION_MANAGER_TASK and not _SESSION_MANAGER_TASK.done():
             verbose_logger.info("Shutting down MCP session managers...")
