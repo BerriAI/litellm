@@ -7,10 +7,9 @@ import contextlib
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
 from anyio import BrokenResourceError
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ConfigDict, ValidationError
-from starlette.applications import Starlette
 from starlette.types import Receive, Scope, Send
 
 from litellm._logging import verbose_logger
@@ -52,17 +51,20 @@ def get_mcp_server_enabled() -> Dict[str, bool]:
 
 
 if MCP_AVAILABLE:
-    from mcp.server import NotificationOptions, Server
-    from mcp.server.models import InitializationOptions
+    from mcp.server import Server
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     from mcp.types import EmbeddedResource as MCPEmbeddedResource
     from mcp.types import ImageContent as MCPImageContent
     from mcp.types import TextContent as MCPTextContent
     from mcp.types import Tool as MCPTool
 
-    from .mcp_server_manager import global_mcp_server_manager
-    from .sse_transport import SseServerTransport
-    from .tool_registry import global_mcp_tool_registry
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._experimental.mcp_server.sse_transport import SseServerTransport
+    from litellm.proxy._experimental.mcp_server.tool_registry import (
+        global_mcp_tool_registry,
+    )
 
     ######################################################
     ############ MCP Tools List REST API Response Object #
@@ -103,7 +105,7 @@ if MCP_AVAILABLE:
     )
 
     @contextlib.asynccontextmanager
-    async def lifespan(app: Starlette) -> AsyncIterator[None]:
+    async def lifespan(app) -> AsyncIterator[None]:
         """Application lifespan context manager."""
         async with session_manager.run():
             async with sse_session_manager.run():
@@ -259,11 +261,13 @@ if MCP_AVAILABLE:
         """Health check endpoint."""
         return JSONResponse({"status": "healthy", "message": "MCP Server is running"})
 
-    async def handle_mcp(scope: Scope, receive: Receive, send: Send) -> None:
+    async def handle_streamable_http_mcp(
+        scope: Scope, receive: Receive, send: Send
+    ) -> None:
         """Handle MCP requests through StreamableHTTP."""
         await session_manager.handle_request(scope, receive, send)
 
-    async def handle_sse(scope: Scope, receive: Receive, send: Send) -> None:
+    async def handle_sse_mcp(scope: Scope, receive: Receive, send: Send) -> None:
         """Handle MCP requests through SSE."""
         await sse_session_manager.handle_request(scope, receive, send)
 
@@ -342,11 +346,24 @@ if MCP_AVAILABLE:
         )
         return await call_mcp_tool(**data)
 
-    options = InitializationOptions(
-        server_name="litellm-mcp-server",
-        server_version="0.1.0",
-        capabilities=server.get_capabilities(
-            notification_options=NotificationOptions(),
-            experimental_capabilities={},
-        ),
+    app = FastAPI(
+        title="LiteLLM MCP Server",
+        description="MCP Server for LiteLLM",
+        version="1.0.0",
+        debug=True,
+        lifespan=lifespan,
     )
+
+    # Include the MCP router
+    app.include_router(router)
+
+    # Mount the MCP handlers
+    app.mount("/mcp", handle_streamable_http_mcp)
+    app.mount("/sse", handle_sse_mcp)
+
+    if __name__ == "__main__":
+        # Configure logging
+        import uvicorn
+
+        # Run the server
+        uvicorn.run(app, host="0.0.0.0", port=3000, log_level="info")
