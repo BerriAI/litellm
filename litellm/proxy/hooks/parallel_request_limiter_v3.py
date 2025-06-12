@@ -149,7 +149,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 counter_key.endswith(":requests")
                 and requests_limit is not None
                 and counter_value is not None
-                and int(counter_value) + 1 > requests_limit
+                and int(counter_value) > requests_limit
             ):
                 overall_code = "OVER_LIMIT"
                 item_code = "OVER_LIMIT"
@@ -157,7 +157,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 counter_key.endswith(":max_parallel_requests")
                 and max_parallel_requests_limit is not None
                 and counter_value is not None
-                and int(counter_value) + 1 > max_parallel_requests_limit
+                and int(counter_value) > max_parallel_requests_limit
             ):
                 overall_code = "OVER_LIMIT"
                 item_code = "OVER_LIMIT"
@@ -165,7 +165,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 counter_key.endswith(":tokens")
                 and tokens_limit is not None
                 and counter_value is not None
-                and int(counter_value) + 1 > tokens_limit
+                and int(counter_value) > tokens_limit
             ):
                 overall_code = "OVER_LIMIT"
                 item_code = "OVER_LIMIT"

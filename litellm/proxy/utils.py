@@ -261,9 +261,6 @@ class ProxyLogging:
         self.internal_usage_cache: InternalUsageCache = InternalUsageCache(
             dual_cache=DualCache(default_in_memory_ttl=1)  # ping redis cache every 1s
         )
-        self.max_parallel_request_limiter = _PROXY_MaxParallelRequestsHandler(
-            self.internal_usage_cache
-        )
         self.max_budget_limiter = _PROXY_MaxBudgetLimiter()
         self.cache_control_check = _PROXY_CacheControlCheck()
         self.alerting: Optional[List] = None
