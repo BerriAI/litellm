@@ -92,7 +92,7 @@ This is great for real time use cases with large requests (eg. multi turn conver
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 
-LiteLLM v1.72.2.rc now accurately tracks rate limits across keys, models, teams, and users with 0 spillover.
+LiteLLM now accurately tracks rate limits across keys, models, teams, and users with 0 spillover.
 
 This is a significant improvement over the previous version, which faced issues with leakage and spillover in high traffic, multi-instance setups.
 
