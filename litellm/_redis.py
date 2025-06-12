@@ -31,51 +31,65 @@ SSL_PARAMS = [
 
 def _get_redis_kwargs():
     arg_spec = inspect.getfullargspec(redis.Redis)
-    exclude_args = {"self", "connection_pool", "retry"}
-    available_args = [x for x in arg_spec.args if x not in exclude_args]
-    return available_args + ["url"] + SSL_PARAMS
+
+    # Only allow primitive arguments
+    exclude_args = {
+        "self",
+        "connection_pool",
+        "retry",
+    }
+
+    include_args = ["url", "ssl", "ssl_cert_reqs", "ssl_ca_certs", "ssl_certfile", "ssl_keyfile"]
+
+    available_args = [x for x in arg_spec.args if x not in exclude_args] + include_args
+
+    return available_args
 
 def _get_redis_url_kwargs(client=None):
     if client is None:
         client = redis.Redis.from_url
-    arg_spec = inspect.getfullargspec(client)
-    exclude_args = {"self", "connection_pool", "retry"}
-    available_args = [x for x in arg_spec.args if x not in exclude_args]
-    return available_args + ["url"] + SSL_PARAMS
+    arg_spec = inspect.getfullargspec(redis.Redis.from_url)
+
+    # Only allow primitive arguments
+    exclude_args = {
+        "self",
+        "connection_pool",
+        "retry",
+    }
+
+    include_args = ["url", "ssl", "ssl_cert_reqs", "ssl_ca_certs", "ssl_certfile", "ssl_keyfile"]
+
+    available_args = [x for x in arg_spec.args if x not in exclude_args] + include_args
+
+    return available_args
 
 def _get_redis_cluster_kwargs(client=None):
     if client is None:
         client = redis.Redis.from_url
     arg_spec = inspect.getfullargspec(redis.RedisCluster)
+
+    # Only allow primitive arguments
     exclude_args = {"self", "connection_pool", "retry", "host", "port", "startup_nodes"}
+
     available_args = [x for x in arg_spec.args if x not in exclude_args]
-    return available_args + ["password", "username"] + SSL_PARAMS
+    available_args.extend(["password", "username", "ssl", "ssl_cert_reqs", "ssl_ca_certs", "ssl_certfile", "ssl_keyfile"])
+
+    return available_args
 
 def _get_redis_env_kwarg_mapping():
-    """Simple environment variable mapping"""
-    redis_kwargs = _get_redis_kwargs()
-    mapping = {f"REDIS_{x.upper()}": x for x in redis_kwargs}
-    return mapping
+    PREFIX = "REDIS_"
+
+    return {f"{PREFIX}{x.upper()}": x for x in _get_redis_kwargs()}
 
 def _redis_kwargs_from_environment():
-    """Get Redis parameters from environment variables"""
     mapping = _get_redis_env_kwarg_mapping()
-    return_dict = {}
-    
-    for env_var, param_name in mapping.items():
-        value = get_secret(env_var, default_value=None)
-        if value is not None:
-            # Convert string booleans to actual booleans for SSL params
-            if param_name in ["ssl", "ssl_check_hostname"] and isinstance(value, str):
-                return_dict[param_name] = value.lower() in ["true", "1", "yes", "on"]
-            else:
-                return_dict[param_name] = value
-    
-    return return_dict
 
-def _extract_ssl_params(redis_kwargs):
-    """Extract SSL parameters from kwargs"""
-    return {k: v for k, v in redis_kwargs.items() if k in SSL_PARAMS}
+    return_dict = {}
+    for k, v in mapping.items():
+        value = get_secret(k, default_value=None)  # type: ignore
+        if value is not None:
+            return_dict[v] = value
+    return return_dict
 
 def get_redis_url_from_environment():
     if "REDIS_URL" in os.environ:
@@ -96,34 +110,49 @@ def get_redis_url_from_environment():
     )
 
 def _get_redis_client_logic(**env_overrides):
-    """Common functionality across sync + async redis client implementations"""
-    # Handle os.environ/ references
+    """
+    Common functionality across sync + async redis client implementations
+    """
+    ### check if "os.environ/<key-name>" passed in
     for k, v in env_overrides.items():
         if isinstance(v, str) and v.startswith("os.environ/"):
             v = v.replace("os.environ/", "")
-            value = get_secret(v)
+            value = get_secret(v)  # type: ignore
             env_overrides[k] = value
 
-    redis_kwargs = {**_redis_kwargs_from_environment(), **env_overrides}
+    redis_kwargs = {
+        **_redis_kwargs_from_environment(),
+        **env_overrides,
+    }
 
-    # Handle special parameters
-    _startup_nodes = redis_kwargs.get("startup_nodes") or get_secret("REDIS_CLUSTER_NODES")
-    if _startup_nodes and isinstance(_startup_nodes, str):
+    _startup_nodes: Optional[Union[str, list]] = redis_kwargs.get("startup_nodes", None) or get_secret(  # type: ignore
+        "REDIS_CLUSTER_NODES"
+    )
+
+    if _startup_nodes is not None and isinstance(_startup_nodes, str):
         redis_kwargs["startup_nodes"] = json.loads(_startup_nodes)
 
-    _sentinel_nodes = redis_kwargs.get("sentinel_nodes") or get_secret("REDIS_SENTINEL_NODES")
-    if _sentinel_nodes and isinstance(_sentinel_nodes, str):
+    _sentinel_nodes: Optional[Union[str, list]] = redis_kwargs.get("sentinel_nodes", None) or get_secret(  # type: ignore
+        "REDIS_SENTINEL_NODES"
+    )
+
+    if _sentinel_nodes is not None and isinstance(_sentinel_nodes, str):
         redis_kwargs["sentinel_nodes"] = json.loads(_sentinel_nodes)
 
-    _sentinel_password = redis_kwargs.get("sentinel_password") or get_secret_str("REDIS_SENTINEL_PASSWORD")
-    if _sentinel_password:
+    _sentinel_password: Optional[str] = redis_kwargs.get(
+        "sentinel_password", None
+    ) or get_secret_str("REDIS_SENTINEL_PASSWORD")
+
+    if _sentinel_password is not None:
         redis_kwargs["sentinel_password"] = _sentinel_password
 
-    _service_name = redis_kwargs.get("service_name") or get_secret("REDIS_SERVICE_NAME")
-    if _service_name:
+    _service_name: Optional[str] = redis_kwargs.get("service_name", None) or get_secret(  # type: ignore
+        "REDIS_SERVICE_NAME"
+    )
+
+    if _service_name is not None:
         redis_kwargs["service_name"] = _service_name
 
-    # Clean up conflicting parameters
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         redis_kwargs.pop("host", None)
         redis_kwargs.pop("port", None)
@@ -131,16 +160,19 @@ def _get_redis_client_logic(**env_overrides):
         redis_kwargs.pop("password", None)
     elif "startup_nodes" in redis_kwargs and redis_kwargs["startup_nodes"] is not None:
         pass
-    elif "sentinel_nodes" in redis_kwargs and redis_kwargs["sentinel_nodes"] is not None:
+    elif (
+        "sentinel_nodes" in redis_kwargs and redis_kwargs["sentinel_nodes"] is not None
+    ):
         pass
     elif "host" not in redis_kwargs or redis_kwargs["host"] is None:
         raise ValueError("Either 'host' or 'url' must be specified for redis.")
 
+    # litellm.print_verbose(f"redis_kwargs: {redis_kwargs}")
     return redis_kwargs
 
 def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
-    _redis_cluster_nodes_in_env = get_secret("REDIS_CLUSTER_NODES")
-    if _redis_cluster_nodes_in_env is not None and isinstance(_redis_cluster_nodes_in_env, str):
+    _redis_cluster_nodes_in_env: Optional[str] = get_secret("REDIS_CLUSTER_NODES")  # type: ignore
+    if _redis_cluster_nodes_in_env is not None:
         try:
             redis_kwargs["startup_nodes"] = json.loads(_redis_cluster_nodes_in_env)
         except json.JSONDecodeError:
@@ -152,12 +184,18 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
     from redis.cluster import ClusterNode
 
     args = _get_redis_cluster_kwargs()
-    cluster_kwargs = {arg: redis_kwargs[arg] for arg in redis_kwargs if arg in args}
+    cluster_kwargs = {}
+    for arg in redis_kwargs:
+        if arg in args:
+            cluster_kwargs[arg] = redis_kwargs[arg]
 
-    new_startup_nodes = [ClusterNode(**item) for item in redis_kwargs["startup_nodes"]]
+    new_startup_nodes: List[ClusterNode] = []
+
+    for item in redis_kwargs["startup_nodes"]:
+        new_startup_nodes.append(ClusterNode(**item))
+
     redis_kwargs.pop("startup_nodes")
-    
-    return redis.RedisCluster(startup_nodes=new_startup_nodes, **cluster_kwargs)
+    return redis.RedisCluster(startup_nodes=new_startup_nodes, **cluster_kwargs)  # type: ignore
 
 def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
     sentinel_nodes = redis_kwargs.get("sentinel_nodes")
@@ -171,14 +209,14 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
 
     verbose_logger.debug("init_redis_sentinel: sentinel nodes are being initialized.")
 
-    # Pass SSL parameters to Sentinel
-    ssl_kwargs = _extract_ssl_params(redis_kwargs)
+    # Set up the Sentinel client
     sentinel = redis.Sentinel(
         sentinel_nodes,
         socket_timeout=REDIS_SOCKET_TIMEOUT,
         password=sentinel_password,
-        **ssl_kwargs
     )
+
+    # Return the master instance for the given service
 
     return sentinel.master_for(service_name)
 
@@ -194,72 +232,97 @@ def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
 
     verbose_logger.debug("init_redis_sentinel: sentinel nodes are being initialized.")
 
-    # Pass SSL parameters to Sentinel
-    ssl_kwargs = _extract_ssl_params(redis_kwargs)
+    # Set up the Sentinel client
     sentinel = async_redis.Sentinel(
         sentinel_nodes,
         socket_timeout=REDIS_SOCKET_TIMEOUT,
         password=sentinel_password,
-        **ssl_kwargs
     )
+
+    # Return the master instance for the given service
 
     return sentinel.master_for(service_name)
 
 def get_redis_client(**env_overrides):
     redis_kwargs = _get_redis_client_logic(**env_overrides)
-    
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         args = _get_redis_url_kwargs()
-        url_kwargs = {arg: redis_kwargs[arg] for arg in redis_kwargs if arg in args}
+        url_kwargs = {}
+        for arg in redis_kwargs:
+            if arg in args:
+                url_kwargs[arg] = redis_kwargs[arg]
+
         return redis.Redis.from_url(**url_kwargs)
 
-    if "startup_nodes" in redis_kwargs or get_secret("REDIS_CLUSTER_NODES") is not None:
+    if "startup_nodes" in redis_kwargs or get_secret("REDIS_CLUSTER_NODES") is not None:  # type: ignore
         return init_redis_cluster(redis_kwargs)
 
+    # Check for Redis Sentinel
     if "sentinel_nodes" in redis_kwargs and "service_name" in redis_kwargs:
         return _init_redis_sentinel(redis_kwargs)
 
     return redis.Redis(**redis_kwargs)
 
-def get_redis_async_client(**env_overrides) -> async_redis.Redis:
+def get_redis_async_client(
+    **env_overrides,
+) -> async_redis.Redis:
     redis_kwargs = _get_redis_client_logic(**env_overrides)
-    
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         args = _get_redis_url_kwargs(client=async_redis.Redis.from_url)
-        url_kwargs = {arg: redis_kwargs[arg] for arg in redis_kwargs if arg in args}
+        url_kwargs = {}
+        for arg in redis_kwargs:
+            if arg in args:
+                url_kwargs[arg] = redis_kwargs[arg]
+            else:
+                verbose_logger.debug(
+                    "REDIS: ignoring argument: {}. Not an allowed async_redis.Redis.from_url arg.".format(
+                        arg
+                    )
+                )
         return async_redis.Redis.from_url(**url_kwargs)
 
     if "startup_nodes" in redis_kwargs:
         from redis.cluster import ClusterNode
-        args = _get_redis_cluster_kwargs()
-        cluster_kwargs = {arg: redis_kwargs[arg] for arg in redis_kwargs if arg in args}
-        new_startup_nodes = [ClusterNode(**item) for item in redis_kwargs["startup_nodes"]]
-        redis_kwargs.pop("startup_nodes")
-        return async_redis.RedisCluster(startup_nodes=new_startup_nodes, **cluster_kwargs)
 
+        args = _get_redis_cluster_kwargs()
+        cluster_kwargs = {}
+        for arg in redis_kwargs:
+            if arg in args:
+                cluster_kwargs[arg] = redis_kwargs[arg]
+
+        new_startup_nodes: List[ClusterNode] = []
+
+        for item in redis_kwargs["startup_nodes"]:
+            new_startup_nodes.append(ClusterNode(**item))
+        redis_kwargs.pop("startup_nodes")
+        return async_redis.RedisCluster(
+            startup_nodes=new_startup_nodes, **cluster_kwargs  # type: ignore
+        )
+
+    # Check for Redis Sentinel
     if "sentinel_nodes" in redis_kwargs and "service_name" in redis_kwargs:
         return _init_async_redis_sentinel(redis_kwargs)
 
-    return async_redis.Redis(**redis_kwargs)
+    return async_redis.Redis(
+        **redis_kwargs,
+    )
 
 def get_redis_connection_pool(**env_overrides):
     redis_kwargs = _get_redis_client_logic(**env_overrides)
     verbose_logger.debug("get_redis_connection_pool: redis_kwargs", redis_kwargs)
-    
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         return async_redis.BlockingConnectionPool.from_url(
             timeout=REDIS_CONNECTION_POOL_TIMEOUT, url=redis_kwargs["url"]
         )
     
-    # Set SSL connection class if SSL is enabled
+    # ONLY FIX: Set SSL connection class if SSL is enabled (don't remove SSL params)
     if redis_kwargs.get("ssl", False):
         redis_kwargs["connection_class"] = async_redis.SSLConnection
         verbose_logger.debug("Using SSL connection for Redis")
     else:
         redis_kwargs["connection_class"] = async_redis.Connection
     
-    redis_kwargs.pop("startup_nodes", None)  # Not supported in connection pools
-    
+    redis_kwargs.pop("startup_nodes", None)
     return async_redis.BlockingConnectionPool(
         timeout=REDIS_CONNECTION_POOL_TIMEOUT, **redis_kwargs
     )
