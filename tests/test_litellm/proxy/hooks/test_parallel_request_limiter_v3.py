@@ -40,8 +40,8 @@ async def test_sliding_window_rate_limit_v3(monkeypatch):
     window_starts: Dict[str, int] = {}
 
     async def mock_batch_rate_limiter(*args, **kwargs):
-        keys = kwargs.get("keys", args[0]) if kwargs else args[0]
-        args_list = kwargs.get("args", args[1]) if kwargs else args[1]
+        keys = kwargs.get("keys") if kwargs else args[0]
+        args_list = kwargs.get("args") if kwargs else args[1]
         now = args_list[0]
         window_size = args_list[1]
         results = []
@@ -124,8 +124,8 @@ async def test_rate_limiter_script_return_values_v3(monkeypatch):
     window_starts: Dict[str, int] = {}
 
     async def mock_batch_rate_limiter(*args, **kwargs):
-        keys = kwargs.get("keys", args[0]) if kwargs else args[0]
-        args_list = kwargs.get("args", args[1]) if kwargs else args[1]
+        keys = kwargs.get("keys") if kwargs else args[0]
+        args_list = kwargs.get("args") if kwargs else args[1]
         now = args_list[0]
         window_size = args_list[1]
         results = []
@@ -271,8 +271,9 @@ async def test_normal_router_call_tpm_v3(monkeypatch, rate_limit_object):
     window_starts: Dict[str, int] = {}
 
     async def mock_batch_rate_limiter(*args, **kwargs):
-        keys = kwargs.get("keys", args[0]) if kwargs else args[0]
-        args_list = kwargs.get("args", args[1]) if kwargs else args[1]
+        print(f"args: {args}, kwargs: {kwargs}")
+        keys = kwargs.get("keys") if kwargs else args[0]
+        args_list = kwargs.get("args") if kwargs else args[1]
         now = args_list[0]
         window_size = args_list[1]
         results = []
