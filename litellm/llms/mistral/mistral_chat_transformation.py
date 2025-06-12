@@ -251,9 +251,23 @@ Then provide a clear, concise answer based on your reasoning."""
                 if msg.get("role") == "system":
                     existing_content = msg.get("content", "")
                     reasoning_prompt = self._get_mistral_reasoning_system_prompt()
+                    
+                    # Handle both string and list content
+                    if isinstance(existing_content, str):
+                        # String content - prepend reasoning prompt
+                        new_content = f"{reasoning_prompt}\n\n{existing_content}"
+                    elif isinstance(existing_content, list):
+                        # List content - prepend reasoning prompt as text block
+                        new_content = [
+                            {"type": "text", "text": reasoning_prompt + "\n\n"}
+                        ] + existing_content
+                    else:
+                        # Fallback for any other type - convert to string
+                        new_content = f"{reasoning_prompt}\n\n{str(existing_content)}"
+                    
                     messages[i] = cast(AllMessageValues, {
                         **msg,
-                        "content": f"{reasoning_prompt}\n\n{existing_content}"
+                        "content": new_content
                     })
                     break
         else:

@@ -145,6 +145,42 @@ class TestMistralReasoningSupport:
         # Should remove the internal flag
         assert "_add_reasoning_prompt" not in optional_params
 
+    def test_add_reasoning_system_prompt_with_existing_list_content(self):
+        """Test adding reasoning system prompt when system message has list content."""
+        mistral_config = MistralConfig()
+        
+        messages = [
+            {
+                "role": "system", 
+                "content": [
+                    {"type": "text", "text": "You are a helpful assistant."},
+                    {"type": "text", "text": "You always provide detailed explanations."}
+                ]
+            },
+            {"role": "user", "content": "What is 2+2?"}
+        ]
+        optional_params = {"_add_reasoning_prompt": True}
+        
+        result = mistral_config._add_reasoning_system_prompt_if_needed(messages, optional_params)
+        
+        # Should modify existing system message with list content
+        assert len(result) == 2
+        assert result[0]["role"] == "system"
+        assert isinstance(result[0]["content"], list)
+        
+        # First item should be the reasoning prompt
+        assert result[0]["content"][0]["type"] == "text"
+        assert "<think>" in result[0]["content"][0]["text"]
+        
+        # Original content should be preserved
+        assert "You are a helpful assistant." in result[0]["content"][1]["text"]
+        assert "You always provide detailed explanations." in result[0]["content"][2]["text"]
+        
+        assert result[1]["role"] == "user"
+        
+        # Should remove the internal flag
+        assert "_add_reasoning_prompt" not in optional_params
+
     def test_add_reasoning_system_prompt_no_flag(self):
         """Test that no modification happens when _add_reasoning_prompt flag is not set."""
         mistral_config = MistralConfig()
