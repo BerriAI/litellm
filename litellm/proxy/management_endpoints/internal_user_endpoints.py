@@ -203,7 +203,7 @@ async def new_user(
         # Admin UI Logic
         # Add User to Team and Organization
         # if team_id passed add this user to the team
-        if data_json.get("team_id", None) is not None:
+        if data_json.get("team_id", None) is not None or data_json["team_member_details"]["team_id"] is not None:
             from litellm.proxy.management_endpoints.team_endpoints import (
                 team_member_add,
                 team_call_validation_checks
@@ -229,14 +229,11 @@ async def new_user(
                     premium_user=premium_user,
                 )
             except HTTPException as e:
-                raise e
+                raise HTTPException(status_code=400, detail={"error": str(e)})
 
             try:
                 await team_member_add(
                     data=team_member_add_request,
-                    # http_request=Request(
-                    #     scope={"type": "http", "path": "/user/new"},
-                    # ),
                     user_api_key_dict=user_api_key_dict,
                 )
             except HTTPException as e:

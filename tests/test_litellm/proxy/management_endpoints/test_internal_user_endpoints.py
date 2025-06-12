@@ -247,6 +247,7 @@ async def test_assign_user_team_role_at_user_creation(mocker):
     from litellm.proxy._types import (
         NewTeamRequest,
         NewUserRequest,
+        NewUserResponse,
         LiteLLM_TeamTable,
         LiteLLM_UserTable,
         TeamListResponseObject,
@@ -269,23 +270,27 @@ async def test_assign_user_team_role_at_user_creation(mocker):
     test_user_email = "test_user_1@berri.ai"
     test_team_id = "test-team"
     test_team_alias = "test_team_1"
+    test_team_member_details = {
+        "team_id":test_team_id,
+        "team_member_role":"user"
+    }
     user_api_key_dict = UserAPIKeyAuth(user_id="test_user", user_role="proxy_admin")
-    key_data = {
-        "token": "test-token",
-        "key_alias": "test-key_alias",
-        "expires": None,
+    response = {
+        # "token": "test-token",
+        # "key_alias": "test-key_alias",
+        # "expires": None,
         "models": [],
-        "aliases": {},
-        "config": {},
+        # "aliases": {},
+        # "config": {},
         "spend": 0.0,
-        "max_budget": None,
+        "max_budget": 0.0,
         "user_id": test_user_id,
+        "user_alias": "test-user-alias",
         "user_email": test_user_email,
-        "team_id": None,
-        "team_member_details": {
-            "team_id":test_team_id,
-            "team_member_role":"user"
-        },
+        "team_id": test_team_id,
+        "team_member_details": test_team_member_details,
+        "organization_id": "test-organization-id",
+        "user_role": "proxy_admin",
         "max_parallel_requests": None,
         "metadata": {},
         "tpm_limit": None,
@@ -293,13 +298,14 @@ async def test_assign_user_team_role_at_user_creation(mocker):
         "budget_duration": None,
         "budget_reset_at": None,
         "allowed_cache_controls": [],
-        "permissions": {},
-        "model_max_budget": {},
-        "budget_id": None,
-        "blocked": None,
-        "created_by": None,
-        "updated_by": None,
-        "allowed_routes": [],
+        # "permissions": {},
+        # "model_max_budget": {},
+        # "budget_id": None,
+        # "blocked": None,
+        # "created_by": None,
+        # "updated_by": None,
+        # "allowed_routes": [],
+        "sso_user_id": "test-sso-user-id",
         "object_permission_id": None,
     }
 
@@ -313,6 +319,7 @@ async def test_assign_user_team_role_at_user_creation(mocker):
         "user_id": "test-user-null-email",
         "user_email": None,
         "user_role": "proxy_admin",
+        "team_member_details": test_team_member_details,
         "created_at": "2025-01-01T00:00:00Z",
     }
 
@@ -326,24 +333,34 @@ async def test_assign_user_team_role_at_user_creation(mocker):
     
     # Mock helper function generate_key_helper_fn
     async def mock_generate_key_helper_fn(*args, **kwargs):
-        return key_data
+        return response
     
     # Mock helper function team_call_validation_checks
     def mock_team_call_validation_checks(*args, **kwargs):
         return None
     
+    # Setup the mock count response as an async function
+    async def mock_insert_data(*args, **kwargs):
+        return LiteLLM_UserTable(user_id=test_user_id, user_email=test_user_email, user_role="proxy_admin")
+
+    # mock_prisma_client.insert_data = mock_insert_data
+    
     # Patch the prisma client import in the endpoint
-    mocker.patch(
-        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
-        mock_generate_key_helper_fn
-    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     mocker.patch(
         "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
         mock__check_duplicate_user_email
     )
 
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+        mock_generate_key_helper_fn
+    )
+
     '''
+    # Patch the prisma client import in the endpoint
+    
 
     mocker.patch(
         "litellm.proxy.management_endpoints.internal_user_endpoints._update_internal_new_user_params",
@@ -361,28 +378,140 @@ async def test_assign_user_team_role_at_user_creation(mocker):
             user_email=test_user_email,
             models=['no-default-models'],
             auto_create_key=False,
-            team_member_details = {
-                "team_id":test_team_id,
-                "team_member_role":"user"
-            }
+            team_id = test_team_id,
+            team_member_details = test_team_member_details
         ), 
         user_api_key_dict
     )
 
-    print(f"user /new response: {new_user_response}")
+    print(f"user /new response: {new_user_response}\n")
+    print(f"{new_user_response.user_email}\n")
+    print(f'{new_user_response.team_member_details["team_id"]}\n')
+    print(f'{new_user_response.team_member_details["team_member_role"]}\n')
 
     assert new_user_response is not None
     assert new_user_response.user_email == test_user_email # Validate that test user was created
-    assert new_user_response.team_member_details["team_id"] == test_team_id # Validate test user was created with test team id
     assert new_user_response.team_member_details["team_member_role"] == "user" # Validate test user was added to test team as "user" role
 
     print(f"user /new response: {new_user_responses}")
 
-"""def test_assigning_admin_team_role_at_user_creation_returns_error():
-    
+@pytest.mark.asyncio
+async def test_assigning_admin_team_role_at_user_creation_as_non_enterprise_user_returns_error(mocker):
+    """
     Test that new_user returns error when adding a new user with admin team role.
     Relevant Pull Request: https://github.com/BerriAI/litellm/pull/10579
-    
+    """
+    from litellm.proxy._types import (
+        NewTeamRequest,
+        NewUserRequest,
+        NewUserResponse,
+        LiteLLM_TeamTable,
+        LiteLLM_UserTable,
+        TeamListResponseObject,
+        LiteLLM_TeamMembership,
+        CommonProxyErrors,
+        ProxyException
+    )
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (new_user, user_info)
+    from http.client import HTTPException
+
+    # class CommonProxyErrors(str, enum.Enum):
 
     # Create new team
-    # Assign team to new user and assign admin role to new user"""
+    # test_team_data = NewTeamRequest(team_alias="test_team_1")
+    test_user_id = "test-user-id"
+    test_user_email = "test_user_1@berri.ai"
+    test_team_id = "test-team"
+    test_team_alias = "test_team_1"
+    test_team_member_details = {
+        "team_id":test_team_id,
+        "team_member_role":"admin"
+    }
+    user_api_key_dict = UserAPIKeyAuth(user_id="test_user", user_role="proxy_admin")
+    response = {
+        # "token": "test-token",
+        # "key_alias": "test-key_alias",
+        # "expires": None,
+        "models": [],
+        # "aliases": {},
+        # "config": {},
+        "spend": 0.0,
+        "max_budget": 0.0,
+        "user_id": test_user_id,
+        "user_alias": "test-user-alias",
+        "user_email": test_user_email,
+        "team_id": test_team_id,
+        "team_member_details": test_team_member_details,
+        "organization_id": "test-organization-id",
+        "user_role": "proxy_admin",
+        "max_parallel_requests": None,
+        "metadata": {},
+        "tpm_limit": None,
+        "rpm_limit": None,
+        "budget_duration": None,
+        "budget_reset_at": None,
+        "allowed_cache_controls": [],
+        # "permissions": {},
+        # "model_max_budget": {},
+        # "budget_id": None,
+        # "blocked": None,
+        # "created_by": None,
+        # "updated_by": None,
+        # "allowed_routes": [],
+        "sso_user_id": "test-sso-user-id",
+        "object_permission_id": None,
+    }
+
+    # Mock the prisma client
+    mock_prisma_client = mocker.MagicMock()
+
+    # Mock helper function _check_duplicate_user_email
+    async def mock__check_duplicate_user_email(*args, **kwargs):
+        return None
+
+    # Mock helper function generate_key_helper_fn
+    async def mock_generate_key_helper_fn(*args, **kwargs):
+        return response
+    
+    
+    
+    
+    # Setup the mock count response as an async function
+    async def mock_insert_data(*args, **kwargs):
+        return LiteLLM_UserTable(user_id=test_user_id, user_email=test_user_email, user_role="proxy_admin")
+
+    # mock_prisma_client.insert_data = mock_insert_data
+    
+    # Patch the prisma client import in the endpoint
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
+        mock__check_duplicate_user_email
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+        mock_generate_key_helper_fn
+    )
+
+    with pytest.raises(ProxyException) as error_info:
+        await new_user(
+            NewUserRequest(
+                user_email=test_user_email,
+                models=['no-default-models'],
+                auto_create_key=False,
+                team_id = test_team_id,
+                team_member_details = test_team_member_details
+            ),  
+            user_api_key_dict
+        )
+
+    print(error_info.value.message)
+    
+    assert "You must be a LiteLLM Enterprise user to use this feature." in str(error_info.value.message)
+
+
+
+    # Create new team
+    # Assign team to new user and assign admin role to new user
