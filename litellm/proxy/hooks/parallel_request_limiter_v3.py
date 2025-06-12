@@ -115,13 +115,71 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         self.window_size = int(os.getenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", 60))
 
-    def print_verbose(self, print_statement):
-        try:
-            verbose_proxy_logger.debug(print_statement)
-            if litellm.set_verbose:
-                print(print_statement)  # noqa
-        except Exception:
-            pass
+    async def in_memory_cache_sliding_window(
+        self,
+        keys: List[str],
+        now_int: int,
+        window_size: int,
+    ) -> List[Any]:
+        """
+        Implement sliding window rate limiting logic using in-memory cache operations.
+        This follows the same logic as the Redis Lua script but uses async cache operations.
+        """
+        results: List[Any] = []
+
+        # Process each window/counter pair
+        for i in range(0, len(keys), 2):
+            window_key = keys[i]
+            counter_key = keys[i + 1]
+            increment_value = 1
+
+            # Get the window start time
+            window_start = await self.internal_usage_cache.async_get_cache(
+                key=window_key,
+                litellm_parent_otel_span=None,
+                local_only=True,
+            )
+
+            # Check if window exists and is valid
+            if window_start is None or (now_int - int(window_start)) >= window_size:
+                # Reset window and counter
+                await self.internal_usage_cache.async_set_cache(
+                    key=window_key,
+                    value=str(now_int),
+                    ttl=window_size,
+                    litellm_parent_otel_span=None,
+                    local_only=True,
+                )
+                await self.internal_usage_cache.async_set_cache(
+                    key=counter_key,
+                    value=increment_value,
+                    ttl=window_size,
+                    litellm_parent_otel_span=None,
+                    local_only=True,
+                )
+                results.append(str(now_int))  # window_start
+                results.append(increment_value)  # counter
+            else:
+                # Increment the counter
+                current_counter = await self.internal_usage_cache.async_get_cache(
+                    key=counter_key,
+                    litellm_parent_otel_span=None,
+                    local_only=True,
+                )
+                new_counter_value = (
+                    int(current_counter) if current_counter is not None else 0
+                ) + increment_value
+                await self.internal_usage_cache.async_set_cache(
+                    key=counter_key,
+                    value=new_counter_value,
+                    ttl=window_size,
+                    litellm_parent_otel_span=None,
+                    local_only=True,
+                )
+                results.append(window_start)  # window_start
+                results.append(new_counter_value)  # counter
+
+        return results
 
     def create_rate_limit_keys(
         self,
@@ -306,7 +364,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     local_only=True,
                 )
         else:
-            raise ValueError("Batch rate limiter script is not initialized")
+            cache_values = await self.in_memory_cache_sliding_window(
+                keys=keys_to_fetch,
+                now_int=now_int,
+                window_size=self.window_size,
+            )
 
         rate_limit_response = self.is_cache_list_over_limit(
             keys_to_fetch, cache_values, key_metadata
@@ -507,7 +569,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             kwargs
         )
         try:
-            self.print_verbose("INSIDE parallel request limiter ASYNC SUCCESS LOGGING")
+            verbose_proxy_logger.debug(
+                "INSIDE parallel request limiter ASYNC SUCCESS LOGGING"
+            )
 
             # Get metadata from kwargs
             user_api_key = kwargs["litellm_params"]["metadata"].get("user_api_key")
