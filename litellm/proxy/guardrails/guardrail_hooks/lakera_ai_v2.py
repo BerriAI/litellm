@@ -375,15 +375,53 @@ class LakeraAIGuardrail(CustomGuardrail):
         Extract dynamic Lakera parameters from request data.
         
         Supports extracting parameters from:
-        1. Direct lakera_* parameters in the request
-        2. Model-specific lakera configuration
-        3. litellm_params.lakera_* parameters
+        1. extra_body.guardrails[guardrail_name] (preferred LiteLLM interface)
+        2. Direct lakera_* parameters in the request
+        3. Model-specific lakera configuration
+        4. litellm_params.lakera_* parameters
         
         Returns a dict with dynamic parameter values.
         """
         dynamic_params = {}
         
-        # Extract from direct lakera_* parameters
+        # 1. Extract from extra_body.guardrails (preferred interface)
+        extra_body = data.get("extra_body", {})
+        if isinstance(extra_body, dict):
+            guardrails = extra_body.get("guardrails", {})
+            if isinstance(guardrails, dict):
+                # Check for our guardrail name (e.g., "lakera-ai-v2" or self.guardrail_name)
+                lakera_config = None
+                
+                # Try multiple possible guardrail names
+                possible_names = [
+                    self.guardrail_name,  # Use the actual guardrail name
+                    "lakera-ai-v2",
+                    "lakera_ai_v2", 
+                    "lakera-ai",
+                    "lakera_ai"
+                ]
+                
+                for name in possible_names:
+                    if name and name in guardrails:
+                        lakera_config = guardrails[name]
+                        break
+                
+                if isinstance(lakera_config, dict):
+                    # Map the parameters directly (no lakera_ prefix needed in extra_body)
+                    if "project_id" in lakera_config:
+                        dynamic_params["dynamic_project_id"] = lakera_config["project_id"]
+                    if "policy_id" in lakera_config:
+                        dynamic_params["dynamic_policy_id"] = lakera_config["policy_id"]
+                    if "payload" in lakera_config:
+                        dynamic_params["dynamic_payload"] = lakera_config["payload"]
+                    if "breakdown" in lakera_config:
+                        dynamic_params["dynamic_breakdown"] = lakera_config["breakdown"]
+                    if "metadata" in lakera_config:
+                        dynamic_params["dynamic_metadata"] = lakera_config["metadata"]
+                    if "dev_info" in lakera_config:
+                        dynamic_params["dynamic_dev_info"] = lakera_config["dev_info"]
+        
+        # 2. Extract from direct lakera_* parameters (fallback)
         lakera_param_mapping = {
             "lakera_project_id": "dynamic_project_id",
             "lakera_policy_id": "dynamic_policy_id", 
@@ -394,33 +432,33 @@ class LakeraAIGuardrail(CustomGuardrail):
         }
         
         for param_key, dynamic_key in lakera_param_mapping.items():
-            if param_key in data:
+            if param_key in data and dynamic_key not in dynamic_params:
                 dynamic_params[dynamic_key] = data[param_key]
         
-        # Extract from litellm_params if present
+        # 3. Extract from litellm_params if present (fallback)
         litellm_params = data.get("litellm_params", {})
         if isinstance(litellm_params, dict):
             for param_key, dynamic_key in lakera_param_mapping.items():
-                if param_key in litellm_params:
+                if param_key in litellm_params and dynamic_key not in dynamic_params:
                     dynamic_params[dynamic_key] = litellm_params[param_key]
         
-        # Extract from model-specific lakera configuration
+        # 4. Extract from model-specific lakera configuration (fallback)
         # This supports configurations like model configs with lakera settings
         model_info = data.get("model_info", {})
         if isinstance(model_info, dict):
             lakera_config = model_info.get("lakera", {})
             if isinstance(lakera_config, dict):
-                if "project_id" in lakera_config:
+                if "project_id" in lakera_config and "dynamic_project_id" not in dynamic_params:
                     dynamic_params["dynamic_project_id"] = lakera_config["project_id"]
-                if "policy_id" in lakera_config:
+                if "policy_id" in lakera_config and "dynamic_policy_id" not in dynamic_params:
                     dynamic_params["dynamic_policy_id"] = lakera_config["policy_id"]
-                if "payload" in lakera_config:
+                if "payload" in lakera_config and "dynamic_payload" not in dynamic_params:
                     dynamic_params["dynamic_payload"] = lakera_config["payload"]
-                if "breakdown" in lakera_config:
+                if "breakdown" in lakera_config and "dynamic_breakdown" not in dynamic_params:
                     dynamic_params["dynamic_breakdown"] = lakera_config["breakdown"]
-                if "metadata" in lakera_config:
+                if "metadata" in lakera_config and "dynamic_metadata" not in dynamic_params:
                     dynamic_params["dynamic_metadata"] = lakera_config["metadata"]
-                if "dev_info" in lakera_config:
+                if "dev_info" in lakera_config and "dynamic_dev_info" not in dynamic_params:
                     dynamic_params["dynamic_dev_info"] = lakera_config["dev_info"]
         
         verbose_proxy_logger.debug("Extracted dynamic Lakera params: %s", dynamic_params)
