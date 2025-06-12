@@ -240,6 +240,25 @@ if MCP_AVAILABLE:
         await sse.handle_post_message(request.scope, request.receive, request._send)
         await request.close()
 
+    @router.post("/")
+    async def handle_streamable_http_mcp(request: Request):
+        """
+        Handle streamable HTTP MCP requests.
+        
+        Note: This endpoint is currently disabled due to MCP SDK limitations.
+        The MCP Python SDK's streamable HTTP manager requires proper task group
+        initialization which is not compatible with FastAPI's request handling model.
+        
+        For HTTP-based MCP functionality, use the REST API endpoints instead:
+        - GET /mcp/tools/list - List available tools
+        - POST /mcp/tools/call - Call a specific tool
+        """
+        verbose_logger.warning("Streamable HTTP MCP endpoint called but not fully supported")
+        raise HTTPException(
+            status_code=501, 
+            detail="Streamable HTTP transport not implemented. Use REST API endpoints: /mcp/tools/list and /mcp/tools/call"
+        )
+
     ########################################################
     ############ MCP Server REST API Routes #################
     ########################################################
