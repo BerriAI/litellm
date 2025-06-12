@@ -212,6 +212,7 @@ class AsyncHTTPHandler:
         stream: bool = False,
         logging_obj: Optional[LiteLLMLoggingObject] = None,
         files: Optional[RequestFiles] = None,
+        content: Any = None,
     ):
         start_time = time.time()
         try:
@@ -227,6 +228,7 @@ class AsyncHTTPHandler:
                 headers=headers,
                 timeout=timeout,
                 files=files,
+                content=content,
             )
             response = await self.client.send(req, stream=stream)
             response.raise_for_status()
@@ -452,6 +454,7 @@ class AsyncHTTPHandler:
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         stream: bool = False,
+        content: Any = None,
     ):
         """
         Making POST request for a single connection client.
@@ -459,7 +462,7 @@ class AsyncHTTPHandler:
         Used for retrying connection client errors.
         """
         req = client.build_request(
-            "POST", url, data=data, json=json, params=params, headers=headers  # type: ignore
+            "POST", url, data=data, json=json, params=params, headers=headers, content=content  # type: ignore
         )
         response = await client.send(req, stream=stream)
         response.raise_for_status()
