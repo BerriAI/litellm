@@ -3595,7 +3595,7 @@ class Router:
     @tracer.wrap()
     async def async_function_with_retries(self, *args, **kwargs):  # noqa: PLR0915
         verbose_router_logger.debug("Inside async function with retries.")
-        original_function = kwargs.pop("original_function")
+        original_function = kwargs.get("original_function")
         fallbacks = kwargs.pop("fallbacks", self.fallbacks)
         parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
         context_window_fallbacks = kwargs.pop(
@@ -3622,7 +3622,9 @@ class Router:
                 model_group=model_group, kwargs=kwargs
             )
             # if the function call is successful, no exception will be raised and we'll break out of the loop
-            response = await self.make_call(original_function, *args, **kwargs)
+            kwargs_without_original_function = kwargs.copy()
+            kwargs_without_original_function.pop("original_function", None)
+            response = await self.make_call(original_function, *args, **kwargs_without_original_function)
             response = add_retry_headers_to_response(
                 response=response, attempted_retries=0, max_retries=None
             )
@@ -3690,7 +3692,9 @@ class Router:
             for current_attempt in range(num_retries):
                 try:
                     # if the function call is successful, no exception will be raised and we'll break out of the loop
-                    response = await self.make_call(original_function, *args, **kwargs)
+                    kwargs_without_original_function = kwargs.copy()
+                    kwargs_without_original_function.pop("original_function", None)
+                    response = await self.make_call(original_function, *args, **kwargs_without_original_function)
                     if inspect.iscoroutinefunction(
                         response
                     ):  # async errors are often returned as coroutines

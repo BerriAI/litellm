@@ -136,9 +136,17 @@ async def run_async_fallback(
             fallback_depth = fallback_depth + 1
             kwargs["fallback_depth"] = fallback_depth
             kwargs["max_fallbacks"] = max_fallbacks
-            response = await litellm_router.async_function_with_fallbacks(
-                *args, **kwargs
-            )
+            
+            # Get the original function to call (not async_function_with_fallbacks to avoid infinite recursion)
+            original_function = kwargs.get("original_function")
+            if original_function is None:
+                raise Exception("No original function found in kwargs for fallback")
+            
+            # Remove original_function from kwargs to avoid "multiple values" error when calling the function
+            kwargs_without_original_function = kwargs.copy()
+            kwargs_without_original_function.pop("original_function", None)
+            
+            response = await original_function(*args, **kwargs_without_original_function)
             verbose_router_logger.info("Successful fallback b/w models.")
             response = add_fallback_headers_to_response(
                 response=response,
