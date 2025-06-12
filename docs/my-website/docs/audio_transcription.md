@@ -17,7 +17,7 @@ import os
 os.environ["OPENAI_API_KEY"] = ""
 audio_file = open("/path/to/audio.mp3", "rb")
 
-response = transcription(model="whisper", file=audio_file)
+response = transcription(model="whisper-1", file=audio_file)
 
 print(f"response: {response}")
 ```
@@ -94,11 +94,10 @@ curl --location 'http://0.0.0.0:8000/v1/audio/transcriptions' \
 
 ```python showLineNumbers
 from openai import OpenAI
-client = openai.OpenAI(
+client = OpenAI(
     api_key="sk-1234",
     base_url="http://0.0.0.0:8000"
 )
-
 
 audio_file = open("speech.mp3", "rb")
 transcript = client.audio.transcriptions.create(
@@ -113,16 +112,36 @@ transcript = client.audio.transcriptions.create(
 
 LiteLLM supports fallbacks for audio transcription, allowing you to automatically retry failed requests with different models or providers.
 
-### Router Configuration
+### Client-Side Fallbacks
 
-<Tabs>
-<TabItem value="same-provider" label="Same Provider Fallbacks">
+Use fallbacks directly in your code with the LiteLLM SDK:
+
+```python showLineNumbers
+from litellm import transcription
+import os 
+
+os.environ["OPENAI_API_KEY"] = "your-key"
+audio_file = open("/path/to/audio.mp3", "rb")
+
+response = transcription(
+    model="openai/whisper-1",  # Primary model
+    file=audio_file,
+    fallbacks=["azure/whisper-deployment"],  # Fallback model
+    timeout=30,
+    num_retries=1
+)
+
+print(f"response: {response}")
+```
+
+### Router Fallbacks
+
+Configure fallbacks using the Router for automatic load balancing:
 
 ```python showLineNumbers
 from litellm import Router
 import os
 
-# Configure multiple deployments of the same model with fallbacks
 router = Router(
     model_list=[
         {
@@ -135,14 +154,14 @@ router = Router(
         {
             "model_name": "whisper-backup",
             "litellm_params": {
-                "model": "whisper-1", 
-                "api_key": os.environ["OPENAI_BACKUP_KEY"],
+                "model": "azure/whisper-deployment",
+                "api_key": os.environ["AZURE_API_KEY"],
+                "api_base": os.environ["AZURE_API_BASE"],
+                "api_version": "2024-02-15-preview"
             }
         }
     ],
-    fallbacks=[
-        {"whisper-primary": ["whisper-backup"]}
-    ],
+    fallbacks=[{"whisper-primary": ["whisper-backup"]}],
     num_retries=2
 )
 
@@ -154,62 +173,12 @@ response = await router.atranscription(
 )
 ```
 
-</TabItem>
-<TabItem value="cross-provider" label="Cross-Provider Fallbacks">
+### Proxy Fallbacks
 
-```python showLineNumbers
-from litellm import Router
-import os
-
-# Configure fallbacks across different providers
-router = Router(
-    model_list=[
-        {
-            "model_name": "openai-whisper",
-            "litellm_params": {
-                "model": "whisper-1",
-                "api_key": os.environ["OPENAI_API_KEY"],
-            }
-        },
-        {
-            "model_name": "azure-whisper",
-            "litellm_params": {
-                "model": "azure/whisper-deployment",
-                "api_key": os.environ["AZURE_API_KEY"],
-                "api_base": os.environ["AZURE_API_BASE"],
-                "api_version": "2024-02-15-preview"
-            }
-        },
-        {
-            "model_name": "groq-whisper",
-            "litellm_params": {
-                "model": "groq/whisper-large-v3",
-                "api_key": os.environ["GROQ_API_KEY"],
-            }
-        }
-    ],
-    fallbacks=[
-        {"openai-whisper": ["azure-whisper", "groq-whisper"]}
-    ],
-    num_retries=1
-)
-
-# Use with cross-provider fallbacks
-audio_file = open("/path/to/audio.mp3", "rb")
-response = await router.atranscription(
-    file=audio_file,
-    model="openai-whisper"  # Will fallback to Azure, then Groq if needed
-)
-```
-
-</TabItem>
-</Tabs>
-
-### Proxy Configuration with Fallbacks
+Configure fallbacks in your proxy YAML config:
 
 ```yaml showLineNumbers
 model_list:
-  # Primary OpenAI deployment
   - model_name: whisper-primary
     litellm_params:
       model: whisper-1
@@ -217,8 +186,7 @@ model_list:
     model_info:
       mode: audio_transcription
       
-  # Azure backup deployment  
-  - model_name: whisper-azure-backup
+  - model_name: whisper-backup
     litellm_params:
       model: azure/whisper-deployment
       api_version: 2024-02-15-preview
@@ -226,20 +194,10 @@ model_list:
       api_key: os.environ/AZURE_API_KEY
     model_info:
       mode: audio_transcription
-      
-  # Groq backup deployment
-  - model_name: whisper-groq-backup
-    litellm_params:
-      model: groq/whisper-large-v3
-      api_key: os.environ/GROQ_API_KEY
-    model_info:
-      mode: audio_transcription
 
-# Configure fallback chain using router_settings
 router_settings:
-  fallbacks: [{"whisper-primary": ["whisper-azure-backup", "whisper-groq-backup"]}]
+  fallbacks: [{"whisper-primary": ["whisper-backup"]}]
   num_retries: 2
-  timeout: 600  # 10 minutes for audio processing
 
 general_settings:
   master_key: sk-1234
@@ -247,94 +205,35 @@ general_settings:
 
 ### Test Fallbacks
 
-To test fallbacks, you can use `mock_testing_fallbacks=true` to trigger fallback behavior:
+Test fallback behavior by forcing the primary model to fail:
 
 <Tabs>
-<TabItem value="curl" label="Curl">
+<TabItem value="sdk" label="LiteLLM SDK">
+
+```python showLineNumbers
+from litellm import transcription
+
+response = transcription(
+    model="openai/whisper-1",
+    file=audio_file,
+    fallbacks=["azure/whisper-deployment"],
+    mock_testing_fallbacks=True  # Force primary to fail
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="Proxy">
 
 ```bash
-# Test with mock_testing_fallbacks to trigger fallbacks
 curl --location 'http://0.0.0.0:8000/v1/audio/transcriptions' \
 --header 'Authorization: Bearer sk-1234' \
---header 'Content-Type: multipart/form-data' \
 --form 'file=@"/path/to/audio.mp3"' \
 --form 'model="whisper-primary"' \
 --form 'mock_testing_fallbacks="true"'
 ```
 
 </TabItem>
-<TabItem value="python" label="Python SDK">
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    api_key="sk-1234",
-    base_url="http://0.0.0.0:8000"
-)
-
-audio_file = open("/path/to/audio.mp3", "rb")
-transcript = client.audio.transcriptions.create(
-    model="whisper-primary",
-    file=audio_file,
-    extra_body={
-        "mock_testing_fallbacks": True  # Trigger fallbacks for testing
-    }
-)
-print(transcript.text)
-```
-
-</TabItem>
 </Tabs>
-
-### Advanced Fallback Configuration
-
-LiteLLM supports different types of fallbacks for audio transcription:
-
-#### Content Policy Fallbacks
-Fallback to different providers if content policy violations occur:
-
-```yaml
-router_settings:
-  content_policy_fallbacks: [{"whisper-primary": ["whisper-groq-backup"]}]
-```
-
-#### Default Fallbacks
-Set default fallbacks for any misconfigured models:
-
-```yaml
-router_settings:
-  default_fallbacks: ["whisper-groq-backup"]
-  fallbacks: [{"whisper-primary": ["whisper-azure-backup", "whisper-groq-backup"]}]
-```
-
-#### Client-Side Fallbacks
-You can also specify fallbacks directly in the request:
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    api_key="sk-1234", 
-    base_url="http://0.0.0.0:8000"
-)
-
-audio_file = open("/path/to/audio.mp3", "rb")
-transcript = client.audio.transcriptions.create(
-    model="whisper-primary",
-    file=audio_file,
-    extra_body={
-        "fallbacks": ["whisper-azure-backup"]  # Client-side fallback
-    }
-)
-```
-
-### Key Benefits
-
-- **Reliability**: Automatic failover if primary service is down
-- **Rate Limit Handling**: Switch providers when hitting rate limits  
-- **Cost Optimization**: Use cheaper providers as backups
-- **Geographic Redundancy**: Fallback to different regions/providers
 
 ## Supported Providers
 
