@@ -47,7 +47,7 @@ local window_size = tonumber(ARGV[2])
 for i = 1, #KEYS, 2 do
     local window_key = KEYS[i]
     local counter_key = KEYS[i + 1]
-    local increment_value = tonumber(KEYS[i + 2]) or 1
+    local increment_value = 1
 
     -- Check if window exists and is valid
     local window_start = redis.call('GET', window_key)
@@ -146,6 +146,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         statuses: List[RateLimitStatus] = []
         overall_code = "OK"
+
         for i in range(0, len(cache_values), 2):
             item_code = "OK"
             window_key = keys_to_fetch[i]
@@ -216,28 +217,34 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         keys_to_fetch: List[str] = []
         key_metadata = {}  # Store metadata for each key
         for descriptor in descriptors:
-            key = descriptor["key"]
-            value = descriptor["value"]
+            descriptor_key = descriptor["key"]
+            descriptor_value = descriptor["value"]
             rate_limit = descriptor.get("rate_limit", {}) or {}
             requests_limit = rate_limit.get("requests_per_unit")
             tokens_limit = rate_limit.get("tokens_per_unit")
             max_parallel_requests_limit = rate_limit.get("max_parallel_requests")
             window_size = rate_limit.get("window_size") or self.window_size
 
-            window_key = f"{{{key}:{value}}}:window"
+            window_key = f"{{{descriptor_key}:{descriptor_value}}}:window"
 
             rate_limit_set = False
             if requests_limit is not None:
-                key = self.create_rate_limit_keys(key, value, "requests")
-                keys_to_fetch.extend([window_key, key])
+                rpm_key = self.create_rate_limit_keys(
+                    descriptor_key, descriptor_value, "requests"
+                )
+                keys_to_fetch.extend([window_key, rpm_key])
                 rate_limit_set = True
             if tokens_limit is not None:
-                key = self.create_rate_limit_keys(key, value, "tokens")
-                keys_to_fetch.extend([window_key, key])
+                tpm_key = self.create_rate_limit_keys(
+                    descriptor_key, descriptor_value, "tokens"
+                )
+                keys_to_fetch.extend([window_key, tpm_key])
                 rate_limit_set = True
             if max_parallel_requests_limit is not None:
-                key = self.create_rate_limit_keys(key, value, "max_parallel_requests")
-                keys_to_fetch.extend([window_key, key])
+                max_parallel_requests_key = self.create_rate_limit_keys(
+                    descriptor_key, descriptor_value, "max_parallel_requests"
+                )
+                keys_to_fetch.extend([window_key, max_parallel_requests_key])
                 rate_limit_set = True
 
             if not rate_limit_set:
@@ -274,6 +281,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 keys=keys_to_fetch,
                 args=[now_int, self.window_size],  # Use integer timestamp
             )
+
             # update in-memory cache with new values
             for i in range(0, len(cache_values), 2):
                 window_key = keys_to_fetch[i]
@@ -646,9 +654,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     )
 
                     # Add rate limit headers
-                    for i, status in enumerate(
-                        litellm_proxy_rate_limit_response["statuses"]
-                    ):
+                    for status in litellm_proxy_rate_limit_response["statuses"]:
                         prefix = "x-ratelimit"
                         _additional_headers[
                             f"{prefix}-remaining-{status['rate_limit_type']}"
