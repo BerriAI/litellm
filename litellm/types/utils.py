@@ -796,7 +796,7 @@ class Choices(OpenAIObject):
     finish_reason: str
     index: int
     message: Message
-    logprobs: Optional[ChoiceLogprobs] = None
+    logprobs: Optional[Union[ChoiceLogprobs, Any]] = None
 
     provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
 
