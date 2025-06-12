@@ -620,9 +620,45 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
-        No-op for failure event since we handle increments in should_rate_limit
+        Decrement max parallel requests counter for the API Key
         """
-        pass
+        from litellm.litellm_core_utils.core_helpers import (
+            _get_parent_otel_span_from_kwargs,
+        )
+        from litellm.types.caching import RedisPipelineIncrementOperation
+
+        try:
+            litellm_parent_otel_span: Union[
+                Span, None
+            ] = _get_parent_otel_span_from_kwargs(kwargs)
+            user_api_key = kwargs["litellm_params"]["metadata"].get("user_api_key")
+            pipeline_operations: List[RedisPipelineIncrementOperation] = []
+
+            if user_api_key:
+                # MAX PARALLEL REQUESTS - only support for API Key, just decrement the counter
+                counter_key = self.create_rate_limit_keys(
+                    key="api_key",
+                    value=user_api_key,
+                    rate_limit_type="max_parallel_requests",
+                )
+                pipeline_operations.append(
+                    RedisPipelineIncrementOperation(
+                        key=counter_key,
+                        increment_value=-1,
+                        ttl=self.window_size,
+                    )
+                )
+
+            # Execute all increments in a single pipeline
+            if pipeline_operations:
+                await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
+                    increment_list=pipeline_operations,
+                    litellm_parent_otel_span=litellm_parent_otel_span,
+                )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                f"Error in rate limit failure event: {str(e)}"
+            )
 
     async def async_post_call_success_hook(
         self, data: dict, user_api_key_dict: UserAPIKeyAuth, response

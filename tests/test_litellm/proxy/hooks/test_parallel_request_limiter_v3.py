@@ -476,3 +476,41 @@ async def test_token_rate_limit_type_respected_v3(monkeypatch, token_rate_limit_
     assert (
         tpm_operation["increment_value"] == expected_tokens[token_rate_limit_type]
     ), f"Expected {expected_tokens[token_rate_limit_type]} tokens for type '{token_rate_limit_type}', got {tpm_operation['increment_value']}"
+
+
+@pytest.mark.asyncio
+async def test_async_log_failure_event_v3():
+    """
+    Simple test for async_log_failure_event - should decrement max_parallel_requests by 1
+    """
+    _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    # Mock kwargs with user_api_key
+    mock_kwargs = {"litellm_params": {"metadata": {"user_api_key": _api_key}}}
+
+    # Capture pipeline operations
+    captured_ops = []
+
+    async def mock_pipeline(increment_list, **kwargs):
+        captured_ops.extend(increment_list)
+
+    parallel_request_handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = (
+        mock_pipeline
+    )
+
+    # Call async_log_failure_event
+    await parallel_request_handler.async_log_failure_event(
+        kwargs=mock_kwargs, response_obj=None, start_time=None, end_time=None
+    )
+
+    # Verify correct operation was created
+    assert len(captured_ops) == 1
+    op = captured_ops[0]
+    assert op["key"] == f"{{api_key:{_api_key}}}:max_parallel_requests"
+    assert op["increment_value"] == -1
+    assert op["ttl"] == 60  # default window size
