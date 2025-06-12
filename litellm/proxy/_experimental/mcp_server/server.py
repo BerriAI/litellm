@@ -15,9 +15,13 @@ from litellm.constants import MCP_TOOL_NAME_PREFIX
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.proxy_server import prisma_client
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.utils import StandardLoggingMCPToolCall
 from litellm.utils import client
+
+# Import database helpers for permission checks
+from . import db as mcp_db
 
 router = APIRouter(
     prefix="/mcp",
@@ -137,15 +141,47 @@ if MCP_AVAILABLE:
 
     @client
     async def call_mcp_tool(
-        name: str, arguments: Optional[Dict[str, Any]] = None, **kwargs: Any
+        name: str, 
+        arguments: Optional[Dict[str, Any]] = None, 
+        user: Optional[UserAPIKeyAuth] = None,
+        **kwargs: Any
     ) -> List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]:
         """
         Call a specific tool with the provided arguments
+        
+        Args:
+            name: Name of the tool to call
+            arguments: Arguments to pass to the tool
+            user: Optional user authentication info for permission checks
+            **kwargs: Additional arguments
         """
         if arguments is None:
             raise HTTPException(
                 status_code=400, detail="Request arguments are required"
             )
+
+        # Check permissions if user is provided and prisma_client is available
+        if user is not None and prisma_client is not None:
+            mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+            if mcp_server:
+                # Get MCP servers the user has access to
+                user_accessible_servers = await mcp_db.get_all_mcp_servers_for_user(
+                    prisma_client=prisma_client,
+                    user=user,
+                )
+                
+                # Check if user has access to the server containing this tool
+                accessible_server_ids = {server.server_id for server in user_accessible_servers}
+                
+                if mcp_server.server_id not in accessible_server_ids:
+                    verbose_logger.warning(
+                        f"User {user.user_id} attempted to call tool '{name}' "
+                        f"from server {mcp_server.server_id} without permission"
+                    )
+                    raise HTTPException(
+                        status_code=403, 
+                        detail=f"Access denied: You don't have permission to use tools from server '{mcp_server.server_id}'"
+                    )
 
         standard_logging_mcp_tool_call: StandardLoggingMCPToolCall = (
             _get_standard_logging_mcp_tool_call(
@@ -276,8 +312,33 @@ if MCP_AVAILABLE:
             }
         ]
         """
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500, detail="Database connection not available"
+            )
+
+        # Get MCP servers the user has access to
+        user_accessible_servers = await mcp_db.get_all_mcp_servers_for_user(
+            prisma_client=prisma_client,
+            user=user_api_key_dict,
+        )
+        
+        # Create a set of accessible server IDs for quick lookup
+        accessible_server_ids = {server.server_id for server in user_accessible_servers}
+        
+        verbose_logger.debug(
+            f"User {user_api_key_dict.user_id} has access to MCP servers: {accessible_server_ids}"
+        )
+
         list_tools_result: List[ListMCPToolsRestAPIResponseObject] = []
         for server in global_mcp_server_manager.get_registry().values():
+            # Check if user has access to this server
+            if server.server_id not in accessible_server_ids:
+                verbose_logger.debug(
+                    f"User {user_api_key_dict.user_id} does not have access to server {server.server_id}"
+                )
+                continue
+                
             if server_id and server.server_id != server_id:
                 continue
             try:
@@ -306,13 +367,51 @@ if MCP_AVAILABLE:
         """
         from litellm.proxy.proxy_server import add_litellm_data_to_request, proxy_config
 
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500, detail="Database connection not available"
+            )
+
         data = await request.json()
+        
+        # Check if the tool name is provided
+        tool_name = data.get("name")
+        if not tool_name:
+            raise HTTPException(
+                status_code=400, detail="Tool name is required"
+            )
+        
+        # Get the MCP server for this tool
+        mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(tool_name)
+        if mcp_server:
+            # Get MCP servers the user has access to
+            user_accessible_servers = await mcp_db.get_all_mcp_servers_for_user(
+                prisma_client=prisma_client,
+                user=user_api_key_dict,
+            )
+            
+            # Check if user has access to the server containing this tool
+            accessible_server_ids = {server.server_id for server in user_accessible_servers}
+            
+            if mcp_server.server_id not in accessible_server_ids:
+                verbose_logger.warning(
+                    f"User {user_api_key_dict.user_id} attempted to call tool '{tool_name}' "
+                    f"from server {mcp_server.server_id} without permission"
+                )
+                raise HTTPException(
+                    status_code=403, 
+                    detail=f"Access denied: You don't have permission to use tools from server '{mcp_server.server_id}'"
+                )
+        
+        # If we reach here, user has permission to call the tool
         data = await add_litellm_data_to_request(
             data=data,
             request=request,
             user_api_key_dict=user_api_key_dict,
             proxy_config=proxy_config,
         )
+        # Pass user to call_mcp_tool for additional permission checks
+        data["user"] = user_api_key_dict
         return await call_mcp_tool(**data)
 
     options = InitializationOptions(
