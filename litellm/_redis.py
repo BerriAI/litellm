@@ -246,13 +246,7 @@ def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
 def get_redis_client(**env_overrides):
     redis_kwargs = _get_redis_client_logic(**env_overrides)
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
-        args = _get_redis_url_kwargs()
-        url_kwargs = {}
-        for arg in redis_kwargs:
-            if arg in args:
-                url_kwargs[arg] = redis_kwargs[arg]
-
-        return redis.Redis.from_url(**url_kwargs)
+        return redis.Redis.from_url(**redis_kwargs)
 
     if "startup_nodes" in redis_kwargs or get_secret("REDIS_CLUSTER_NODES") is not None:  # type: ignore
         return init_redis_cluster(redis_kwargs)
@@ -261,6 +255,7 @@ def get_redis_client(**env_overrides):
     if "sentinel_nodes" in redis_kwargs and "service_name" in redis_kwargs:
         return _init_redis_sentinel(redis_kwargs)
 
+    # Just pass everything through - same as redis.StrictRedis()
     return redis.Redis(**redis_kwargs)
 
 def get_redis_async_client(
@@ -268,18 +263,7 @@ def get_redis_async_client(
 ) -> async_redis.Redis:
     redis_kwargs = _get_redis_client_logic(**env_overrides)
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
-        args = _get_redis_url_kwargs(client=async_redis.Redis.from_url)
-        url_kwargs = {}
-        for arg in redis_kwargs:
-            if arg in args:
-                url_kwargs[arg] = redis_kwargs[arg]
-            else:
-                verbose_logger.debug(
-                    "REDIS: ignoring argument: {}. Not an allowed async_redis.Redis.from_url arg.".format(
-                        arg
-                    )
-                )
-        return async_redis.Redis.from_url(**url_kwargs)
+        return async_redis.Redis.from_url(**redis_kwargs)
 
     if "startup_nodes" in redis_kwargs:
         from redis.cluster import ClusterNode
@@ -303,9 +287,8 @@ def get_redis_async_client(
     if "sentinel_nodes" in redis_kwargs and "service_name" in redis_kwargs:
         return _init_async_redis_sentinel(redis_kwargs)
 
-    return async_redis.Redis(
-        **redis_kwargs,
-    )
+    # Just pass everything through - same as redis.Redis()
+    return async_redis.Redis(**redis_kwargs)
 
 def get_redis_connection_pool(**env_overrides):
     redis_kwargs = _get_redis_client_logic(**env_overrides)
