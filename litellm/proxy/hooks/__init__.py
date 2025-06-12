@@ -1,8 +1,10 @@
+import os
 from typing import Literal, Union
 
 from . import *
 from .cache_control_check import _PROXY_CacheControlCheck
 from .max_budget_limiter import _PROXY_MaxBudgetLimiter
+from .parallel_request_limiter import _PROXY_MaxParallelRequestsHandler
 from .parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
 
 ### CHECK IF ENTERPRISE HOOKS ARE AVAILABLE ###
@@ -15,9 +17,13 @@ except ImportError:
 # List of all available hooks that can be enabled
 PROXY_HOOKS = {
     "max_budget_limiter": _PROXY_MaxBudgetLimiter,
-    "parallel_request_limiter": _PROXY_MaxParallelRequestsHandler_v3,
+    "parallel_request_limiter": _PROXY_MaxParallelRequestsHandler,
     "cache_control_check": _PROXY_CacheControlCheck,
 }
+
+## FEATURE FLAG HOOKS ##
+if os.getenv("EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING", "false").lower() == "true":
+    PROXY_HOOKS["parallel_request_limiter"] = _PROXY_MaxParallelRequestsHandler_v3
 
 
 ### update PROXY_HOOKS with ENTERPRISE_PROXY_HOOKS ###
