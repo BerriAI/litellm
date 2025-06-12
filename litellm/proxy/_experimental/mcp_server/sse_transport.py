@@ -6,7 +6,7 @@ Credit to the maintainers of SecretiveShell for their SSE Transport implementati
 """
 
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import quote
 from uuid import UUID, uuid4
 
@@ -38,6 +38,7 @@ class SseServerTransport:
     _read_stream_writers: dict[
         UUID, MemoryObjectSendStream[types.JSONRPCMessage | Exception]
     ]
+    _current_session_id: Optional[str]
 
     def __init__(self, endpoint: str) -> None:
         """
@@ -48,9 +49,14 @@ class SseServerTransport:
         super().__init__()
         self._endpoint = endpoint
         self._read_stream_writers = {}
+        self._current_session_id = None
         verbose_logger.debug(
             f"SseServerTransport initialized with endpoint: {endpoint}"
         )
+
+    def get_current_session_id(self) -> Optional[str]:
+        """Get the current session ID"""
+        return self._current_session_id
 
     @asynccontextmanager
     async def connect_sse(self, request: Request):
@@ -71,6 +77,7 @@ class SseServerTransport:
         session_id = uuid4()
         session_uri = f"{quote(self._endpoint)}?session_id={session_id.hex}"
         self._read_stream_writers[session_id] = read_stream_writer
+        self._current_session_id = session_id.hex  # Store current session ID
         verbose_logger.debug(f"Created new session with ID: {session_id}")
 
         sse_stream_writer: MemoryObjectSendStream[dict[str, Any]]
@@ -96,15 +103,21 @@ class SseServerTransport:
                         }
                     )
 
-        async with anyio.create_task_group() as tg:
-            response = EventSourceResponse(
-                content=sse_stream_reader, data_sender_callable=sse_writer
-            )
-            verbose_logger.debug("Starting SSE response task")
-            tg.start_soon(response, request.scope, request.receive, request._send)
+        try:
+            async with anyio.create_task_group() as tg:
+                response = EventSourceResponse(
+                    content=sse_stream_reader, data_sender_callable=sse_writer
+                )
+                verbose_logger.debug("Starting SSE response task")
+                tg.start_soon(response, request.scope, request.receive, request._send)
 
-            verbose_logger.debug("Yielding read and write streams")
-            yield (read_stream, write_stream)
+                verbose_logger.debug("Yielding read and write streams")
+                yield (read_stream, write_stream)
+        finally:
+            # Clean up session ID when done
+            self._current_session_id = None
+            # Clean up the session from writers dict
+            self._read_stream_writers.pop(session_id, None)
 
     async def handle_post_message(
         self, scope: Scope, receive: Receive, send: Send

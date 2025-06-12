@@ -59,6 +59,7 @@ if MCP_AVAILABLE:
     from .mcp_server_manager import global_mcp_server_manager
     from .sse_transport import SseServerTransport
     from .tool_registry import global_mcp_tool_registry
+    from .db import get_all_mcp_servers_for_user
 
     ######################################################
     ############ MCP Tools List REST API Response Object #
@@ -74,6 +75,29 @@ if MCP_AVAILABLE:
         model_config = ConfigDict(arbitrary_types_allowed=True)
 
     ########################################################
+    ############ User Context Storage for SSE Sessions ####
+    ########################################################
+    # Store user context for each SSE session
+    _session_user_context: dict[str, UserAPIKeyAuth] = {}
+
+    def _store_user_context_for_session(session_id: str, user_context: UserAPIKeyAuth) -> None:
+        """Store user context for a session ID"""
+        _session_user_context[session_id] = user_context
+        verbose_logger.debug(f"Stored user context for session {session_id}")
+
+    def _get_user_context_for_session(session_id: str) -> Optional[UserAPIKeyAuth]:
+        """Get user context for a session ID"""
+        return _session_user_context.get(session_id)
+
+    def _clear_user_context_for_session(session_id: str) -> None:
+        """Clear user context for a session ID"""
+        _session_user_context.pop(session_id, None)
+        verbose_logger.debug(f"Cleared user context for session {session_id}")
+
+    # Global variable to store current session context during server function calls
+    _current_session_id: Optional[str] = None
+
+    ########################################################
     ############ Initialize the MCP Server #################
     ########################################################
     server: Server = Server("litellm-mcp-server")
@@ -85,15 +109,43 @@ if MCP_AVAILABLE:
     @server.list_tools()
     async def list_tools() -> list[MCPTool]:
         """
-        List all available tools
+        List all available tools with user permission filtering
         """
         return await _list_mcp_tools()
 
     async def _list_mcp_tools() -> List[MCPTool]:
         """
-        List all available tools
+        List all available tools with user permission filtering
         """
+        from litellm.proxy.proxy_server import prisma_client
+
         tools = []
+        
+        # Get user context for the current session
+        user_context = None
+        if _current_session_id:
+            user_context = _get_user_context_for_session(_current_session_id)
+        
+        if user_context is None:
+            verbose_logger.warning("No user context found for MCP list_tools request")
+            return []
+
+        verbose_logger.debug(f"Filtering MCP tools for user: {user_context.api_key}")
+
+        # Get MCP servers the user has access to
+        if prisma_client is None:
+            verbose_logger.error("Prisma client is not available")
+            return []
+            
+        allowed_mcp_servers = await get_all_mcp_servers_for_user(
+            prisma_client=prisma_client,
+            user=user_context,
+        )
+        allowed_server_ids = {server.server_id for server in allowed_mcp_servers}
+        
+        verbose_logger.debug(f"User has access to MCP servers: {allowed_server_ids}")
+
+        # Add local tools (these are always allowed for authenticated users)
         for tool in global_mcp_tool_registry.list_tools():
             tools.append(
                 MCPTool(
@@ -105,10 +157,24 @@ if MCP_AVAILABLE:
         verbose_logger.debug(
             "GLOBAL MCP TOOLS: %s", global_mcp_tool_registry.list_tools()
         )
+        
+        # Add SSE tools from allowed servers only
         sse_tools: List[MCPTool] = await global_mcp_server_manager.list_tools()
-        verbose_logger.debug("SSE TOOLS: %s", sse_tools)
+        verbose_logger.debug("ALL SSE TOOLS: %s", sse_tools)
+        
+        filtered_sse_tools = []
         if sse_tools is not None:
-            tools.extend(sse_tools)
+            for tool in sse_tools:
+                # Check if this tool belongs to an allowed server
+                tool_server = global_mcp_server_manager._get_mcp_server_from_tool_name(tool.name)
+                if tool_server and tool_server.server_id in allowed_server_ids:
+                    filtered_sse_tools.append(tool)
+                    verbose_logger.debug(f"Including tool {tool.name} from server {tool_server.server_id}")
+                else:
+                    verbose_logger.debug(f"Excluding tool {tool.name} - server not allowed")
+            tools.extend(filtered_sse_tools)
+            
+        verbose_logger.debug(f"Returning {len(tools)} filtered tools for user")
         return tools
 
     @server.call_tool()
@@ -116,7 +182,7 @@ if MCP_AVAILABLE:
         name: str, arguments: Dict[str, Any] | None
     ) -> List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]:
         """
-        Call a specific tool with the provided arguments
+        Call a specific tool with the provided arguments, with user permission checking
 
         Args:
             name (str): Name of the tool to call
@@ -126,8 +192,42 @@ if MCP_AVAILABLE:
             List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]: Tool execution results
 
         Raises:
-            HTTPException: If tool not found or arguments missing
+            HTTPException: If tool not found, arguments missing, or user doesn't have permission
         """
+        from litellm.proxy.proxy_server import prisma_client
+
+        # Get user context for the current session
+        user_context = None
+        if _current_session_id:
+            user_context = _get_user_context_for_session(_current_session_id)
+        
+        if user_context is None:
+            verbose_logger.warning(f"No user context found for MCP tool call: {name}")
+            raise HTTPException(
+                status_code=401, 
+                detail="Authentication required for MCP tool calls"
+            )
+
+        verbose_logger.debug(f"Checking permissions for tool {name} for user: {user_context.api_key}")
+
+        # Check if this is a managed server tool and if user has access
+        if name in global_mcp_server_manager.tool_name_to_mcp_server_name_mapping:
+            tool_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+            if tool_server and prisma_client is not None:
+                # Get MCP servers the user has access to
+                allowed_mcp_servers = await get_all_mcp_servers_for_user(
+                    prisma_client=prisma_client,
+                    user=user_context,
+                )
+                allowed_server_ids = {server.server_id for server in allowed_mcp_servers}
+                
+                if tool_server.server_id not in allowed_server_ids:
+                    verbose_logger.warning(f"User {user_context.api_key} attempted to call tool {name} from server {tool_server.server_id} without permission")
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"Access denied: You don't have permission to use tools from server '{tool_server.server_id}'"
+                    )
+
         # Validate arguments
         response = await call_mcp_tool(
             name=name,
@@ -218,11 +318,25 @@ if MCP_AVAILABLE:
         except Exception as e:
             return [MCPTextContent(text=f"Error: {str(e)}", type="text")]
 
-    @router.get("/", response_class=StreamingResponse)
-    async def handle_sse(request: Request):
+    @router.get("/", response_class=StreamingResponse, dependencies=[Depends(user_api_key_auth)])
+    async def handle_sse(
+        request: Request,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)
+    ):
         verbose_logger.info("new incoming SSE connection established")
+        verbose_logger.debug(f"SSE connection for user: {user_api_key_dict.api_key}")
+        
         async with sse.connect_sse(request) as streams:
+            # Store user context for this session using the current session ID
+            session_id = sse.get_current_session_id()
+            if session_id:
+                _store_user_context_for_session(session_id, user_api_key_dict)
+            
             try:
+                # Set current session context for server function calls
+                global _current_session_id
+                _current_session_id = session_id
+                
                 await server.run(streams[0], streams[1], options)
             except BrokenResourceError:
                 pass
@@ -232,12 +346,39 @@ if MCP_AVAILABLE:
                 pass
             except Exception:
                 raise
+            finally:
+                # Clean up session context
+                if session_id:
+                    _clear_user_context_for_session(session_id)
+                _current_session_id = None
+                
         await request.close()
 
-    @router.post("/sse/messages")
-    async def handle_messages(request: Request):
+    @router.post("/sse/messages", dependencies=[Depends(user_api_key_auth)])
+    async def handle_messages(
+        request: Request,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)
+    ):
         verbose_logger.info("incoming SSE message received")
-        await sse.handle_post_message(request.scope, request.receive, request._send)
+        verbose_logger.debug(f"SSE message from user: {user_api_key_dict.api_key}")
+        
+        # Set current session context for potential server function calls
+        session_id_param = request.query_params.get("session_id")
+        if session_id_param:
+            global _current_session_id
+            _current_session_id = session_id_param
+            
+            # Verify the user context matches the stored context for this session
+            stored_context = _get_user_context_for_session(session_id_param)
+            if stored_context and stored_context.api_key != user_api_key_dict.api_key:
+                verbose_logger.warning(f"Session {session_id_param} user context mismatch")
+                raise HTTPException(status_code=403, detail="Session user context mismatch")
+        
+        try:
+            await sse.handle_post_message(request.scope, request.receive, request._send)
+        finally:
+            _current_session_id = None
+            
         await request.close()
 
     ########################################################
@@ -276,10 +417,30 @@ if MCP_AVAILABLE:
             }
         ]
         """
+        from litellm.proxy.proxy_server import prisma_client
+
         list_tools_result: List[ListMCPToolsRestAPIResponseObject] = []
+        
+        # Get MCP servers the user has access to
+        if prisma_client is None:
+            verbose_logger.error("Prisma client is not available")
+            return list_tools_result
+            
+        allowed_mcp_servers = await get_all_mcp_servers_for_user(
+            prisma_client=prisma_client,
+            user=user_api_key_dict,
+        )
+        allowed_server_ids = {server.server_id for server in allowed_mcp_servers}
+        
         for server in global_mcp_server_manager.get_registry().values():
             if server_id and server.server_id != server_id:
                 continue
+                
+            # Check if user has access to this server
+            if server.server_id not in allowed_server_ids:
+                verbose_logger.debug(f"User {user_api_key_dict.api_key} doesn't have access to server {server.server_id}")
+                continue
+                
             try:
                 tools = await global_mcp_server_manager._get_tools_from_server(server)
                 for tool in tools:
@@ -304,9 +465,29 @@ if MCP_AVAILABLE:
         """
         REST API to call a specific MCP tool with the provided arguments
         """
-        from litellm.proxy.proxy_server import add_litellm_data_to_request, proxy_config
+        from litellm.proxy.proxy_server import add_litellm_data_to_request, proxy_config, prisma_client
 
         data = await request.json()
+        
+        # Check if user has permission to call this tool
+        tool_name = data.get("name")
+        if tool_name and tool_name in global_mcp_server_manager.tool_name_to_mcp_server_name_mapping:
+            tool_server = global_mcp_server_manager._get_mcp_server_from_tool_name(tool_name)
+            if tool_server and prisma_client is not None:
+                # Get MCP servers the user has access to
+                allowed_mcp_servers = await get_all_mcp_servers_for_user(
+                    prisma_client=prisma_client,
+                    user=user_api_key_dict,
+                )
+                allowed_server_ids = {server.server_id for server in allowed_mcp_servers}
+                
+                if tool_server.server_id not in allowed_server_ids:
+                    verbose_logger.warning(f"User {user_api_key_dict.api_key} attempted to call tool {tool_name} from server {tool_server.server_id} without permission")
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"Access denied: You don't have permission to use tools from server '{tool_server.server_id}'"
+                    )
+        
         data = await add_litellm_data_to_request(
             data=data,
             request=request,
