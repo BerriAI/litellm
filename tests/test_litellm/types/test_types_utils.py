@@ -33,3 +33,9 @@ def test_chat_completion_delta_tool_call():
     )
 
     assert "function" in tool
+
+
+def test_empty_choices():
+    from litellm.types.utils import Choices
+
+    Choices()

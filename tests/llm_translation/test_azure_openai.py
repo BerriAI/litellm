@@ -589,3 +589,17 @@ async def test_azure_embedding_max_retries_0(
         ]
         == max_retries
     )
+
+
+def test_azure_safety_result():
+    """Bubble up safety result from Azure OpenAI"""
+    from litellm import completion
+    litellm._turn_on_debug()
+
+    response = completion(
+        model="azure/gpt-4o-new-test",
+        messages=[{"role": "user", "content": "Hello world"}],
+    )
+    print(f"response: {response}")
+    assert response.choices[0].message.content is not None
+    assert response.choices[0].provider_specific_fields is not None
