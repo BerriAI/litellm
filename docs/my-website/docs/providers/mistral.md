@@ -146,20 +146,20 @@ All models listed here https://docs.mistral.ai/platform/endpoints are supported.
 
 | Model Name     | Function Call                                                | Reasoning Support |
 |----------------|--------------------------------------------------------------|-------------------|
-| Mistral Small  | `completion(model="mistral/mistral-small-latest", messages)` | ❌ |
-| Mistral Medium | `completion(model="mistral/mistral-medium-latest", messages)`| ❌ |
-| Mistral Large 2  | `completion(model="mistral/mistral-large-2407", messages)` | ❌ |
-| Mistral Large Latest  | `completion(model="mistral/mistral-large-latest", messages)` | ❌ |
-| **Magistral Small**  | `completion(model="mistral/magistral-small-2506", messages)` | ✅ |
-| **Magistral Medium** | `completion(model="mistral/magistral-medium-2506", messages)`| ✅ |
-| Mistral 7B     | `completion(model="mistral/open-mistral-7b", messages)`      | ❌ |
-| Mixtral 8x7B   | `completion(model="mistral/open-mixtral-8x7b", messages)`    | ❌ |
-| Mixtral 8x22B  | `completion(model="mistral/open-mixtral-8x22b", messages)`   | ❌ |
-| Codestral      | `completion(model="mistral/codestral-latest", messages)`     | ❌ |
-| Mistral NeMo      | `completion(model="mistral/open-mistral-nemo", messages)`     | ❌ |
-| Mistral NeMo 2407      | `completion(model="mistral/open-mistral-nemo-2407", messages)`     | ❌ |
-| Codestral Mamba      | `completion(model="mistral/open-codestral-mamba", messages)`     | ❌ |
-| Codestral Mamba    | `completion(model="mistral/codestral-mamba-latest"", messages)`     | ❌ |
+| Mistral Small  | `completion(model="mistral/mistral-small-latest", messages)` | No |
+| Mistral Medium | `completion(model="mistral/mistral-medium-latest", messages)`| No |
+| Mistral Large 2  | `completion(model="mistral/mistral-large-2407", messages)` | No |
+| Mistral Large Latest  | `completion(model="mistral/mistral-large-latest", messages)` | No |
+| **Magistral Small**  | `completion(model="mistral/magistral-small-2506", messages)` | Yes |
+| **Magistral Medium** | `completion(model="mistral/magistral-medium-2506", messages)`| Yes |
+| Mistral 7B     | `completion(model="mistral/open-mistral-7b", messages)`      | No |
+| Mixtral 8x7B   | `completion(model="mistral/open-mixtral-8x7b", messages)`    | No |
+| Mixtral 8x22B  | `completion(model="mistral/open-mixtral-8x22b", messages)`   | No |
+| Codestral      | `completion(model="mistral/codestral-latest", messages)`     | No |
+| Mistral NeMo      | `completion(model="mistral/open-mistral-nemo", messages)`     | No |
+| Mistral NeMo 2407      | `completion(model="mistral/open-mistral-nemo-2407", messages)`     | No |
+| Codestral Mamba      | `completion(model="mistral/open-codestral-mamba", messages)`     | No |
+| Codestral Mamba    | `completion(model="mistral/codestral-mamba-latest"", messages)`     | No |
 
 ## Function Calling 
 
