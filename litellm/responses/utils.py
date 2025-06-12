@@ -231,9 +231,15 @@ class ResponseAPILoggingUtils:
 
     @staticmethod
     def _transform_response_api_usage_to_chat_usage(
-        usage: Union[dict, ResponseAPIUsage],
+        usage: Optional[Union[dict, ResponseAPIUsage]],
     ) -> Usage:
         """Tranforms the ResponseAPIUsage object to a Usage object"""
+        if usage is None:
+            return Usage(
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=0,
+            )
         response_api_usage: ResponseAPIUsage = (
             ResponseAPIUsage(**usage) if isinstance(usage, dict) else usage
         )

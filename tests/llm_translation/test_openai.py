@@ -469,3 +469,55 @@ async def test_openai_pdf_url(model):
 
     assert "file_data" in request["raw_request_body"]["messages"][0]["content"][1]["file"]
 
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_openai_codex_stream(sync_mode):
+    from litellm.main import stream_chunk_builder
+    kwargs = {
+        "model": "openai/codex-mini-latest",
+        "messages": [{"role": "user", "content": "Hey!"}],
+        "stream": True,
+    }
+
+    chunks = []
+    if sync_mode:
+        response = litellm.completion(
+            **kwargs
+        )
+        for chunk in response:
+            chunks.append(chunk)
+    else:
+        response = await litellm.acompletion(
+            **kwargs
+        )
+        async for chunk in response:
+            chunks.append(chunk)
+    
+    complete_response = stream_chunk_builder(chunks=chunks)
+    print("complete_response: ", complete_response)
+
+    assert complete_response.choices[0].message.content is not None
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_openai_codex(sync_mode):
+    
+    from litellm import acompletion
+
+    kwargs = {
+        "model": "openai/codex-mini-latest",
+        "messages": [{"role": "user", "content": "Hey!"}],
+    }
+
+    if sync_mode:
+        response = litellm.completion(
+            **kwargs
+        )
+    else:
+        response = await litellm.acompletion(
+            **kwargs
+        )
+    print("response: ", response)
+
+    assert response.choices[0].message.content is not None
