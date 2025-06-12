@@ -6,6 +6,7 @@ import { fetchTeamModels } from "../components/create_key_button";
 import { modelAvailableCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
+import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 
 interface KeyEditViewProps {
   keyData: KeyResponse;
@@ -98,7 +99,8 @@ export function KeyEditView({
     budget_duration: getBudgetDuration(keyData.budget_duration),
     metadata: keyData.metadata ? JSON.stringify(keyData.metadata, null, 2) : "",
     guardrails: keyData.metadata?.guardrails || [],
-    vector_stores: keyData.object_permission?.vector_stores || []
+    vector_stores: keyData.object_permission?.vector_stores || [],
+    mcp_servers: keyData.object_permission?.mcp_servers || []
   };
 
   return (
@@ -177,6 +179,15 @@ export function KeyEditView({
           value={form.getFieldValue('vector_stores')}
           accessToken={accessToken || ""}
           placeholder="Select vector stores"
+        />
+      </Form.Item>
+
+      <Form.Item label="MCP Servers" name="mcp_servers">
+        <MCPServerSelector
+          onChange={(values) => form.setFieldValue('mcp_servers', values)}
+          value={form.getFieldValue('mcp_servers')}
+          accessToken={accessToken || ""}
+          placeholder="Select MCP servers"
         />
       </Form.Item>
 

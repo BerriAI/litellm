@@ -554,6 +554,13 @@ def convert_to_model_response_object(  # noqa: PLR0915
                     and len(message.tool_calls) > 0
                 ):
                     finish_reason = "tool_calls"
+
+                ## PROVIDER SPECIFIC FIELDS ##
+                provider_specific_fields = {}
+                for field in choice.keys():
+                    if field not in Choices.model_fields.keys():
+                        provider_specific_fields[field] = choice[field]
+
                 logprobs = choice.get("logprobs", None)
                 enhancements = choice.get("enhancements", None)
                 choice = Choices(
@@ -562,6 +569,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
                     message=message,
                     logprobs=logprobs,
                     enhancements=enhancements,
+                    provider_specific_fields=provider_specific_fields,
                 )
                 choice_list.append(choice)
             model_response_object.choices = choice_list

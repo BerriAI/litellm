@@ -602,7 +602,7 @@ def test_vertex_ai_streaming_usage_web_search_calculation():
 
 def test_vertex_ai_transform_parts():
     """
-    Test the _transform_parts method for converting Vertex AI function calls 
+    Test the _transform_parts method for converting Vertex AI function calls
     to OpenAI-compatible tool calls and function calls.
     """
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -615,17 +615,16 @@ def test_vertex_ai_transform_parts():
         HttpxPartType(
             functionCall={
                 "name": "get_current_weather",
-                "args": {"location": "Boston", "unit": "celsius"}
+                "args": {"location": "Boston", "unit": "celsius"},
             }
         ),
-        HttpxPartType(text="Some text content")
+        HttpxPartType(text="Some text content"),
     ]
-    
+
     function, tools = VertexGeminiConfig._transform_parts(
-        parts=parts_with_function, 
-        is_function_call=True
+        parts=parts_with_function, is_function_call=True
     )
-    
+
     # Should return function, no tools
     assert function is not None
     assert function["name"] == "get_current_weather"
@@ -634,42 +633,39 @@ def test_vertex_ai_transform_parts():
 
     # Test case 2: Tool call mode (is_function_call=False)
     function, tools = VertexGeminiConfig._transform_parts(
-        parts=parts_with_function, 
-        is_function_call=False
+        parts=parts_with_function, is_function_call=False
     )
-    
+
     # Should return tools, no function
     assert function is None
     assert tools is not None
     assert len(tools) == 1
     assert tools[0]["type"] == "function"
     assert tools[0]["function"]["name"] == "get_current_weather"
-    assert tools[0]["function"]["arguments"] == '{"location": "Boston", "unit": "celsius"}'
+    assert (
+        tools[0]["function"]["arguments"] == '{"location": "Boston", "unit": "celsius"}'
+    )
     assert tools[0]["id"].startswith("call_")
     assert tools[0]["index"] == 0
 
     # Test case 3: Multiple function calls
     parts_with_multiple_functions = [
         HttpxPartType(
-            functionCall={
-                "name": "get_current_weather",
-                "args": {"location": "Boston"}
-            }
+            functionCall={"name": "get_current_weather", "args": {"location": "Boston"}}
         ),
         HttpxPartType(
             functionCall={
                 "name": "get_forecast",
-                "args": {"location": "New York", "days": 3}
+                "args": {"location": "New York", "days": 3},
             }
         ),
-        HttpxPartType(text="Some text content")
+        HttpxPartType(text="Some text content"),
     ]
-    
+
     function, tools = VertexGeminiConfig._transform_parts(
-        parts=parts_with_multiple_functions, 
-        is_function_call=False
+        parts=parts_with_multiple_functions, is_function_call=False
     )
-    
+
     # Should return multiple tools
     assert function is None
     assert tools is not None
@@ -683,43 +679,35 @@ def test_vertex_ai_transform_parts():
     # Test case 4: No function calls
     parts_without_functions = [
         HttpxPartType(text="Just some text content"),
-        HttpxPartType(text="More text")
+        HttpxPartType(text="More text"),
     ]
-    
+
     function, tools = VertexGeminiConfig._transform_parts(
-        parts=parts_without_functions, 
-        is_function_call=False
+        parts=parts_without_functions, is_function_call=False
     )
-    
+
     # Should return nothing
     assert function is None
     assert tools is None
 
     # Test case 5: Empty parts list
     function, tools = VertexGeminiConfig._transform_parts(
-        parts=[], 
-        is_function_call=False
+        parts=[], is_function_call=False
     )
-    
+
     # Should return nothing
     assert function is None
     assert tools is None
 
     # Test case 6: Function call with empty args
     parts_with_empty_args = [
-        HttpxPartType(
-            functionCall={
-                "name": "simple_function",
-                "args": {}
-            }
-        )
+        HttpxPartType(functionCall={"name": "simple_function", "args": {}})
     ]
-    
+
     function, tools = VertexGeminiConfig._transform_parts(
-        parts=parts_with_empty_args, 
-        is_function_call=True
+        parts=parts_with_empty_args, is_function_call=True
     )
-    
+
     # Should handle empty args correctly
     assert function is not None
     assert function["name"] == "simple_function"

@@ -740,13 +740,73 @@
         "supports_tool_choice": true,
         "supports_reasoning": true
     },
+    "o3-pro": {
+        "max_tokens": 100000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 20e-06,
+        "input_cost_per_token_batches": 10e-06,
+        "output_cost_per_token_batches": 40e-06,
+        "output_cost_per_token": 80e-06,
+        "litellm_provider": "openai",
+        "mode": "responses",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": false,
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supported_endpoints": [
+            "/v1/responses",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ]
+    },
+    "o3-pro-2025-06-10": {
+        "max_tokens": 100000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 20e-06,
+        "input_cost_per_token_batches": 10e-06,
+        "output_cost_per_token_batches": 40e-06,
+        "output_cost_per_token": 80e-06,
+        "litellm_provider": "openai",
+        "mode": "responses",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": false,
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supported_endpoints": [
+            "/v1/responses",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ]
+    },
     "o3": {
         "max_tokens": 100000,
         "max_input_tokens": 200000,
         "max_output_tokens": 100000,
-        "input_cost_per_token": 1e-05,
-        "output_cost_per_token": 4e-05,
-        "cache_read_input_token_cost": 2.5e-06,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 8e-06,
+        "cache_read_input_token_cost": 0.5e-06,
         "litellm_provider": "openai",
         "mode": "chat",
         "supports_function_calling": true,
@@ -756,15 +816,28 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supported_endpoints": [
+            "/v1/responses",
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ]
     },
     "o3-2025-04-16": {
         "max_tokens": 100000,
         "max_input_tokens": 200000,
         "max_output_tokens": 100000,
-        "input_cost_per_token": 1e-05,
-        "output_cost_per_token": 4e-05,
-        "cache_read_input_token_cost": 2.5e-06,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 8e-06,
+        "cache_read_input_token_cost": 0.5e-06,
         "litellm_provider": "openai",
         "mode": "chat",
         "supports_function_calling": true,
@@ -774,7 +847,20 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supported_endpoints": [
+            "/v1/responses",
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ]
     },
     "o3-mini": {
         "max_tokens": 100000,
@@ -14289,5 +14375,503 @@
         "max_output_tokens": 4096,
         "litellm_provider": "featherless_ai",
         "mode": "chat"
+    },
+    "deepgram/nova-3": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00007167,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0043,
+            "calculation": "$0.0043/60 seconds = $0.00007167 per second"
+        }
+    },
+    "deepgram/nova-3-general": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00007167,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0043,
+            "calculation": "$0.0043/60 seconds = $0.00007167 per second"
+        }
+    },
+    "deepgram/nova-3-medical": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00008667,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0052,
+            "calculation": "$0.0052/60 seconds = $0.00008667 per second (multilingual)"
+        }
+    },
+    "deepgram/nova-2": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00007167,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0043,
+            "calculation": "$0.0043/60 seconds = $0.00007167 per second"
+        }
+    },
+    "deepgram/nova-2-general": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00007167,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0043,
+            "calculation": "$0.0043/60 seconds = $0.00007167 per second"
+        }
+    },
+    "deepgram/nova-2-meeting": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00007167,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0043,
+            "calculation": "$0.0043/60 seconds = $0.00007167 per second"
+        }
+    },
+    "deepgram/nova-2-phonecall": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00007167,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0043,
+            "calculation": "$0.0043/60 seconds = $0.00007167 per second"
+        }
+    },
+    "deepgram/nova-2-voicemail": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00007167,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0043,
+            "calculation": "$0.0043/60 seconds = $0.00007167 per second"
+        }
+    },
+    "deepgram/nova-2-finance": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00007167,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0043,
+            "calculation": "$0.0043/60 seconds = $0.00007167 per second"
+        }
+    },
+    "deepgram/nova-2-conversationalai": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00007167,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0043,
+            "calculation": "$0.0043/60 seconds = $0.00007167 per second"
+        }
+    },
+    "deepgram/nova-2-video": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00007167,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0043,
+            "calculation": "$0.0043/60 seconds = $0.00007167 per second"
+        }
+    },
+    "deepgram/nova-2-drivethru": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00007167,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0043,
+            "calculation": "$0.0043/60 seconds = $0.00007167 per second"
+        }
+    },
+    "deepgram/nova-2-automotive": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00007167,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0043,
+            "calculation": "$0.0043/60 seconds = $0.00007167 per second"
+        }
+    },
+    "deepgram/nova-2-atc": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00007167,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0043,
+            "calculation": "$0.0043/60 seconds = $0.00007167 per second"
+        }
+    },
+    "deepgram/nova": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00007167,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0043,
+            "calculation": "$0.0043/60 seconds = $0.00007167 per second"
+        }
+    },
+    "deepgram/nova-general": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00007167,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0043,
+            "calculation": "$0.0043/60 seconds = $0.00007167 per second"
+        }
+    },
+    "deepgram/nova-phonecall": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00007167,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0043,
+            "calculation": "$0.0043/60 seconds = $0.00007167 per second"
+        }
+    },
+    "deepgram/enhanced": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00024167,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0145,
+            "calculation": "$0.0145/60 seconds = $0.00024167 per second"
+        }
+    },
+    "deepgram/enhanced-general": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00024167,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0145,
+            "calculation": "$0.0145/60 seconds = $0.00024167 per second"
+        }
+    },
+    "deepgram/enhanced-meeting": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00024167,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0145,
+            "calculation": "$0.0145/60 seconds = $0.00024167 per second"
+        }
+    },
+    "deepgram/enhanced-phonecall": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00024167,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0145,
+            "calculation": "$0.0145/60 seconds = $0.00024167 per second"
+        }
+    },
+    "deepgram/enhanced-finance": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00024167,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0145,
+            "calculation": "$0.0145/60 seconds = $0.00024167 per second"
+        }
+    },
+    "deepgram/base": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00020833,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0125,
+            "calculation": "$0.0125/60 seconds = $0.00020833 per second"
+        }
+    },
+    "deepgram/base-general": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00020833,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0125,
+            "calculation": "$0.0125/60 seconds = $0.00020833 per second"
+        }
+    },
+    "deepgram/base-meeting": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00020833,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0125,
+            "calculation": "$0.0125/60 seconds = $0.00020833 per second"
+        }
+    },
+    "deepgram/base-phonecall": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00020833,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0125,
+            "calculation": "$0.0125/60 seconds = $0.00020833 per second"
+        }
+    },
+    "deepgram/base-voicemail": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00020833,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0125,
+            "calculation": "$0.0125/60 seconds = $0.00020833 per second"
+        }
+    },
+    "deepgram/base-finance": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00020833,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0125,
+            "calculation": "$0.0125/60 seconds = $0.00020833 per second"
+        }
+    },
+    "deepgram/base-conversationalai": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00020833,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0125,
+            "calculation": "$0.0125/60 seconds = $0.00020833 per second"
+        }
+    },
+    "deepgram/base-video": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00020833,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "original_pricing_per_minute": 0.0125,
+            "calculation": "$0.0125/60 seconds = $0.00020833 per second"
+        }
+    },
+    "deepgram/whisper": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.0001,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "notes": "Deepgram's hosted OpenAI Whisper models - pricing may differ from native Deepgram models"
+        }
+    },
+    "deepgram/whisper-tiny": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.0001,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "notes": "Deepgram's hosted OpenAI Whisper models - pricing may differ from native Deepgram models"
+        }
+    },
+    "deepgram/whisper-base": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.0001,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "notes": "Deepgram's hosted OpenAI Whisper models - pricing may differ from native Deepgram models"
+        }
+    },
+    "deepgram/whisper-small": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.0001,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "notes": "Deepgram's hosted OpenAI Whisper models - pricing may differ from native Deepgram models"
+        }
+    },
+    "deepgram/whisper-medium": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.0001,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "notes": "Deepgram's hosted OpenAI Whisper models - pricing may differ from native Deepgram models"
+        }
+    },
+    "deepgram/whisper-large": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.0001,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "deepgram",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://deepgram.com/pricing",
+        "metadata": {
+            "notes": "Deepgram's hosted OpenAI Whisper models - pricing may differ from native Deepgram models"
+        }
     }
 }

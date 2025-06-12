@@ -35,6 +35,7 @@ import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_
 import { isAdminRole } from "@/utils/roles";
 import ObjectPermissionsView from "../object_permissions_view";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import PremiumVectorStoreSelector from "../common_components/PremiumVectorStoreSelector";
 
 export interface TeamData {
@@ -235,10 +236,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       };
 
       // Handle object_permission updates
-      if (values.vector_stores !== undefined) {
+      if (values.vector_stores !== undefined || values.mcp_servers !== undefined) {
         updateData.object_permission = {
           ...teamData?.team_info.object_permission,
-          vector_stores: values.vector_stores || []
+          vector_stores: values.vector_stores || [],
+          mcp_servers: values.mcp_servers || []
         };
       }
       
@@ -385,7 +387,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     guardrails: info.metadata?.guardrails || [],
                     metadata: info.metadata ? JSON.stringify(info.metadata, null, 2) : "",
                     organization_id: info.organization_id,
-                    vector_stores: info.object_permission?.vector_stores || []
+                    vector_stores: info.object_permission?.vector_stores || [],
+                    mcp_servers: info.object_permission?.mcp_servers || []
                   }}
                   layout="vertical"
                 >
@@ -464,6 +467,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       value={form.getFieldValue('vector_stores')}
                       accessToken={accessToken || ""}
                       placeholder="Select vector stores"
+                    />
+                  </Form.Item>
+
+                  <Form.Item label="MCP Servers" name="mcp_servers">
+                    <MCPServerSelector
+                      onChange={(values) => form.setFieldValue('mcp_servers', values)}
+                      value={form.getFieldValue('mcp_servers')}
+                      accessToken={accessToken || ""}
+                      placeholder="Select MCP servers"
                     />
                   </Form.Item>
                   
