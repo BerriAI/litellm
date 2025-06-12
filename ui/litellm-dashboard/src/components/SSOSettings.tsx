@@ -253,13 +253,13 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles,
 
   // Dynamically render settings based on the schema
   const renderSettings = () => {
-    const { values, schema } = settings;
+    const { values, field_schema } = settings;
     
-    if (!schema || !schema.properties) {
+    if (!field_schema || !field_schema.properties) {
       return <Text>No schema information available</Text>;
     }
 
-    return Object.entries(schema.properties).map(([key, property]: [string, any]) => {
+    return Object.entries(field_schema.properties).map(([key, property]: [string, any]) => {
       const value = values[key];
       const displayName = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
       
@@ -286,7 +286,8 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles,
 
   return (
     <Card>
-      <div className="flex justify-end items-center mb-4">
+      <div className="flex justify-between items-center mb-4">
+        <Title>Default User Settings</Title>
         {!loading && settings && (
           isEditing ? (
             <div className="flex gap-2">
@@ -317,8 +318,8 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles,
         )}
       </div>
       
-      {settings?.schema?.description && (
-        <Paragraph className="mb-4">{settings.schema.description}</Paragraph>
+      {settings?.field_schema?.description && (
+        <Paragraph className="mb-4">{settings.field_schema.description}</Paragraph>
       )}
       <Divider />
       
