@@ -25,6 +25,10 @@ router = APIRouter(
     tags=["mcp"],
 )
 
+LITELLM_MCP_SERVER_NAME = "litellm-mcp-server"
+LITELLM_MCP_SERVER_VERSION = "1.0.0"
+LITELLM_MCP_SERVER_DESCRIPTION = "MCP Server for LiteLLM"
+
 # Check if MCP is available
 # "mcp" requires python 3.10 or higher, but several litellm users use python 3.8
 # We're making this conditional import to avoid breaking users who use python 3.8.
@@ -86,8 +90,8 @@ if MCP_AVAILABLE:
     ############ Initialize the MCP Server #################
     ########################################################
     server: Server = Server(
-        name="litellm-mcp-server",
-        version="1.0.0",
+        name=LITELLM_MCP_SERVER_NAME,
+        version=LITELLM_MCP_SERVER_VERSION,
     )
     sse: SseServerTransport = SseServerTransport("/mcp/sse/messages")
 
@@ -409,9 +413,9 @@ if MCP_AVAILABLE:
         return await call_mcp_tool(**data)
 
     app = FastAPI(
-        title="LiteLLM MCP Server",
-        description="MCP Server for LiteLLM",
-        version="1.0.0",
+        title=LITELLM_MCP_SERVER_NAME,
+        description=LITELLM_MCP_SERVER_DESCRIPTION,
+        version=LITELLM_MCP_SERVER_VERSION,
         lifespan=lifespan,
     )
 
