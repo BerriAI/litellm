@@ -839,6 +839,11 @@ class Choices(OpenAIObject):
 
         self.provider_specific_fields = provider_specific_fields
 
+        if self.logprobs is None:
+            del self.logprobs
+        if self.provider_specific_fields is None:
+            del self.provider_specific_fields
+
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
