@@ -31,6 +31,15 @@ body {
   .text-balance {
     text-wrap: balance;
   }
+
+  .indigo-button-3d {
+    background: linear-gradient(#7a75ff, #4f46f1);
+    box-shadow:
+      inset 0 -1px 1px rgba(0, 0, 0, 0.08),
+      inset 0 1px 1px rgba(255, 255, 255, 0.4),
+      0 0 0px 1px #4d45e8,
+      0 4px 3px -1px rgba(0, 0, 0, 0.15);
+  }
 }
 
 .table-wrapper {
