@@ -41,6 +41,16 @@ docker run
 ghcr.io/berriai/litellm:main-v1.72.2-stable
 ```
 </TabItem>
+
+<TabItem value="pip" label="Pip">
+
+:::info
+
+Pip install will be live by EOD 06/12/2025.
+
+:::
+
+</TabItem>
 </Tabs>
 
 ## TLDR
