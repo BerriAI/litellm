@@ -267,4 +267,4 @@ Here's a Demo Instance to test changes:
     - Username: admin
     - Password: sk-1234
 
-## [Git Diff](https://github.com/BerriAI/litellm/releases)
+## [Git Diff](https://github.com/BerriAI/litellm/releases/tag/v1.72.2-stable)
