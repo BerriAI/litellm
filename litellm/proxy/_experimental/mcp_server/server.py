@@ -425,3 +425,6 @@ if MCP_AVAILABLE:
     # Mount the MCP handlers
     app.mount("/", handle_streamable_http_mcp)
     app.mount("/sse", handle_sse_mcp)
+
+else:
+    app = FastAPI()
