@@ -255,7 +255,7 @@ Then provide a clear, concise answer based on your reasoning."""
                     # Handle both string and list content, preserving original format
                     if isinstance(existing_content, str):
                         # String content - prepend reasoning prompt
-                        new_content = f"{reasoning_prompt}\n\n{existing_content}"
+                        new_content: Union[str, list] = f"{reasoning_prompt}\n\n{existing_content}"
                     elif isinstance(existing_content, list):
                         # List content - prepend reasoning prompt as text block
                         new_content = [
