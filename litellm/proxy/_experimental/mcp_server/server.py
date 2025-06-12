@@ -7,7 +7,6 @@ import contextlib
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
 from pydantic import ConfigDict
 from starlette.types import Receive, Scope, Send
 
