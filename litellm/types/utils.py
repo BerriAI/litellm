@@ -810,26 +810,30 @@ class Choices(OpenAIObject):
         provider_specific_fields: Optional[Dict[str, Any]] = None,
         **params,
     ):
-        super(Choices, self).__init__(**params)
         if finish_reason is not None:
-            self.finish_reason = map_finish_reason(
-                finish_reason
-            )  # set finish_reason for all responses
+            params["finish_reason"] = map_finish_reason(finish_reason)
         else:
-            self.finish_reason = "stop"
-        self.index = index
+            params["finish_reason"] = "stop"
+        if index is not None:
+            params["index"] = index
+        else:
+            params["index"] = 0
         if message is None:
-            self.message = Message()
+            params["message"] = Message()
         else:
             if isinstance(message, Message):
-                self.message = message
+                params["message"] = message
             elif isinstance(message, dict):
-                self.message = Message(**message)
+                params["message"] = Message(**message)
         if logprobs is not None:
             if isinstance(logprobs, dict):
-                self.logprobs = ChoiceLogprobs(**logprobs)
+                params["logprobs"] = ChoiceLogprobs(**logprobs)
             else:
-                self.logprobs = logprobs
+                params["logprobs"] = logprobs
+        else:
+            params["logprobs"] = None
+        super(Choices, self).__init__(**params)
+
         if enhancements is not None:
             self.enhancements = enhancements
 
