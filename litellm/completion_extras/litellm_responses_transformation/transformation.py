@@ -72,7 +72,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         "output": content,
                     }
                 )
-            elif role == "assistant" and tool_calls:
+            elif role == "assistant" and tool_calls and isinstance(tool_calls, list):
                 for tool_call in tool_calls:
                     function = tool_call.get("function")
                     if function:
@@ -134,15 +134,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 ] = self._convert_tools_to_responses_format(
                     cast(List[Dict[str, Any]], value)
                 )
-            elif key in [
-                "temperature",
-                "top_p",
-                "tool_choice",
-                "parallel_tool_calls",
-                "user",
-                "stream",
-            ]:
-                responses_api_request[key] = value
+            elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
+                responses_api_request[key] = value  # type: ignore
             elif key == "metadata":
                 responses_api_request["metadata"] = value
             elif key == "previous_response_id":
@@ -537,7 +530,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
         elif event_type == "response.output_text.delta":
             # Content part added to output
-            content_part: Optional[str] = parsed_chunk.get("delta", None)
+            content_part = parsed_chunk.get("delta", None)
             if content_part is not None:
                 return GenericStreamingChunk(
                     text=content_part,
