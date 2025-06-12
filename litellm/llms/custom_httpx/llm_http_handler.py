@@ -982,28 +982,22 @@ class BaseLLMHTTPHandler:
             request_data=request_data,
         )
 
-    def audio_transcriptions(
+    def _prepare_audio_transcription_request(
         self,
         model: str,
         audio_file: FileTypes,
         optional_params: dict,
         litellm_params: dict,
-        model_response: TranscriptionResponse,
-        timeout: float,
-        max_retries: int,
         logging_obj: LiteLLMLoggingObj,
         api_key: Optional[str],
         api_base: Optional[str],
-        custom_llm_provider: str,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        atranscription: bool = False,
-        headers: Optional[Dict[str, Any]] = None,
-        provider_config: Optional[BaseAudioTranscriptionConfig] = None,
-    ) -> TranscriptionResponse:
-        if provider_config is None:
-            raise ValueError(
-                f"No provider config found for model: {model} and provider: {custom_llm_provider}"
-            )
+        headers: Optional[Dict[str, Any]],
+        provider_config: BaseAudioTranscriptionConfig,
+    ) -> Tuple[dict, str, Optional[bytes], Optional[dict]]:
+        """
+        Shared logic for preparing audio transcription requests.
+        Returns: (headers, complete_url, binary_data, json_data)
+        """
         headers = provider_config.validate_environment(
             api_key=api_key,
             headers=headers or {},
@@ -1012,9 +1006,6 @@ class BaseLLMHTTPHandler:
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-
-        if client is None or not isinstance(client, HTTPHandler):
-            client = _get_httpx_client()
 
         complete_url = provider_config.get_complete_url(
             api_base=api_base,
@@ -1038,6 +1029,102 @@ class BaseLLMHTTPHandler:
         else:
             json_data = data
 
+        ## LOGGING
+        logging_obj.pre_call(
+            input=optional_params.get("query", ""),
+            api_key=api_key,
+            additional_args={
+                "complete_input_dict": {},
+                "api_base": complete_url,
+                "headers": headers,
+            },
+        )
+
+        return headers, complete_url, binary_data, json_data
+
+    def _transform_audio_transcription_response(
+        self,
+        provider_config: BaseAudioTranscriptionConfig,
+        model: str,
+        response: httpx.Response,
+        model_response: TranscriptionResponse,
+        logging_obj: LiteLLMLoggingObj,
+        optional_params: dict,
+        api_key: Optional[str],
+    ) -> TranscriptionResponse:
+        """Shared logic for transforming audio transcription responses."""
+        if isinstance(provider_config, litellm.DeepgramAudioTranscriptionConfig):
+            return provider_config.transform_audio_transcription_response(
+                model=model,
+                raw_response=response,
+                model_response=model_response,
+                logging_obj=logging_obj,
+                request_data={},
+                optional_params=optional_params,
+                litellm_params={},
+                api_key=api_key,
+            )
+        return model_response
+
+    def audio_transcriptions(
+        self,
+        model: str,
+        audio_file: FileTypes,
+        optional_params: dict,
+        litellm_params: dict,
+        model_response: TranscriptionResponse,
+        timeout: float,
+        max_retries: int,
+        logging_obj: LiteLLMLoggingObj,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        custom_llm_provider: str,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        atranscription: bool = False,
+        headers: Optional[Dict[str, Any]] = None,
+        provider_config: Optional[BaseAudioTranscriptionConfig] = None,
+    ) -> Union[TranscriptionResponse, Coroutine[Any, Any, TranscriptionResponse]]:
+        if provider_config is None:
+            raise ValueError(
+                f"No provider config found for model: {model} and provider: {custom_llm_provider}"
+            )
+
+        if atranscription is True:
+            return self.async_audio_transcriptions(  # type: ignore
+                model=model,
+                audio_file=audio_file,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                model_response=model_response,
+                timeout=timeout,
+                max_retries=max_retries,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                client=client,
+                headers=headers,
+                provider_config=provider_config,
+            )
+
+        # Prepare the request
+        headers, complete_url, binary_data, json_data = (
+            self._prepare_audio_transcription_request(
+                model=model,
+                audio_file=audio_file,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                api_base=api_base,
+                headers=headers,
+                provider_config=provider_config,
+            )
+        )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            client = _get_httpx_client()
+
         try:
             # Make the POST request
             response = client.post(
@@ -1050,19 +1137,82 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
-        if isinstance(provider_config, litellm.DeepgramAudioTranscriptionConfig):
-            returned_response = provider_config.transform_audio_transcription_response(
-                model=model,
-                raw_response=response,
-                model_response=model_response,
-                logging_obj=logging_obj,
-                request_data={},
-                optional_params=optional_params,
-                litellm_params={},
-                api_key=api_key,
+        return self._transform_audio_transcription_response(
+            provider_config=provider_config,
+            model=model,
+            response=response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            optional_params=optional_params,
+            api_key=api_key,
+        )
+
+    async def async_audio_transcriptions(
+        self,
+        model: str,
+        audio_file: FileTypes,
+        optional_params: dict,
+        litellm_params: dict,
+        model_response: TranscriptionResponse,
+        timeout: float,
+        max_retries: int,
+        logging_obj: LiteLLMLoggingObj,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        custom_llm_provider: str,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        headers: Optional[Dict[str, Any]] = None,
+        provider_config: Optional[BaseAudioTranscriptionConfig] = None,
+    ) -> TranscriptionResponse:
+        if provider_config is None:
+            raise ValueError(
+                f"No provider config found for model: {model} and provider: {custom_llm_provider}"
             )
-            return returned_response
-        return model_response
+
+        # Prepare the request
+        headers, complete_url, binary_data, json_data = (
+            self._prepare_audio_transcription_request(
+                model=model,
+                audio_file=audio_file,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                api_base=api_base,
+                headers=headers,
+                provider_config=provider_config,
+            )
+        )
+
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        try:
+            # Make the async POST request
+            response = await async_httpx_client.post(
+                url=complete_url,
+                headers=headers,
+                content=binary_data,
+                json=json_data,
+                timeout=timeout,
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        return self._transform_audio_transcription_response(
+            provider_config=provider_config,
+            model=model,
+            response=response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            optional_params=optional_params,
+            api_key=api_key,
+        )
 
     async def async_anthropic_messages_handler(
         self,
@@ -2297,10 +2447,7 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[
-        ImageResponse,
-        Coroutine[Any, Any, ImageResponse],
-    ]:
+    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
         """
 
         Handles image edit requests.
