@@ -5501,3 +5501,40 @@ export const getRemainingUsers = async (accessToken: string): Promise<{
     throw error;
   }
 };
+
+export const deleteCallback = async (
+  accessToken: String,
+  callbackName: string
+) => {
+  /**
+   * Delete specific callback from proxy using the /config/callback/delete API
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/config/callback/delete`
+      : `/config/callback/delete`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        callback_name: callbackName,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to delete specific callback:", error);
+    throw error;
+  }
+};
