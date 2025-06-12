@@ -327,7 +327,7 @@ if MCP_AVAILABLE:
         """Handle MCP requests through SSE."""
         try:
             # Ensure session managers are initialized
-            if not _session_managers_initialized:
+            if not _SESSION_MANAGERS_INITIALIZED:
                 await initialize_session_managers()
                 # Give it a moment to start up
                 await asyncio.sleep(0.1)
