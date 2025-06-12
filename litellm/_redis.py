@@ -33,7 +33,9 @@ def _get_redis_kwargs():
         "retry",
     }
 
-    include_args = ["url"]
+    include_args = ["url", "ssl", "ssl_cert_reqs", "ssl_ca_certs", "ssl_certfile", 
+                   "ssl_keyfile", "ssl_check_hostname", "ssl_ca_cert_dir", 
+                   "ssl_ciphers", "ssl_crlfile"]
 
     available_args = [x for x in arg_spec.args if x not in exclude_args] + include_args
 
@@ -52,7 +54,9 @@ def _get_redis_url_kwargs(client=None):
         "retry",
     }
 
-    include_args = ["url"]
+    include_args = ["url", "ssl", "ssl_cert_reqs", "ssl_ca_certs", "ssl_certfile", 
+                   "ssl_keyfile", "ssl_check_hostname", "ssl_ca_cert_dir", 
+                   "ssl_ciphers", "ssl_crlfile"]
 
     available_args = [x for x in arg_spec.args if x not in exclude_args] + include_args
 
@@ -68,17 +72,36 @@ def _get_redis_cluster_kwargs(client=None):
     exclude_args = {"self", "connection_pool", "retry", "host", "port", "startup_nodes"}
 
     available_args = [x for x in arg_spec.args if x not in exclude_args]
-    available_args.append("password")
-    available_args.append("username")
-    available_args.append("ssl")
+    available_args.extend(["password", "username", "ssl", "ssl_cert_reqs", "ssl_ca_certs", 
+                          "ssl_certfile", "ssl_keyfile", "ssl_check_hostname", 
+                          "ssl_ca_cert_dir", "ssl_ciphers", "ssl_crlfile"])
 
     return available_args
 
 
 def _get_redis_env_kwarg_mapping():
     PREFIX = "REDIS_"
-
-    return {f"{PREFIX}{x.upper()}": x for x in _get_redis_kwargs()}
+    
+    # Get all standard redis kwargs
+    redis_kwargs = _get_redis_kwargs()
+    
+    # Create mapping for all redis parameters including SSL
+    mapping = {f"{PREFIX}{x.upper()}": x for x in redis_kwargs}
+    
+    # Add additional SSL environment variable mappings for common variations
+    ssl_env_mappings = {
+        "REDIS_SSL_CERT_REQS": "ssl_cert_reqs",
+        "REDIS_SSL_CA_CERTS": "ssl_ca_certs", 
+        "REDIS_SSL_CERTFILE": "ssl_certfile",
+        "REDIS_SSL_KEYFILE": "ssl_keyfile",
+        "REDIS_SSL_CHECK_HOSTNAME": "ssl_check_hostname",
+        "REDIS_SSL_CA_CERT_DIR": "ssl_ca_cert_dir",
+        "REDIS_SSL_CIPHERS": "ssl_ciphers",
+        "REDIS_SSL_CRLFILE": "ssl_crlfile",
+    }
+    
+    mapping.update(ssl_env_mappings)
+    return mapping
 
 
 def _redis_kwargs_from_environment():
@@ -88,7 +111,16 @@ def _redis_kwargs_from_environment():
     for k, v in mapping.items():
         value = get_secret(k, default_value=None)  # type: ignore
         if value is not None:
-            return_dict[v] = value
+            # Handle boolean values for SSL parameters
+            if v in ["ssl", "ssl_check_hostname"] and isinstance(value, str):
+                if value.lower() in ["true", "1", "yes", "on"]:
+                    return_dict[v] = True
+                elif value.lower() in ["false", "0", "no", "off"]:
+                    return_dict[v] = False
+                else:
+                    return_dict[v] = value
+            else:
+                return_dict[v] = value
     return return_dict
 
 
@@ -213,15 +245,25 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
 
     verbose_logger.debug("init_redis_sentinel: sentinel nodes are being initialized.")
 
+    # Extract SSL parameters for Sentinel
+    sentinel_ssl_kwargs = {}
+    ssl_params = ["ssl", "ssl_cert_reqs", "ssl_ca_certs", "ssl_certfile", 
+                  "ssl_keyfile", "ssl_check_hostname", "ssl_ca_cert_dir", 
+                  "ssl_ciphers", "ssl_crlfile"]
+    
+    for param in ssl_params:
+        if param in redis_kwargs:
+            sentinel_ssl_kwargs[param] = redis_kwargs[param]
+
     # Set up the Sentinel client
     sentinel = redis.Sentinel(
         sentinel_nodes,
         socket_timeout=REDIS_SOCKET_TIMEOUT,
         password=sentinel_password,
+        **sentinel_ssl_kwargs
     )
 
     # Return the master instance for the given service
-
     return sentinel.master_for(service_name)
 
 
@@ -237,15 +279,25 @@ def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
 
     verbose_logger.debug("init_redis_sentinel: sentinel nodes are being initialized.")
 
+    # Extract SSL parameters for Sentinel
+    sentinel_ssl_kwargs = {}
+    ssl_params = ["ssl", "ssl_cert_reqs", "ssl_ca_certs", "ssl_certfile", 
+                  "ssl_keyfile", "ssl_check_hostname", "ssl_ca_cert_dir", 
+                  "ssl_ciphers", "ssl_crlfile"]
+    
+    for param in ssl_params:
+        if param in redis_kwargs:
+            sentinel_ssl_kwargs[param] = redis_kwargs[param]
+
     # Set up the Sentinel client
     sentinel = async_redis.Sentinel(
         sentinel_nodes,
         socket_timeout=REDIS_SOCKET_TIMEOUT,
         password=sentinel_password,
+        **sentinel_ssl_kwargs
     )
 
     # Return the master instance for the given service
-
     return sentinel.master_for(service_name)
 
 
@@ -322,12 +374,17 @@ def get_redis_connection_pool(**env_overrides):
         return async_redis.BlockingConnectionPool.from_url(
             timeout=REDIS_CONNECTION_POOL_TIMEOUT, url=redis_kwargs["url"]
         )
-    connection_class = async_redis.Connection
-    if "ssl" in redis_kwargs:
-        connection_class = async_redis.SSLConnection
-        redis_kwargs.pop("ssl", None)
-        redis_kwargs["connection_class"] = connection_class
+    
+    # Handle SSL connection setup
+    if redis_kwargs.get("ssl", False):
+        redis_kwargs["connection_class"] = async_redis.SSLConnection
+        verbose_logger.debug("Using SSL connection for Redis")
+    else:
+        redis_kwargs["connection_class"] = async_redis.Connection
+    
+    # Remove startup_nodes as it's not supported in connection pools
     redis_kwargs.pop("startup_nodes", None)
+    
     return async_redis.BlockingConnectionPool(
         timeout=REDIS_CONNECTION_POOL_TIMEOUT, **redis_kwargs
     )
