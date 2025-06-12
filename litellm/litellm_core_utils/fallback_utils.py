@@ -81,7 +81,7 @@ def completion_with_fallbacks(**kwargs):
 # ------------------------------
 
 
-async def async_transcription_with_fallbacks(model, file, **kwargs):
+async def async_transcription_with_fallbacks(model: str, file: FileTypes, **kwargs):
     """Asynchronously attempt transcription with fallback models if the primary fails.
 
     Parameters
@@ -141,6 +141,7 @@ async def async_transcription_with_fallbacks(model, file, **kwargs):
             response = await litellm.atranscription(
                 model=attempt_model,
                 file=file,
+                litellm_logging_obj=litellm_logging_obj,
                 **attempt_kwargs,
             )
 
