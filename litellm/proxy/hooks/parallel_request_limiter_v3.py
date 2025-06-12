@@ -88,6 +88,7 @@ class RateLimitStatus(TypedDict):
     current_limit: int
     limit_remaining: int
     rate_limit_type: Literal["requests", "tokens", "max_parallel_requests"]
+    descriptor_key: str
 
 
 class RateLimitResponse(TypedDict):
@@ -193,6 +194,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     "current_limit": current_limit,
                     "limit_remaining": limit_remaining,
                     "rate_limit_type": rate_limit_type,
+                    "descriptor_key": key_metadata[window_key]["descriptor_key"],
                 }
             )
 
@@ -259,6 +261,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 if max_parallel_requests_limit is not None
                 else None,
                 "window_size": int(window_size),
+                "descriptor_key": descriptor_key,
             }
 
         ## CHECK IN-MEMORY CACHE
@@ -655,7 +658,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
                     # Add rate limit headers
                     for status in litellm_proxy_rate_limit_response["statuses"]:
-                        prefix = "x-ratelimit"
+                        prefix = f"x-ratelimit-{status['descriptor_key']}"
                         _additional_headers[
                             f"{prefix}-remaining-{status['rate_limit_type']}"
                         ] = status["limit_remaining"]
