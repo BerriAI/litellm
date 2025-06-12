@@ -573,6 +573,12 @@ class AsyncHTTPHandler:
                     verify_ssl=ssl_verify,
                     ssl_context=ssl_context,
                     local_addr=("0.0.0.0", 0) if litellm.force_ipv4 else None,
+                    # Performance optimizations for connection pooling
+                    limit=1000,  # Maximum number of connections in the pool
+                    limit_per_host=100,  # Maximum number of connections per host
+                    keepalive_timeout=30,  # Keep connections alive for 30 seconds
+                    enable_cleanup_closed=True,  # Clean up closed connections
+                    ttl_dns_cache=600,  # Cache DNS for 10 minutes
                 )
             ),
         )
@@ -657,7 +663,7 @@ class HTTPHandler:
     @staticmethod
     def extract_query_params(url: str) -> Dict[str, str]:
         """
-        Parse a URL’s query-string into a dict.
+        Parse a URL's query-string into a dict.
 
         :param url: full URL, e.g. "https://.../path?foo=1&bar=2"
         :return: {"foo": "1", "bar": "2"}

@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import typing
+import weakref
 from typing import Callable, Dict, Union
 
 import aiohttp
@@ -130,58 +131,96 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         # Store the client factory for recreating sessions when needed
         if callable(client):
             self._client_factory = client
+        
+        # Performance optimization: Cache session validation to avoid expensive checks
+        self._session_validated = False
+        self._cached_loop_id = None
+        self._session_error_count = 0
+        self._max_session_errors = 3  # Recreate session after this many errors
 
     def _get_valid_client_session(self) -> ClientSession:
         """
-        Helper to get a valid ClientSession for the current event loop.
-
-        This handles the case where the session was created in a different
-        event loop that may have been closed (common in CI/CD environments).
+        Optimized helper to get a valid ClientSession for the current event loop.
+        
+        This version minimizes expensive operations and caches validation results
+        to improve performance.
         """
         from aiohttp.client import ClientSession
 
-        # If we don't have a client or it's not a ClientSession, create one
-        if not isinstance(self.client, ClientSession):
-            if hasattr(self, "_client_factory") and callable(self._client_factory):
-                self.client = self._client_factory()
-            else:
-                self.client = ClientSession()
+        # Fast path: If we have a valid session and it's been validated recently, use it
+        if (isinstance(self.client, ClientSession) and 
+            self._session_validated and 
+            self._session_error_count < self._max_session_errors):
+            try:
+                # Quick check: is the session still open?
+                if not self.client.closed:
+                    return self.client
+            except Exception:
+                # If any error occurs, fall through to recreation
+                pass
+
+        # Create or recreate session
+        self._create_new_session()
+        
+        # Ensure we always return a ClientSession
+        if isinstance(self.client, ClientSession):
+            return self.client
+        else:
+            # This should not happen after _create_new_session, but handle it safely
+            self.client = ClientSession()
             return self.client
 
-        # Check if the existing session is still valid for the current event loop
+    def _create_new_session(self) -> None:
+        """Create a new session and update validation cache."""
+        current_loop = None
+        current_loop_id = None
+        
         try:
-            session_loop = getattr(self.client, "_loop", None)
-            current_loop = asyncio.get_running_loop()
+            # Get current event loop ID for caching
+            try:
+                current_loop = asyncio.get_running_loop()
+                current_loop_id = id(current_loop)
+            except RuntimeError:
+                current_loop_id = None
 
-            # If session is from a different or closed loop, recreate it
-            if (
-                session_loop is None
-                or session_loop != current_loop
-                or session_loop.is_closed()
-            ):
-                # Clean up the old session
+            # Close existing session if it exists and is different loop
+            if (isinstance(self.client, ClientSession) and 
+                not self.client.closed and 
+                self._cached_loop_id != current_loop_id):
                 try:
-                    # Note: not awaiting close() here as it might be from a different loop
-                    # The session will be garbage collected
-                    pass
+                    # Schedule closure without waiting since it might be from different loop
+                    if current_loop and hasattr(self.client, '_loop') and self.client._loop != current_loop:
+                        # Don't await close() if it's from a different loop
+                        pass
+                    else:
+                        # Same loop, can close properly
+                        asyncio.create_task(self.client.close())
                 except Exception as e:
                     verbose_logger.debug(f"Error closing old session: {e}")
-                    pass
 
-                # Create a new session in the current event loop
-                if hasattr(self, "_client_factory") and callable(self._client_factory):
-                    self.client = self._client_factory()
-                else:
-                    self.client = ClientSession()
-
-        except (RuntimeError, AttributeError):
-            # If we can't check the loop or session is invalid, recreate it
+            # Create new session
             if hasattr(self, "_client_factory") and callable(self._client_factory):
                 self.client = self._client_factory()
             else:
                 self.client = ClientSession()
 
-        return self.client
+            # Update cache
+            self._session_validated = True
+            self._cached_loop_id = current_loop_id
+            self._session_error_count = 0
+
+        except Exception as e:
+            verbose_logger.debug(f"Error creating new session: {e}")
+            # Fallback: create basic session
+            self.client = ClientSession()
+            self._session_validated = True
+            self._session_error_count = 0
+
+    def _handle_session_error(self) -> None:
+        """Handle session errors by incrementing error count and invalidating cache."""
+        self._session_error_count += 1
+        if self._session_error_count >= self._max_session_errors:
+            self._session_validated = False
 
     async def handle_async_request(
         self,
@@ -193,34 +232,39 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         timeout = request.extensions.get("timeout", {})
         sni_hostname = request.extensions.get("sni_hostname")
 
-        # Use helper to ensure we have a valid session for the current event loop
+        # Use optimized helper to get session (minimal overhead)
         client_session = self._get_valid_client_session()
 
-        with map_aiohttp_exceptions():
-            try:
-                data = request.content
-            except httpx.RequestNotRead:
-                data = request.stream  # type: ignore
-                request.headers.pop("transfer-encoding", None)  # handled by aiohttp
+        try:
+            with map_aiohttp_exceptions():
+                try:
+                    data = request.content
+                except httpx.RequestNotRead:
+                    data = request.stream  # type: ignore
+                    request.headers.pop("transfer-encoding", None)  # handled by aiohttp
 
-            response = await client_session.request(
-                method=request.method,
-                url=YarlURL(str(request.url), encoded=True),
-                headers=request.headers,
-                data=data,
-                allow_redirects=False,
-                auto_decompress=False,
-                timeout=ClientTimeout(
-                    sock_connect=timeout.get("connect"),
-                    sock_read=timeout.get("read"),
-                    connect=timeout.get("pool"),
-                ),
-                server_hostname=sni_hostname,
-            ).__aenter__()
+                response = await client_session.request(
+                    method=request.method,
+                    url=YarlURL(str(request.url), encoded=True),
+                    headers=request.headers,
+                    data=data,
+                    allow_redirects=False,
+                    auto_decompress=False,
+                    timeout=ClientTimeout(
+                        sock_connect=timeout.get("connect"),
+                        sock_read=timeout.get("read"),
+                        connect=timeout.get("pool"),
+                    ),
+                    server_hostname=sni_hostname,
+                ).__aenter__()
 
-        return httpx.Response(
-            status_code=response.status,
-            headers=response.headers,
-            content=AiohttpResponseStream(response),
-            request=request,
-        )
+            return httpx.Response(
+                status_code=response.status,
+                headers=response.headers,
+                content=AiohttpResponseStream(response),
+                request=request,
+            )
+        except Exception as e:
+            # Handle session errors
+            self._handle_session_error()
+            raise
