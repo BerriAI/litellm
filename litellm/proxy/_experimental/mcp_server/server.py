@@ -141,7 +141,7 @@ if MCP_AVAILABLE:
 
     async def shutdown_session_managers():
         """Shutdown the session managers."""
-        global _SESSION_MANAGERS_INITIALIZED, _session_manager_task
+        global _SESSION_MANAGERS_INITIALIZED, _SESSION_MANAGER_TASK
 
         if _SESSION_MANAGER_TASK and not _SESSION_MANAGER_TASK.done():
             verbose_logger.info("Shutting down MCP session managers...")
@@ -301,11 +301,6 @@ if MCP_AVAILABLE:
             return [MCPTextContent(text=str(result), type="text")]
         except Exception as e:
             return [MCPTextContent(text=f"Error: {str(e)}", type="text")]
-
-    @router.get("/health")
-    async def health_check(request: Request) -> JSONResponse:
-        """Health check endpoint."""
-        return JSONResponse({"status": "healthy", "message": "MCP Server is running"})
 
     async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
