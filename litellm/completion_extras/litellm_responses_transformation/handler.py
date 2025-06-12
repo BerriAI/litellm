@@ -164,6 +164,8 @@ class ResponsesToCompletionBridgeHandler:
         result = await aresponses(
             **request_data,
             aresponses=True,
+            api_base=litellm_params["api_base"],
+            api_key=litellm_params["api_key"],
         )
 
         if isinstance(result, ResponsesAPIResponse):
