@@ -252,18 +252,25 @@ Then provide a clear, concise answer based on your reasoning."""
                     existing_content = msg.get("content", "")
                     reasoning_prompt = self._get_mistral_reasoning_system_prompt()
                     
-                    # Handle both string and list content
+                    # Handle both string and list content - convert everything to string
+                    # since Mistral API expects string content
                     if isinstance(existing_content, str):
                         # String content - prepend reasoning prompt
-                        new_content = f"{reasoning_prompt}\n\n{existing_content}"
+                        content_str = existing_content
                     elif isinstance(existing_content, list):
-                        # List content - prepend reasoning prompt as text block
-                        new_content = [
-                            {"type": "text", "text": reasoning_prompt + "\n\n"}
-                        ] + existing_content
+                        # List content - convert to string first
+                        content_str = ""
+                        for item in existing_content:
+                            if isinstance(item, dict) and item.get("type") == "text":
+                                content_str += item.get("text", "")
+                            else:
+                                content_str += str(item)
                     else:
                         # Fallback for any other type - convert to string
-                        new_content = f"{reasoning_prompt}\n\n{str(existing_content)}"
+                        content_str = str(existing_content)
+                    
+                    # Create the final content with reasoning prompt
+                    new_content = f"{reasoning_prompt}\n\n{content_str}"
                     
                     messages[i] = cast(AllMessageValues, {
                         **msg,

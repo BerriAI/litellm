@@ -163,18 +163,17 @@ class TestMistralReasoningSupport:
         
         result = mistral_config._add_reasoning_system_prompt_if_needed(messages, optional_params)
         
-        # Should modify existing system message with list content
+        # Should modify existing system message with list content converted to string
         assert len(result) == 2
         assert result[0]["role"] == "system"
-        assert isinstance(result[0]["content"], list)
+        assert isinstance(result[0]["content"], str)
         
-        # First item should be the reasoning prompt
-        assert result[0]["content"][0]["type"] == "text"
-        assert "<think>" in result[0]["content"][0]["text"]
+        # Should contain the reasoning prompt
+        assert "<think>" in result[0]["content"]
         
-        # Original content should be preserved
-        assert "You are a helpful assistant." in result[0]["content"][1]["text"]
-        assert "You always provide detailed explanations." in result[0]["content"][2]["text"]
+        # Original content should be preserved (converted from list to string)
+        assert "You are a helpful assistant." in result[0]["content"]
+        assert "You always provide detailed explanations." in result[0]["content"]
         
         assert result[1]["role"] == "user"
         
