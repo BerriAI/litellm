@@ -286,7 +286,8 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles,
 
   return (
     <Card>
-      <div className="flex justify-end items-center mb-4">
+      <div className="flex justify-between items-center mb-4">
+        <Title>Default User Settings</Title>
         {!loading && settings && (
           isEditing ? (
             <div className="flex gap-2">
