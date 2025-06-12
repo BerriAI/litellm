@@ -31,6 +31,7 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles,
 
       try {
         const data = await getInternalUserSettings(accessToken);
+        console.log("SSO settings:", data);
         setSettings(data);
         setEditedValues(data.values || {});
         
@@ -253,13 +254,13 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles,
 
   // Dynamically render settings based on the schema
   const renderSettings = () => {
-    const { values, schema } = settings;
+    const { values, field_schema } = settings;
     
-    if (!schema || !schema.properties) {
+    if (!field_schema || !field_schema.properties) {
       return <Text>No schema information available</Text>;
     }
 
-    return Object.entries(schema.properties).map(([key, property]: [string, any]) => {
+    return Object.entries(field_schema.properties).map(([key, property]: [string, any]) => {
       const value = values[key];
       const displayName = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
       
@@ -317,8 +318,8 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles,
         )}
       </div>
       
-      {settings?.schema?.description && (
-        <Paragraph className="mb-4">{settings.schema.description}</Paragraph>
+      {settings?.field_schema?.description && (
+        <Paragraph className="mb-4">{settings.field_schema.description}</Paragraph>
       )}
       <Divider />
       
