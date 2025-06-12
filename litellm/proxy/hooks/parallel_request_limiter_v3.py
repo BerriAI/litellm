@@ -630,6 +630,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 Optional[RateLimitResponseWithDescriptors],
                 data.get("litellm_proxy_rate_limit_response", None),
             )
+
             if litellm_proxy_rate_limit_response is not None:
                 rate_limit_response = litellm_proxy_rate_limit_response["response"]
                 descriptors = litellm_proxy_rate_limit_response["descriptors"]
