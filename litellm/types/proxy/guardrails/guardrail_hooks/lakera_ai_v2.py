@@ -6,6 +6,7 @@ from litellm.types.llms.openai import AllMessageValues
 class LakeraAIRequest(TypedDict, total=False):
     messages: List[AllMessageValues]
     project_id: Optional[str]
+    policy_id: Optional[str]
     payload: Optional[bool]
     breakdown: Optional[bool]
     metadata: Optional[Dict]

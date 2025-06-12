@@ -65,9 +65,25 @@ class LakeraAIGuardrail(CustomGuardrail):
         self,
         messages: List[AllMessageValues],
         request_data: Dict,
+        dynamic_project_id: Optional[str] = None,
+        dynamic_payload: Optional[bool] = None,
+        dynamic_breakdown: Optional[bool] = None,
+        dynamic_metadata: Optional[Dict] = None,
+        dynamic_dev_info: Optional[bool] = None,
+        dynamic_policy_id: Optional[str] = None,
     ) -> Tuple[LakeraAIResponse, Dict]:
         """
         Call the Lakera AI v2 guard API.
+        
+        Args:
+            messages: List of messages to check
+            request_data: The request data for logging
+            dynamic_project_id: Override project_id for this request
+            dynamic_payload: Override payload setting for this request
+            dynamic_breakdown: Override breakdown setting for this request
+            dynamic_metadata: Override metadata for this request
+            dynamic_dev_info: Override dev_info setting for this request
+            dynamic_policy_id: Policy ID for this request
         """
         status: Literal["success", "failure"] = "success"
         exception_str: str = ""
@@ -76,16 +92,31 @@ class LakeraAIGuardrail(CustomGuardrail):
         request: Dict = {}
         masked_entity_count: Dict = {}
         try:
-            request = dict(
-                LakeraAIRequest(
-                    messages=messages,
-                    project_id=self.project_id,
-                    payload=self.payload,
-                    breakdown=self.breakdown,
-                    metadata=self.metadata,
-                    dev_info=self.dev_info,
-                )
-            )
+            # Use dynamic parameters if provided, otherwise fall back to initialized values
+            project_id = dynamic_project_id if dynamic_project_id is not None else self.project_id
+            payload = dynamic_payload if dynamic_payload is not None else self.payload
+            breakdown = dynamic_breakdown if dynamic_breakdown is not None else self.breakdown
+            metadata = dynamic_metadata if dynamic_metadata is not None else self.metadata
+            dev_info = dynamic_dev_info if dynamic_dev_info is not None else self.dev_info
+            
+            # Build the request
+            request_params = {
+                "messages": messages,
+                "payload": payload,
+                "breakdown": breakdown,
+                "metadata": metadata,
+                "dev_info": dev_info,
+            }
+            
+            # Add project_id if provided
+            if project_id is not None:
+                request_params["project_id"] = project_id
+                
+            # Add policy_id if provided (dynamic only parameter)
+            if dynamic_policy_id is not None:
+                request_params["policy_id"] = dynamic_policy_id
+            
+            request = dict(LakeraAIRequest(**request_params))
             verbose_proxy_logger.debug("Lakera AI v2 guard request: %s", request)
             response = await self.async_handler.post(
                 url=f"{self.api_base}/v2/guard",
@@ -111,7 +142,7 @@ class LakeraAIGuardrail(CustomGuardrail):
                     dict(copy.deepcopy(lakera_response)) if lakera_response else {}
                 )
                 # payload contains PII, we don't want to log it
-                copy_lakera_response_dict.pop("payload")
+                copy_lakera_response_dict.pop("payload", None)
                 guardrail_json_response = copy_lakera_response_dict
             else:
                 guardrail_json_response = exception_str
@@ -215,9 +246,13 @@ class LakeraAIGuardrail(CustomGuardrail):
         #########################################################
         ########## 1. Make the Lakera AI v2 guard API request ##########
         #########################################################
+        # Extract dynamic parameters from request data
+        dynamic_params = self._extract_dynamic_params(data)
+        
         lakera_guardrail_response, masked_entity_count = await self.call_v2_guard(
             messages=new_messages,
             request_data=data,
+            **dynamic_params,
         )
 
         #########################################################
@@ -281,9 +316,13 @@ class LakeraAIGuardrail(CustomGuardrail):
         #########################################################
         ########## 1. Make the Lakera AI v2 guard API request ##########
         #########################################################
+        # Extract dynamic parameters from request data
+        dynamic_params = self._extract_dynamic_params(data)
+        
         lakera_guardrail_response, masked_entity_count = await self.call_v2_guard(
             messages=new_messages,
             request_data=data,
+            **dynamic_params,
         )
 
         #########################################################
@@ -330,3 +369,59 @@ class LakeraAIGuardrail(CustomGuardrail):
             if not detector_type.startswith("pii/"):
                 return False
         return True
+
+    def _extract_dynamic_params(self, data: Dict) -> Dict:
+        """
+        Extract dynamic Lakera parameters from request data.
+        
+        Supports extracting parameters from:
+        1. Direct lakera_* parameters in the request
+        2. Model-specific lakera configuration
+        3. litellm_params.lakera_* parameters
+        
+        Returns a dict with dynamic parameter values.
+        """
+        dynamic_params = {}
+        
+        # Extract from direct lakera_* parameters
+        lakera_param_mapping = {
+            "lakera_project_id": "dynamic_project_id",
+            "lakera_policy_id": "dynamic_policy_id", 
+            "lakera_payload": "dynamic_payload",
+            "lakera_breakdown": "dynamic_breakdown",
+            "lakera_metadata": "dynamic_metadata",
+            "lakera_dev_info": "dynamic_dev_info",
+        }
+        
+        for param_key, dynamic_key in lakera_param_mapping.items():
+            if param_key in data:
+                dynamic_params[dynamic_key] = data[param_key]
+        
+        # Extract from litellm_params if present
+        litellm_params = data.get("litellm_params", {})
+        if isinstance(litellm_params, dict):
+            for param_key, dynamic_key in lakera_param_mapping.items():
+                if param_key in litellm_params:
+                    dynamic_params[dynamic_key] = litellm_params[param_key]
+        
+        # Extract from model-specific lakera configuration
+        # This supports configurations like model configs with lakera settings
+        model_info = data.get("model_info", {})
+        if isinstance(model_info, dict):
+            lakera_config = model_info.get("lakera", {})
+            if isinstance(lakera_config, dict):
+                if "project_id" in lakera_config:
+                    dynamic_params["dynamic_project_id"] = lakera_config["project_id"]
+                if "policy_id" in lakera_config:
+                    dynamic_params["dynamic_policy_id"] = lakera_config["policy_id"]
+                if "payload" in lakera_config:
+                    dynamic_params["dynamic_payload"] = lakera_config["payload"]
+                if "breakdown" in lakera_config:
+                    dynamic_params["dynamic_breakdown"] = lakera_config["breakdown"]
+                if "metadata" in lakera_config:
+                    dynamic_params["dynamic_metadata"] = lakera_config["metadata"]
+                if "dev_info" in lakera_config:
+                    dynamic_params["dynamic_dev_info"] = lakera_config["dev_info"]
+        
+        verbose_proxy_logger.debug("Extracted dynamic Lakera params: %s", dynamic_params)
+        return dynamic_params
