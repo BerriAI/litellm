@@ -1412,7 +1412,6 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "user_id": user_id,
             "user_alias": user_alias,
             "team_id": team_id,
-            "team_member_details": team_member_details,
             "organization_id": organization_id,
             "user_role": user_role,
             "spend": spend,

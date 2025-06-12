@@ -218,6 +218,8 @@ async def new_user(
                 )
             )
 
+            response["team_member_details"] = data_json["team_member_details"]
+
             verbose_proxy_logger.debug(
                 "Team Member Role {}".format(str(data_json["team_member_details"]["team_member_role"]))
             )
