@@ -4,7 +4,6 @@ This is a rate limiter implementation based on a similar one by Envoy proxy.
 This is currently in development and not yet ready for production.
 """
 import os
-import sys
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
@@ -20,7 +19,6 @@ from typing import (
 
 from fastapi import HTTPException
 
-import litellm
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger

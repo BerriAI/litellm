@@ -1,10 +1,8 @@
-import os
 from typing import Literal, Union
 
 from . import *
 from .cache_control_check import _PROXY_CacheControlCheck
 from .max_budget_limiter import _PROXY_MaxBudgetLimiter
-from .parallel_request_limiter import _PROXY_MaxParallelRequestsHandler
 from .parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
 
 ### CHECK IF ENTERPRISE HOOKS ARE AVAILABLE ###
