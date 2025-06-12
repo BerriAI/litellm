@@ -795,7 +795,7 @@ class Delta(OpenAIObject):
 class Choices(OpenAIObject):
     finish_reason: Optional[str] = None
     index: Optional[int] = None
-    message: Optional[Message] = None
+    message: Message
     logprobs: Optional[ChoiceLogprobs] = None
 
     provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
