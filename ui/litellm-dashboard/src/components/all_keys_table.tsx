@@ -295,11 +295,14 @@ export function AllKeysTable({
       header: "User ID",
       cell: (info) => {
         const userId = info.getValue() as string;
-        return userId ? (
-          <Tooltip title={userId}>
-            <span>{userId.slice(0, 7)}...</span>
-          </Tooltip>
-        ) : "-";
+        if (userId.length > 15) {
+          return (
+            <Tooltip title={userId}>
+              <span>{userId.slice(0, 7)}...</span>
+            </Tooltip>
+          );
+        }
+        return userId ? userId : "-";
       },
     },
     {
@@ -316,8 +319,15 @@ export function AllKeysTable({
       accessorKey: "created_by",
       header: "Created By",
       cell: (info) => {
-        const value = info.getValue();
-        return value ? value : "Unknown";
+        const value = info.getValue() as string;
+        if (value.length > 15) {
+          return (
+            <Tooltip title={value}>
+              <span>{value.slice(0, 7)}...</span>
+            </Tooltip>
+          );
+        }
+        return value;
       },
     },
     {
