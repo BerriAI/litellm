@@ -412,7 +412,6 @@ if MCP_AVAILABLE:
         title="LiteLLM MCP Server",
         description="MCP Server for LiteLLM",
         version="1.0.0",
-        debug=True,
         lifespan=lifespan,
     )
 
@@ -422,10 +421,3 @@ if MCP_AVAILABLE:
     # Mount the MCP handlers
     app.mount("/", handle_streamable_http_mcp)
     app.mount("/sse", handle_sse_mcp)
-
-    if __name__ == "__main__":
-        # Configure logging
-        import uvicorn
-
-        # Run the server
-        uvicorn.run(app, host="0.0.0.0", port=3000, log_level="info")
