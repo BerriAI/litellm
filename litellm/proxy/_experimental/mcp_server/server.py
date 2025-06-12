@@ -13,6 +13,7 @@ from starlette.types import Receive, Scope, Send
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_TOOL_NAME_PREFIX
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.proxy._experimental.mcp_server.auth import user_api_key_auth_mcp
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
@@ -165,16 +166,36 @@ if MCP_AVAILABLE:
     ########################################################
     ############### MCP Server Routes #######################
     ########################################################
+
+    def _get_user_auth_from_mcp_context() -> Optional[UserAPIKeyAuth]:
+        """
+        Extract user authentication info from MCP server context
+        """
+        try:
+            request_context = server.request_context
+            scope = request_context.lifespan_context.scope
+            return scope.get("user_api_key_auth")
+        except Exception as e:
+            verbose_logger.debug(f"Could not extract user auth from MCP context: {e}")
+            return None
+
     @server.list_tools()
     async def list_tools() -> list[MCPTool]:
         """
         List all available tools
         """
-        return await _list_mcp_tools()
+        user_api_key_auth = _get_user_auth_from_mcp_context()
+        verbose_logger.debug(f"MCP list_tools - User API Key Auth: {user_api_key_auth}")
+        return await _list_mcp_tools(user_api_key_auth)
 
-    async def _list_mcp_tools() -> List[MCPTool]:
+    async def _list_mcp_tools(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ) -> List[MCPTool]:
         """
         List all available tools
+
+        Args:
+            user_api_key_auth: User authentication info for access control
         """
         tools = []
         for tool in global_mcp_tool_registry.list_tools():
@@ -306,6 +327,12 @@ if MCP_AVAILABLE:
     ) -> None:
         """Handle MCP requests through StreamableHTTP."""
         try:
+            # Validate headers and log request info
+            user_api_key_auth: UserAPIKeyAuth = await user_api_key_auth_mcp(scope)
+
+            # Store auth info in scope for MCP server functions to access
+            scope["user_api_key_auth"] = user_api_key_auth
+
             # Ensure session managers are initialized
             if not _SESSION_MANAGERS_INITIALIZED:
                 await initialize_session_managers()
@@ -320,6 +347,12 @@ if MCP_AVAILABLE:
     async def handle_sse_mcp(scope: Scope, receive: Receive, send: Send) -> None:
         """Handle MCP requests through SSE."""
         try:
+            # Validate headers and log request info
+            user_api_key_auth: UserAPIKeyAuth = await user_api_key_auth_mcp(scope)
+
+            # Store auth info in scope for MCP server functions to access
+            scope["user_api_key_auth"] = user_api_key_auth
+
             # Ensure session managers are initialized
             if not _SESSION_MANAGERS_INITIALIZED:
                 await initialize_session_managers()
