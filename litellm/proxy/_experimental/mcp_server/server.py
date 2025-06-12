@@ -151,8 +151,8 @@ if MCP_AVAILABLE:
             except asyncio.CancelledError:
                 pass
 
-        _session_managers_initialized = False
-        _session_manager_task = None
+        _SESSION_MANAGERS_INITIALIZED = False
+        _SESSION_MANAGER_TASK = None
 
     @contextlib.asynccontextmanager
     async def lifespan(app) -> AsyncIterator[None]:
