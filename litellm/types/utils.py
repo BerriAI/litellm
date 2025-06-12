@@ -793,8 +793,8 @@ class Delta(OpenAIObject):
 
 
 class Choices(OpenAIObject):
-    finish_reason: Optional[str] = None
-    index: Optional[int] = None
+    finish_reason: str
+    index: int
     message: Message
     logprobs: Optional[ChoiceLogprobs] = None
 
