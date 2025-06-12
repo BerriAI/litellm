@@ -41,13 +41,6 @@ docker run
 ghcr.io/berriai/litellm:main-v1.72.2-stable
 ```
 </TabItem>
-
-<TabItem value="pip" label="Pip">
-
-``` showLineNumbers title="pip install litellm"
-pip install litellm==1.72.2
-```
-</TabItem>
 </Tabs>
 
 ## TLDR
