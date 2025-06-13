@@ -93,7 +93,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     {
                         "type": "message",
                         "role": role,
-                        "content": self._convert_content_to_responses_format(content),
+                        "content": self._convert_content_to_responses_format(content, role),
                     }
                 )
 
@@ -287,14 +287,20 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 Union["OpenAIMessageContentListBlock", "ChatCompletionThinkingBlock"]
             ],
         ],
+        role: str
     ) -> List[Dict[str, Any]]:
         """Convert chat completion content to responses API format"""
         verbose_logger.debug(
             f"Chat provider: Converting content to responses format - input type: {type(content)}"
         )
 
+        text_type = "input_text"
+        image_type = "input_image"
+        if role == "assistant":
+            text_type = "output_text"
+
         if isinstance(content, str):
-            result = [{"type": "input_text", "text": content}]
+            result = [{"type": text_type, "text": content}]
             verbose_logger.debug(f"Chat provider: String content -> {result}")
             return result
         elif isinstance(content, list):
@@ -304,20 +310,20 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     f"Chat provider: Processing content item {i}: {type(item)} = {item}"
                 )
                 if isinstance(item, str):
-                    converted = {"type": "input_text", "text": item}
+                    converted = {"type": text_type, "text": item}
                     result.append(converted)
                     verbose_logger.debug(f"Chat provider:   -> {converted}")
                 elif isinstance(item, dict):
                     # Handle multimodal content
                     original_type = item.get("type")
                     if original_type == "text":
-                        converted = {"type": "input_text", "text": item.get("text", "")}
+                        converted = {"type": text_type, "text": item.get("text", "")}
                         result.append(converted)
                         verbose_logger.debug(f"Chat provider:   text -> {converted}")
                     elif original_type == "image_url":
                         # Map to responses API image format
                         converted = {
-                            "type": "input_image",
+                            "type": image_type,
                             "image_url": item.get("image_url", {}),
                         }
                         result.append(converted)
@@ -328,7 +334,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         # Try to map other types to responses API format
                         item_type = original_type or "input_text"
                         if item_type == "image":
-                            converted = {"type": "input_image", **item}
+                            converted = {"type": image_type, **item}
                             result.append(converted)
                             verbose_logger.debug(
                                 f"Chat provider:   image -> {converted}"
@@ -350,7 +356,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         else:
                             # Default to input_text for unknown types
                             converted = {
-                                "type": "input_text",
+                                "type": text_type,
                                 "text": str(item.get("text", item)),
                             }
                             result.append(converted)
@@ -360,7 +366,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             verbose_logger.debug(f"Chat provider: Final converted content: {result}")
             return result
         else:
-            result = [{"type": "input_text", "text": str(content)}]
+            result = [{"type": text_type, "text": str(content)}]
             verbose_logger.debug(f"Chat provider: Other content type -> {result}")
             return result
 
