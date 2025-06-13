@@ -13,9 +13,6 @@ from starlette.types import Receive, Scope, Send
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_TOOL_NAME_PREFIX
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
-    LiteLLMAuthenticatedUser,
-)
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     UserAPIKeyAuthMCP,
 )
@@ -58,6 +55,9 @@ if MCP_AVAILABLE:
     from mcp.types import TextContent as MCPTextContent
     from mcp.types import Tool as MCPTool
 
+    from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
+        LiteLLMAuthenticatedUser,
+    )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
