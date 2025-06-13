@@ -35,6 +35,9 @@ ghcr.io/berriai/litellm:main-v1.72.2-stable
 
 <TabItem value="pip" label="Pip">
 
+``` showLineNumbers title="pip install litellm"
+pip install litellm==1.72.2.post1
+```
 
 </TabItem>
 </Tabs>
@@ -87,7 +90,7 @@ This is a significant improvement over the previous version, which faced issues 
 - LiteLLM now uses Lua scripts to ensure all checks are atomic.
 - In-memory caching uses Redis values. This prevents drift, and reduces Redis queries once objects are over their limit.
 
-These changes are currently behind the feature flag - `ENABLE_MULTI_INSTANCE_RATE_LIMITING=True`. We plan to GA this in our next release - subject to feedback.
+These changes are currently behind the feature flag - `EXPERIMENTAL_ENABLE_MULTI_INSTANCE_RATE_LIMITING=True`. We plan to GA this in our next release - subject to feedback.
 
 ## Audit Logs on UI
 
