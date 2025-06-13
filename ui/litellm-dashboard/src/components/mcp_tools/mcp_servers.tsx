@@ -5,7 +5,9 @@ import {
   Modal,
   Tooltip,
   message,
+  Tabs,
 } from "antd";
+import { LinkIcon } from "lucide-react";
 
 import {
   Grid,
@@ -28,6 +30,7 @@ import {
 import { isAdminRole } from "@/utils/roles";
 import { MCPServerView } from "./mcp_server_view";
 import CreateMCPServer from "./create_mcp_server";
+import MCPConnect from "./mcp_connect";
 
 interface DeleteModalProps {
   isModalOpen: boolean;
@@ -89,6 +92,7 @@ const MCPServers: React.FC<MCPServerProps> = ({
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
   const [editServer, setEditServer] = useState(false);
+  const [activeTab, setActiveTab] = useState<string>("servers");
 
   const columns = React.useMemo(
     () =>
@@ -136,6 +140,8 @@ const MCPServers: React.FC<MCPServerProps> = ({
     setServerToDelete(null);
   };
 
+
+
   if (!accessToken || !userRole || !userID) {
     return (
       <div className="p-6 text-center text-gray-500">
@@ -144,9 +150,11 @@ const MCPServers: React.FC<MCPServerProps> = ({
     );
   }
 
-  return (
-    <div className="w-full mx-4 h-[75vh]">
-      {selectedServerId ? (
+  const tabItems = [
+    {
+      key: "servers",
+      label: "Servers",
+      children: selectedServerId ? (
         <MCPServerView
           mcpServer={
             mcpServers.find(
@@ -189,7 +197,28 @@ const MCPServers: React.FC<MCPServerProps> = ({
             cancelDelete={cancelDelete}
           />
         </div>
-      )}
+      ),
+    },
+    {
+      key: "connect",
+      label: (
+        <span className="flex items-center gap-2">
+          <LinkIcon size={16} />
+          Connect
+        </span>
+      ),
+      children: <MCPConnect />,
+    },
+  ];
+
+  return (
+    <div className="w-full mx-4 h-[75vh]">
+      <Tabs
+        activeKey={activeTab}
+        onChange={setActiveTab}
+        items={tabItems}
+        className="h-full"
+      />
     </div>
   );
 };
