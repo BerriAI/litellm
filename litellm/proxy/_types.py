@@ -591,6 +591,42 @@ class ProxyChatCompletionRequest(LiteLLMPydanticObjectBase):
     )  # allow params not defined here, these fall in litellm.completion(**kwargs)
 
 
+class ProxyTextCompletionRequest(LiteLLMPydanticObjectBase):
+    model: str
+    prompt: str
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
+    n: Optional[int] = None
+    stream: Optional[bool] = None
+    stop: Optional[Union[str, List[str]]] = None
+    max_tokens: Optional[int] = None
+    presence_penalty: Optional[float] = None
+    frequency_penalty: Optional[float] = None
+    logit_bias: Optional[Dict[str, float]] = None
+    user: Optional[str] = None
+    seed: Optional[int] = None
+    best_of: Optional[int] = None
+    echo: Optional[bool] = None
+    logprobs: Optional[int] = None
+    suffix: Optional[str] = None
+
+    # Optional LiteLLM params
+    caching: Optional[bool] = None
+    api_base: Optional[str] = None
+    api_version: Optional[str] = None
+    api_key: Optional[str] = None
+    num_retries: Optional[int] = None
+    context_window_fallback_dict: Optional[Dict[str, str]] = None
+    fallbacks: Optional[List[str]] = None
+    metadata: Optional[Dict[str, str]] = {}
+    deployment_id: Optional[str] = None
+    request_timeout: Optional[int] = None
+
+    model_config = ConfigDict(
+        extra="allow"
+    )  # allow params not defined here, these fall in litellm.completion(**kwargs)
+
+
 class ModelInfoDelete(LiteLLMPydanticObjectBase):
     id: str
 
