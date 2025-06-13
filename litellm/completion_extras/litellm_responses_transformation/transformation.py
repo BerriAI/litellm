@@ -163,6 +163,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         api_model = model
 
+        from litellm.types.utils import CallTypes
+
+        setattr(litellm_logging_obj, "call_type", CallTypes.responses.value)
+
         request_data = {
             "model": api_model,
             "input": input_items,
