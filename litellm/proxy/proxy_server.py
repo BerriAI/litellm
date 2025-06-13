@@ -2779,7 +2779,7 @@ class ProxyConfig:
         """
         await self._init_guardrails_in_db(prisma_client=prisma_client)
         await self._init_vector_stores_in_db(prisma_client=prisma_client)
-        # await self._init_mcp_servers_in_db()
+        await self._init_mcp_servers_in_db()
 
     async def _init_guardrails_in_db(self, prisma_client: PrismaClient):
         from litellm.proxy.guardrails.guardrail_registry import (

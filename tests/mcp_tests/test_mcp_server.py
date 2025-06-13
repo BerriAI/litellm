@@ -329,8 +329,16 @@ async def test_streamable_http_mcp_handler_mock():
     mock_session_manager = AsyncMock()
     mock_session_manager.handle_request = AsyncMock()
     
-    # Mock scope, receive, send
-    mock_scope = {"type": "http", "method": "POST", "path": "/mcp"}
+    # Mock scope, receive, send with proper ASGI scope format
+    mock_scope = {
+        "type": "http",
+        "method": "POST", 
+        "path": "/mcp",
+        "headers": [(b"content-type", b"application/json")],
+        "query_string": b"",
+        "server": ("localhost", 8000),
+        "scheme": "http"
+    }
     mock_receive = AsyncMock()
     mock_send = AsyncMock()
     
@@ -356,8 +364,16 @@ async def test_sse_mcp_handler_mock():
     mock_sse_session_manager = AsyncMock()
     mock_sse_session_manager.handle_request = AsyncMock()
     
-    # Mock scope, receive, send
-    mock_scope = {"type": "http", "method": "GET", "path": "/mcp/sse"}
+    # Mock scope, receive, send with proper ASGI scope format
+    mock_scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/mcp/sse",
+        "headers": [(b"accept", b"text/event-stream")],
+        "query_string": b"",
+        "server": ("localhost", 8000),
+        "scheme": "http"
+    }
     mock_receive = AsyncMock()
     mock_send = AsyncMock()
     
