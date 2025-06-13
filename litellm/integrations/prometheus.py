@@ -558,10 +558,6 @@ class PrometheusLogger(CustomLogger):
             enum_values=enum_values,
         )
 
-        self.litellm_proxy_total_requests_metric.labels(**_labels).inc(
-            standard_logging_payload["total_tokens"]
-        )
-
         _labels = prometheus_label_factory(
             supported_enum_labels=PrometheusMetricLabels.get_labels(
                 label_name="litellm_total_tokens_metric"
@@ -649,7 +645,17 @@ class PrometheusLogger(CustomLogger):
             ),
             enum_values=enum_values,
         )
+
         self.litellm_requests_metric.labels(**_labels).inc()
+
+        _labels = prometheus_label_factory(
+            supported_enum_labels=PrometheusMetricLabels.get_labels(
+                label_name="litellm_proxy_total_requests_metric"
+            ),
+            enum_values=enum_values,
+        )
+
+        self.litellm_proxy_total_requests_metric.labels(**_labels).inc()
 
         self.litellm_spend_metric.labels(
             end_user_id,
