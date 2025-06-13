@@ -165,6 +165,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         request_data = {
             "model": api_model,
             "input": input_items,
+            **litellm_params,
         }
 
         verbose_logger.debug(
@@ -257,6 +258,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 raise ValueError(f"Unknown item type: {item}")
 
         setattr(model_response, "choices", choices)
+
+        model_response.model = model
 
         setattr(
             model_response,
