@@ -67,6 +67,16 @@ const Sidebar: React.FC<SidebarProps> = ({
     { key: "16", page: "model-hub", label: "Model Hub", icon: <AppstoreOutlined /> },
     { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined />},
     { key: "11", page: "guardrails", label: "Guardrails", icon: <SafetyOutlined />, roles: all_admin_roles },
+    {
+      key: "llm-tools",
+      page: "llm-tools",
+      label: "LLM Tools",
+      icon: <ToolOutlined />,
+      roles: all_admin_roles,
+      children: [
+        { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined />, roles: all_admin_roles },
+      ]
+    },
     { 
       key: "experimental", 
       page: "experimental",
@@ -76,7 +86,6 @@ const Sidebar: React.FC<SidebarProps> = ({
         { key: "9", page: "caching", label: "Caching", icon: <DatabaseOutlined />, roles: all_admin_roles },
         { key: "10", page: "budgets", label: "Budgets", icon: <BankOutlined />, roles: all_admin_roles },
         { key: "20", page: "transform-request", label: "API Playground", icon: <ApiOutlined />, roles: [...all_admin_roles, ...internalUserRoles] },
-        { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined />, roles: all_admin_roles },
         { key: "19", page: "tag-management", label: "Tag Management", icon: <TagsOutlined />, roles: all_admin_roles },
         { key: "21", page: "vector-stores", label: "Vector Stores", icon: <DatabaseOutlined />, roles: all_admin_roles },
         { key: "4", page: "usage", label: "Old Usage", icon: <BarChartOutlined /> },
@@ -137,6 +146,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         <Menu
           mode="inline"
           selectedKeys={[selectedMenuKey]}
+          defaultOpenKeys={["llm-tools"]}
           style={{ 
             borderRight: 0,
             backgroundColor: 'transparent',
