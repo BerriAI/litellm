@@ -4,10 +4,6 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, Query, Request
 
 from litellm._logging import verbose_logger
-from litellm.proxy._experimental.mcp_server.server import (
-    ListMCPToolsRestAPIResponseObject,
-    call_mcp_tool,
-)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
@@ -27,6 +23,10 @@ router = APIRouter(
 if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
+    )
+    from litellm.proxy._experimental.mcp_server.server import (
+        ListMCPToolsRestAPIResponseObject,
+        call_mcp_tool,
     )
 
     ########################################################
