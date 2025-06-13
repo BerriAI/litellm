@@ -66,7 +66,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   return (
     <div>
       <Button 
-        className="mx-auto" 
+        className="mx-auto mb-4" 
         onClick={() => setModalVisible(true)}
       >
         + Add New MCP Server
