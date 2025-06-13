@@ -7,7 +7,7 @@ import smtplib
 import threading
 import time
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import (
@@ -24,8 +24,6 @@ from typing import (
 
 from litellm.constants import MAX_TEAM_LIST_LIMIT
 from litellm.proxy._types import (
-    DB_CONNECTION_ERROR_TYPES,
-    CommonProxyErrors,
     ProxyErrorTypes,
     ProxyException,
     SpendLogsMetadata,
@@ -2890,7 +2888,7 @@ class ProxyUpdateSpend:
             )
             verbose_proxy_logger.debug(f"update_spend_logs: n_retry_times={n_retry_times}")
             if n_retry_times < 3:
-                verbose_proxy_logger.debug(f"update_spend_logs: retrying")
+                verbose_proxy_logger.debug("update_spend_logs: retrying")
                 await ProxyUpdateSpend.update_spend_logs(
                     n_retry_times + 1,
                     prisma_client=prisma_client,
@@ -2934,7 +2932,6 @@ def _raise_failed_update_spend_exception(
     e: Exception, start_time: float, proxy_logging_obj: ProxyLogging
 ):
     verbose_proxy_logger.debug(f"Failed to update spend - {str(e)}")
-    end_time = time.time()
     if isinstance(e, Exception):
         spend_tracking_alert = "{}".format(
             traceback.format_exc()[:1000]
@@ -3018,19 +3015,27 @@ def get_error_message_str(e: Exception) -> str:
 
 
 def _get_redoc_url() -> str:
-    from litellm.proxy.proxy_server import get_custom_url
-
-    route = "/redoc"
-    return get_custom_url(request_base_url="", route=route)
+    try:
+        from litellm.proxy.proxy_server import get_custom_url
+        
+        route = "/redoc"
+        return get_custom_url(request_base_url="", route=route)
+    except ImportError:
+        # Handle circular import - return default URL
+        return "/redoc"
 
 
 def _get_docs_url() -> Optional[str]:
-    from litellm.proxy.proxy_server import app, get_custom_url
-
-    if app is not None:
-        if hasattr(app, "docs_url") and app.docs_url is not None:
-            route = app.docs_url
-            return get_custom_url(request_base_url="", route=route)
+    try:
+        from litellm.proxy.proxy_server import app, get_custom_url
+        
+        if app is not None:
+            if hasattr(app, "docs_url") and app.docs_url is not None:
+                route = app.docs_url
+                return get_custom_url(request_base_url="", route=route)
+    except ImportError:
+        # Handle circular import - return None if we can't import
+        pass
     return None
 
 
@@ -3052,8 +3057,7 @@ def handle_exception_on_proxy(e: Exception) -> ProxyException:
             code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
         )
     else:
-        error_traceback = traceback.format_exc()
-        error_msg = f"{str(e)}"
+        error_msg = str(e)
         return ProxyException(
             message=error_msg,
             type=ProxyErrorTypes.internal_server_error,
