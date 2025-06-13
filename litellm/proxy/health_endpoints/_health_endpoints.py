@@ -367,6 +367,47 @@ async def _save_health_check_to_db(
         # Continue execution - don't let database save failure break health checks
 
 
+async def _perform_health_check_and_save(
+    model_list,
+    target_model,
+    cli_model,
+    details,
+    prisma_client,
+    start_time,
+    user_id,
+    model_id=None
+):
+    """Helper function to perform health check and save results to database"""
+    healthy_endpoints, unhealthy_endpoints = await perform_health_check(
+        model_list=model_list, 
+        cli_model=cli_model, 
+        target_model=target_model,
+        details=details
+    )
+    
+    # Optionally save health check result to database (non-blocking)
+    if prisma_client is not None:
+        # For CLI model, use cli_model name; for router models, use target_model
+        model_name_for_db = cli_model if cli_model is not None else target_model
+        if model_name_for_db is not None:
+            asyncio.create_task(_save_health_check_to_db(
+                prisma_client,
+                model_name_for_db,
+                healthy_endpoints,
+                unhealthy_endpoints,
+                start_time,
+                user_id,
+                model_id=model_id
+            ))
+    
+    return {
+        "healthy_endpoints": healthy_endpoints,
+        "unhealthy_endpoints": unhealthy_endpoints,
+        "healthy_count": len(healthy_endpoints),
+        "unhealthy_count": len(unhealthy_endpoints),
+    }
+
+
 @router.get("/health", tags=["health"], dependencies=[Depends(user_api_key_auth)])
 async def health_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -436,28 +477,16 @@ async def health_endpoint(
         if llm_model_list is None:
             # if no router set, check if user set a model using litellm --model ollama/llama2
             if user_model is not None:
-                healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-                    model_list=[], cli_model=user_model, details=health_check_details
+                return await _perform_health_check_and_save(
+                    model_list=[],
+                    target_model=None,
+                    cli_model=user_model,
+                    details=health_check_details,
+                    prisma_client=prisma_client,
+                    start_time=start_time,
+                    user_id=user_api_key_dict.user_id,
+                    model_id=None  # CLI model doesn't have model_id
                 )
-                
-                # Optionally save health check result to database (non-blocking)
-                if prisma_client is not None:
-                    asyncio.create_task(_save_health_check_to_db(
-                        prisma_client,
-                        user_model,
-                        healthy_endpoints,
-                        unhealthy_endpoints,
-                        start_time,
-                        user_api_key_dict.user_id,
-                        model_id=None  # CLI model doesn't have model_id
-                    ))
-                
-                return {
-                    "healthy_endpoints": healthy_endpoints,
-                    "unhealthy_endpoints": unhealthy_endpoints,
-                    "healthy_count": len(healthy_endpoints),
-                    "unhealthy_count": len(unhealthy_endpoints),
-                }
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": "Model list not initialized"},
@@ -471,28 +500,16 @@ async def health_endpoint(
         if use_background_health_checks:
             return health_check_results
         else:
-            healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-                _llm_model_list, target_model, details=health_check_details
+            return await _perform_health_check_and_save(
+                model_list=_llm_model_list,
+                target_model=target_model,
+                cli_model=None,
+                details=health_check_details,
+                prisma_client=prisma_client,
+                start_time=start_time,
+                user_id=user_api_key_dict.user_id,
+                model_id=model_id
             )
-
-            # Optionally save health check result to database (non-blocking)
-            if prisma_client is not None and target_model is not None:
-                asyncio.create_task(_save_health_check_to_db(
-                    prisma_client,
-                    target_model,
-                    healthy_endpoints,
-                    unhealthy_endpoints,
-                    start_time,
-                    user_api_key_dict.user_id,
-                    model_id=model_id
-                ))
-
-            return {
-                "healthy_endpoints": healthy_endpoints,
-                "unhealthy_endpoints": unhealthy_endpoints,
-                "healthy_count": len(healthy_endpoints),
-                "unhealthy_count": len(unhealthy_endpoints),
-            }
     except Exception as e:
         verbose_proxy_logger.error(
             "litellm.proxy.proxy_server.py::health_endpoint(): Exception occured - {}".format(
