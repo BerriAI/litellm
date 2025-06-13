@@ -2,12 +2,13 @@ import { ColumnDef } from "@tanstack/react-table";
 import { Badge, Grid, Icon } from "@tremor/react";
 import { Tooltip } from "antd";
 import { UserInfo } from "./types";
-import { PencilAltIcon, TrashIcon, InformationCircleIcon } from "@heroicons/react/outline";
+import { PencilAltIcon, TrashIcon, InformationCircleIcon, RefreshIcon } from "@heroicons/react/outline";
 
 export const columns = (
   possibleUIRoles: Record<string, Record<string, string>>,
   handleEdit: (user: UserInfo) => void,
   handleDelete: (userId: string) => void,
+  handleResetPassword: (userId: string) => void
 ): ColumnDef<UserInfo>[] => [
   {
     header: "User ID",
@@ -110,16 +111,27 @@ export const columns = (
     header: "",
     cell: ({ row }) => (
       <div className="flex gap-2">
-        <Icon
-          icon={PencilAltIcon}
-          size="sm"
-          onClick={() => handleEdit(row.original)}
-        />
-        <Icon
-          icon={TrashIcon}
-          size="sm"
-          onClick={() => handleDelete(row.original.user_id)}
-        />
+        <Tooltip title="Edit user" zIndex={9999}>
+          <Icon
+            icon={PencilAltIcon}
+            size="sm"
+            onClick={() => handleEdit(row.original)}
+          />
+        </Tooltip>
+        <Tooltip title="Delete user" zIndex={9999}>
+          <Icon
+            icon={TrashIcon}
+            size="sm"
+            onClick={() => handleDelete(row.original.user_id)}
+          />
+        </Tooltip>
+        <Tooltip title="Reset Password" zIndex={9999}>
+          <Icon
+            icon={RefreshIcon}
+            size="sm"
+            onClick={() => handleResetPassword(row.original.user_id)}
+          />
+        </Tooltip>
       </div>
     ),
   },
