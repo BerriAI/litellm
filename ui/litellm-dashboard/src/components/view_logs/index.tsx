@@ -473,7 +473,6 @@ export default function SpendLogsTable({
   };
 
   const quickSelectOptions = [
-    { label: "Last 1 Minute", value: 1, unit: "minute" },
     { label: "Last 15 Minutes", value: 15, unit: "minutes" },
     { label: "Last Hour", value: 1, unit: "hours" },
     { label: "Last 4 Hours", value: 4, unit: "hours" },
