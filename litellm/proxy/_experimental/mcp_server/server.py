@@ -230,7 +230,9 @@ if MCP_AVAILABLE:
         )
 
         tools_from_mcp_servers: List[MCPTool] = (
-            await global_mcp_server_manager.list_tools()
+            await global_mcp_server_manager.list_tools(
+                user_api_key_auth=user_api_key_auth,
+            )
         )
         verbose_logger.debug("TOOLS FROM MCP SERVERS: %s", tools_from_mcp_servers)
         if tools_from_mcp_servers is not None:

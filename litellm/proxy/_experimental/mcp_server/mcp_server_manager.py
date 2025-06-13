@@ -17,7 +17,9 @@ from mcp.types import CallToolResult
 from mcp.types import Tool as MCPTool
 
 from litellm._logging import verbose_logger
-from litellm.proxy._experimental.mcp_server.auth import UserAPIKeyAuthMCP
+from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+    UserAPIKeyAuthMCP,
+)
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     MCPAuthType,
@@ -141,9 +143,15 @@ class MCPServerManager:
         allowed_mcp_servers = await UserAPIKeyAuthMCP.get_allowed_mcp_servers(
             user_api_key_auth
         )
+        verbose_logger.debug(
+            f"Allowed MCP Servers for user api key auth: {allowed_mcp_servers}"
+        )
         if len(allowed_mcp_servers) > 0:
             return allowed_mcp_servers
         else:
+            verbose_logger.debug(
+                "No allowed MCP Servers found for user api key auth, returning default registry servers"
+            )
             return list(self.get_registry().keys())
 
     async def list_tools(
