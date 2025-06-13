@@ -2612,19 +2612,35 @@ class Logging(LiteLLMLoggingBaseClass):
         if self.stream and isinstance(result, ModelResponse):
             return result
 
-        result = litellm.AnthropicConfig().transform_response(
-            raw_response=self.model_call_details["httpx_response"],
-            model_response=litellm.ModelResponse(),
-            model=self.model,
-            messages=[],
-            logging_obj=self,
-            optional_params={},
-            api_key="",
-            request_data={},
-            encoding=litellm.encoding,
-            json_mode=False,
-            litellm_params={},
-        )
+        if "httpx_response" in self.model_call_details:
+            result = litellm.AnthropicConfig().transform_response(
+                raw_response=self.model_call_details.get("httpx_response", None),
+                model_response=litellm.ModelResponse(),
+                model=self.model,
+                messages=[],
+                logging_obj=self,
+                optional_params={},
+                api_key="",
+                request_data={},
+                encoding=litellm.encoding,
+                json_mode=False,
+                litellm_params={},
+            )
+        else:
+            from litellm.types.llms.anthropic import AnthropicResponse
+
+            pydantic_result = AnthropicResponse.model_validate(result)
+            import httpx
+
+            result = litellm.AnthropicConfig().transform_parsed_response(
+                completion_response=pydantic_result.model_dump(),
+                raw_response=httpx.Response(
+                    status_code=200,
+                    headers={},
+                ),
+                model_response=litellm.ModelResponse(),
+                json_mode=None,
+            )
         return result
 
 
