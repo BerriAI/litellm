@@ -6,8 +6,14 @@ import {
   Alert,
   Button,
   Divider,
-  Tabs,
 } from "antd";
+import {
+  TabPanel,
+  TabPanels,
+  TabGroup,
+  TabList,
+  Tab,
+} from "@tremor/react";
 import { CopyIcon, Code, Terminal, Globe } from "lucide-react";
 import { getProxyBaseUrl } from "../networking";
 
@@ -172,39 +178,6 @@ const MCPConnect: React.FC = () => {
     </Space>
   );
 
-  const tabItems = [
-    {
-      key: "openai",
-      label: (
-        <span className="flex items-center gap-2">
-          <Code size={16} />
-          OpenAI API
-        </span>
-      ),
-      children: <OpenAITab />,
-    },
-    {
-      key: "cursor",
-      label: (
-        <span className="flex items-center gap-2">
-          <Terminal size={16} />
-          Cursor
-        </span>
-      ),
-      children: <CursorTab />,
-    },
-    {
-      key: "streamable-http",
-      label: (
-        <span className="flex items-center gap-2">
-          <Globe size={16} />
-          Streamable HTTP
-        </span>
-      ),
-      children: <StreamableHTTPTab />,
-    },
-  ];
-
   return (
     <div className="p-6">
       <Space direction="vertical" size="large" className="w-full">
@@ -215,11 +188,41 @@ const MCPConnect: React.FC = () => {
           </Paragraph>
         </div>
 
-        <Tabs
-          defaultActiveKey="openai"
-          items={tabItems}
-          className="w-full"
-        />
+        <TabGroup className="w-full">
+          <TabList className="flex justify-start mt-2 w-full">
+            <div className="flex">
+              <Tab>
+                <span className="flex items-center gap-2">
+                  <Code size={16} />
+                  OpenAI API
+                </span>
+              </Tab>
+              <Tab>
+                <span className="flex items-center gap-2">
+                  <Terminal size={16} />
+                  Cursor
+                </span>
+              </Tab>
+              <Tab>
+                <span className="flex items-center gap-2">
+                  <Globe size={16} />
+                  Streamable HTTP
+                </span>
+              </Tab>
+            </div>
+          </TabList>
+          <TabPanels>
+            <TabPanel>
+              <OpenAITab />
+            </TabPanel>
+            <TabPanel>
+              <CursorTab />
+            </TabPanel>
+            <TabPanel>
+              <StreamableHTTPTab />
+            </TabPanel>
+          </TabPanels>
+        </TabGroup>
       </Space>
     </div>
   );
