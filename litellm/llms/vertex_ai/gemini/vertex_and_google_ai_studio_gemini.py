@@ -315,6 +315,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if (
                     "parameters" in _openai_function_object
                     and _openai_function_object["parameters"] is not None
+                    and isinstance(_openai_function_object["parameters"], dict)
                 ):  # OPENAI accepts JSON Schema, Google accepts OpenAPI schema.
                     _openai_function_object["parameters"] = _build_vertex_schema(
                         _openai_function_object["parameters"]
@@ -344,6 +345,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 )
                 _description = openai_function_object.get("description", None)
                 _parameters = openai_function_object.get("parameters", None)
+                if isinstance(_parameters, str) and len(_parameters) == 0:
+                    _parameters = {
+                        "type": "object",
+                    }
                 if _description is not None:
                     gtool_func_declaration["description"] = _description
                 if _parameters is not None:
@@ -776,7 +781,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _transform_parts(
         parts: List[HttpxPartType],
-        index: int,
         is_function_call: Optional[bool],
     ) -> Tuple[
         Optional[ChatCompletionToolCallFunctionChunk],
@@ -784,6 +788,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ]:
         function: Optional[ChatCompletionToolCallFunctionChunk] = None
         _tools: List[ChatCompletionToolCallChunk] = []
+        # in a single chunk, each tool call appears as a separate part
+        # they need to be separate indexes as they are separate tool calls
+        funcCallIndex = 0
         for part in parts:
             if "functionCall" in part:
                 _function_chunk = ChatCompletionToolCallFunctionChunk(
@@ -797,9 +804,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         id=f"call_{str(uuid.uuid4())}",
                         type="function",
                         function=_function_chunk,
-                        index=index,
+                        index=funcCallIndex,
                     )
                     _tools.append(_tool_response_chunk)
+                funcCallIndex += 1
         if len(_tools) == 0:
             tools: Optional[List[ChatCompletionToolCallChunk]] = None
         else:
@@ -972,9 +980,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if "promptTokensDetails" in usage_metadata:
             for detail in usage_metadata["promptTokensDetails"]:
                 if detail["modality"] == "AUDIO":
-                    audio_tokens = detail["tokenCount"]
+                    audio_tokens = detail.get("tokenCount", 0)
                 elif detail["modality"] == "TEXT":
-                    text_tokens = detail["tokenCount"]
+                    text_tokens = detail.get("tokenCount", 0)
         if "thoughtsTokenCount" in usage_metadata:
             reasoning_tokens = usage_metadata["thoughtsTokenCount"]
         prompt_tokens_details = PromptTokensDetailsWrapper(
@@ -1113,7 +1121,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
                 functions, tools = VertexGeminiConfig._transform_parts(
                     parts=candidate["content"]["parts"],
-                    index=candidate.get("index", idx),
                     is_function_call=is_function_call(standard_optional_params),
                 )
 
@@ -1886,6 +1893,8 @@ class ModelResponseIterator:
                     ).web_search_requests = web_search_requests
 
             setattr(model_response, "usage", usage)  # type: ignore
+
+            model_response._hidden_params["is_finished"] = False
             return model_response
 
         except json.JSONDecodeError:

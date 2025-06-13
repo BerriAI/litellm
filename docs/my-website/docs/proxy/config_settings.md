@@ -416,6 +416,7 @@ router_settings:
 | DIRECT_URL | Direct URL for service endpoint
 | DISABLE_ADMIN_UI | Toggle to disable the admin UI
 | DISABLE_AIOHTTP_TRANSPORT | Flag to disable aiohttp transport. When this is set to True, litellm will use httpx instead of aiohttp. **Default is False**
+| DISABLE_AIOHTTP_TRUST_ENV | Flag to disable aiohttp trust environment. When this is set to True, litellm will not trust the environment for aiohttp eg. `HTTP_PROXY` and `HTTPS_PROXY` environment variables will not be used when this is set to True. **Default is False**
 | DISABLE_SCHEMA_UPDATE | Toggle to disable schema updates
 | DOCS_DESCRIPTION | Description text for documentation pages
 | DOCS_FILTERED | Flag indicating filtered documentation
@@ -521,6 +522,7 @@ router_settings:
 | LITELLM_LOCAL_MODEL_COST_MAP | Local configuration for model cost mapping in LiteLLM
 | LITELLM_LOG | Enable detailed logging for LiteLLM
 | LITELLM_MODE | Operating mode for LiteLLM (e.g., production, development)
+| LITELLM_RATE_LIMIT_WINDOW_SIZE | Rate limit window size for LiteLLM. Default is 60
 | LITELLM_SALT_KEY | Salt key for encryption in LiteLLM
 | LITELLM_SECRET_AWS_KMS_LITELLM_LICENSE | AWS KMS encrypted license for LiteLLM
 | LITELLM_TOKEN | Access token for LiteLLM integration

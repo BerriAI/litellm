@@ -143,8 +143,10 @@ class BaseLLMChatTest(ABC):
 
     def test_streaming(self):
         """Check if litellm handles streaming correctly"""
+        from litellm.types.utils import ModelResponseStream
+        from typing import Optional
         base_completion_call_args = self.get_base_completion_call_args()
-        litellm.set_verbose = True
+        # litellm.set_verbose = True
         messages = [
             {
                 "role": "user",
@@ -164,9 +166,14 @@ class BaseLLMChatTest(ABC):
 
         # for OpenAI the content contains the JSON schema, so we need to assert that the content is not None
         chunks = []
+        created_at: Optional[int] = None
         for chunk in response:
             print(chunk)
             chunks.append(chunk)
+            if isinstance(chunk, ModelResponseStream):
+                if created_at is None:
+                    created_at = chunk.created
+                assert chunk.created == created_at
 
         resp = litellm.stream_chunk_builder(chunks=chunks)
         print(resp)

@@ -6,7 +6,7 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
+from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload, cast
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
@@ -75,7 +75,7 @@ class MistralConfig(OpenAIGPTConfig):
         return super().get_config()
 
     def get_supported_openai_params(self, model: str) -> List[str]:
-        return [
+        supported_params = [
             "stream",
             "temperature",
             "top_p",
@@ -87,6 +87,12 @@ class MistralConfig(OpenAIGPTConfig):
             "stop",
             "response_format",
         ]
+        
+        # Add reasoning support for magistral models
+        if "magistral" in model.lower():
+            supported_params.extend(["thinking", "reasoning_effort"])
+            
+        return supported_params
 
     def _map_tool_choice(self, tool_choice: str) -> str:
         if tool_choice == "auto" or tool_choice == "none":
@@ -95,6 +101,20 @@ class MistralConfig(OpenAIGPTConfig):
             return "any"
         else:  # openai 'tool_choice' object param not supported by Mistral API
             return "any"
+
+    @staticmethod
+    def _get_mistral_reasoning_system_prompt() -> str:
+        """
+        Returns the system prompt for Mistral reasoning models.
+        Based on Mistral's documentation: https://docs.mistral.ai/capabilities/reasoning/
+        """
+        return """When solving problems, think step-by-step in <think> tags before providing your final answer. Use the following format:
+
+<think>
+Your step-by-step reasoning process. Be thorough and work through the problem carefully.
+</think>
+
+Then provide a clear, concise answer based on your reasoning."""
 
     def map_openai_params(
         self,
@@ -128,6 +148,12 @@ class MistralConfig(OpenAIGPTConfig):
                 optional_params["extra_body"] = {"random_seed": value}
             if param == "response_format":
                 optional_params["response_format"] = value
+            if param == "reasoning_effort" and "magistral" in model.lower():
+                # Flag that we need to add reasoning system prompt
+                optional_params["_add_reasoning_prompt"] = True
+            if param == "thinking" and "magistral" in model.lower():
+                # Flag that we need to add reasoning system prompt
+                optional_params["_add_reasoning_prompt"] = True
         return optional_params
 
     def _get_openai_compatible_provider_info(
@@ -205,6 +231,57 @@ class MistralConfig(OpenAIGPTConfig):
         else:
             return super()._transform_messages(new_messages, model, False)
 
+    def _add_reasoning_system_prompt_if_needed(
+        self, 
+        messages: List[AllMessageValues], 
+        optional_params: dict
+    ) -> List[AllMessageValues]:
+        """
+        Add reasoning system prompt for Mistral magistral models when reasoning_effort is specified.
+        """
+        if not optional_params.get("_add_reasoning_prompt", False):
+            return messages
+        
+        # Check if there's already a system message
+        has_system_message = any(msg.get("role") == "system" for msg in messages)
+        
+        if has_system_message:
+            # Prepend reasoning instructions to existing system message
+            for i, msg in enumerate(messages):
+                if msg.get("role") == "system":
+                    existing_content = msg.get("content", "")
+                    reasoning_prompt = self._get_mistral_reasoning_system_prompt()
+                    
+                    # Handle both string and list content, preserving original format
+                    if isinstance(existing_content, str):
+                        # String content - prepend reasoning prompt
+                        new_content: Union[str, list] = f"{reasoning_prompt}\n\n{existing_content}"
+                    elif isinstance(existing_content, list):
+                        # List content - prepend reasoning prompt as text block
+                        new_content = [
+                            {"type": "text", "text": reasoning_prompt + "\n\n"}
+                        ] + existing_content
+                    else:
+                        # Fallback for any other type - convert to string
+                        new_content = f"{reasoning_prompt}\n\n{str(existing_content)}"
+                    
+                    messages[i] = cast(AllMessageValues, {
+                        **msg,
+                        "content": new_content
+                    })
+                    break
+        else:
+            # Add new system message with reasoning instructions
+            reasoning_message: AllMessageValues = cast(AllMessageValues, {
+                "role": "system",
+                "content": self._get_mistral_reasoning_system_prompt()
+            })
+            messages = [reasoning_message] + messages
+        
+        # Remove the internal flag
+        optional_params.pop("_add_reasoning_prompt", None)
+        return messages
+
     @classmethod
     def _handle_name_in_message(cls, message: AllMessageValues) -> AllMessageValues:
         """
@@ -236,3 +313,31 @@ class MistralConfig(OpenAIGPTConfig):
                 mistral_tool_calls.append(_tool_call_message)
             message["tool_calls"] = mistral_tool_calls  # type: ignore
         return message
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        """
+        Transform the overall request to be sent to the API.
+        For magistral models, adds reasoning system prompt when reasoning_effort is specified.
+
+        Returns:
+            dict: The transformed request. Sent as the body of the API call.
+        """
+        # Add reasoning system prompt if needed (for magistral models)
+        if "magistral" in model.lower() and optional_params.get("_add_reasoning_prompt", False):
+            messages = self._add_reasoning_system_prompt_if_needed(messages, optional_params)
+        
+        # Call parent transform_request which handles _transform_messages
+        return super().transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )

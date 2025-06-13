@@ -35,6 +35,8 @@ class PassThroughEndpointLogging:
             "generateContent",
             "streamGenerateContent",
             "predict",
+            "rawPredict",
+            "streamRawPredict",
         ]
 
         # Anthropic
@@ -101,9 +103,9 @@ class PassThroughEndpointLogging:
         standard_logging_response_object: Optional[
             PassThroughEndpointLoggingResultValues
         ] = None
-        logging_obj.model_call_details["passthrough_logging_payload"] = (
-            passthrough_logging_payload
-        )
+        logging_obj.model_call_details[
+            "passthrough_logging_payload"
+        ] = passthrough_logging_payload
         if self.is_vertex_route(url_route):
             vertex_passthrough_logging_handler_result = (
                 VertexPassthroughLoggingHandler.vertex_passthrough_handler(

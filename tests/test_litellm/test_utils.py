@@ -451,6 +451,12 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         ],
                     },
                 },
+                "supported_regions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                    },
+                },
                 "search_context_cost_per_query": {
                     "type": "object",
                     "properties": {
@@ -2002,6 +2008,30 @@ class TestProxyFunctionCalling:
                 ), f"Claude 3 model should support function calling: {model}"
             except Exception as e:
                 print(f"Could not test {model}: {e}")
+
+
+def test_register_model_with_scientific_notation():
+    """
+    Test that the register_model function can handle scientific notation in the model name.
+    """
+    model_cost_dict = {
+        "my-custom-model": {
+            "max_tokens": 8192,
+            "input_cost_per_token": "3e-07",
+            "output_cost_per_token": "6e-07",
+            "litellm_provider": "openai",
+            "mode": "chat",
+        },
+    }
+
+    litellm.register_model(model_cost_dict)
+
+    registered_model = litellm.model_cost["my-custom-model"]
+    print(registered_model)
+    assert registered_model["input_cost_per_token"] == 3e-07
+    assert registered_model["output_cost_per_token"] == 6e-07
+    assert registered_model["litellm_provider"] == "openai"
+    assert registered_model["mode"] == "chat"
 
 
 if __name__ == "__main__":
