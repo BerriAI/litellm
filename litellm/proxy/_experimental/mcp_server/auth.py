@@ -1,11 +1,11 @@
-from typing import Optional
+from typing import List, Optional
 
 from starlette.datastructures import Headers
 from starlette.requests import Request
 from starlette.types import Scope
 
 from litellm._logging import verbose_logger
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_TeamTableCachedObj, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 
@@ -100,3 +100,88 @@ class UserAPIKeyAuthMCP:
             verbose_logger.exception(f"Error getting headers from scope: {e}")
             # Return empty Headers object with empty dict
             return Headers({})
+
+    async def get_allowed_mcp_servers(
+        self, user_api_key_auth: UserAPIKeyAuth
+    ) -> List[str]:
+        """
+        Apply least privilege
+        """
+        from typing import List
+
+        allowed_mcp_servers: List[str] = []
+        allowed_mcp_servers_for_key = self._get_allowed_mcp_servers_for_key(
+            user_api_key_auth
+        )
+        allowed_mcp_servers_for_team = await self._get_allowed_mcp_servers_for_team(
+            user_api_key_auth
+        )
+
+        #########################################################
+        # If team has mcp_servers, then key must have a subset of the team's mcp_servers
+        #########################################################
+        if len(allowed_mcp_servers_for_team) > 0:
+            for _mcp_server in allowed_mcp_servers_for_key:
+                if _mcp_server in allowed_mcp_servers_for_team:
+                    allowed_mcp_servers.append(_mcp_server)
+
+            #########################################################
+            # Add the team's mcp_servers to the allowed_mcp_servers
+            #########################################################
+            allowed_mcp_servers.extend(allowed_mcp_servers_for_team)
+        else:
+            allowed_mcp_servers = allowed_mcp_servers_for_key
+
+        return list(set(allowed_mcp_servers))
+
+    def _get_allowed_mcp_servers_for_key(
+        self, user_api_key_auth: UserAPIKeyAuth
+    ) -> List[str]:
+        object_permissions = user_api_key_auth.object_permission
+        if object_permissions is None:
+            return []
+
+        if object_permissions.mcp_servers is None:
+            return []
+
+        return object_permissions.mcp_servers
+
+    async def _get_allowed_mcp_servers_for_team(
+        self, user_api_key_auth: UserAPIKeyAuth
+    ) -> List[str]:
+        """
+        The `object_permission` for a team is not stored on the user_api_key_auth object
+
+        first we check if the team has a object_permission_id attached
+            - if it does then we look up the object_permission for the team
+        """
+        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        if user_api_key_auth.team_id is None:
+            return []
+
+        team_obj: LiteLLM_TeamTableCachedObj = await get_team_object(
+            team_id=user_api_key_auth.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+            check_cache_only=True,
+        )
+        if prisma_client is None:
+            verbose_logger.debug("prisma_client is None")
+            return []
+
+        object_permissions = team_obj.object_permission
+        if object_permissions is None:
+            return []
+
+        if object_permissions.mcp_servers is None:
+            return []
+
+        return object_permissions.mcp_servers
