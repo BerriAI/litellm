@@ -213,6 +213,7 @@ def test_map_tool_choice():
     config = AnthropicConfig()
 
     tool_choice = "none"
-    result = config._map_tool_choice(tool_choice=tool_choice, parallel_tool_use=None)
+    result = config._map_tool_choice(tool_choice=tool_choice, parallel_tool_use=True)
     assert result is not None
     assert result["type"] == "none"
+    print(result)

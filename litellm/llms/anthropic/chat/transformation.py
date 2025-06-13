@@ -168,7 +168,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if parallel_tool_use is not None:
             # Anthropic uses 'disable_parallel_tool_use' flag to determine if parallel tool use is allowed
             # this is the inverse of the openai flag.
-            if _tool_choice is not None:
+            if tool_choice == "none":
+                pass
+            elif _tool_choice is not None:
                 _tool_choice["disable_parallel_tool_use"] = not parallel_tool_use
             else:  # use anthropic defaults and make sure to send the disable_parallel_tool_use flag
                 _tool_choice = AnthropicMessagesToolChoice(
