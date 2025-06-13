@@ -112,7 +112,7 @@ class UserAPIKeyAuthMCP:
 
         allowed_mcp_servers: List[str] = []
         allowed_mcp_servers_for_key = (
-            UserAPIKeyAuthMCP._get_allowed_mcp_servers_for_key(user_api_key_auth)
+            await UserAPIKeyAuthMCP._get_allowed_mcp_servers_for_key(user_api_key_auth)
         )
         allowed_mcp_servers_for_team = (
             await UserAPIKeyAuthMCP._get_allowed_mcp_servers_for_team(user_api_key_auth)
@@ -136,20 +136,30 @@ class UserAPIKeyAuthMCP:
         return list(set(allowed_mcp_servers))
 
     @staticmethod
-    def _get_allowed_mcp_servers_for_key(
+    async def _get_allowed_mcp_servers_for_key(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[str]:
+        from litellm.proxy.proxy_server import prisma_client
+
         if user_api_key_auth is None:
             return []
 
-        object_permissions = user_api_key_auth.object_permission
-        if object_permissions is None:
+        if user_api_key_auth.object_permission_id is None:
             return []
 
-        if object_permissions.mcp_servers is None:
+        if prisma_client is None:
+            verbose_logger.debug("prisma_client is None")
             return []
 
-        return object_permissions.mcp_servers
+        key_object_permission = (
+            await prisma_client.db.litellm_objectpermissiontable.find_unique(
+                where={"object_permission_id": user_api_key_auth.object_permission_id},
+            )
+        )
+        if key_object_permission is None:
+            return []
+
+        return key_object_permission.mcp_servers or []
 
     @staticmethod
     async def _get_allowed_mcp_servers_for_team(
@@ -190,7 +200,4 @@ class UserAPIKeyAuthMCP:
         if object_permissions is None:
             return []
 
-        if object_permissions.mcp_servers is None:
-            return []
-
-        return object_permissions.mcp_servers
+        return object_permissions.mcp_servers or []
