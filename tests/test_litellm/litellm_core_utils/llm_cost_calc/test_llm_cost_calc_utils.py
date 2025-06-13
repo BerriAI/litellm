@@ -140,3 +140,85 @@ def test_generic_cost_per_token_above_200k_tokens():
         * usage.completion_tokens,
         10,
     )
+
+
+def test_cache_read_cost_above_200k_tokens():
+    model = "gemini-2.5-pro-preview-06-05"
+    custom_llm_provider = "gemini"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_cost_map = litellm.model_cost[model].copy()
+
+    litellm.model_cost[model] = model_cost_map
+
+    prompt_tokens = 210_000
+    cache_hit_tokens = 50_000
+    text_tokens = prompt_tokens - cache_hit_tokens
+    completion_tokens = 0
+
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=cache_hit_tokens,
+            text_tokens=text_tokens
+        )
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    expected_prompt_cost = (
+        text_tokens * model_cost_map["input_cost_per_token_above_200k_tokens"]
+    ) + (
+        cache_hit_tokens * model_cost_map["cache_read_input_token_cost_above_200k_tokens"]
+    )
+
+    assert round(prompt_cost, 10) == round(expected_prompt_cost, 10)
+    assert round(completion_cost, 10) == 0.0
+
+
+def test_cache_read_cost_below_200k_tokens():
+    model = "gemini-2.5-pro-preview-06-05"
+    custom_llm_provider = "gemini"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_cost_map = litellm.model_cost[model].copy()
+
+    litellm.model_cost[model] = model_cost_map
+
+    prompt_tokens = 190_000
+    cache_hit_tokens = 30_000
+    text_tokens = prompt_tokens - cache_hit_tokens
+    completion_tokens = 0
+
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=cache_hit_tokens,
+            text_tokens=text_tokens,
+        ),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    expected_prompt_cost = (
+        text_tokens * model_cost_map["input_cost_per_token"]
+    ) + (
+        cache_hit_tokens * model_cost_map["cache_read_input_token_cost"]
+    )
+
+    assert round(prompt_cost, 10) == round(expected_prompt_cost, 10)
+    assert round(completion_cost, 10) == 0.0
