@@ -6,11 +6,20 @@ import {
   Tooltip,
   message,
 } from "antd";
+import {
+  TabPanel,
+  TabPanels,
+  TabGroup,
+  TabList,
+  Tab,
+} from "@tremor/react";
+import { LinkIcon } from "lucide-react";
 
 import {
   Grid,
   Col,
   Title,
+  Text,
 } from "@tremor/react";
 import { DataTable } from "../view_logs/table";
 import { mcpServerColumns } from "./mcp_server_columns";
@@ -28,6 +37,7 @@ import {
 import { isAdminRole } from "@/utils/roles";
 import { MCPServerView } from "./mcp_server_view";
 import CreateMCPServer from "./create_mcp_server";
+import MCPConnect from "./mcp_connect";
 
 interface DeleteModalProps {
   isModalOpen: boolean;
@@ -136,6 +146,8 @@ const MCPServers: React.FC<MCPServerProps> = ({
     setServerToDelete(null);
   };
 
+
+
   if (!accessToken || !userRole || !userID) {
     return (
       <div className="p-6 text-center text-gray-500">
@@ -144,52 +156,81 @@ const MCPServers: React.FC<MCPServerProps> = ({
     );
   }
 
-  return (
-    <div className="w-full mx-4 h-[75vh]">
-      {selectedServerId ? (
-        <MCPServerView
-          mcpServer={
-            mcpServers.find(
-              (server: MCPServer) => server.server_id === selectedServerId
-            ) || {}
-          }
-          onBack={() => {
-            setEditServer(false);
-            setSelectedServerId(null);
-            refetch();
-          }}
-          isProxyAdmin={isAdminRole(userRole)}
-          isEditing={editServer}
-          accessToken={accessToken}
-          userID={userID}
-          userRole={userRole}
-        />
-      ) : (
-        <div className="w-full p-6">
-          <div className="flex items-center justify-between mb-2">
-            <h1 className="text-xl font-semibold">MCP Servers</h1>
+  const ServersTab = () => (
+    selectedServerId ? (
+      <MCPServerView
+        mcpServer={
+          mcpServers.find(
+            (server: MCPServer) => server.server_id === selectedServerId
+          ) || {}
+        }
+        onBack={() => {
+          setEditServer(false);
+          setSelectedServerId(null);
+          refetch();
+        }}
+        isProxyAdmin={isAdminRole(userRole)}
+        isEditing={editServer}
+        accessToken={accessToken}
+        userID={userID}
+        userRole={userRole}
+      />
+    ) : (
+      <div>
+        <div className="mb-2 mt-4">
+          <div>
+            <Title>MCP Servers</Title>
+            <Text className="text-tremor-content">
+              Configure and manage your MCP servers
+            </Text>
           </div>
-          <CreateMCPServer
-            userRole={userRole}
-            accessToken={accessToken}
-            onCreateSuccess={createMCPServer}
-          />
-          <DataTable
-            columns={columns}
-            data={mcpServers || []}
-            renderSubComponent={() => <></>}
-            getRowCanExpand={() => false}
-            isLoading={isLoadingServers}
-            noDataMessage="No MCP Servers found"
-          />
-          <DeleteModal
-            isModalOpen={isDeleteModalOpen}
-            title="Delete MCP Server"
-            confirmDelete={confirmDelete}
-            cancelDelete={cancelDelete}
-          />
         </div>
-      )}
+        <CreateMCPServer
+          userRole={userRole}
+          accessToken={accessToken}
+          onCreateSuccess={createMCPServer}
+        />
+        <DataTable
+          columns={columns}
+          data={mcpServers || []}
+          renderSubComponent={() => <></>}
+          getRowCanExpand={() => false}
+          isLoading={isLoadingServers}
+          noDataMessage="No MCP Servers found"
+        />
+        <DeleteModal
+          isModalOpen={isDeleteModalOpen}
+          title="Delete MCP Server"
+          confirmDelete={confirmDelete}
+          cancelDelete={cancelDelete}
+        />
+      </div>
+    )
+  );
+
+  return (
+    <div className="w-full h-[75vh] mt-8 p-6">
+      <TabGroup className="h-full">
+        <TabList>
+          <div className="flex">
+            <Tab>Servers</Tab>
+            <Tab>
+              <span className="flex items-center gap-2">
+                <LinkIcon size={16} />
+                Connect
+              </span>
+            </Tab>
+          </div>
+        </TabList>
+        <TabPanels className="h-full">
+          <TabPanel className="h-full">
+            <ServersTab />
+          </TabPanel>
+          <TabPanel className="h-full">
+            <MCPConnect />
+          </TabPanel>
+        </TabPanels>
+      </TabGroup>
     </div>
   );
 };
