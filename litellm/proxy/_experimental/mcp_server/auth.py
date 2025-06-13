@@ -38,8 +38,18 @@ class UserAPIKeyAuthMCP:
             UserAPIKeyAuthMCP.get_litellm_api_key_from_headers(headers) or ""
         )
 
+        # Create a proper Request object with mock body method to avoid ASGI receive channel issues
+        request = Request(scope=scope)
+
+        # Mock the body method to return empty dict as JSON bytes
+        # This prevents "Receive channel has not been made available" error
+        async def mock_body():
+            return b"{}"  # Empty JSON object as bytes
+
+        request.body = mock_body  # type: ignore
+
         validated_user_api_key_auth = await user_api_key_auth(
-            api_key=litellm_api_key, request=Request(scope=scope)
+            api_key=litellm_api_key, request=request
         )
 
         return validated_user_api_key_auth
