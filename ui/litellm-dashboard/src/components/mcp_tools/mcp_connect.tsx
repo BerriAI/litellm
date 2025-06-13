@@ -25,7 +25,8 @@ import {
   ExternalLinkIcon,
   ShieldAlertIcon,
   KeyIcon,
-  ServerIcon
+  ServerIcon,
+  Zap
 } from "lucide-react";
 import { getProxyBaseUrl } from "../networking";
 
@@ -116,6 +117,81 @@ const MCPConnect: React.FC = () => {
         {children}
       </div>
     </div>
+  );
+
+  const LiteLLMProxyTab = () => (
+    <Space direction="vertical" size="large" className="w-full">
+      <div className="bg-gradient-to-r from-emerald-50 to-green-50 p-6 rounded-lg border border-emerald-100">
+        <div className="flex items-center gap-3 mb-3">
+          <Zap className="text-emerald-600" size={24} />
+          <Title level={4} className="mb-0 text-emerald-900">LiteLLM Proxy API Integration</Title>
+        </div>
+        <Text className="text-emerald-700">
+          Connect to LiteLLM Proxy's Responses API for seamless tool integration with multiple model providers
+        </Text>
+      </div>
+      
+      <Space direction="vertical" size="large" className="w-full">
+        <FeatureCard
+          icon={<KeyIcon className="text-emerald-600" size={16} />}
+          title="API Key Setup"
+          description="Configure your LiteLLM Proxy API key for authentication"
+        >
+          <Space direction="vertical" size="middle" className="w-full">
+            <div>
+              <Text>Get your API key from your LiteLLM Proxy dashboard or contact your administrator</Text>
+            </div>
+            <CodeBlock
+              title="Environment Variable"
+              code='export LITELLM_API_KEY="sk-..."'
+              copyKey="litellm-env"
+            />
+          </Space>
+        </FeatureCard>
+
+        <FeatureCard
+          icon={<ServerIcon className="text-emerald-600" size={16} />}
+          title="MCP Server Information"
+          description="Connection details for your LiteLLM MCP server"
+        >
+          <CodeBlock
+            title="Server URL"
+            code={`${proxyBaseUrl}/mcp`}
+            copyKey="litellm-server-url"
+          />
+        </FeatureCard>
+
+        <FeatureCard
+          icon={<Code className="text-emerald-600" size={16} />}
+          title="Implementation Example"
+          description="Complete cURL example for using the LiteLLM Proxy Responses API"
+        >
+          <CodeBlock
+            code={`curl --location '${proxyBaseUrl}/v1/responses' \\
+--header 'Content-Type: application/json' \\
+--header "Authorization: Bearer $LITELLM_API_KEY" \\
+--data '{
+    "model": "gpt-4",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "${proxyBaseUrl}/mcp",
+            "require_approval": "never",
+            "headers": {
+                "Authorization": "Bearer YOUR_LITELLM_MCP_API_KEY"
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'`}
+            copyKey="litellm-curl"
+            className="text-xs"
+          />
+        </FeatureCard>
+      </Space>
+    </Space>
   );
 
   const OpenAITab = () => (
@@ -346,6 +422,12 @@ const MCPConnect: React.FC = () => {
               </Tab>
               <Tab className="px-6 py-3 rounded-md transition-all duration-200">
                 <span className="flex items-center gap-2 font-medium">
+                  <Zap size={18} />
+                  LiteLLM Proxy
+                </span>
+              </Tab>
+              <Tab className="px-6 py-3 rounded-md transition-all duration-200">
+                <span className="flex items-center gap-2 font-medium">
                   <Terminal size={18} />
                   Cursor
                 </span>
@@ -361,6 +443,9 @@ const MCPConnect: React.FC = () => {
           <TabPanels>
             <TabPanel className="mt-6">
               <OpenAITab />
+            </TabPanel>
+            <TabPanel className="mt-6">
+              <LiteLLMProxyTab />
             </TabPanel>
             <TabPanel className="mt-6">
               <CursorTab />
