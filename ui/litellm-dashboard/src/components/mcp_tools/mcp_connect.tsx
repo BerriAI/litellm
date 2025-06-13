@@ -1,3 +1,5 @@
+/* eslint-disable react/no-unescaped-entities */
+
 import React, { useState } from "react";
 import {
   Card,
@@ -127,7 +129,7 @@ const MCPConnect: React.FC = () => {
           <Title level={4} className="mb-0 text-emerald-900">LiteLLM Proxy API Integration</Title>
         </div>
         <Text className="text-emerald-700">
-          Connect to LiteLLM Proxy's Responses API for seamless tool integration with multiple model providers
+          Connect to LiteLLM Proxy Responses API for seamless tool integration with multiple model providers
         </Text>
       </div>
       
@@ -202,7 +204,7 @@ const MCPConnect: React.FC = () => {
           <Title level={4} className="mb-0 text-blue-900">OpenAI Responses API Integration</Title>
         </div>
         <Text className="text-blue-700">
-          Connect OpenAI's Responses API to your LiteLLM MCP server for seamless tool integration
+          Connect OpenAI Responses API to your LiteLLM MCP server for seamless tool integration
         </Text>
       </div>
       
@@ -214,7 +216,8 @@ const MCPConnect: React.FC = () => {
         >
           <Space direction="vertical" size="middle" className="w-full">
             <div>
-              <Text>Get your API key from the{" "}
+              {/* eslint-disable-next-line react/no-unescaped-entities */}
+            <Text>Get your API key from the{" "}
                 <a 
                   href="https://platform.openai.com/api-keys" 
                   target="_blank" 
@@ -350,7 +353,7 @@ copyKey="cursor-config"
       >
         <Space direction="vertical" size="middle" className="w-full">
           <div>
-            <Text>Each MCP client supports different transports. Refer to your client's documentation to determine the appropriate transport method.</Text>
+            <Text>Each MCP client supports different transports. Refer to your client documentation to determine the appropriate transport method.</Text>
           </div>
           <CodeBlock
             title="Server URL"
