@@ -2972,7 +2972,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
 
             os.environ[
                 "OTEL_EXPORTER_OTLP_TRACES_HEADERS"
-            ] = f"space_key={arize_config.space_key},api_key={arize_config.api_key}"
+            ] = f"space_id={arize_config.space_key},api_key={arize_config.api_key}"
             for callback in _in_memory_loggers:
                 if (
                     isinstance(callback, ArizeLogger)
