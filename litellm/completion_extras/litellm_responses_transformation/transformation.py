@@ -197,6 +197,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         json_mode: Optional[bool] = None,
     ) -> "ModelResponse":
         """Transform Responses API response to chat completion response"""
+
         from openai.types.responses import (
             ResponseFunctionToolCall,
             ResponseOutputMessage,
@@ -213,6 +214,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         if not isinstance(raw_response, ResponsesAPIResponse):
             raise ValueError(f"Unexpected response type: {type(raw_response)}")
+
+        if raw_response.error is not None:
+            raise ValueError(f"Error in response: {raw_response.error}")
 
         choices: List[Choices] = []
         index = 0
@@ -256,6 +260,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 raise ValueError("Function calling not supported yet.")
             else:
                 raise ValueError(f"Unknown item type: {item}")
+
+        if len(choices) == 0:
+            if (
+                raw_response.incomplete_details is not None
+                and raw_response.incomplete_details.reason is not None
+            ):
+                raise ValueError(
+                    f"{model} unable to complete request: {raw_response.incomplete_details.reason}"
+                )
 
         setattr(model_response, "choices", choices)
 
