@@ -361,6 +361,7 @@ copyKey="cursor-config"
             <Button 
               type="link" 
               className="p-0 h-auto text-blue-600 hover:text-blue-700"
+              href="https://modelcontextprotocol.io/docs/concepts/transports"
               icon={<ExternalLinkIcon size={14} />}
             >
               Learn more about MCP transports
