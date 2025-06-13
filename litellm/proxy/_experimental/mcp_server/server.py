@@ -13,7 +13,12 @@ from starlette.types import Receive, Scope, Send
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_TOOL_NAME_PREFIX
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._experimental.mcp_server.auth import UserAPIKeyAuthMCP
+from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
+    LiteLLMAuthenticatedUser,
+)
+from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+    UserAPIKeyAuthMCP,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
@@ -42,6 +47,14 @@ _SESSION_MANAGER_TASK = None
 
 if MCP_AVAILABLE:
     from mcp.server import Server
+
+    # Import auth context variables and middleware
+    from mcp.server.auth.middleware.auth_context import (
+        AuthContextMiddleware,
+        auth_context_var,
+    )
+    from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+    from mcp.server.auth.provider import AccessToken
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     from mcp.types import EmbeddedResource as MCPEmbeddedResource
     from mcp.types import ImageContent as MCPImageContent
@@ -150,26 +163,49 @@ if MCP_AVAILABLE:
     ############### MCP Server Routes #######################
     ########################################################
 
-    def _get_user_auth_from_mcp_context() -> Optional[UserAPIKeyAuth]:
-        """
-        Extract user authentication info from MCP server context
-        """
-        try:
-            request_context = server.request_context
-            scope = request_context.lifespan_context.scope
-            return scope.get("user_api_key_auth")
-        except Exception as e:
-            verbose_logger.debug(f"Could not extract user auth from MCP context: {e}")
-            return None
-
     @server.list_tools()
     async def list_tools() -> list[MCPTool]:
         """
         List all available tools
         """
-        user_api_key_auth = _get_user_auth_from_mcp_context()
-        verbose_logger.debug(f"MCP list_tools - User API Key Auth: {user_api_key_auth}")
+        # Get user authentication from context variable
+        user_api_key_auth = get_auth_context()
+        verbose_logger.debug(
+            f"MCP list_tools - User API Key Auth from context: {user_api_key_auth}"
+        )
         return await _list_mcp_tools(user_api_key_auth)
+
+    @server.call_tool()
+    async def mcp_server_tool_call(
+        name: str, arguments: Dict[str, Any] | None
+    ) -> List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]:
+        """
+        Call a specific tool with the provided arguments
+
+        Args:
+            name (str): Name of the tool to call
+            arguments (Dict[str, Any] | None): Arguments to pass to the tool
+
+        Returns:
+            List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]: Tool execution results
+
+        Raises:
+            HTTPException: If tool not found or arguments missing
+        """
+        # Validate arguments
+        response = await call_mcp_tool(
+            name=name,
+            arguments=arguments,
+        )
+        return response
+
+    ########################################################
+    ############ End of MCP Server Routes ##################
+    ########################################################
+
+    ########################################################
+    ############ Helper Functions ##########################
+    ########################################################
 
     async def _list_mcp_tools(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
@@ -200,30 +236,6 @@ if MCP_AVAILABLE:
         if tools_from_mcp_servers is not None:
             tools.extend(tools_from_mcp_servers)
         return tools
-
-    @server.call_tool()
-    async def mcp_server_tool_call(
-        name: str, arguments: Dict[str, Any] | None
-    ) -> List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]:
-        """
-        Call a specific tool with the provided arguments
-
-        Args:
-            name (str): Name of the tool to call
-            arguments (Dict[str, Any] | None): Arguments to pass to the tool
-
-        Returns:
-            List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]: Tool execution results
-
-        Raises:
-            HTTPException: If tool not found or arguments missing
-        """
-        # Validate arguments
-        response = await call_mcp_tool(
-            name=name,
-            arguments=arguments,
-        )
-        return response
 
     @client
     async def call_mcp_tool(
@@ -317,9 +329,8 @@ if MCP_AVAILABLE:
             user_api_key_auth: UserAPIKeyAuth = (
                 await UserAPIKeyAuthMCP.user_api_key_auth_mcp(scope)
             )
-
-            # Store auth info in scope for MCP server functions to access
-            scope["user_api_key_auth"] = user_api_key_auth
+            # Set the auth context variable for easy access in MCP functions
+            set_auth_context(user_api_key_auth)
 
             # Ensure session managers are initialized
             if not _SESSION_MANAGERS_INITIALIZED:
@@ -339,9 +350,8 @@ if MCP_AVAILABLE:
             user_api_key_auth: UserAPIKeyAuth = (
                 await UserAPIKeyAuthMCP.user_api_key_auth_mcp(scope)
             )
-
-            # Store auth info in scope for MCP server functions to access
-            scope["user_api_key_auth"] = user_api_key_auth
+            # Set the auth context variable for easy access in MCP functions
+            set_auth_context(user_api_key_auth)
 
             # Ensure session managers are initialized
             if not _SESSION_MANAGERS_INITIALIZED:
@@ -375,6 +385,27 @@ if MCP_AVAILABLE:
     # Mount the MCP handlers
     app.mount("/", handle_streamable_http_mcp)
     app.mount("/sse", handle_sse_mcp)
+    app.add_middleware(AuthContextMiddleware)
+
+    ########################################################
+    ############ Auth Context Functions ####################
+    ########################################################
+
+    def set_auth_context(user_api_key_auth: UserAPIKeyAuth) -> None:
+        """Set the UserAPIKeyAuth in the auth context variable."""
+        auth_user = LiteLLMAuthenticatedUser(user_api_key_auth)
+        auth_context_var.set(auth_user)
+
+    def get_auth_context() -> Optional[UserAPIKeyAuth]:
+        """Get the UserAPIKeyAuth from the auth context variable."""
+        auth_user = auth_context_var.get()
+        if auth_user and isinstance(auth_user, LiteLLMAuthenticatedUser):
+            return auth_user.user_api_key_auth
+        return None
+
+    ########################################################
+    ############ End of Auth Context Functions #############
+    ########################################################
 
 else:
     app = FastAPI()
