@@ -66,6 +66,7 @@ interface AllKeysTableProps {
     sortBy: string;
     sortOrder: 'asc' | 'desc';
   };
+  premiumUser: boolean;
 }
 
 // Define columns similar to our logs table
@@ -140,6 +141,7 @@ export function AllKeysTable({
   refresh,
   onSortChange,
   currentSort,
+  premiumUser,
 }: AllKeysTableProps) {
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
   const [userList, setUserList] = useState<UserResponse[]>([]);
@@ -293,11 +295,14 @@ export function AllKeysTable({
       header: "User ID",
       cell: (info) => {
         const userId = info.getValue() as string;
-        return userId ? (
-          <Tooltip title={userId}>
-            <span>{userId.slice(0, 7)}...</span>
-          </Tooltip>
-        ) : "-";
+        if (userId.length > 15) {
+          return (
+            <Tooltip title={userId}>
+              <span>{userId.slice(0, 7)}...</span>
+            </Tooltip>
+          );
+        }
+        return userId ? userId : "-";
       },
     },
     {
@@ -314,8 +319,15 @@ export function AllKeysTable({
       accessorKey: "created_by",
       header: "Created By",
       cell: (info) => {
-        const value = info.getValue();
-        return value ? value : "Unknown";
+        const value = info.getValue() as string;
+        if (value.length > 15) {
+          return (
+            <Tooltip title={value}>
+              <span>{value.slice(0, 7)}...</span>
+            </Tooltip>
+          );
+        }
+        return value;
       },
     },
     {
@@ -606,6 +618,7 @@ export function AllKeysTable({
           userID={userID}
           userRole={userRole}
           teams={allTeams}
+          premiumUser={premiumUser}
         />
       ) : (
         <div className="border-b py-4 flex-1 overflow-hidden">

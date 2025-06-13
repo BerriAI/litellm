@@ -29,8 +29,10 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
 )
-from litellm.types.utils import ModelResponse
-from litellm.utils import CustomStreamWrapper
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.types.utils import ModelResponse
 
 from ..base_utils import (
     map_developer_role_to_system_role,
@@ -360,7 +362,7 @@ class BaseConfig(ABC):
         self,
         model: str,
         raw_response: httpx.Response,
-        model_response: ModelResponse,
+        model_response: "ModelResponse",
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
         messages: List[AllMessageValues],
@@ -369,7 +371,7 @@ class BaseConfig(ABC):
         encoding: Any,
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
-    ) -> ModelResponse:
+    ) -> "ModelResponse":
         pass
 
     @abstractmethod
@@ -380,7 +382,7 @@ class BaseConfig(ABC):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        streaming_response: Union[Iterator[str], AsyncIterator[str], "ModelResponse"],
         sync_stream: bool,
         json_mode: Optional[bool] = False,
     ) -> Any:
@@ -398,7 +400,7 @@ class BaseConfig(ABC):
         client: Optional[AsyncHTTPHandler] = None,
         json_mode: Optional[bool] = None,
         signed_json_body: Optional[bytes] = None,
-    ) -> CustomStreamWrapper:
+    ) -> "CustomStreamWrapper":
         raise NotImplementedError
 
     def get_sync_custom_stream_wrapper(
@@ -413,7 +415,7 @@ class BaseConfig(ABC):
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         json_mode: Optional[bool] = None,
         signed_json_body: Optional[bytes] = None,
-    ) -> CustomStreamWrapper:
+    ) -> "CustomStreamWrapper":
         raise NotImplementedError
 
     @property

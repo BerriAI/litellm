@@ -260,7 +260,7 @@ See All General Settings [here](http://localhost:3000/docs/proxy/configs#all-set
    - **Description**: 
      - Set a `database_url`, this is the connection to your Postgres DB, which is used by litellm for generating keys, users, teams.
    - **Usage**: 
-     - ** Set on config.yaml** set your master key under `general_settings:database_url`, example - 
+     - ** Set on config.yaml** set your `database_url` under `general_settings:database_url`, example - 
         `database_url: "postgresql://..."`
      - Set `DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname>` in your env 
 

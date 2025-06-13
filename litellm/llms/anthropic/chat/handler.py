@@ -4,7 +4,17 @@ Calling + translation logic for anthropic's `/v1/messages` endpoint
 
 import copy
 import json
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import httpx  # type: ignore
 
@@ -12,9 +22,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
-from litellm import LlmProviders
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -36,15 +44,20 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import (
     Delta,
     GenericStreamingChunk,
+    LlmProviders,
+    ModelResponse,
     ModelResponseStream,
     StreamingChoices,
     Usage,
 )
-from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
 
 from ...base import BaseLLM
 from ..common_utils import AnthropicError, process_anthropic_headers
 from .transformation import AnthropicConfig
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.llms.base_llm.chat.transformation import BaseConfig
 
 
 async def make_call(
@@ -181,6 +194,8 @@ class AnthropicChatCompletion(BaseLLM):
         logger_fn=None,
         headers={},
     ):
+        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
         data["stream"] = True
 
         completion_stream, headers = await make_call(
@@ -221,11 +236,11 @@ class AnthropicChatCompletion(BaseLLM):
         optional_params: dict,
         json_mode: bool,
         litellm_params: dict,
-        provider_config: BaseConfig,
+        provider_config: "BaseConfig",
         logger_fn=None,
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
-    ) -> Union[ModelResponse, CustomStreamWrapper]:
+    ) -> Union[ModelResponse, "CustomStreamWrapper"]:
         async_handler = client or get_async_httpx_client(
             llm_provider=litellm.LlmProviders.ANTHROPIC
         )
@@ -290,6 +305,9 @@ class AnthropicChatCompletion(BaseLLM):
         headers={},
         client=None,
     ):
+        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+        from litellm.utils import ProviderConfigManager
+
         optional_params = copy.deepcopy(optional_params)
         stream = optional_params.pop("stream", None)
         json_mode: bool = optional_params.pop("json_mode", False)

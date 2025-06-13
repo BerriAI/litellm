@@ -212,6 +212,7 @@ class AsyncHTTPHandler:
         stream: bool = False,
         logging_obj: Optional[LiteLLMLoggingObject] = None,
         files: Optional[RequestFiles] = None,
+        content: Any = None,
     ):
         start_time = time.time()
         try:
@@ -227,6 +228,7 @@ class AsyncHTTPHandler:
                 headers=headers,
                 timeout=timeout,
                 files=files,
+                content=content,
             )
             response = await self.client.send(req, stream=stream)
             response.raise_for_status()
@@ -452,6 +454,7 @@ class AsyncHTTPHandler:
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         stream: bool = False,
+        content: Any = None,
     ):
         """
         Making POST request for a single connection client.
@@ -459,7 +462,7 @@ class AsyncHTTPHandler:
         Used for retrying connection client errors.
         """
         req = client.build_request(
-            "POST", url, data=data, json=json, params=params, headers=headers  # type: ignore
+            "POST", url, data=data, json=json, params=params, headers=headers, content=content  # type: ignore
         )
         response = await client.send(req, stream=stream)
         response.raise_for_status()
@@ -542,6 +545,8 @@ class AsyncHTTPHandler:
         - [Default] If force_ipv4 is False, it will create an AiohttpTransport with default settings
         """
         from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
+        
+        from litellm.secret_managers.main import str_to_bool
 
         #########################################################
         # If ssl_verify is None, set it to True
@@ -550,10 +555,20 @@ class AsyncHTTPHandler:
         #########################################################
         if ssl_verify is None:
             ssl_verify = True
+            
+        #########################################################
+        # Check if user disabled aiohttp trust env
+        # When True, aiohttp will not trust environment variables for proxy settings
+        ########################################################
+        disable_trust_env = (
+            litellm.disable_aiohttp_trust_env is True
+            or str_to_bool(os.getenv("DISABLE_AIOHTTP_TRUST_ENV", "False")) is True
+        )
 
         verbose_logger.debug("Creating AiohttpTransport...")
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
+                trust_env=not disable_trust_env,
                 connector=TCPConnector(
                     verify_ssl=ssl_verify,
                     ssl_context=ssl_context,

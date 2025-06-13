@@ -4,13 +4,16 @@ import base64
 import json
 import os
 from datetime import datetime
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import httpx
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import NON_LLM_CONNECTION_TIMEOUT
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import EnterpriseLicenseData
 
 
 class LicenseCheck:
@@ -27,6 +30,7 @@ class LicenseCheck:
         self.http_handler = HTTPHandler(timeout=NON_LLM_CONNECTION_TIMEOUT)
         self.public_key = None
         self.read_public_key()
+        self.airgapped_license_data: Optional["EnterpriseLicenseData"] = None
 
     def read_public_key(self):
         try:
@@ -125,10 +129,24 @@ class LicenseCheck:
         except Exception:
             return False
 
+    def is_over_limit(self, total_users: int) -> bool:
+        """
+        Check if the license is over the limit
+        """
+        if self.airgapped_license_data is None:
+            return False
+        if "max_users" not in self.airgapped_license_data or not isinstance(
+            self.airgapped_license_data["max_users"], int
+        ):
+            return False
+        return total_users > self.airgapped_license_data["max_users"]
+
     def verify_license_without_api_request(self, public_key, license_key):
         try:
             from cryptography.hazmat.primitives import hashes
             from cryptography.hazmat.primitives.asymmetric import padding
+
+            from litellm.proxy._types import EnterpriseLicenseData
 
             # Decode the license key
             decoded = base64.b64decode(license_key)
@@ -147,6 +165,8 @@ class LicenseCheck:
 
             # Decode and parse the data
             license_data = json.loads(message.decode())
+
+            self.airgapped_license_data = EnterpriseLicenseData(**license_data)
 
             # debug information provided in license data
             verbose_proxy_logger.debug("License data: %s", license_data)

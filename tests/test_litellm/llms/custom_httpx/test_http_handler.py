@@ -120,3 +120,70 @@ async def test_ssl_verification_with_aiohttp_transport():
 
     # assert both litellm transport and aiohttp session have ssl_verify=False
     assert transport_connector._ssl == aiohttp_session.connector._ssl
+
+
+@pytest.mark.asyncio
+async def test_disable_aiohttp_trust_env_with_env_variable(monkeypatch):
+    """Test aiohttp transport respects DISABLE_AIOHTTP_TRUST_ENV environment variable"""
+    # Set environment variable to disable trust env
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRUST_ENV", "True")
+    
+    # Ensure aiohttp transport is enabled
+    litellm.disable_aiohttp_transport = False
+    
+    # Create async client
+    client = AsyncHTTPHandler()
+    
+    # Get the transport (should be LiteLLMAiohttpTransport)
+    transport = client.client._transport
+    assert isinstance(transport, LiteLLMAiohttpTransport)
+    
+    # Get the aiohttp ClientSession
+    client_session = transport._get_valid_client_session()
+    
+    # Verify that trust_env is False when DISABLE_AIOHTTP_TRUST_ENV is True
+    assert client_session._trust_env is False
+
+
+@pytest.mark.asyncio
+async def test_disable_aiohttp_trust_env_with_litellm_setting():
+    """Test aiohttp transport respects litellm.disable_aiohttp_trust_env setting"""
+    # Set litellm setting to disable trust env
+    litellm.disable_aiohttp_trust_env = True
+    
+    # Ensure aiohttp transport is enabled
+    litellm.disable_aiohttp_transport = False
+    
+    # Create async client
+    client = AsyncHTTPHandler()
+    
+    # Get the transport (should be LiteLLMAiohttpTransport)
+    transport = client.client._transport
+    assert isinstance(transport, LiteLLMAiohttpTransport)
+    
+    # Get the aiohttp ClientSession
+    client_session = transport._get_valid_client_session()
+    
+    # Verify that trust_env is False when litellm.disable_aiohttp_trust_env is True
+    assert client_session._trust_env is False
+
+
+@pytest.mark.asyncio
+async def test_enable_aiohttp_trust_env_default():
+    """Test aiohttp transport enables trust_env by default"""
+    # Ensure both settings are disabled/default
+    litellm.disable_aiohttp_trust_env = False
+    litellm.disable_aiohttp_transport = False
+    
+    # Create async client
+    client = AsyncHTTPHandler()
+    
+    # Get the transport (should be LiteLLMAiohttpTransport)
+    transport = client.client._transport
+    assert isinstance(transport, LiteLLMAiohttpTransport)
+    
+    # Get the aiohttp ClientSession
+    client_session = transport._get_valid_client_session()
+    
+    # Verify that trust_env is True by default
+    assert client_session._trust_env is True

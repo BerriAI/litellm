@@ -13,7 +13,12 @@ from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES, VertexPartnerProvider
 
-from .common_utils import _get_gemini_url, _get_vertex_url, all_gemini_url_modes
+from .common_utils import (
+    _get_gemini_url,
+    _get_vertex_url,
+    all_gemini_url_modes,
+    is_global_only_vertex_model,
+)
 
 if TYPE_CHECKING:
     from google.auth.credentials import Credentials as GoogleCredentialsObject
@@ -34,7 +39,9 @@ class VertexBase:
         self.project_id: Optional[str] = None
         self.async_handler: Optional[AsyncHTTPHandler] = None
 
-    def get_vertex_region(self, vertex_region: Optional[str]) -> str:
+    def get_vertex_region(self, vertex_region: Optional[str], model: str) -> str:
+        if is_global_only_vertex_model(model):
+            return "global"
         return vertex_region or "us-central1"
 
     def load_auth(
@@ -323,7 +330,10 @@ class VertexBase:
             )
             auth_header = None  # this field is not used for gemin
         else:
-            vertex_location = self.get_vertex_region(vertex_region=vertex_location)
+            vertex_location = self.get_vertex_region(
+                vertex_region=vertex_location,
+                model=model,
+            )
 
             ### SET RUNTIME ENDPOINT ###
             version: Literal["v1beta1", "v1"] = (

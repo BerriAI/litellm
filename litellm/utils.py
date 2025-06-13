@@ -2077,6 +2077,43 @@ def supports_reasoning(model: str, custom_llm_provider: Optional[str] = None) ->
     )
 
 
+def get_supported_regions(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> Optional[List[str]]:
+    """
+    Get a list of supported regions for a given model and provider.
+
+    Parameters:
+    model (str): The model name to be checked.
+    custom_llm_provider (Optional[str]): The provider to be checked.
+    """
+    try:
+        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
+        model_info = _get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
+        supported_regions = model_info.get("supported_regions", None)
+        if supported_regions is None:
+            return None
+
+        #########################################################
+        # Ensure only list supported regions are returned
+        #########################################################
+        if isinstance(supported_regions, list):
+            return supported_regions
+        else:
+            return None
+    except Exception as e:
+        verbose_logger.debug(
+            f"Model not found or error in checking supported_regions support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
+        )
+        return None
+
+
 def supports_embedding_image_input(
     model: str, custom_llm_provider: Optional[str] = None
 ) -> bool:
@@ -2094,9 +2131,26 @@ def supports_embedding_image_input(
 def _update_dictionary(existing_dict: Dict, new_dict: dict) -> dict:
     for k, v in new_dict.items():
         if v is not None:
-            existing_dict[k] = v
+            # Convert stringified numbers to appropriate numeric types
+            existing_dict[k] = _convert_stringified_numbers(v)
 
     return existing_dict
+
+
+def _convert_stringified_numbers(value):
+    """Convert stringified numbers (including scientific notation) to appropriate numeric types."""
+    if isinstance(value, str):
+        try:
+            # Try to convert to float first to handle scientific notation like "3e-07"
+            if "e" in value.lower() or "." in value:
+                return float(value)
+            # Try to convert to int for whole numbers like "8192"
+            else:
+                return int(value)
+        except (ValueError, TypeError):
+            # If conversion fails, return the original string
+            return value
+    return value
 
 
 def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
@@ -2117,6 +2171,7 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
 
     loaded_model_cost = {}
     if isinstance(model_cost, dict):
+        # Convert stringified numbers to appropriate numeric types
         loaded_model_cost = model_cost
     elif isinstance(model_cost, str):
         loaded_model_cost = litellm.get_model_cost_map(url=model_cost)
@@ -4266,6 +4321,10 @@ def _check_provider_match(model_info: dict, custom_llm_provider: Optional[str]) 
         elif custom_llm_provider.startswith("bedrock") and model_info[
             "litellm_provider"
         ].startswith("bedrock"):
+            return True
+        elif (
+            custom_llm_provider == "litellm_proxy"
+        ):  # litellm_proxy is a special case, it's not a provider, it's a proxy for the provider
             return True
         else:
             return False
@@ -6715,6 +6774,8 @@ class ProviderConfigManager:
             return litellm.InfinityRerankConfig()
         elif litellm.LlmProviders.JINA_AI == provider:
             return litellm.JinaAIRerankConfig()
+        elif litellm.LlmProviders.HUGGINGFACE == provider:
+            return litellm.HuggingFaceRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
