@@ -166,119 +166,114 @@ const MCPServers: React.FC<MCPServerProps> = ({
           <div className="flex items-center justify-between mb-4">
             <h1 className="text-xl font-semibold">MCP Servers</h1>
           </div>
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableHeaderCell>Server ID</TableHeaderCell>
-                <TableHeaderCell>Server Name</TableHeaderCell>
-                <TableHeaderCell>Description</TableHeaderCell>
-                <TableHeaderCell>Transport</TableHeaderCell>
-                <TableHeaderCell>Auth Type</TableHeaderCell>
-                <TableHeaderCell>Url</TableHeaderCell>
-                <TableHeaderCell>Created</TableHeaderCell>
-                <TableHeaderCell>Info</TableHeaderCell>
-              </TableRow>
-            </TableHead>
+          <div className="bg-white rounded-lg shadow">
+            <div className="rounded-lg custom-border">
+              <Table className="[&_td]:py-0.5 [&_th]:py-1">
+                <TableHead>
+                  <TableRow>
+                    <TableHeaderCell className="py-1 h-8">Server ID</TableHeaderCell>
+                    <TableHeaderCell className="py-1 h-8">Server Name</TableHeaderCell>
+                    <TableHeaderCell className="py-1 h-8">Description</TableHeaderCell>
+                    <TableHeaderCell className="py-1 h-8">Transport</TableHeaderCell>
+                    <TableHeaderCell className="py-1 h-8">Auth Type</TableHeaderCell>
+                    <TableHeaderCell className="py-1 h-8">Url</TableHeaderCell>
+                    <TableHeaderCell className="py-1 h-8">Created</TableHeaderCell>
+                    <TableHeaderCell className="py-1 h-8">Info</TableHeaderCell>
+                  </TableRow>
+                </TableHead>
 
-            <TableBody>
-              {!mcpServers || mcpServers.length == 0
-                ? []
-                : mcpServers.map((mcpServer: MCPServer) => (
-                    <TableRow key={mcpServer.server_id}>
-                      <TableCell>
-                        <div className="overflow-hidden">
+                <TableBody>
+                  {isLoadingServers ? (
+                    <TableRow>
+                      <TableCell colSpan={8} className="h-8 text-center">
+                        <div className="text-center text-gray-500">
+                          <p>🚅 Loading MCP servers...</p>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ) : !mcpServers || mcpServers.length == 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={8} className="h-8 text-center">
+                        <div className="text-center text-gray-500">
+                          <p>No MCP servers found</p>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    mcpServers.map((mcpServer: MCPServer) => (
+                      <TableRow key={mcpServer.server_id} className="h-8">
+                        <TableCell className="py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap">
                           <Tooltip title={mcpServer.server_id}>
                             <Button
                               size="xs"
                               variant="light"
-                              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+                              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[15ch]"
                               onClick={() => {
-                                // Add click handler
                                 setSelectedServerId(mcpServer.server_id);
                               }}
                             >
                               {displayFriendlyId(mcpServer.server_id)}
                             </Button>
                           </Tooltip>
-                        </div>
-                      </TableCell>
-                      <TableCell
-                        style={{
-                          maxWidth: "4px",
-                          whiteSpace: "pre-wrap",
-                          overflow: "hidden",
-                        }}
-                      >
-                        {mcpServer.alias}
-                      </TableCell>
-                      <TableCell
-                        style={{
-                          maxWidth: "4px",
-                          whiteSpace: "pre-wrap",
-                          overflow: "hidden",
-                        }}
-                      >
-                        {mcpServer.description}
-                      </TableCell>
-                      <TableCell
-                        style={{
-                          maxWidth: "4px",
-                          whiteSpace: "pre-wrap",
-                          overflow: "hidden",
-                        }}
-                      >
-                        {handleTransport(mcpServer.transport)}
-                      </TableCell>
-                      <TableCell
-                        style={{
-                          maxWidth: "4px",
-                          whiteSpace: "pre-wrap",
-                          overflow: "hidden",
-                        }}
-                      >
-                        {handleAuth(mcpServer.auth_type)}
-                      </TableCell>
-                      <TableCell>
-                        <div className="overflow-hidden">
-                          <Tooltip title={mcpServer.url}>
-                            {mcpServer.url}
+                        </TableCell>
+                        <TableCell className="py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap">
+                          <Tooltip title={mcpServer.alias || "-"}>
+                            <span className="max-w-[15ch] truncate block">{mcpServer.alias || "-"}</span>
                           </Tooltip>
-                        </div>
-                      </TableCell>
-                      <TableCell
-                        style={{
-                          maxWidth: "4px",
-                          whiteSpace: "pre-wrap",
-                          overflow: "hidden",
-                        }}
-                      >
-                        {mcpServer.created_at
-                          ? new Date(mcpServer.created_at).toLocaleDateString()
-                          : "N/A"}
-                      </TableCell>
-                      <TableCell>
-                        {isAdminRole(userRole) ? (
-                          <>
-                            <Icon
-                              icon={PencilAltIcon}
-                              size="sm"
-                              onClick={() => {
-                                setSelectedServerId(mcpServer.server_id);
-                                setEditServer(true);
-                              }}
-                            />
-                            <Icon
-                              onClick={() => handleDelete(mcpServer.server_id)}
-                              icon={TrashIcon}
-                              size="sm"
-                            />
-                          </>
-                        ) : null}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-            </TableBody>
-          </Table>
+                        </TableCell>
+                        <TableCell className="py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap">
+                          <Tooltip title={mcpServer.description || "-"}>
+                            <span className="max-w-[15ch] truncate block">{mcpServer.description || "-"}</span>
+                          </Tooltip>
+                        </TableCell>
+                        <TableCell className="py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap">
+                          <span>{handleTransport(mcpServer.transport)}</span>
+                        </TableCell>
+                        <TableCell className="py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap">
+                          <span>{handleAuth(mcpServer.auth_type)}</span>
+                        </TableCell>
+                        <TableCell className="py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap">
+                          <Tooltip title={mcpServer.url || "-"}>
+                            <span className="max-w-[15ch] truncate block">{mcpServer.url || "-"}</span>
+                          </Tooltip>
+                        </TableCell>
+                        <TableCell className="py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap">
+                          <span>
+                            {mcpServer.created_at
+                              ? new Date(mcpServer.created_at).toLocaleDateString()
+                              : "N/A"}
+                          </span>
+                        </TableCell>
+                        <TableCell className="py-0.5 max-h-8">
+                          {isAdminRole(userRole) ? (
+                            <div className="flex items-center space-x-1">
+                              <Icon
+                                icon={PencilAltIcon}
+                                size="sm"
+                                className="cursor-pointer hover:text-blue-600"
+                                onClick={() => {
+                                  setSelectedServerId(mcpServer.server_id);
+                                  setEditServer(true);
+                                }}
+                              />
+                              <Icon
+                                onClick={() => handleDelete(mcpServer.server_id)}
+                                icon={TrashIcon}
+                                size="sm"
+                                className="cursor-pointer hover:text-red-600"
+                              />
+                            </div>
+                          ) : (
+                            <span>-</span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
           <DeleteModal
             isModalOpen={isDeleteModalOpen}
             title="Delete MCP Server"
