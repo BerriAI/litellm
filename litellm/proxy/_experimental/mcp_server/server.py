@@ -20,7 +20,6 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     UserAPIKeyAuthMCP,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.utils import StandardLoggingMCPToolCall
 from litellm.utils import client
@@ -53,8 +52,6 @@ if MCP_AVAILABLE:
         AuthContextMiddleware,
         auth_context_var,
     )
-    from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
-    from mcp.server.auth.provider import AccessToken
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     from mcp.types import EmbeddedResource as MCPEmbeddedResource
     from mcp.types import ImageContent as MCPImageContent
