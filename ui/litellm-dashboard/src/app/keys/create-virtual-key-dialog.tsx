@@ -6,13 +6,17 @@ import {
   useDialogStore,
 } from "@ariakit/react";
 import {
+  UiFormCombobox,
   UiFormContent,
   UiFormDescription,
   UiFormGroup,
   UiFormLabel,
   UiFormLabelGroup,
+  UiFormRadio,
+  UiFormRadioGroup,
   UiFormTextInput,
 } from "./forms";
+import { teams } from "./data";
 
 function Content() {
   const store = useDialogContext();
@@ -52,7 +56,12 @@ function Content() {
             </UiFormLabelGroup>
 
             <UiFormContent>
-              <UiFormTextInput placeholder="Name of Key" />
+              <UiFormRadioGroup defaultValue="you">
+                <UiFormRadio value="you">You</UiFormRadio>
+                <UiFormRadio value="service_account">
+                  Service Account
+                </UiFormRadio>
+              </UiFormRadioGroup>
             </UiFormContent>
           </UiFormGroup>
 
@@ -72,6 +81,27 @@ function Content() {
 
           <UiFormGroup>
             <UiFormLabelGroup>
+              <UiFormLabel>Team</UiFormLabel>
+              <UiFormDescription>
+                The team this key belongs to, which determines available models,
+                budget limits, and access permissions. Team assignment controls
+                resource allocation and usage tracking for this virtual key
+              </UiFormDescription>
+            </UiFormLabelGroup>
+
+            <UiFormContent>
+              <UiFormCombobox
+                placeholder="Select Team"
+                items={teams.map((team) => ({
+                  title: team.name,
+                  subtitle: team.id,
+                }))}
+              />
+            </UiFormContent>
+          </UiFormGroup>
+
+          <UiFormGroup>
+            <UiFormLabelGroup>
               <UiFormLabel>Models</UiFormLabel>
               <UiFormDescription>
                 Select which models this key can access. Choose All Team Models
@@ -83,21 +113,6 @@ function Content() {
 
             <UiFormContent>
               <UiFormTextInput placeholder="Select Models" />
-            </UiFormContent>
-          </UiFormGroup>
-
-          <UiFormGroup>
-            <UiFormLabelGroup>
-              <UiFormLabel>Team</UiFormLabel>
-              <UiFormDescription>
-                The team this key belongs to, which determines available models,
-                budget limits, and access permissions. Team assignment controls
-                resource allocation and usage tracking for this virtual key
-              </UiFormDescription>
-            </UiFormLabelGroup>
-
-            <UiFormContent>
-              <UiFormTextInput placeholder="Select Team" />
             </UiFormContent>
           </UiFormGroup>
         </div>

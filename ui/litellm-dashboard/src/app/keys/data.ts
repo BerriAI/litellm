@@ -13,7 +13,6 @@ export type Team = {
 export type VirtualKey = {
   alias: string;
   id: string;
-  teamAlias: string | null;
   team: Team | null;
   user: User | null;
   expires: string | null;
@@ -28,9 +27,8 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "kemal-fall2024-sagarg-key",
     id: "640006a5c5372871e5bb6f0761b460776",
-    teamAlias: "the-dream-team",
     team: {
-      id: "team_001",
+      id: "550e8400-e29b-41d4-a716-446655440001",
       name: "The Dream Team",
       alias: "the-dream-team",
     },
@@ -49,7 +47,6 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "prod-api-key-v2",
     id: "740006a5c5372871e5bb6f0761b460777",
-    teamAlias: null,
     team: null,
     user: {
       id: "user_002",
@@ -66,9 +63,8 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "dev-testing-key",
     id: "840006a5c5372871e5bb6f0761b460778",
-    teamAlias: "dev-ops-team",
     team: {
-      id: "team_002",
+      id: "550e8400-e29b-41d4-a716-446655440002",
       name: "DevOps Team",
       alias: "dev-ops-team",
     },
@@ -87,9 +83,8 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "analytics-dashboard-key",
     id: "940006a5c5372871e5bb6f0761b460779",
-    teamAlias: "analytics-team",
     team: {
-      id: "team_003",
+      id: "550e8400-e29b-41d4-a716-446655440003",
       name: "Analytics Team",
       alias: "analytics-team",
     },
@@ -104,7 +99,6 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "mobile-app-key",
     id: "a40006a5c5372871e5bb6f0761b460780",
-    teamAlias: null,
     team: null,
     user: {
       id: "user_004",
@@ -121,9 +115,8 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "backup-service-key",
     id: "b40006a5c5372871e5bb6f0761b460781",
-    teamAlias: "infrastructure",
     team: {
-      id: "team_004",
+      id: "550e8400-e29b-41d4-a716-446655440004",
       name: "Infrastructure Team",
       alias: "infrastructure",
     },
@@ -142,9 +135,8 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "ml-training-key",
     id: "c40006a5c5372871e5bb6f0761b460782",
-    teamAlias: "ml-research",
     team: {
-      id: "team_005",
+      id: "550e8400-e29b-41d4-a716-446655440005",
       name: "ML Research Team",
       alias: "ml-research",
     },
@@ -163,7 +155,6 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "customer-support-key",
     id: "d40006a5c5372871e5bb6f0761b460783",
-    teamAlias: null,
     team: null,
     user: {
       id: "user_007",
@@ -180,9 +171,8 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "integration-test-key",
     id: "e40006a5c5372871e5bb6f0761b460784",
-    teamAlias: "qa-team",
     team: {
-      id: "team_006",
+      id: "550e8400-e29b-41d4-a716-446655440006",
       name: "QA Team",
       alias: "qa-team",
     },
@@ -197,9 +187,8 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "webhook-processor-key",
     id: "f40006a5c5372871e5bb6f0761b460785",
-    teamAlias: "backend-team",
     team: {
-      id: "team_007",
+      id: "550e8400-e29b-41d4-a716-446655440007",
       name: "Backend Team",
       alias: "backend-team",
     },
@@ -218,9 +207,8 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "monitoring-alerts-key",
     id: "g40006a5c5372871e5bb6f0761b460786",
-    teamAlias: "sre-team",
     team: {
-      id: "team_008",
+      id: "550e8400-e29b-41d4-a716-446655440008",
       name: "SRE Team",
       alias: "sre-team",
     },
@@ -239,7 +227,6 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "data-pipeline-key",
     id: "h40006a5c5372871e5bb6f0761b460787",
-    teamAlias: null,
     team: null,
     user: {
       id: "user_010",
@@ -256,9 +243,8 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "security-scanner-key",
     id: "i40006a5c5372871e5bb6f0761b460788",
-    teamAlias: "security-team",
     team: {
-      id: "team_009",
+      id: "550e8400-e29b-41d4-a716-446655440009",
       name: "Security Team",
       alias: "security-team",
     },
@@ -273,9 +259,8 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "content-delivery-key",
     id: "j40006a5c5372871e5bb6f0761b460789",
-    teamAlias: "frontend-team",
     team: {
-      id: "team_010",
+      id: "550e8400-e29b-41d4-a716-446655440010",
       name: "Frontend Team",
       alias: "frontend-team",
     },
@@ -294,7 +279,6 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "payment-gateway-key",
     id: "k40006a5c5372871e5bb6f0761b460790",
-    teamAlias: null,
     team: null,
     user: {
       id: "user_012",
@@ -311,9 +295,8 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "notification-service-key",
     id: "l40006a5c5372871e5bb6f0761b460791",
-    teamAlias: "platform-team",
     team: {
-      id: "team_011",
+      id: "550e8400-e29b-41d4-a716-446655440011",
       name: "Platform Team",
       alias: "platform-team",
     },
@@ -332,9 +315,8 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "search-indexer-key",
     id: "m40006a5c5372871e5bb6f0761b460792",
-    teamAlias: "search-team",
     team: {
-      id: "team_012",
+      id: "550e8400-e29b-41d4-a716-446655440012",
       name: "Search Team",
       alias: "search-team",
     },
@@ -349,7 +331,6 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "cache-manager-key",
     id: "n40006a5c5372871e5bb6f0761b460793",
-    teamAlias: null,
     team: null,
     user: {
       id: "user_014",
@@ -366,9 +347,8 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "log-aggregator-key",
     id: "o40006a5c5372871e5bb6f0761b460794",
-    teamAlias: "observability",
     team: {
-      id: "team_013",
+      id: "550e8400-e29b-41d4-a716-446655440013",
       name: "Observability Team",
       alias: "observability",
     },
@@ -387,9 +367,8 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "file-storage-key",
     id: "p40006a5c5372871e5bb6f0761b460795",
-    teamAlias: "storage-team",
     team: {
-      id: "team_014",
+      id: "550e8400-e29b-41d4-a716-446655440014",
       name: "Storage Team",
       alias: "storage-team",
     },
@@ -408,7 +387,6 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "email-service-key",
     id: "q40006a5c5372871e5bb6f0761b460796",
-    teamAlias: null,
     team: null,
     user: {
       id: "user_017",
@@ -425,9 +403,8 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "video-processing-key",
     id: "r40006a5c5372871e5bb6f0761b460797",
-    teamAlias: "media-team",
     team: {
-      id: "team_015",
+      id: "550e8400-e29b-41d4-a716-446655440015",
       name: "Media Team",
       alias: "media-team",
     },
@@ -442,9 +419,8 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "geo-location-key",
     id: "s40006a5c5372871e5bb6f0761b460798",
-    teamAlias: "location-services",
     team: {
-      id: "team_016",
+      id: "550e8400-e29b-41d4-a716-446655440016",
       name: "Location Services",
       alias: "location-services",
     },
@@ -463,7 +439,6 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "translation-api-key",
     id: "t40006a5c5372871e5bb6f0761b460799",
-    teamAlias: null,
     team: null,
     user: {
       id: "user_019",
@@ -480,9 +455,8 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "recommendation-engine-key",
     id: "u40006a5c5372871e5bb6f0761b460800",
-    teamAlias: "ai-team",
     team: {
-      id: "team_017",
+      id: "550e8400-e29b-41d4-a716-446655440017",
       name: "AI Team",
       alias: "ai-team",
     },
@@ -501,9 +475,8 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "fraud-detection-key",
     id: "v40006a5c5372871e5bb6f0761b460801",
-    teamAlias: "risk-team",
     team: {
-      id: "team_018",
+      id: "550e8400-e29b-41d4-a716-446655440018",
       name: "Risk Management Team",
       alias: "risk-team",
     },
@@ -518,7 +491,6 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "chat-bot-key",
     id: "w40006a5c5372871e5bb6f0761b460802",
-    teamAlias: null,
     team: null,
     user: {
       id: "user_021",
@@ -535,9 +507,8 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "inventory-sync-key",
     id: "x40006a5c5372871e5bb6f0761b460803",
-    teamAlias: "inventory-team",
     team: {
-      id: "team_019",
+      id: "550e8400-e29b-41d4-a716-446655440019",
       name: "Inventory Team",
       alias: "inventory-team",
     },
@@ -556,9 +527,8 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "social-media-key",
     id: "y40006a5c5372871e5bb6f0761b460804",
-    teamAlias: "marketing-team",
     team: {
-      id: "team_020",
+      id: "550e8400-e29b-41d4-a716-446655440020",
       name: "Marketing Team",
       alias: "marketing-team",
     },
@@ -577,7 +547,6 @@ export const virtualKeys: VirtualKey[] = [
   {
     alias: "legacy-system-key",
     id: "z40006a5c5372871e5bb6f0761b460805",
-    teamAlias: null,
     team: null,
     user: {
       id: "user_024",
@@ -592,3 +561,12 @@ export const virtualKeys: VirtualKey[] = [
     lastUsed: "2025-05-17",
   },
 ];
+
+export const teams = virtualKeys
+  .reduce<Team[]>((current, virtualKey) => {
+    if (virtualKey.team) {
+      current.push(virtualKey.team);
+    }
+    return current;
+  }, [])
+  .sort((a, b) => a.name.localeCompare(b.name));
