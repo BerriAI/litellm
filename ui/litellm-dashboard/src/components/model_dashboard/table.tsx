@@ -2,12 +2,7 @@ import { Fragment } from "react";
 import {
   ColumnDef,
   flexRender,
-  getCoreRowModel,
-  getSortedRowModel,
-  SortingState,
-  useReactTable,
-  ColumnResizeMode,
-  VisibilityState,
+  Table as TableInstance,
 } from "@tanstack/react-table";
 import React from "react";
 import {
@@ -18,83 +13,24 @@ import {
   TableRow,
   TableCell,
 } from "@tremor/react";
-import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon, TableIcon } from "@heroicons/react/outline";
+import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
 
 interface ModelDataTableProps<TData, TValue> {
-  data: TData[];
-  columns: ColumnDef<TData, TValue>[];
   isLoading?: boolean;
-  table: any; // Add table prop to access column visibility controls
+  table: TableInstance<TData>;
 }
 
 export function ModelDataTable<TData, TValue>({
-  data = [],
-  columns,
   isLoading = false,
-  table
+  table,
 }: ModelDataTableProps<TData, TValue>) {
-  const [sorting, setSorting] = React.useState<SortingState>([
-    { id: "model_info.created_at", desc: true }
-  ]);
-  const [columnResizeMode] = React.useState<ColumnResizeMode>("onChange");
-  const [columnSizing, setColumnSizing] = React.useState({});
-  const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>({});
-
-  const tableInstance = useReactTable({
-    data,
-    columns,
-    state: {
-      sorting,
-      columnSizing,
-      columnVisibility,
-    },
-    columnResizeMode,
-    onSortingChange: setSorting,
-    onColumnSizingChange: setColumnSizing,
-    onColumnVisibilityChange: setColumnVisibility,
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    enableSorting: true,
-    enableColumnResizing: true,
-    defaultColumn: {
-      minSize: 40,
-      maxSize: 500,
-    },
-  });
-
-  // Expose table instance to parent
-  React.useEffect(() => {
-    if (table) {
-      table.current = tableInstance;
-    }
-  }, [tableInstance, table]);
-
-  const getHeaderText = (header: any): string => {
-    if (typeof header === 'string') {
-      return header;
-    }
-    if (typeof header === 'function') {
-      const headerElement = header();
-      if (headerElement && headerElement.props && headerElement.props.children) {
-        const children = headerElement.props.children;
-        if (typeof children === 'string') {
-          return children;
-        }
-        if (children.props && children.props.children) {
-          return children.props.children;
-        }
-      }
-    }
-    return '';
-  };
-
   return (
     <div className="rounded-lg custom-border relative">
       <div className="overflow-x-auto">
         <div className="relative min-w-full">
           <Table className="[&_td]:py-0.5 [&_th]:py-1 w-full">
             <TableHead>
-              {tableInstance.getHeaderGroups().map((headerGroup) => (
+              {table.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id}>
                   {headerGroup.headers.map((header) => (
                     <TableHeaderCell 
@@ -150,14 +86,14 @@ export function ModelDataTable<TData, TValue>({
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={columns.length} className="h-8 text-center">
+                  <TableCell colSpan={table.getAllColumns().length} className="h-8 text-center">
                     <div className="text-center text-gray-500">
                       <p>🚅 Loading models...</p>
                     </div>
                   </TableCell>
                 </TableRow>
-              ) : tableInstance.getRowModel().rows.length > 0 ? (
-                tableInstance.getRowModel().rows.map((row) => (
+              ) : table.getRowModel().rows.length > 0 ? (
+                table.getRowModel().rows.map((row) => (
                   <TableRow key={row.id}>
                     {row.getVisibleCells().map((cell) => (
                       <TableCell
@@ -180,7 +116,7 @@ export function ModelDataTable<TData, TValue>({
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={columns.length} className="h-8 text-center">
+                  <TableCell colSpan={table.getAllColumns().length} className="h-8 text-center">
                     <div className="text-center text-gray-500">
                       <p>No models found</p>
                     </div>

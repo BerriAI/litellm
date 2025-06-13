@@ -113,7 +113,16 @@ import AddModelTab from "./add_model/add_model_tab";
 import { ModelDataTable } from "./model_dashboard/table";
 import { columns } from "./model_dashboard/columns";
 import { all_admin_roles } from "@/utils/roles";
-import { Table as TableInstance } from '@tanstack/react-table';
+import { ModelData } from "./model_dashboard/types";
+import { 
+  Table as TableInstance,
+  SortingState,
+  PaginationState,
+  useReactTable,
+  getCoreRowModel,
+  getSortedRowModel,
+  getPaginationRowModel,
+} from '@tanstack/react-table';
 
 interface ModelDashboardProps {
   accessToken: string | null;
@@ -257,6 +266,64 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<TableInstance<any>>(null);
+
+  const filteredData = React.useMemo(() => {
+    if (!modelData?.data) {
+      return [];
+    }
+    return modelData.data.filter(
+      (model: ModelData) =>
+        (selectedModelGroup === "all" || !selectedModelGroup || model.model_name === selectedModelGroup) &&
+        (!selectedTeamFilter || selectedTeamFilter === "all" || model.model_info?.team_id === selectedTeamFilter)
+    );
+  }, [modelData, selectedModelGroup, selectedTeamFilter]);
+
+  const [sorting, setSorting] = React.useState<SortingState>([
+    { id: "model_info.created_at", desc: true }
+  ]);
+  const [pagination, setPagination] = React.useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: 10,
+  });
+
+  const tableColumns = React.useMemo(
+    () => {
+      if (!userRole || !userID) return [];
+      return columns(
+        userRole,
+        userID,
+        premiumUser,
+        setSelectedModelId,
+        setSelectedTeamId,
+        getDisplayModelName,
+        (model: any) => {
+          setSelectedModel(model);
+          setEditModalVisible(true);
+        },
+        () => {
+          const currentDate = new Date();
+          setLastRefreshed(currentDate.toLocaleString());
+        },
+        setEditModel
+      );
+    },
+    [userRole, userID, premiumUser]
+  );
+
+  const table = useReactTable({
+    data: filteredData,
+    columns: tableColumns,
+    state: {
+        sorting,
+        pagination,
+    },
+    onSortingChange: setSorting,
+    onPaginationChange: setPagination,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    enableSorting: true,
+  });
 
   const setProviderModelsFn = (provider: Providers) => {
     const _providerModels = getProviderModels(provider, modelMap);
@@ -1193,34 +1260,55 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                         </div>
 
                         {/* Results Count */}
-                        <div className="flex justify-between items-center">
+                        {/* <div className="flex justify-between items-center">
                           <Text className="text-sm text-gray-700">
-                            Showing {modelData && modelData.data.length > 0 ? modelData.data.length : 0} results
+                            Showing {filteredData.length} results
                           </Text>
-                        </div>
+                        </div> */}
                       </div>
                     </div>
 
+                    {table.getPrePaginationRowModel().rows.length > 0 && (
+                      <div className="flex items-center justify-between w-full px-6 py-4">
+                        <span className="text-sm text-gray-700">
+                          Showing{' '}
+                          {table.getState().pagination.pageIndex *
+                            table.getState().pagination.pageSize +
+                            1}
+                          {' - '}
+                          {Math.min(
+                            (table.getState().pagination.pageIndex + 1) *
+                              table.getState().pagination.pageSize,
+                            table.getPrePaginationRowModel().rows.length
+                          )}{' '}
+                          of {table.getPrePaginationRowModel().rows.length} results
+                        </span>
+                        <div className="inline-flex items-center gap-2">
+                          <span className="text-sm text-gray-700">
+                            Page {table.getState().pagination.pageIndex + 1} of{' '}
+                            {table.getPageCount()}
+                          </span>
+                          <button
+                            onClick={() => table.previousPage()}
+                            disabled={!table.getCanPreviousPage()}
+                            className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            Previous
+                          </button>
+                          <button
+                            onClick={() => table.nextPage()}
+                            disabled={!table.getCanNextPage()}
+                            className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            Next
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
                     <ModelDataTable
-                      columns={columns(
-                        userRole,
-                        userID,
-                        premiumUser,
-                        setSelectedModelId,
-                        setSelectedTeamId,
-                        getDisplayModelName,
-                        handleEditClick,
-                        handleRefreshClick,
-                        setEditModel,
-                      )}
-                      data={modelData.data.filter(
-                        (model: any) => (
-                          (selectedModelGroup === "all" || model.model_name === selectedModelGroup || !selectedModelGroup) &&
-                          (selectedTeamFilter === "all" || model.model_info["team_id"] === selectedTeamFilter || !selectedTeamFilter)
-                        )
-                      )}
+                      table={table}
                       isLoading={false}
-                      table={tableRef}
                     />
                   </div>
                 </div>
