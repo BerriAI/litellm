@@ -1,4 +1,14 @@
-from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Coroutine,
+    Dict,
+    List,
+    Optional,
+    Union,
+    cast,
+)
 
 import litellm
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
@@ -8,6 +18,9 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.utils import ModelResponse
+
+if TYPE_CHECKING:
+    pass
 
 ########################################################
 # init adapter
