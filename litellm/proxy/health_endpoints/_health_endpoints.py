@@ -381,34 +381,24 @@ async def health_endpoint(
     # Handle model_id parameter - convert to model name for health check
     target_model = model
     if model_id and not model:
-        # Find the model name from model_id
-        # Use the same logic as /model/info endpoint but adapted for health check
+        # Use get_deployment from router to find the model name
         if llm_router is not None:
-            # Get all models from router and find the one with matching model_id
             try:
-                all_models = []
-                if llm_model_list is not None:
-                    all_models = copy.deepcopy(llm_model_list)
-                
-                for model_item in all_models:
-                    try:
-                        # Try to access model_info and model_name
-                        if hasattr(model_item, 'model_info') and hasattr(model_item, 'model_name'):
-                            model_info = model_item.model_info
-                            model_name = model_item.model_name
-                            
-                            # Check if model_info has the matching id
-                            if hasattr(model_info, 'id') and model_info.id == model_id:
-                                target_model = model_name
-                                break
-                        
-                    except Exception:
-                        continue
-                        
-            except Exception:
-                pass
-        
-        if not target_model:
+                deployment = llm_router.get_deployment(model_id=model_id)
+                if deployment is not None:
+                    target_model = deployment.model_name
+                else:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={"error": f"Model with ID {model_id} not found"},
+                    )
+            except Exception as e:
+                verbose_proxy_logger.error(f"Error getting deployment for model_id {model_id}: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={"error": f"Model with ID {model_id} not found"},
+                )
+        else:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"Model with ID {model_id} not found"},
@@ -424,7 +414,7 @@ async def health_endpoint(
                 
                 # Optionally save health check result to database (non-blocking)
                 if prisma_client is not None:
-                    await _save_health_check_to_db(
+                    asyncio.create_task(_save_health_check_to_db(
                         prisma_client,
                         user_model,
                         healthy_endpoints,
@@ -432,7 +422,7 @@ async def health_endpoint(
                         start_time,
                         user_api_key_dict.user_id,
                         model_id=None  # CLI model doesn't have model_id
-                    )
+                    ))
                 
                 return {
                     "healthy_endpoints": healthy_endpoints,
@@ -459,7 +449,7 @@ async def health_endpoint(
 
             # Optionally save health check result to database (non-blocking)
             if prisma_client is not None and target_model is not None:
-                await _save_health_check_to_db(
+                asyncio.create_task(_save_health_check_to_db(
                     prisma_client,
                     target_model,
                     healthy_endpoints,
@@ -467,7 +457,7 @@ async def health_endpoint(
                     start_time,
                     user_api_key_dict.user_id,
                     model_id=model_id
-                )
+                ))
 
             return {
                 "healthy_endpoints": healthy_endpoints,
