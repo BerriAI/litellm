@@ -2907,7 +2907,8 @@ class ProxyUpdateSpend:
 
     @staticmethod
     def disable_spend_updates() -> bool:
-        return str_to_bool(os.getenv("DISABLE_SPEND_UPDATES", "False"))
+        result = str_to_bool(os.getenv("DISABLE_SPEND_UPDATES", "False"))
+        return result if result is not None else False
 
 
 async def update_spend(  # noqa: PLR0915
