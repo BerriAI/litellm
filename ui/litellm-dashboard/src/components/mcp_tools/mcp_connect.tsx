@@ -13,6 +13,8 @@ import {
   TabGroup,
   TabList,
   Tab,
+  Title as TremorTitle,
+  Text as TremorText,
 } from "@tremor/react";
 import { CopyIcon, Code, Terminal, Globe } from "lucide-react";
 import { getProxyBaseUrl } from "../networking";
@@ -182,10 +184,10 @@ const MCPConnect: React.FC = () => {
     <div className="p-6">
       <Space direction="vertical" size="large" className="w-full">
         <div>
-          <Title level={2}>Connect to your MCP client</Title>
-          <Paragraph>
+          <TremorTitle>Connect to your MCP client</TremorTitle>
+          <TremorText className="text-tremor-content">
             Use tools directly from any MCP client with LiteLLM MCP. Enable your AI assistant to perform real-world tasks through a simple, secure connection.
-          </Paragraph>
+          </TremorText>
         </div>
 
         <TabGroup className="w-full">
