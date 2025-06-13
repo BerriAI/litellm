@@ -162,9 +162,14 @@ const MCPServers: React.FC<MCPServerProps> = ({
         />
       ) : (
         <div className="w-full p-6">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-2">
             <h1 className="text-xl font-semibold">MCP Servers</h1>
           </div>
+          <CreateMCPServer
+            userRole={userRole}
+            accessToken={accessToken}
+            onCreateSuccess={createMCPServer}
+          />
           <DataTable
             columns={columns}
             data={mcpServers || []}
@@ -178,11 +183,6 @@ const MCPServers: React.FC<MCPServerProps> = ({
             title="Delete MCP Server"
             confirmDelete={confirmDelete}
             cancelDelete={cancelDelete}
-          />
-          <CreateMCPServer
-            userRole={userRole}
-            accessToken={accessToken}
-            onCreateSuccess={createMCPServer}
           />
         </div>
       )}
