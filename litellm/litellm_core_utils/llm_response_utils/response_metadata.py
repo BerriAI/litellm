@@ -38,7 +38,8 @@ class ResponseMetadata:
         """Set hidden parameters on the response"""
 
         ## ADD OTHER HIDDEN PARAMS
-        model_id = kwargs.get("model_info", {}).get("id", None)
+        model_info = kwargs.get("model_info", {}) or {}
+        model_id = model_info.get("id", None)
         new_params = {
             "litellm_call_id": getattr(logging_obj, "litellm_call_id", None),
             "api_base": get_api_base(model=model or "", optional_params=kwargs),
