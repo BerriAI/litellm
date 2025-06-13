@@ -123,7 +123,12 @@ def anthropic_messages_handler(
     is_async = kwargs.pop("is_async", False)
     # Use provided client or create a new one
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-    litellm_params = GenericLiteLLMParams(**kwargs)
+    litellm_params = GenericLiteLLMParams(
+        **kwargs,
+        api_key=api_key,
+        api_base=api_base,
+        custom_llm_provider=custom_llm_provider,
+    )
     (
         model,
         custom_llm_provider,
@@ -135,11 +140,12 @@ def anthropic_messages_handler(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
-    anthropic_messages_provider_config: Optional[BaseAnthropicMessagesConfig] = (
-        ProviderConfigManager.get_provider_anthropic_messages_config(
-            model=model,
-            provider=litellm.LlmProviders(custom_llm_provider),
-        )
+
+    anthropic_messages_provider_config: Optional[
+        BaseAnthropicMessagesConfig
+    ] = ProviderConfigManager.get_provider_anthropic_messages_config(
+        model=model,
+        provider=litellm.LlmProviders(custom_llm_provider),
     )
     if anthropic_messages_provider_config is None:
         # Handle non-Anthropic models using the adapter
@@ -159,6 +165,10 @@ def anthropic_messages_handler(
                 top_k=top_k,
                 top_p=top_p,
                 _is_async=is_async,
+                api_key=api_key,
+                api_base=api_base,
+                client=client,
+                custom_llm_provider=custom_llm_provider,
                 **kwargs,
             )
         )

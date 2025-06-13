@@ -104,6 +104,7 @@ class ResponsesToCompletionBridgeHandler:
             optional_params=optional_params,
             litellm_params=litellm_params,
             headers=headers,
+            litellm_logging_obj=logging_obj,
         )
         result = responses(
             **request_data,
@@ -160,6 +161,7 @@ class ResponsesToCompletionBridgeHandler:
             optional_params=optional_params,
             litellm_params=litellm_params,
             headers=headers,
+            litellm_logging_obj=logging_obj,
         )
         result = await aresponses(
             **request_data,
