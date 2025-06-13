@@ -3106,10 +3106,20 @@ def is_known_model(model: Optional[str], llm_router: Optional[Router]) -> bool:
 
 
 def join_paths(base_path: str, route: str) -> str:
-    # Remove trailing/leading slashes
-    base_path = base_path.strip("/")
-    route = route.strip("/")
-    return f"/{base_path}/{route}"
+    # Remove trailing slashes from base_path and leading slashes from route
+    base_path = base_path.rstrip("/")
+    route = route.lstrip("/")
+    
+    # If base_path is empty, return route with leading slash
+    if not base_path:
+        return f"/{route}" if route else "/"
+    
+    # If route is empty, return just base_path
+    if not route:
+        return base_path
+    
+    # Join with single slash
+    return f"{base_path}/{route}"
 
 
 def get_custom_url(request_base_url: str, route: Optional[str] = None) -> str:
@@ -3123,7 +3133,9 @@ def get_custom_url(request_base_url: str, route: Optional[str] = None) -> str:
     server_root_path = get_server_root_path()
     if route is not None:
         if server_root_path != "":
-            return join_paths(join_paths(base_url, server_root_path), route)
+            # First join base_url with server_root_path, then with route
+            intermediate_url = join_paths(base_url, server_root_path)
+            return join_paths(intermediate_url, route)
         else:
             return join_paths(base_url, route)
     else:
