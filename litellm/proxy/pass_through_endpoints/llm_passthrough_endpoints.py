@@ -1,5 +1,5 @@
 """
-What is this? 
+What is this?
 
 Provider-specific Pass-Through Endpoints
 
@@ -697,14 +697,21 @@ class VertexAIDiscoveryPassThroughHandler(BaseVertexAIPassThroughHandler):
 class VertexAIPassThroughHandler(BaseVertexAIPassThroughHandler):
     @staticmethod
     def get_default_base_target_url(vertex_location: Optional[str]) -> str:
-        return f"https://{vertex_location}-aiplatform.googleapis.com/"
+        return get_vertex_base_url(vertex_location)
 
     @staticmethod
     def update_base_target_url_with_credential_location(
         base_target_url: str, vertex_location: Optional[str]
     ) -> str:
-        return f"https://{vertex_location}-aiplatform.googleapis.com/"
+        return get_vertex_base_url(vertex_location)
 
+def get_vertex_base_url(vertex_location: Optional[str]) -> str:
+    """
+    Returns the base URL for Vertex AI based on the provided location.
+    """
+    if vertex_location == "global":
+        return "https://aiplatform.googleapis.com/"
+    return f"https://{vertex_location}-aiplatform.googleapis.com/"
 
 def get_vertex_pass_through_handler(
     call_type: Literal["discovery", "aiplatform"]
@@ -805,7 +812,7 @@ async def _base_vertex_proxy_route(
         )
 
     if base_target_url is None:
-        base_target_url = f"https://{vertex_location}-aiplatform.googleapis.com/"
+        base_target_url = get_vertex_base_url(vertex_location)
 
     request_route = encoded_endpoint
     verbose_proxy_logger.debug("request_route %s", request_route)
