@@ -315,6 +315,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if (
                     "parameters" in _openai_function_object
                     and _openai_function_object["parameters"] is not None
+                    and isinstance(_openai_function_object["parameters"], dict)
                 ):  # OPENAI accepts JSON Schema, Google accepts OpenAPI schema.
                     _openai_function_object["parameters"] = _build_vertex_schema(
                         _openai_function_object["parameters"]
@@ -344,6 +345,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 )
                 _description = openai_function_object.get("description", None)
                 _parameters = openai_function_object.get("parameters", None)
+                if isinstance(_parameters, str) and len(_parameters) == 0:
+                    _parameters = {
+                        "type": "object",
+                    }
                 if _description is not None:
                     gtool_func_declaration["description"] = _description
                 if _parameters is not None:
@@ -975,9 +980,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if "promptTokensDetails" in usage_metadata:
             for detail in usage_metadata["promptTokensDetails"]:
                 if detail["modality"] == "AUDIO":
-                    audio_tokens = detail["tokenCount"]
+                    audio_tokens = detail.get("tokenCount", 0)
                 elif detail["modality"] == "TEXT":
-                    text_tokens = detail["tokenCount"]
+                    text_tokens = detail.get("tokenCount", 0)
         if "thoughtsTokenCount" in usage_metadata:
             reasoning_tokens = usage_metadata["thoughtsTokenCount"]
         prompt_tokens_details = PromptTokensDetailsWrapper(

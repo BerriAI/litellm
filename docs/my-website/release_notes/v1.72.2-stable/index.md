@@ -1,12 +1,12 @@
 ---
-title: "[Pre Release] v1.72.2-stable"
+title: "v1.72.2-stable"
 slug: "v1-72-2-stable"
 date: 2025-06-07T10:00:00
 authors:
   - name: Krrish Dholakia
     title: CEO, LiteLLM
     url: https://www.linkedin.com/in/krish-d/
-    image_url: https://media.licdn.com/dms/image/v2/D4D03AQGrlsJ3aqpHmQ/profile-displayphoto-shrink_400_400/B4DZSAzgP7HYAg-/0/1737327772964?e=1749686400&v=beta&t=Hkl3U8Ps0VtvNxX0BNNq24b4dtX5wQaPFp6oiKCIHD8
+    image_url: https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg
   - name: Ishaan Jaffer
     title: CTO, LiteLLM
     url: https://www.linkedin.com/in/reffajnaahsi/
@@ -20,15 +20,6 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 
-:::info
-
-The release candidate is live now.
-
-The production release will be live on Wednesday.
-
-:::
-
-
 ## Deploy this version
 
 <Tabs>
@@ -38,15 +29,16 @@ The production release will be live on Wednesday.
 docker run
 -e STORE_MODEL_IN_DB=True
 -p 4000:4000
-ghcr.io/berriai/litellm:main-v1.72.2.rc
+ghcr.io/berriai/litellm:main-v1.72.2-stable
 ```
 </TabItem>
 
 <TabItem value="pip" label="Pip">
 
 ``` showLineNumbers title="pip install litellm"
-pip install litellm==1.72.2
+pip install litellm==1.72.2.post1
 ```
+
 </TabItem>
 </Tabs>
 
@@ -89,7 +81,7 @@ This is great for real time use cases with large requests (eg. multi turn conver
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 
-LiteLLM v1.72.2.rc now accurately tracks rate limits across keys, models, teams, and users with 0 spillover.
+LiteLLM now accurately tracks rate limits across keys, models, teams, and users with 0 spillover.
 
 This is a significant improvement over the previous version, which faced issues with leakage and spillover in high traffic, multi-instance setups.
 
@@ -98,7 +90,7 @@ This is a significant improvement over the previous version, which faced issues 
 - LiteLLM now uses Lua scripts to ensure all checks are atomic.
 - In-memory caching uses Redis values. This prevents drift, and reduces Redis queries once objects are over their limit.
 
-These changes are currently behind the feature flag - `ENABLE_MULTI_INSTANCE_RATE_LIMITING=True`. We plan to GA this in our next release - subject to feedback.
+These changes are currently behind the feature flag - `EXPERIMENTAL_ENABLE_MULTI_INSTANCE_RATE_LIMITING=True`. We plan to GA this in our next release - subject to feedback.
 
 ## Audit Logs on UI
 
@@ -278,4 +270,4 @@ Here's a Demo Instance to test changes:
     - Username: admin
     - Password: sk-1234
 
-## [Git Diff](https://github.com/BerriAI/litellm/releases)
+## [Git Diff](https://github.com/BerriAI/litellm/releases/tag/v1.72.2-stable)
