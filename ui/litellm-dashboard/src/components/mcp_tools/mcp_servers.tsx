@@ -176,8 +176,8 @@ const MCPServers: React.FC<MCPServerProps> = ({
         userRole={userRole}
       />
     ) : (
-      <div className="w-full p-6">
-        <div className="flex items-center justify-between mb-2">
+      <div>
+        <div className="mb-2 mt-4">
           <div>
             <Title>MCP Servers</Title>
             <Text className="text-tremor-content">
@@ -209,9 +209,9 @@ const MCPServers: React.FC<MCPServerProps> = ({
   );
 
   return (
-    <div className="w-full mx-4 h-[75vh]">
+    <div className="w-full h-[75vh] mt-8">
       <TabGroup className="h-full">
-        <TabList className="flex justify-start mt-2 w-full">
+        <TabList>
           <div className="flex">
             <Tab>Servers</Tab>
             <Tab>
