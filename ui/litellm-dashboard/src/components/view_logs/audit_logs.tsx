@@ -390,7 +390,7 @@ export default function AuditLogs({
   if (!premiumUser) {
     return (
       <div>
-        <Text>This is a LiteLLM Enterprise feature, and requires a valid key to use. Get a trial key <a href="https://litellm.ai/pricing" target="_blank" rel="noopener noreferrer">here</a>.</Text>
+        <Text>This is a LiteLLM Enterprise feature, and requires a valid key to use. Get a trial key <a href="https://www.litellm.ai/#pricing" target="_blank" rel="noopener noreferrer">here</a>.</Text>
       </div>
     );
   }
