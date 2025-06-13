@@ -86,7 +86,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if stream:
             completion_kwargs["stream"] = stream
 
-        excluded_keys = {"litellm_logging_obj", "anthropic_messages"}
+        excluded_keys = {"anthropic_messages"}
         extra_kwargs = extra_kwargs or {}
         for key, value in extra_kwargs.items():
             if (

@@ -1170,6 +1170,21 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> Optional[float]:
         return self._response_cost_calculator(result=result, cache_hit=cache_hit)
 
+    def should_run_logging(
+        self,
+        event_type: Literal[
+            "async_success", "sync_success", "async_failure", "sync_failure"
+        ],
+    ) -> bool:
+        try:
+            if self.model_call_details.get(f"has_logged_{event_type}", False) is True:
+                return False
+
+            self.model_call_details[f"has_logged_{event_type}"] = True
+            return True
+        except Exception as e:
+            return True
+
     def should_run_callback(
         self, callback: litellm.CALLBACK_TYPES, litellm_params: dict, event_hook: str
     ) -> bool:
@@ -1364,6 +1379,10 @@ class Logging(LiteLLMLoggingBaseClass):
         verbose_logger.debug(
             f"Logging Details LiteLLM-Success Call: Cache_hit={cache_hit}"
         )
+        if not self.should_run_logging(
+            event_type="sync_success"
+        ):  # prevent double logging
+            return
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time,
             end_time=end_time,
@@ -1840,6 +1859,7 @@ class Logging(LiteLLMLoggingBaseClass):
         print_verbose(
             "Logging Details LiteLLM-Async Success Call, cache_hit={}".format(cache_hit)
         )
+        self.should_run_logging(event_type="async_success")  # prevent double logging
 
         ## CALCULATE COST FOR BATCH JOBS
         if self.call_type == CallTypes.aretrieve_batch.value and isinstance(
@@ -2176,6 +2196,7 @@ class Logging(LiteLLMLoggingBaseClass):
         verbose_logger.debug(
             f"Logging Details LiteLLM-Failure Call: {litellm.failure_callback}"
         )
+        self.should_run_logging(event_type="sync_failure")  # prevent double logging
         try:
             start_time, end_time = self._failure_handler_helper_fn(
                 exception=exception,
@@ -2360,6 +2381,7 @@ class Logging(LiteLLMLoggingBaseClass):
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
         """
         await self.special_failure_handlers(exception=exception)
+        self.should_run_logging(event_type="async_failure")  # prevent double logging
         start_time, end_time = self._failure_handler_helper_fn(
             exception=exception,
             traceback_exception=traceback_exception,
