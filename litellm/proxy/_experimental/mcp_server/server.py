@@ -13,7 +13,7 @@ from starlette.types import Receive, Scope, Send
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_TOOL_NAME_PREFIX
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._experimental.mcp_server.auth import user_api_key_auth_mcp
+from litellm.proxy._experimental.mcp_server.auth import UserAPIKeyAuthMCP
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
@@ -328,7 +328,9 @@ if MCP_AVAILABLE:
         """Handle MCP requests through StreamableHTTP."""
         try:
             # Validate headers and log request info
-            user_api_key_auth: UserAPIKeyAuth = await user_api_key_auth_mcp(scope)
+            user_api_key_auth: UserAPIKeyAuth = (
+                await UserAPIKeyAuthMCP.user_api_key_auth_mcp(scope)
+            )
 
             # Store auth info in scope for MCP server functions to access
             scope["user_api_key_auth"] = user_api_key_auth
@@ -348,7 +350,9 @@ if MCP_AVAILABLE:
         """Handle MCP requests through SSE."""
         try:
             # Validate headers and log request info
-            user_api_key_auth: UserAPIKeyAuth = await user_api_key_auth_mcp(scope)
+            user_api_key_auth: UserAPIKeyAuth = (
+                await UserAPIKeyAuthMCP.user_api_key_auth_mcp(scope)
+            )
 
             # Store auth info in scope for MCP server functions to access
             scope["user_api_key_auth"] = user_api_key_auth
