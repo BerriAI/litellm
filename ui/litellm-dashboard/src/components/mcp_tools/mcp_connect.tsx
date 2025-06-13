@@ -179,7 +179,7 @@ const MCPConnect: React.FC = () => {
             "server_url": "${proxyBaseUrl}/mcp",
             "require_approval": "never",
             "headers": {
-                "Authorization": "Bearer YOUR_LITELLM_MCP_API_KEY"
+                "Authorization": "Bearer YOUR_LITELLM_API_KEY"
             }
         }
     ],
@@ -290,18 +290,6 @@ const MCPConnect: React.FC = () => {
         </Text>
       </div>
 
-      <Alert
-        message={
-          <div className="flex items-center gap-2">
-            <ShieldAlertIcon size={16} />
-            <span><strong>Security Notice:</strong> Treat your MCP server URL like a password! It can be used to run tools and access your data.</span>
-          </div>
-        }
-        type="warning"
-        showIcon={false}
-        className="border-amber-200 bg-amber-50"
-      />
-      
       <Card className="border border-gray-200">
         <Title level={5} className="mb-4 text-gray-800">Setup Instructions</Title>
         <Space direction="vertical" size="large" className="w-full">
@@ -328,19 +316,15 @@ const MCPConnect: React.FC = () => {
               code={`{
   "mcpServers": {
     "LiteLLM": {
-      "url": "${proxyBaseUrl}/mcp"
+      "url": "${proxyBaseUrl}/mcp",
+      "headers": {
+        "Authorization": "Bearer $LITELLM_API_KEY"
+      }
     }
   }
 }`}
-              copyKey="cursor-config"
+copyKey="cursor-config"
             />
-          </StepCard>
-
-          <StepCard
-            step={4}
-            title="Enable Agent Mode"
-          >
-            <Text className="text-gray-600">To use LiteLLM MCP within Cursor, set the chat to Agent mode</Text>
           </StepCard>
         </Space>
       </Card>
@@ -358,18 +342,6 @@ const MCPConnect: React.FC = () => {
           Connect to LiteLLM MCP using HTTP transport. Compatible with any MCP client that supports HTTP streaming.
         </Text>
       </div>
-
-      <Alert
-        message={
-          <div className="flex items-center gap-2">
-            <ShieldAlertIcon size={16} />
-            <span><strong>Security Notice:</strong> Treat your MCP server URL like a password! It can be used to run tools and access your data.</span>
-          </div>
-        }
-        type="warning"
-        showIcon={false}
-        className="border-amber-200 bg-amber-50"
-      />
       
       <FeatureCard
         icon={<Globe className="text-green-600" size={16} />}
