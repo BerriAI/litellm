@@ -2644,7 +2644,18 @@ async def _save_health_check_to_db(
         
         # Use database method if available
         if hasattr(prisma_client, 'save_health_check_result'):
-            result = await prisma_client.save_health_check_result(**health_check_data)
+            # Call with proper typed arguments instead of dictionary spread
+            result = await prisma_client.save_health_check_result(
+                model_name=model_name,
+                status=status,
+                healthy_count=healthy_count,
+                unhealthy_count=unhealthy_count,
+                error_message=error_message,
+                response_time_ms=response_time_ms,
+                details=details,
+                checked_by=checked_by,
+                model_id=model_id,
+            )
         else:
             # Fallback to direct database insert
             result = await prisma_client.db.litellm_healthchecktable.create(

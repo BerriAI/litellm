@@ -25,10 +25,8 @@ def mock_prisma_client():
     # Bind the actual methods from PrismaClient to the mock instance
     import types
     client.save_health_check_result = types.MethodType(PrismaClient.save_health_check_result, client)
-    client.get_latest_health_check = types.MethodType(PrismaClient.get_latest_health_check, client)
     client.get_health_check_history = types.MethodType(PrismaClient.get_health_check_history, client)
     client.get_all_latest_health_checks = types.MethodType(PrismaClient.get_all_latest_health_checks, client)
-    client._clean_json_data = types.MethodType(PrismaClient._clean_json_data, client)
     
     return client
 
@@ -92,24 +90,7 @@ class TestPrismaClientHealthCheckMethods:
         
         assert result is None
 
-    @pytest.mark.asyncio
-    async def test_get_latest_health_check_success(self, mock_prisma_client):
-        """Test retrieving latest health check for a model"""
-        mock_result = {
-            "id": "test-id",
-            "model_name": "gpt-3.5-turbo",
-            "status": "healthy",
-            "checked_at": datetime.now()
-        }
-        mock_prisma_client.db.litellm_healthchecktable.find_first = AsyncMock(return_value=mock_result)
-        
-        result = await mock_prisma_client.get_latest_health_check("gpt-3.5-turbo")
-        
-        mock_prisma_client.db.litellm_healthchecktable.find_first.assert_called_once_with(
-            where={"model_name": "gpt-3.5-turbo"},
-            order={"checked_at": "desc"}
-        )
-        assert result == mock_result
+
 
     @pytest.mark.asyncio
     async def test_get_health_check_history_success(self, mock_prisma_client):
