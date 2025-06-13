@@ -338,7 +338,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def _map_reasoning_effort(
-        reasoning_effort: Optional[Union[REASONING_EFFORT, str]]
+        reasoning_effort: Optional[Union[REASONING_EFFORT, str]],
     ) -> Optional[AnthropicThinkingParam]:
         if reasoning_effort is None:
             return None
@@ -832,9 +832,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
             completion_tokens_details=completion_token_details,
-            server_tool_use=ServerToolUse(web_search_requests=web_search_requests)
-            if web_search_requests is not None
-            else None,
+            server_tool_use=(
+                ServerToolUse(web_search_requests=web_search_requests)
+                if web_search_requests is not None
+                else None
+            ),
         )
         return usage
 
@@ -844,6 +846,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         json_mode: Optional[bool] = None,
+        prefix_prompt: Optional[str] = None,
     ):
         _hidden_params: Dict = {}
         _hidden_params["additional_headers"] = process_anthropic_headers(
@@ -876,6 +879,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 reasoning_content,
                 tool_calls,
             ) = self.extract_response_content(completion_response=completion_response)
+
+            if prefix_prompt is not None and not text_content.startswith(prefix_prompt):
+                text_content = prefix_prompt + text_content
 
             _message = litellm.Message(
                 tool_calls=tool_calls,
