@@ -144,6 +144,9 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.proxy._experimental.mcp_server.rest_endpoints import (
+    router as mcp_rest_endpoints_router,
+)
 from litellm.proxy._experimental.mcp_server.server import app as mcp_app
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
@@ -8301,3 +8304,4 @@ app.include_router(ui_discovery_endpoints_router)
 # MCP Server
 ########################################################
 app.mount(path=BASE_MCP_ROUTE, app=mcp_app)
+app.include_router(mcp_rest_endpoints_router)
