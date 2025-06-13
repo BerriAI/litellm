@@ -1329,6 +1329,7 @@ class Logging(LiteLLMLoggingBaseClass):
             ## RESPONSES API USAGE OBJECT TRANSFORMATION ##
             # MAP RESPONSES API USAGE OBJECT TO LITELLM USAGE OBJECT
             if isinstance(result, ResponsesAPIResponse):
+                result = result.model_copy()
                 setattr(
                     result,
                     "usage",
