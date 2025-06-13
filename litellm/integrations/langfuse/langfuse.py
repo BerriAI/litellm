@@ -676,8 +676,12 @@ class LangFuseLogger:
 
                 if _usage_obj:
                     usage = {
-                        "prompt_tokens": _usage_obj.prompt_tokens,
-                        "completion_tokens": _usage_obj.completion_tokens,
+                        "prompt_tokens": getattr(_usage_obj, "prompt_tokens", None)
+                        or getattr(response_obj, "input_tokens", None),
+                        "completion_tokens": getattr(
+                            _usage_obj, "completion_tokens", None
+                        )
+                        or getattr(response_obj, "output_tokens", None),
                         "total_cost": cost if self._supports_costs() else None,
                     }
             generation_name = clean_metadata.pop("generation_name", None)
