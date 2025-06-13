@@ -25,6 +25,8 @@ def mock_prisma_client():
     # Bind the actual methods from PrismaClient to the mock instance
     import types
     client.save_health_check_result = types.MethodType(PrismaClient.save_health_check_result, client)
+    client._validate_response_time = types.MethodType(PrismaClient._validate_response_time, client)
+    client._clean_details = types.MethodType(PrismaClient._clean_details, client)
     client.get_health_check_history = types.MethodType(PrismaClient.get_health_check_history, client)
     client.get_all_latest_health_checks = types.MethodType(PrismaClient.get_all_latest_health_checks, client)
     

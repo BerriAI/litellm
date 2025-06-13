@@ -2461,6 +2461,27 @@ class PrismaClient:
         )
 
     # Health Check Database Methods
+    def _validate_response_time(self, response_time_ms: Optional[float]) -> Optional[float]:
+        """Validate and clean response time value"""
+        if response_time_ms is None:
+            return None
+        try:
+            value = float(response_time_ms)
+            return value if value == value and value not in (float('inf'), float('-inf')) else None
+        except (ValueError, TypeError):
+            verbose_proxy_logger.warning(f"Invalid response_time_ms value: {response_time_ms}")
+            return None
+
+    def _clean_details(self, details: Optional[dict]) -> Optional[dict]:
+        """Clean and validate details JSON"""
+        if not isinstance(details, dict):
+            return None
+        try:
+            return safe_json_loads(safe_dumps(details))
+        except Exception as e:
+            verbose_proxy_logger.warning(f"Failed to clean details JSON: {e}")
+            return None
+
     async def save_health_check_result(
         self,
         model_name: str,
@@ -2473,10 +2494,9 @@ class PrismaClient:
         checked_by: Optional[str] = None,
         model_id: Optional[str] = None,
     ):
-        """
-        Save health check result to database
-        """
+        """Save health check result to database"""
         try:
+            # Build base data with required fields
             health_check_data = {
                 "model_name": str(model_name),
                 "status": str(status),
@@ -2484,48 +2504,23 @@ class PrismaClient:
                 "unhealthy_count": int(unhealthy_count),
             }
             
-            # Add error_message if provided
-            if error_message is not None:
-                # Truncate error messages to prevent DB field overflow
-                health_check_data["error_message"] = str(error_message)[:500]
+            # Add optional fields using dict comprehension and helper methods
+            optional_fields = {
+                "error_message": str(error_message)[:500] if error_message else None,
+                "response_time_ms": self._validate_response_time(response_time_ms),
+                "details": self._clean_details(details),
+                "checked_by": str(checked_by) if checked_by else None,
+                "model_id": str(model_id) if model_id else None,
+            }
             
-            # Add response_time_ms if valid
-            if response_time_ms is not None:
-                try:
-                    # Ensure it's a valid float and not NaN or infinite
-                    response_time_ms = float(response_time_ms)
-                    if response_time_ms == response_time_ms and response_time_ms != float('inf') and response_time_ms != float('-inf'):
-                        health_check_data["response_time_ms"] = response_time_ms
-                except (ValueError, TypeError):
-                    verbose_proxy_logger.warning(f"Invalid response_time_ms value: {response_time_ms}")
-            
-            # Clean and validate details JSON
-            if details is not None and isinstance(details, dict):
-                try:
-                    # Serialize and deserialize to ensure valid JSON and remove unsupported values
-                    serialized = safe_dumps(details)
-                    clean_details = safe_json_loads(serialized)
-                    health_check_data["details"] = clean_details
-                except Exception as detail_error:
-                    verbose_proxy_logger.warning(f"Failed to clean details JSON: {detail_error}")
-                    # Don't include details field if it fails
-            
-            # Add optional fields if they have valid values
-            if checked_by is not None:
-                health_check_data["checked_by"] = str(checked_by)
-            
-            if model_id is not None:
-                health_check_data["model_id"] = str(model_id)
+            # Add only non-None optional fields
+            health_check_data.update({k: v for k, v in optional_fields.items() if v is not None})
             
             verbose_proxy_logger.debug(f"Saving health check data: {health_check_data}")
+            return await self.db.litellm_healthchecktable.create(data=health_check_data)
             
-            result = await self.db.litellm_healthchecktable.create(
-                data=health_check_data
-            )
-            return result
         except Exception as e:
             verbose_proxy_logger.error(f"Error saving health check result for model {model_name}: {e}")
-            # Don't re-raise the exception to avoid breaking the health check flow
             return None
 
     async def get_health_check_history(
