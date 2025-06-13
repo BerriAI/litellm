@@ -22,6 +22,7 @@ class CompletionTransformationBridge(ABC):
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
+        litellm_logging_obj: "LiteLLMLoggingObj",
     ) -> dict:
         """Transform /chat/completions api request to another request"""
         pass
