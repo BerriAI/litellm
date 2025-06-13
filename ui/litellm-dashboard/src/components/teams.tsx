@@ -59,6 +59,7 @@ import { CogIcon } from "@heroicons/react/outline";
 import AvailableTeamsPanel from "@/components/team/available_teams";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import PremiumVectorStoreSelector from "./common_components/PremiumVectorStoreSelector";
+import PremiumMCPSelector from "./common_components/PremiumMCPSelector";
 import type { KeyResponse, Team } from "./key_team_helpers/key_list";
 
 interface TeamProps {
@@ -324,12 +325,21 @@ const Teams: React.FC<TeamProps> = ({
         }
 
         message.info("Creating Team");
-        // Transform allowed_vector_store_ids into object_permission
+        // Transform allowed_vector_store_ids and allowed_mcp_server_ids into object_permission
         if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
           formValues.object_permission = {
             vector_stores: formValues.allowed_vector_store_ids
           };
           delete formValues.allowed_vector_store_ids;
+        }
+
+        // Transform allowed_mcp_server_ids into object_permission
+        if (formValues.allowed_mcp_server_ids && formValues.allowed_mcp_server_ids.length > 0) {
+          if (!formValues.object_permission) {
+            formValues.object_permission = {};
+          }
+          formValues.object_permission.mcp_servers = formValues.allowed_mcp_server_ids;
+          delete formValues.allowed_mcp_server_ids;
         }
         const response: any = await teamCreateCall(accessToken, formValues);
         if (teams !== null) {
@@ -1090,6 +1100,27 @@ const Teams: React.FC<TeamProps> = ({
                               value={form.getFieldValue('allowed_vector_store_ids')}
                               accessToken={accessToken || ''}
                               placeholder="Select vector stores (optional)"
+                              premiumUser={premiumUser}
+                            />
+                          </Form.Item>
+                          <Form.Item 
+                            label={
+                              <span>
+                                Allowed MCP Servers{' '}
+                                <Tooltip title="Select which MCP servers this team can access by default. Leave empty for access to all MCP servers">
+                                  <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                                </Tooltip>
+                              </span>
+                            }
+                            name="allowed_mcp_server_ids"
+                            className="mt-8"
+                            help="Select MCP servers this team can access. Leave empty for access to all MCP servers"
+                          >
+                            <PremiumMCPSelector
+                              onChange={(values) => form.setFieldValue('allowed_mcp_server_ids', values)}
+                              value={form.getFieldValue('allowed_mcp_server_ids')}
+                              accessToken={accessToken || ''}
+                              placeholder="Select MCP servers (optional)"
                               premiumUser={premiumUser}
                             />
                           </Form.Item>
