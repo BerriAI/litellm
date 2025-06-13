@@ -1182,7 +1182,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
             self.model_call_details[f"has_logged_{event_type}"] = True
             return True
-        except Exception as e:
+        except Exception:
             return True
 
     def should_run_callback(
