@@ -19,6 +19,9 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 )
 from litellm.types.utils import ModelResponse
 
+if TYPE_CHECKING:
+    pass
+
 ########################################################
 # init adapter
 ANTHROPIC_ADAPTER = AnthropicAdapter()
