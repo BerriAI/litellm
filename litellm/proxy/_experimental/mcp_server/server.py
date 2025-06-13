@@ -209,10 +209,13 @@ if MCP_AVAILABLE:
         verbose_logger.debug(
             "GLOBAL MCP TOOLS: %s", global_mcp_tool_registry.list_tools()
         )
-        sse_tools: List[MCPTool] = await global_mcp_server_manager.list_tools()
-        verbose_logger.debug("SSE TOOLS: %s", sse_tools)
-        if sse_tools is not None:
-            tools.extend(sse_tools)
+
+        tools_from_mcp_servers: List[MCPTool] = (
+            await global_mcp_server_manager.list_tools()
+        )
+        verbose_logger.debug("TOOLS FROM MCP SERVERS: %s", tools_from_mcp_servers)
+        if tools_from_mcp_servers is not None:
+            tools.extend(tools_from_mcp_servers)
         return tools
 
     @server.call_tool()
