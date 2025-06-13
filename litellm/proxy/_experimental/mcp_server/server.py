@@ -6,23 +6,16 @@ import asyncio
 import contextlib
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException
 from pydantic import ConfigDict
 from starlette.types import Receive, Scope, Send
 
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_TOOL_NAME_PREFIX
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.utils import StandardLoggingMCPToolCall
 from litellm.utils import client
-
-router = APIRouter(
-    prefix="/mcp",
-    tags=["mcp"],
-)
 
 LITELLM_MCP_SERVER_NAME = "litellm-mcp-server"
 LITELLM_MCP_SERVER_VERSION = "1.0.0"
@@ -38,18 +31,6 @@ try:
 except ImportError as e:
     verbose_logger.debug(f"MCP module not found: {e}")
     MCP_AVAILABLE = False
-
-
-# Routes
-@router.get(
-    "/enabled",
-    description="Returns if the MCP server is enabled",
-)
-def get_mcp_server_enabled() -> Dict[str, bool]:
-    """
-    Returns if the MCP server is enabled
-    """
-    return {"enabled": MCP_AVAILABLE}
 
 
 # Global variables to track initialization
@@ -240,15 +221,15 @@ if MCP_AVAILABLE:
             "litellm_logging_obj", None
         )
         if litellm_logging_obj:
-            litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
-                standard_logging_mcp_tool_call
-            )
-            litellm_logging_obj.model_call_details["model"] = (
-                f"{MCP_TOOL_NAME_PREFIX}: {standard_logging_mcp_tool_call.get('name') or ''}"
-            )
-            litellm_logging_obj.model_call_details["custom_llm_provider"] = (
-                standard_logging_mcp_tool_call.get("mcp_server_name")
-            )
+            litellm_logging_obj.model_call_details[
+                "mcp_tool_call_metadata"
+            ] = standard_logging_mcp_tool_call
+            litellm_logging_obj.model_call_details[
+                "model"
+            ] = f"{MCP_TOOL_NAME_PREFIX}: {standard_logging_mcp_tool_call.get('name') or ''}"
+            litellm_logging_obj.model_call_details[
+                "custom_llm_provider"
+            ] = standard_logging_mcp_tool_call.get("mcp_server_name")
 
         # Try managed server tool first
         if name in global_mcp_server_manager.tool_name_to_mcp_server_name_mapping:
@@ -331,81 +312,6 @@ if MCP_AVAILABLE:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             raise e
 
-    ########################################################
-    ############ MCP Server REST API Routes #################
-    ########################################################
-    @router.get("/tools/list", dependencies=[Depends(user_api_key_auth)])
-    async def list_tool_rest_api(
-        server_id: Optional[str] = Query(
-            None, description="The server id to list tools for"
-        ),
-        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    ) -> List[ListMCPToolsRestAPIResponseObject]:
-        """
-        List all available tools with information about the server they belong to.
-
-        Example response:
-        Tools:
-        [
-            {
-                "name": "create_zap",
-                "description": "Create a new zap",
-                "inputSchema": "tool_input_schema",
-                "mcp_info": {
-                    "server_name": "zapier",
-                    "logo_url": "https://www.zapier.com/logo.png",
-                }
-            },
-            {
-                "name": "fetch_data",
-                "description": "Fetch data from a URL",
-                "inputSchema": "tool_input_schema",
-                "mcp_info": {
-                    "server_name": "fetch",
-                    "logo_url": "https://www.fetch.com/logo.png",
-                }
-            }
-        ]
-        """
-        list_tools_result: List[ListMCPToolsRestAPIResponseObject] = []
-        for server in global_mcp_server_manager.get_registry().values():
-            if server_id and server.server_id != server_id:
-                continue
-            try:
-                tools = await global_mcp_server_manager._get_tools_from_server(server)
-                for tool in tools:
-                    list_tools_result.append(
-                        ListMCPToolsRestAPIResponseObject(
-                            name=tool.name,
-                            description=tool.description,
-                            inputSchema=tool.inputSchema,
-                            mcp_info=server.mcp_info,
-                        )
-                    )
-            except Exception as e:
-                verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
-                continue
-        return list_tools_result
-
-    @router.post("/tools/call", dependencies=[Depends(user_api_key_auth)])
-    async def call_tool_rest_api(
-        request: Request,
-        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    ):
-        """
-        REST API to call a specific MCP tool with the provided arguments
-        """
-        from litellm.proxy.proxy_server import add_litellm_data_to_request, proxy_config
-
-        data = await request.json()
-        data = await add_litellm_data_to_request(
-            data=data,
-            request=request,
-            user_api_key_dict=user_api_key_dict,
-            proxy_config=proxy_config,
-        )
-        return await call_mcp_tool(**data)
-
     app = FastAPI(
         title=LITELLM_MCP_SERVER_NAME,
         description=LITELLM_MCP_SERVER_DESCRIPTION,
@@ -413,8 +319,16 @@ if MCP_AVAILABLE:
         lifespan=lifespan,
     )
 
-    # Include the MCP router
-    app.include_router(router)
+    # Routes
+    @app.get(
+        "/enabled",
+        description="Returns if the MCP server is enabled",
+    )
+    def get_mcp_server_enabled() -> Dict[str, bool]:
+        """
+        Returns if the MCP server is enabled
+        """
+        return {"enabled": MCP_AVAILABLE}
 
     # Mount the MCP handlers
     app.mount("/", handle_streamable_http_mcp)

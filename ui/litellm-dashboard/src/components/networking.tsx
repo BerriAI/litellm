@@ -4609,8 +4609,8 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
   try {
     // Construct base URL
     let url = proxyBaseUrl 
-      ? `${proxyBaseUrl}/mcp/tools/list?server_id=${serverId}`
-      : `/mcp/tools/list?server_id=${serverId}`;
+      ? `${proxyBaseUrl}/mcp-rest/tools/list?server_id=${serverId}`
+      : `/mcp-rest/tools/list?server_id=${serverId}`;
 
     console.log("Fetching MCP tools from:", url);
     
@@ -4642,8 +4642,8 @@ export const callMCPTool = async (accessToken: string, toolName: string, toolArg
   try {
     // Construct base URL
     let url = proxyBaseUrl 
-      ? `${proxyBaseUrl}/mcp/tools/call`
-      : `/mcp/tools/call`;
+      ? `${proxyBaseUrl}/mcp-rest/tools/call`
+      : `/mcp-rest/tools/call`;
 
     console.log("Calling MCP tool:", toolName, "with arguments:", toolArguments);
     
