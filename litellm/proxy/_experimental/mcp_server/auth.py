@@ -101,8 +101,9 @@ class UserAPIKeyAuthMCP:
             # Return empty Headers object with empty dict
             return Headers({})
 
+    @staticmethod
     async def get_allowed_mcp_servers(
-        self, user_api_key_auth: UserAPIKeyAuth
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[str]:
         """
         Apply least privilege
@@ -110,11 +111,11 @@ class UserAPIKeyAuthMCP:
         from typing import List
 
         allowed_mcp_servers: List[str] = []
-        allowed_mcp_servers_for_key = self._get_allowed_mcp_servers_for_key(
-            user_api_key_auth
+        allowed_mcp_servers_for_key = (
+            UserAPIKeyAuthMCP._get_allowed_mcp_servers_for_key(user_api_key_auth)
         )
-        allowed_mcp_servers_for_team = await self._get_allowed_mcp_servers_for_team(
-            user_api_key_auth
+        allowed_mcp_servers_for_team = (
+            await UserAPIKeyAuthMCP._get_allowed_mcp_servers_for_team(user_api_key_auth)
         )
 
         #########################################################
@@ -134,9 +135,13 @@ class UserAPIKeyAuthMCP:
 
         return list(set(allowed_mcp_servers))
 
+    @staticmethod
     def _get_allowed_mcp_servers_for_key(
-        self, user_api_key_auth: UserAPIKeyAuth
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[str]:
+        if user_api_key_auth is None:
+            return []
+
         object_permissions = user_api_key_auth.object_permission
         if object_permissions is None:
             return []
@@ -146,8 +151,9 @@ class UserAPIKeyAuthMCP:
 
         return object_permissions.mcp_servers
 
+    @staticmethod
     async def _get_allowed_mcp_servers_for_team(
-        self, user_api_key_auth: UserAPIKeyAuth
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[str]:
         """
         The `object_permission` for a team is not stored on the user_api_key_auth object
@@ -161,6 +167,9 @@ class UserAPIKeyAuthMCP:
             proxy_logging_obj,
             user_api_key_cache,
         )
+
+        if user_api_key_auth is None:
+            return []
 
         if user_api_key_auth.team_id is None:
             return []

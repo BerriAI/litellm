@@ -17,6 +17,7 @@ from mcp.types import CallToolResult
 from mcp.types import Tool as MCPTool
 
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.auth import UserAPIKeyAuthMCP
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     MCPAuthType,
@@ -24,6 +25,7 @@ from litellm.proxy._types import (
     MCPSpecVersionType,
     MCPTransport,
     MCPTransportType,
+    UserAPIKeyAuth,
 )
 
 try:
@@ -130,17 +132,39 @@ class MCPServerManager:
                 f"Added MCP Server: {mcp_server.alias or mcp_server.server_id}"
             )
 
-    async def list_tools(self) -> List[MCPTool]:
+    async def get_allowed_mcp_servers(
+        self, user_api_key_auth: Optional[UserAPIKeyAuth] = None
+    ) -> List[str]:
+        """
+        Get the allowed MCP Servers for the user
+        """
+        allowed_mcp_servers = await UserAPIKeyAuthMCP.get_allowed_mcp_servers(
+            user_api_key_auth
+        )
+        if len(allowed_mcp_servers) > 0:
+            return allowed_mcp_servers
+        else:
+            return list(self.get_registry().keys())
+
+    async def list_tools(
+        self, user_api_key_auth: Optional[UserAPIKeyAuth] = None
+    ) -> List[MCPTool]:
         """
         List all tools available across all MCP Servers.
 
         Returns:
             List[MCPTool]: Combined list of tools from all servers
         """
+        allowed_mcp_servers = await self.get_allowed_mcp_servers(user_api_key_auth)
+
         list_tools_result: List[MCPTool] = []
         verbose_logger.debug("SERVER MANAGER LISTING TOOLS")
 
-        for _, server in self.get_registry().items():
+        for server_id in allowed_mcp_servers:
+            server = self.get_mcp_server_by_id(server_id)
+            if server is None:
+                verbose_logger.warning(f"MCP Server {server_id} not found")
+                continue
             try:
                 tools = await self._get_tools_from_server(server)
                 list_tools_result.extend(tools)
