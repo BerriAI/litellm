@@ -325,9 +325,9 @@ force_ipv4: bool = (
     False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 )
 module_level_aclient = AsyncHTTPHandler(
-    timeout=request_timeout, client_alias="module level aclient", mounts=async_proxy_mounts
+    timeout=request_timeout, client_alias="module level aclient"
 )
-module_level_client = HTTPHandler(timeout=request_timeout, mounts=sync_proxy_mounts)
+module_level_client = HTTPHandler(timeout=request_timeout)
 
 #### RETRIES ####
 num_retries: Optional[int] = None  # per model endpoint
