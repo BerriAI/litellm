@@ -209,7 +209,7 @@ const MCPServers: React.FC<MCPServerProps> = ({
   );
 
   return (
-    <div className="w-full h-[75vh] mt-8">
+    <div className="w-full h-[75vh] mt-8 p-6">
       <TabGroup className="h-full">
         <TabList>
           <div className="flex">
