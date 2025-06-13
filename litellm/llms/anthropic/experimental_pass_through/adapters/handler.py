@@ -20,7 +20,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
-    from litellm.types.router import GenericLiteLLMParams
+    pass
 
 ########################################################
 # init adapter
