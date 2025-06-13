@@ -125,11 +125,6 @@ class UserAPIKeyAuthMCP:
             for _mcp_server in allowed_mcp_servers_for_key:
                 if _mcp_server in allowed_mcp_servers_for_team:
                     allowed_mcp_servers.append(_mcp_server)
-
-            #########################################################
-            # Add the team's mcp_servers to the allowed_mcp_servers
-            #########################################################
-            allowed_mcp_servers.extend(allowed_mcp_servers_for_team)
         else:
             allowed_mcp_servers = allowed_mcp_servers_for_key
 
