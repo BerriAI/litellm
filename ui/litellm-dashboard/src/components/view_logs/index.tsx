@@ -175,18 +175,6 @@ export default function SpendLogsTable({
     );
   };
 
-  const getRefreshIntervalInMs = (interval: { value: number; unit: string }) => {
-    const unitToMs: Record<string, number> = {
-      'minute': 60 * 1000,
-      'minutes': 60 * 1000,
-      'hour': 60 * 60 * 1000,
-      'hours': 60 * 60 * 1000,
-      'day': 24 * 60 * 60 * 1000,
-      'days': 24 * 60 * 60 * 1000
-    };
-    return interval.value * (unitToMs[interval.unit] || 0);
-  };
-
   const logs = useQuery<PaginatedResponse>({
     queryKey: [
       "logs",
@@ -257,7 +245,7 @@ export default function SpendLogsTable({
       return response;
     },
     enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs",
-    refetchInterval: isLiveTail ? getRefreshIntervalInMs(selectedTimeInterval) : false,
+    refetchInterval: isLiveTail ? 15000 : false,
     refetchIntervalInBackground: true,
   });
 
@@ -755,7 +743,7 @@ export default function SpendLogsTable({
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                       </svg>
                       <span className="text-sm text-green-700">
-                        Auto-refreshing every {selectedTimeInterval.value} {formatTimeUnit(selectedTimeInterval.value, selectedTimeInterval.unit)}
+                        Auto-refreshing every 15 seconds
                       </span>
                     </div>
                     <button
