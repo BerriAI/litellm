@@ -157,7 +157,7 @@ export default function SpendLogsTable({
       setFilterByCurrentUser(true);
     }
   }, [userRole]);
-  
+
   const LiveTailControls = () => {
     return (
       <div className="flex items-center gap-2">
@@ -173,6 +173,18 @@ export default function SpendLogsTable({
         </label>
       </div>
     );
+  };
+
+  const getRefreshIntervalInMs = (interval: { value: number; unit: string }) => {
+    const unitToMs: Record<string, number> = {
+      'minute': 60 * 1000,
+      'minutes': 60 * 1000,
+      'hour': 60 * 60 * 1000,
+      'hours': 60 * 60 * 1000,
+      'day': 24 * 60 * 60 * 1000,
+      'days': 24 * 60 * 60 * 1000
+    };
+    return interval.value * (unitToMs[interval.unit] || 0);
   };
 
   const logs = useQuery<PaginatedResponse>({
@@ -245,7 +257,7 @@ export default function SpendLogsTable({
       return response;
     },
     enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs",
-    refetchInterval: isLiveTail ? selectedTimeInterval.value * 1000 : false, // Convert to milliseconds
+    refetchInterval: isLiveTail ? getRefreshIntervalInMs(selectedTimeInterval) : false,
     refetchIntervalInBackground: true,
   });
 
@@ -464,8 +476,31 @@ export default function SpendLogsTable({
   }
 
   const formatTimeUnit = (value: number, unit: string) => {
-    return value === 1 ? unit.slice(0, -1) : unit; // Remove 's' if value is 1
+    if (value === 1) {
+      if (unit === 'minutes') return 'minute';
+      if (unit === 'hours') return 'hour';
+      if (unit === 'days') return 'day';
+    }
+    return unit;
   };
+
+  const quickSelectOptions = [
+    { label: "Last 1 Minute", value: 1, unit: "minute" },
+    { label: "Last 15 Minutes", value: 15, unit: "minutes" },
+    { label: "Last Hour", value: 1, unit: "hours" },
+    { label: "Last 4 Hours", value: 4, unit: "hours" },
+    { label: "Last 24 Hours", value: 24, unit: "hours" },
+    { label: "Last 7 Days", value: 7, unit: "days" },
+  ];
+
+  const selectedOption = quickSelectOptions.find(
+    (option) =>
+      option.value === selectedTimeInterval.value && option.unit === selectedTimeInterval.unit
+  );
+
+  const displayLabel = isCustomDate
+    ? getTimeRangeDisplay(isCustomDate, startTime, endTime)
+    : selectedOption?.label;
 
   return (
     <div className="w-full p-6">
@@ -558,23 +593,17 @@ export default function SpendLogsTable({
                                 d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
                               />
                             </svg>
-                            {getTimeRangeDisplay(isCustomDate, startTime, endTime)}
+                            {displayLabel}
                           </button>
 
                           {quickSelectOpen && (
                             <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border p-2 z-50">
                               <div className="space-y-1">
-                                {[
-                                  { label: "Last 15 Minutes", value: 15, unit: "minutes" },
-                                  { label: "Last Hour", value: 1, unit: "hours" },
-                                  { label: "Last 4 Hours", value: 4, unit: "hours" },
-                                  { label: "Last 24 Hours", value: 24, unit: "hours" },
-                                  { label: "Last 7 Days", value: 7, unit: "days" },
-                                ].map((option) => (
+                                {quickSelectOptions.map((option) => (
                                   <button
                                     key={option.label}
                                     className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${
-                                      getTimeRangeDisplay(isCustomDate, startTime, endTime) === option.label ? 'bg-blue-50 text-blue-600' : ''
+                                      displayLabel === option.label ? 'bg-blue-50 text-blue-600' : ''
                                     }`}
                                     onClick={() => {
                                       setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
