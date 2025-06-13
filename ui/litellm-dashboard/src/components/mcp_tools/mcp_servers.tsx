@@ -1,7 +1,5 @@
 import React, { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-
-import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
+import { useQuery } from "@tanstack/react-query";
 
 import {
   Modal,
@@ -10,19 +8,12 @@ import {
 } from "antd";
 
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-  Icon,
-  Button,
   Grid,
   Col,
   Title,
-  TextInput,
 } from "@tremor/react";
+import { DataTable } from "../view_logs/table";
+import { mcpServerColumns } from "./mcp_server_columns";
 
 import {
   deleteMCPServer,
@@ -37,12 +28,6 @@ import {
 import { isAdminRole } from "@/utils/roles";
 import { MCPServerView } from "./mcp_server_view";
 import CreateMCPServer from "./create_mcp_server";
-
-const displayFriendlyId = (id: string) => {
-  return `${id.slice(0, 7)}...`;
-};
-
-
 
 interface DeleteModalProps {
   isModalOpen: boolean;
@@ -105,11 +90,25 @@ const MCPServers: React.FC<MCPServerProps> = ({
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
   const [editServer, setEditServer] = useState(false);
 
-  const handleDelete = (server_id: string) => {
+  const columns = React.useMemo(
+    () =>
+      mcpServerColumns(
+        userRole,
+        (serverId: string) => setSelectedServerId(serverId),
+        (serverId: string) => {
+          setSelectedServerId(serverId);
+          setEditServer(true);
+        },
+        handleDelete
+      ),
+    [userRole, handleDelete]
+  );
+
+  function handleDelete(server_id: string) {
     // Set the team to delete and open the confirmation modal
     setServerToDelete(server_id);
     setIsDeleteModalOpen(true);
-  };
+  }
 
   const confirmDelete = async () => {
     if (serverIdToDelete == null || accessToken == null) {
@@ -166,119 +165,14 @@ const MCPServers: React.FC<MCPServerProps> = ({
           <div className="flex items-center justify-between mb-4">
             <h1 className="text-xl font-semibold">MCP Servers</h1>
           </div>
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableHeaderCell>Server ID</TableHeaderCell>
-                <TableHeaderCell>Server Name</TableHeaderCell>
-                <TableHeaderCell>Description</TableHeaderCell>
-                <TableHeaderCell>Transport</TableHeaderCell>
-                <TableHeaderCell>Auth Type</TableHeaderCell>
-                <TableHeaderCell>Url</TableHeaderCell>
-                <TableHeaderCell>Created</TableHeaderCell>
-                <TableHeaderCell>Info</TableHeaderCell>
-              </TableRow>
-            </TableHead>
-
-            <TableBody>
-              {!mcpServers || mcpServers.length == 0
-                ? []
-                : mcpServers.map((mcpServer: MCPServer) => (
-                    <TableRow key={mcpServer.server_id}>
-                      <TableCell>
-                        <div className="overflow-hidden">
-                          <Tooltip title={mcpServer.server_id}>
-                            <Button
-                              size="xs"
-                              variant="light"
-                              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
-                              onClick={() => {
-                                // Add click handler
-                                setSelectedServerId(mcpServer.server_id);
-                              }}
-                            >
-                              {displayFriendlyId(mcpServer.server_id)}
-                            </Button>
-                          </Tooltip>
-                        </div>
-                      </TableCell>
-                      <TableCell
-                        style={{
-                          maxWidth: "4px",
-                          whiteSpace: "pre-wrap",
-                          overflow: "hidden",
-                        }}
-                      >
-                        {mcpServer.alias}
-                      </TableCell>
-                      <TableCell
-                        style={{
-                          maxWidth: "4px",
-                          whiteSpace: "pre-wrap",
-                          overflow: "hidden",
-                        }}
-                      >
-                        {mcpServer.description}
-                      </TableCell>
-                      <TableCell
-                        style={{
-                          maxWidth: "4px",
-                          whiteSpace: "pre-wrap",
-                          overflow: "hidden",
-                        }}
-                      >
-                        {handleTransport(mcpServer.transport)}
-                      </TableCell>
-                      <TableCell
-                        style={{
-                          maxWidth: "4px",
-                          whiteSpace: "pre-wrap",
-                          overflow: "hidden",
-                        }}
-                      >
-                        {handleAuth(mcpServer.auth_type)}
-                      </TableCell>
-                      <TableCell>
-                        <div className="overflow-hidden">
-                          <Tooltip title={mcpServer.url}>
-                            {mcpServer.url}
-                          </Tooltip>
-                        </div>
-                      </TableCell>
-                      <TableCell
-                        style={{
-                          maxWidth: "4px",
-                          whiteSpace: "pre-wrap",
-                          overflow: "hidden",
-                        }}
-                      >
-                        {mcpServer.created_at
-                          ? new Date(mcpServer.created_at).toLocaleDateString()
-                          : "N/A"}
-                      </TableCell>
-                      <TableCell>
-                        {isAdminRole(userRole) ? (
-                          <>
-                            <Icon
-                              icon={PencilAltIcon}
-                              size="sm"
-                              onClick={() => {
-                                setSelectedServerId(mcpServer.server_id);
-                                setEditServer(true);
-                              }}
-                            />
-                            <Icon
-                              onClick={() => handleDelete(mcpServer.server_id)}
-                              icon={TrashIcon}
-                              size="sm"
-                            />
-                          </>
-                        ) : null}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-            </TableBody>
-          </Table>
+          <DataTable
+            columns={columns}
+            data={mcpServers || []}
+            renderSubComponent={() => <></>}
+            getRowCanExpand={() => false}
+            isLoading={isLoadingServers}
+            noDataMessage="No MCP Servers found"
+          />
           <DeleteModal
             isModalOpen={isDeleteModalOpen}
             title="Delete MCP Server"
