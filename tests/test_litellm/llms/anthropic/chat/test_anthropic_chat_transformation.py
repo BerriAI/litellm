@@ -207,3 +207,12 @@ def test_add_code_execution_tool():
     assert tools is not None
     assert len(tools) == 1
     assert tools[0]["type"] == "code_execution_20250522"
+
+
+def test_map_tool_choice():
+    config = AnthropicConfig()
+
+    tool_choice = "none"
+    result = config._map_tool_choice(tool_choice=tool_choice, parallel_tool_use=None)
+    assert result is not None
+    assert result["type"] == "none"

@@ -157,6 +157,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
         elif tool_choice == "required":
             _tool_choice = AnthropicMessagesToolChoice(type="any")
+        elif tool_choice == "none":
+            _tool_choice = AnthropicMessagesToolChoice(type="none")
         elif isinstance(tool_choice, dict):
             _tool_name = tool_choice.get("function", {}).get("name")
             _tool_choice = AnthropicMessagesToolChoice(type="tool")
@@ -338,7 +340,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def _map_reasoning_effort(
-        reasoning_effort: Optional[Union[REASONING_EFFORT, str]]
+        reasoning_effort: Optional[Union[REASONING_EFFORT, str]],
     ) -> Optional[AnthropicThinkingParam]:
         if reasoning_effort is None:
             return None
@@ -832,9 +834,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
             completion_tokens_details=completion_token_details,
-            server_tool_use=ServerToolUse(web_search_requests=web_search_requests)
-            if web_search_requests is not None
-            else None,
+            server_tool_use=(
+                ServerToolUse(web_search_requests=web_search_requests)
+                if web_search_requests is not None
+                else None
+            ),
         )
         return usage
 
