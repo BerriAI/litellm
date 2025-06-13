@@ -106,6 +106,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
+        litellm_logging_obj: "LiteLLMLoggingObj",
     ) -> dict:
         from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 
@@ -162,9 +163,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         api_model = model
 
+        from litellm.types.utils import CallTypes
+
+        setattr(litellm_logging_obj, "call_type", CallTypes.responses.value)
+
         request_data = {
             "model": api_model,
             "input": input_items,
+            "litellm_logging_obj": litellm_logging_obj,
             **litellm_params,
         }
 
