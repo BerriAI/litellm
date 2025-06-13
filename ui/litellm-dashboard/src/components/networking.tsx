@@ -4578,6 +4578,33 @@ export const createMCPServer = async (
   }
 };
 
+export const updateMCPServer = async (
+  accessToken: string,
+  formValues: Record<string, any>
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
+    const response = await fetch(url, {
+      method: "PUT",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(formValues),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to update MCP server:", error);
+    throw error;
+  }
+};
+
 export const deleteMCPServer = async (
   accessToken: String,
   serverId: String

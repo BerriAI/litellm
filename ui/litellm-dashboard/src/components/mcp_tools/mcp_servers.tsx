@@ -153,7 +153,11 @@ const MCPServers: React.FC<MCPServerProps> = ({
               (server: MCPServer) => server.server_id === selectedServerId
             ) || {}
           }
-          onBack={() => setSelectedServerId(null)}
+          onBack={() => {
+            setEditServer(false);
+            setSelectedServerId(null);
+            refetch();
+          }}
           isProxyAdmin={isAdminRole(userRole)}
           isEditing={editServer}
           accessToken={accessToken}
