@@ -1326,6 +1326,17 @@ class Logging(LiteLLMLoggingBaseClass):
             else:  # streaming chunks + image gen.
                 self.model_call_details["response_cost"] = None
 
+            ## RESPONSES API USAGE OBJECT TRANSFORMATION ##
+            # MAP RESPONSES API USAGE OBJECT TO LITELLM USAGE OBJECT
+            if isinstance(result, ResponsesAPIResponse):
+                setattr(
+                    result,
+                    "usage",
+                    ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                        result.usage
+                    ),
+                )
+
             if (
                 litellm.max_budget
                 and self.stream is False
