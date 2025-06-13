@@ -80,7 +80,6 @@ export default function SpendLogsTable({
     moment().format("YYYY-MM-DDTHH:mm")
   );
 
-  // Add these new state variables at the top with other useState declarations
   const [isCustomDate, setIsCustomDate] = useState(false);
   const [quickSelectOpen, setQuickSelectOpen] = useState(false);
   const [tempTeamId, setTempTeamId] = useState("");
@@ -100,6 +99,13 @@ export default function SpendLogsTable({
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
   const queryClient = useQueryClient();
+
+  const [isLiveTail, setIsLiveTail] = useState(true); // Default to true
+
+  const [selectedTimeInterval, setSelectedTimeInterval] = useState<{ value: number; unit: string }>({ 
+    value: 24, 
+    unit: "hours" 
+  });
 
   useEffect(() => {
     const fetchKeyInfo = async () => {
@@ -151,6 +157,23 @@ export default function SpendLogsTable({
       setFilterByCurrentUser(true);
     }
   }, [userRole]);
+  
+  const LiveTailControls = () => {
+    return (
+      <div className="flex items-center gap-2">
+        <label className="relative inline-flex items-center cursor-pointer">
+          <input
+            type="checkbox"
+            className="sr-only peer"
+            checked={isLiveTail}
+            onChange={(e) => setIsLiveTail(e.target.checked)}
+          />
+          <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
+          <span className="ml-2 text-sm font-medium text-gray-900">Live Tail</span>
+        </label>
+      </div>
+    );
+  };
 
   const logs = useQuery<PaginatedResponse>({
     queryKey: [
@@ -222,7 +245,7 @@ export default function SpendLogsTable({
       return response;
     },
     enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs",
-    refetchInterval: 5000,
+    refetchInterval: isLiveTail ? selectedTimeInterval.value * 1000 : false, // Convert to milliseconds
     refetchIntervalInBackground: true,
   });
 
@@ -440,6 +463,10 @@ export default function SpendLogsTable({
     );
   }
 
+  const formatTimeUnit = (value: number, unit: string) => {
+    return value === 1 ? unit.slice(0, -1) : unit; // Remove 's' if value is 1
+  };
+
   return (
     <div className="w-full p-6">
       <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "request logs" : "audit logs")}>
@@ -556,8 +583,9 @@ export default function SpendLogsTable({
                                           .subtract(option.value, option.unit as any)
                                           .format("YYYY-MM-DDTHH:mm")
                                       );
-                                      setQuickSelectOpen(false);
+                                      setSelectedTimeInterval({ value: option.value, unit: option.unit });
                                       setIsCustomDate(false);
+                                      setQuickSelectOpen(false);
                                     }}
                                   >
                                     {option.label}
@@ -576,6 +604,8 @@ export default function SpendLogsTable({
                             </div>
                           )}
                         </div>
+                        
+                        <LiveTailControls />
                         
                         <button
                           onClick={handleRefresh}
@@ -689,6 +719,24 @@ export default function SpendLogsTable({
                     </div>
                   </div>
                 </div>
+                {isLiveTail && (
+                  <div className="mb-4 px-4 py-2 bg-green-50 border border-greem-200 rounded-md flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <svg className="w-4 h-4 text-green-600 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      <span className="text-sm text-green-700">
+                        Auto-refreshing every {selectedTimeInterval.value} {formatTimeUnit(selectedTimeInterval.value, selectedTimeInterval.unit)}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => setIsLiveTail(false)}
+                      className="text-sm text-green-600 hover:text-green-800"
+                    >
+                      Stop
+                    </button>
+                  </div>
+                )}
                 <DataTable
                   columns={columns}
                   data={filteredData}
