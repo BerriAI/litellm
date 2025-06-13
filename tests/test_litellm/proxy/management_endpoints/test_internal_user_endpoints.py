@@ -391,6 +391,12 @@ async def test_assign_user_team_role_at_user_creation(mocker):
     # Mock prisma client
     mock_prisma_client = mocker.MagicMock()
 
+    # Setup the mock count response as an async function
+    async def mock_count(*args, **kwargs):
+        return 0 
+
+    mock_prisma_client.db.litellm_usertable.count = mock_count
+
     # Mock helper function _check_duplicate_user_email
     async def mock__check_duplicate_user_email(*args, **kwargs):
         return None
@@ -477,6 +483,12 @@ async def test_assigning_admin_team_role_at_user_creation_as_non_enterprise_user
 
     # Mock prisma client
     mock_prisma_client = mocker.MagicMock()
+
+    # Setup the mock count response as an async function
+    async def mock_count(*args, **kwargs):
+        return 0 
+
+    mock_prisma_client.db.litellm_usertable.count = mock_count
 
     # Mock helper function _check_duplicate_user_email
     async def mock__check_duplicate_user_email(*args, **kwargs):
