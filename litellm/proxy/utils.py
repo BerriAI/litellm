@@ -2801,7 +2801,7 @@ class ProxyUpdateSpend:
             ## Do this in bulk ##
             # 1. get request status for each transaction
             _spend_logs_payload = []
-            _end_user_list_transactions = {}  # key = end_user_id, value = spend
+            _end_user_list_transactions: Dict[str, float] = {}  # key = end_user_id, value = spend
             verbose_proxy_logger.debug(
                 f"[Spend Logs] - update_spend_logs processing {len(_spend_logs_data)} transactions"
             )
@@ -2815,26 +2815,31 @@ class ProxyUpdateSpend:
                     _payload = SpendLogsPayload(
                         request_id=data["id"],
                         call_type=data["call_type"],
-                        api_key=data.get("api_key"),
-                        api_key_alias=data.get("api_key_alias"),
+                        api_key=data.get("api_key", ""),
                         spend=data["spend"],
-                        total_tokens=data.get("total_tokens"),
-                        prompt_tokens=data.get("prompt_tokens"),
-                        completion_tokens=data.get("completion_tokens"),
+                        total_tokens=data.get("total_tokens", 0),
+                        prompt_tokens=data.get("prompt_tokens", 0),
+                        completion_tokens=data.get("completion_tokens", 0),
                         startTime=data["startTime"],
                         endTime=data["endTime"],
-                        model=data.get("model"),
+                        completionStartTime=data.get("completionStartTime"),
+                        model=data.get("model", ""),
                         model_id=data.get("model_id"),
                         model_group=data.get("model_group"),
-                        cache_hit=data.get("cache_hit"),
-                        cache_key=data.get("cache_key"),
-                        user=data.get("user"),
+                        api_base=data.get("api_base", ""),
+                        user=data.get("user", ""),
+                        metadata=safe_dumps(data.get("metadata", {})),
+                        cache_hit=data.get("cache_hit", ""),
+                        cache_key=data.get("cache_key", ""),
+                        request_tags=safe_dumps(data.get("request_tags", [])),
                         team_id=data.get("team_id"),
-                        user_id=data.get("user_id"),
-                        org_id=data.get("org_id"),
-                        team_alias=data.get("team_alias"),
-                        org_alias=data.get("org_alias"),
-                        metadata=data.get("metadata", {}),
+                        end_user=data.get("end_user_id"),
+                        requester_ip_address=data.get("requester_ip_address"),
+                        custom_llm_provider=data.get("custom_llm_provider"),
+                        messages=data.get("messages"),
+                        response=data.get("response"),
+                        proxy_server_request=data.get("proxy_server_request"),
+                        session_id=data.get("session_id"),
                         status=request_status,
                     )
 
@@ -2862,8 +2867,12 @@ class ProxyUpdateSpend:
 
             # 2. insert into DB / db writer
             if db_writer_client is not None:
-                await db_writer_client.batch_write_spend_logs(
-                    spend_logs_data=_spend_logs_payload
+                # Note: HTTPHandler does not have batch_write_spend_logs method
+                # TODO: Implement this method in HTTPHandler or use alternative approach
+                verbose_proxy_logger.debug("db_writer_client is available but batch_write_spend_logs method not implemented")
+                await prisma_client.db.litellm_spendlogs.create_many(
+                    data=_spend_logs_payload,  # type: ignore
+                    skip_duplicates=True,  # ignore conflicts
                 )
             else:
                 await prisma_client.db.litellm_spendlogs.create_many(
@@ -3066,7 +3075,7 @@ def handle_exception_on_proxy(e: Exception) -> ProxyException:
         )
 
 
-def _premium_user_check():
+def _premium_user_check() -> bool:
     """
     Admin UI - Check if user is a Premium user.
 
@@ -3083,11 +3092,16 @@ def is_known_model(model: Optional[str], llm_router: Optional[Router]) -> bool:
     """
     Check if model is in model list or is a known litellm model
     """
-    return model is not None and (
-        litellm.utils.is_known_provider(model=model) or (
-            llm_router is not None and model in llm_router.get_model_names()
-        )
-    )
+    if model is None:
+        return False
+    
+    try:
+        # Try to get model info - if it succeeds, the model is known
+        litellm.utils.get_model_info(model=model)
+        return True
+    except Exception:
+        # If get_model_info fails, check if it's in the router's model list
+        return llm_router is not None and model in llm_router.get_model_names()
 
 
 def join_paths(base_path: str, route: str) -> str:
