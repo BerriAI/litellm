@@ -86,4 +86,4 @@ ENV PERPLEXITY_API_KEY="abcd"
 
 EXPOSE 4000/tcp
 ENTRYPOINT ["litellm"]
-CMD ["--config", "./litellm/proxy/raga/model_config.yaml", "--port", "4000"]
+CMD ["--config", "./litellm/proxy/raga/model_config.yaml", "--port", "4000", "--num_workers", "16"]
