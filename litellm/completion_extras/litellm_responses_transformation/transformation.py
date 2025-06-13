@@ -106,6 +106,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
+        litellm_logging_obj: "LiteLLMLoggingObj",
     ) -> dict:
         from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 
@@ -162,9 +163,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         api_model = model
 
+        from litellm.types.utils import CallTypes
+
+        setattr(litellm_logging_obj, "call_type", CallTypes.responses.value)
+
         request_data = {
             "model": api_model,
             "input": input_items,
+            "litellm_logging_obj": litellm_logging_obj,
+            **litellm_params,
         }
 
         verbose_logger.debug(
@@ -196,6 +203,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         json_mode: Optional[bool] = None,
     ) -> "ModelResponse":
         """Transform Responses API response to chat completion response"""
+
         from openai.types.responses import (
             ResponseFunctionToolCall,
             ResponseOutputMessage,
@@ -212,6 +220,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         if not isinstance(raw_response, ResponsesAPIResponse):
             raise ValueError(f"Unexpected response type: {type(raw_response)}")
+
+        if raw_response.error is not None:
+            raise ValueError(f"Error in response: {raw_response.error}")
 
         choices: List[Choices] = []
         index = 0
@@ -256,7 +267,18 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             else:
                 raise ValueError(f"Unknown item type: {item}")
 
+        if len(choices) == 0:
+            if (
+                raw_response.incomplete_details is not None
+                and raw_response.incomplete_details.reason is not None
+            ):
+                raise ValueError(
+                    f"{model} unable to complete request: {raw_response.incomplete_details.reason}"
+                )
+
         setattr(model_response, "choices", choices)
+
+        model_response.model = model
 
         setattr(
             model_response,
