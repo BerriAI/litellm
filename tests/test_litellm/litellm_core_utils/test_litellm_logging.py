@@ -78,7 +78,8 @@ def test_logging_prevent_double_logging(logging_obj):
     When using a bridge, log only once from the underlying bridge call.
     This is to avoid double logging.
     """
-    logging_obj.should_run_logging(event_type="sync_success")
+    logging_obj.stream = False
+    logging_obj.has_run_logging(event_type="sync_success")
     assert logging_obj.should_run_logging(event_type="sync_success") == False
     assert logging_obj.should_run_logging(event_type="sync_failure") == True
     assert logging_obj.should_run_logging(event_type="async_success") == True

@@ -1175,15 +1175,29 @@ class Logging(LiteLLMLoggingBaseClass):
         event_type: Literal[
             "async_success", "sync_success", "async_failure", "sync_failure"
         ],
+        stream: bool = False,
     ) -> bool:
         try:
             if self.model_call_details.get(f"has_logged_{event_type}", False) is True:
                 return False
 
-            self.model_call_details[f"has_logged_{event_type}"] = True
             return True
         except Exception:
             return True
+
+    def has_run_logging(
+        self,
+        event_type: Literal[
+            "async_success", "sync_success", "async_failure", "sync_failure"
+        ],
+    ) -> None:
+        if self.stream is not None and self.stream is True:
+            """
+            Ignore check on stream, as there can be multiple chunks
+            """
+            return
+        self.model_call_details[f"has_logged_{event_type}"] = True
+        return
 
     def should_run_callback(
         self, callback: litellm.CALLBACK_TYPES, litellm_params: dict, event_hook: str
@@ -1450,6 +1464,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         call_type=self.call_type,
                     )
 
+            self.has_run_logging(event_type="sync_success")
             for callback in callbacks:
                 try:
                     litellm_params = self.model_call_details.get("litellm_params", {})
@@ -1982,6 +1997,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     call_type=self.call_type,
                 )
 
+        self.has_run_logging(event_type="async_success")
         for callback in callbacks:
             # check if callback can run for this request
             litellm_params = self.model_call_details.get("litellm_params", {})
@@ -2226,6 +2242,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 ),
                 result=result,
             )
+            self.has_run_logging(event_type="sync_failure")
             for callback in callbacks:
                 try:
                     if callback == "lunary" and lunaryLogger is not None:
@@ -2406,6 +2423,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         result = None  # result sent to all loggers, init this to None incase it's not created
 
+        self.has_run_logging(event_type="async_failure")
         for callback in callbacks:
             try:
                 if isinstance(callback, CustomLogger):  # custom logger class
