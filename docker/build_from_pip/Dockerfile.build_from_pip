@@ -17,6 +17,9 @@ COPY requirements.txt .
 RUN --mount=type=cache,target=${HOME}/.cache/pip \
     ${HOME}/venv/bin/pip install -r requirements.txt
 
+# Copy Prisma schema file
+COPY ../../schema.prisma .
+
 # Generate prisma client
 RUN prisma generate
 
