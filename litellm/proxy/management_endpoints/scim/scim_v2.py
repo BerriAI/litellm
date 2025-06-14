@@ -1,6 +1,7 @@
 """
-SCIM v2 Endpoints for LiteLLM Proxy using Internal User/Team Management
+✨ SCIM v2 Endpoints for LiteLLM Proxy using Internal User/Team Management
 
+This is an enterprise feature and requires a premium license.
 """
 
 import uuid
@@ -32,12 +33,13 @@ from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
 from litellm.proxy.management_endpoints.team_endpoints import new_team
-from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.proxy.utils import _premium_user_check, handle_exception_on_proxy
 from litellm.types.proxy.management_endpoints.scim_v2 import *
 
 scim_router = APIRouter(
     prefix="/scim/v2",
-    tags=["SCIM v2"],
+    tags=["✨ SCIM v2 (Enterprise Only)"],
+    dependencies=[Depends(_premium_user_check)],
 )
 
 
@@ -82,13 +84,13 @@ async def get_users(
                 where_conditions["user_email"] = email
 
         # Get users from database
-        users: List[
-            LiteLLM_UserTable
-        ] = await prisma_client.db.litellm_usertable.find_many(
-            where=where_conditions,
-            skip=(startIndex - 1),
-            take=count,
-            order={"created_at": "desc"},
+        users: List[LiteLLM_UserTable] = (
+            await prisma_client.db.litellm_usertable.find_many(
+                where=where_conditions,
+                skip=(startIndex - 1),
+                take=count,
+                order={"created_at": "desc"},
+            )
         )
 
         # Get total count for pagination
