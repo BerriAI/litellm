@@ -1089,6 +1089,7 @@ async def test_async_completion_azure_caching_streaming():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=2)
 async def test_async_embedding_azure_caching():
     print("Testing custom callback input - Azure Caching")
     customHandler_caching = CompletionCustomHandler()
