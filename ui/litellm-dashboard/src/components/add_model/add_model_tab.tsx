@@ -262,13 +262,17 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                     tooltip="Use model access groups to give users access to select models, and add new ones to the group over time."
                   >
                     <AntdSelect
+                      mode="tags"
                       showSearch
-                      placeholder="Select or search for existing model access group"
+                      placeholder="Select existing groups or type to create new ones"
                       optionFilterProp="children"
+                      tokenSeparators={[',']}
                       options={modelAccessGroups.map((group) => ({
                         value: group,
                         label: group
                       }))}
+                      maxTagCount="responsive"
+                      allowClear
                     />
                   </Form.Item>
                 </>
