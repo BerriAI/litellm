@@ -1,9 +1,9 @@
 """
-Supports using JWT's for authenticating into the proxy. 
+Supports using JWT's for authenticating into the proxy.
 
-Currently only supports admin. 
+Currently only supports admin.
 
-JWT token must have 'litellm_proxy_admin' in scope. 
+JWT token must have 'litellm_proxy_admin' in scope.
 """
 
 import json
@@ -31,6 +31,8 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     LitellmUserRoles,
     Member,
+    ProxyErrorTypes,
+    ProxyException,
     ScopeMapping,
     Span,
     TeamMemberAddRequest,
@@ -888,13 +890,25 @@ class JWTAuthManager:
             ),
             team_id=team_object.team_id,
         )
-        # add user to team
-        await team_member_add(
-            data=data,
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN
-            ),  # [TODO]: expose an internal service role, for better tracking
-        )
+        # add user to team - make this non-blocking to avoid authentication failures
+        try:
+            await team_member_add(
+                data=data,
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN
+                ),  # [TODO]: expose an internal service role, for better tracking
+            )
+            verbose_proxy_logger.debug(
+                f"Successfully added user {user_object.user_id} to team {team_object.team_id}"
+            )
+        except ProxyException as e:
+            if e.type == ProxyErrorTypes.team_member_already_in_team:
+                verbose_proxy_logger.debug(
+                    f"User {user_object.user_id} is already a member of team {team_object.team_id}"
+                )
+                return None
+            else:
+                raise e
         return None
 
     @staticmethod
