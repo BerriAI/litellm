@@ -15,6 +15,7 @@ import {
   UiFormRadio,
   UiFormRadioGroup,
   UiFormTextInput,
+  UiModelSelect,
 } from "./forms";
 import { teams } from "./data";
 
@@ -112,7 +113,16 @@ function Content() {
             </UiFormLabelGroup>
 
             <UiFormContent>
-              <UiFormTextInput placeholder="Select Models" />
+              <UiFormRadioGroup defaultValue="select_models">
+                <UiFormRadio value="all_team_models">
+                  All team models
+                </UiFormRadio>
+                <UiFormRadio value="select_models">
+                  Select specific models
+                </UiFormRadio>
+              </UiFormRadioGroup>
+
+              <UiModelSelect />
             </UiFormContent>
           </UiFormGroup>
         </div>
@@ -179,7 +189,7 @@ export function CreateVirtualKeyDialog(props: CreateVirtualKeyDialogProps) {
         "outline-none rounded-2xl overflow-x-hidden",
         "ring-[0.5px] ring-black/[0.08]",
         "shadow-2xl",
-        "max-w-[920px] max-h-[min(90%,1000px)]",
+        "max-w-[1020px] max-h-[min(90%,1200px)]",
         "origin-center transition-[opacity,transform] duration-200 ease-out",
         "scale-95 opacity-0",
         "data-[enter]:scale-100 data-[enter]:opacity-100",

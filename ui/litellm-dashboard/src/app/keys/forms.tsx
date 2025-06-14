@@ -17,8 +17,10 @@ import {
   SelectProvider,
   useRadioContext,
 } from "@ariakit/react";
-import { ChevronDown } from "lucide-react";
+import { CheckIcon, ChevronDown, XIcon } from "lucide-react";
 import { forwardRef, startTransition, useMemo, useState } from "react";
+import { AiModel, models } from "./data";
+import { title } from "process";
 
 export function UiFormGroup({
   className,
@@ -42,7 +44,7 @@ export function UiFormLabelGroup({
 }: React.ComponentProps<"div">) {
   return (
     <div
-      className={cx("flex flex-col gap-1.5 max-w-[320px]", className)}
+      className={cx("flex flex-col gap-1.5 shrink-0 max-w-[320px]", className)}
       {...props}
     />
   );
@@ -84,7 +86,7 @@ export function UiFormContent({
   ...props
 }: React.ComponentProps<"div">) {
   return (
-    <div className={cx("flex grow flex-col gap-1.5", className)} {...props} />
+    <div className={cx("flex grow flex-col gap-4", className)} {...props} />
   );
 }
 
@@ -127,12 +129,12 @@ export function UiFormRadioGroup({
   );
 }
 
-function UiFormRadioCircle() {
+function UiFormCircle() {
   return (
     <span
       className={cx(
         "inline-flex items-center justify-center shrink-0",
-        "size-4 rounded-full",
+        "size-[16px] rounded-full",
         "ring-[0.5px] ring-black/[0.12]",
         "shadow-md shadow-black/[0.06]",
         "transition-colors duration-200 ease-out",
@@ -145,6 +147,31 @@ function UiFormRadioCircle() {
           "transition-[opacity,transform] origin-center duration-200 ease-out",
           "shadow-sm shadow-black/30",
           "scale-0 group-aria-checked:scale-100",
+        )}
+      />
+    </span>
+  );
+}
+
+function UiFormCheck() {
+  return (
+    <span
+      className={cx(
+        "inline-flex items-center justify-center shrink-0",
+        "size-[16px] rounded",
+        "ring-[0.5px] ring-black/[0.12]",
+        "shadow-md shadow-black/[0.06]",
+        "transition-colors duration-200 ease-out",
+        "bg-white group-aria-selected:bg-indigo-500",
+      )}
+    >
+      <CheckIcon
+        size={10}
+        strokeWidth={4}
+        className={cx(
+          "text-white",
+          "transition-[opacity,transform] mt-px origin-center duration-200 ease-out",
+          "scale-0 group-aria-selected:scale-100",
         )}
       />
     </span>
@@ -164,7 +191,7 @@ export function UiFormRadio({ className, children, ...props }: RadioProps) {
       {...props}
     >
       <div className="text-start flex items-center gap-2">
-        <UiFormRadioCircle />
+        <UiFormCircle />
         <span className="text-[13px] tracking-tight text-neutral-800">
           {children}
         </span>
@@ -245,7 +272,7 @@ export function UiFormCombobox({
           sameWidth
           unmountOnHide
           className={cx(
-            "bg-white rounded-md overflow-x-hidden",
+            "bg-white rounded-md overflow-x-hidden z-10",
             "flex flex-col",
             "max-h-[min(320px,var(--popover-available-height,320px))]",
             "ring-[0.7px] ring-black/[0.12] outline-none",
@@ -291,6 +318,204 @@ export function UiFormCombobox({
                     {item.subtitle}
                   </span>
                 ) : null}
+              </SelectItem>
+            ))}
+          </ComboboxList>
+        </SelectPopover>
+      </SelectProvider>
+    </ComboboxProvider>
+  );
+}
+
+type AiModelOption = {
+  title: string;
+  value: string;
+};
+
+function getModelTitle(id: string): string {
+  if (id.endsWith("/*")) {
+    return "All " + id.split("/*")[0] + " models";
+  }
+
+  return id;
+}
+
+function transformModel(id: string): AiModelOption {
+  return { title: getModelTitle(id), value: id };
+}
+
+function transformModels(ids: string[]): AiModelOption[] {
+  const modelOptions: Record<string, AiModelOption> = {};
+
+  for (const id of ids) {
+    if (id in modelOptions === false) {
+      modelOptions[id] = transformModel(id);
+    }
+  }
+
+  return Object.values(modelOptions).sort((a, b) => {
+    const aEndsWithWildcard = a.value.endsWith("/*");
+    const bEndsWithWildcard = b.value.endsWith("/*");
+
+    // If one ends with /* and the other doesn't, prioritize the wildcard
+    if (aEndsWithWildcard && !bEndsWithWildcard) {
+      return -1;
+    }
+
+    if (!aEndsWithWildcard && bEndsWithWildcard) {
+      return 1;
+    }
+
+    // If both are wildcards or both are not wildcards, sort alphabetically
+    return a.title.localeCompare(b.title);
+  });
+}
+
+type UiModelSelectProps = SelectProps & {};
+
+export function UiModelSelect({ className, ...props }: UiModelSelectProps) {
+  const [searchValue, setSearchValue] = useState("");
+  const [selectedValues, setSelectedValues] = useState<string[]>([]);
+  console.log(selectedValues);
+  const placeholder = "Select Models";
+
+  const items = useMemo(() => {
+    return transformModels(models);
+  }, []);
+
+  const matches = useMemo(() => {
+    return items.filter((item) => {
+      return item.title.toLowerCase().includes(searchValue);
+    });
+  }, [searchValue, items]);
+
+  return (
+    <ComboboxProvider
+      includesBaseElement={false}
+      resetValueOnHide
+      setValue={(value) => {
+        startTransition(() => {
+          setSearchValue(value);
+        });
+      }}
+    >
+      <SelectProvider value={selectedValues} setValue={setSelectedValues}>
+        <Select
+          className={cx(
+            "relative block w-full min-h-[34px] truncate rounded-md",
+            "border-none text-start",
+            "ring-[0.7px] ring-black/[0.12]",
+            "shadow-md shadow-black/[0.05] transition-colors",
+            selectedValues.length === 0 ? "bg-neutral-50" : "bg-white",
+            className,
+          )}
+          {...props}
+        >
+          {selectedValues.length === 0 ? (
+            <span className="text-[13px] font-normal tracking-tight text-neutral-400 px-4">
+              {placeholder}
+            </span>
+          ) : (
+            <div className="flex flex-wrap items-center gap-1 px-1 py-1">
+              {selectedValues.map(transformModel).map((option, optionIndex) => (
+                <div
+                  key={option.value}
+                  className={cx(
+                    "bg-black/[0.07] rounded inline-flex items-center gap-1",
+                  )}
+                >
+                  <span className="text-[12px] inline-block py-1 pl-2">
+                    {option.title}
+                  </span>
+
+                  <div
+                    className={cx(
+                      "flex items-center group/close",
+                      "shrink-0 pr-2",
+                    )}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      setSelectedValues((v) => {
+                        return v.reduce<string[]>((result, item, index) => {
+                          if (index !== optionIndex) {
+                            result.push(item);
+                          }
+                          return result;
+                        }, []);
+                      });
+                    }}
+                  >
+                    <XIcon
+                      size={14}
+                      strokeWidth={3}
+                      className="text-neutral-400 group-hover/close:text-neutral-600"
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {selectedValues.length === 0 ? (
+            <span
+              className={cx(
+                "absolute right-0 inset-y-0 pr-3 pointer-events-none",
+                "flex items-center justify-center",
+              )}
+            >
+              <ChevronDown size={16} className="text-neutral-500" />
+            </span>
+          ) : null}
+        </Select>
+
+        <SelectPopover
+          gutter={8}
+          sameWidth
+          unmountOnHide
+          className={cx(
+            "bg-white rounded-md overflow-x-hidden",
+            "flex flex-col",
+            "max-h-[min(320px,var(--popover-available-height,320px))]",
+            "ring-[0.7px] ring-black/[0.12] outline-none",
+            "shadow-lg shadow-black/[0.08]",
+            "transition-transform duration-[150ms] ease-out",
+            "translate-y-[-2%] opacity-0",
+            "data-[enter]:translate-y-0 data-[enter]:opacity-100 z-10",
+          )}
+        >
+          <div className={cx("", "border-b border-neutral-200")}>
+            <Combobox
+              autoFocus
+              style={{ boxShadow: "none" }}
+              autoSelect
+              className={cx(
+                "block w-full h-[34px] truncate rounded-none bg-transparent px-4",
+                "border-none outline-none",
+                "text-[13px] font-normal tracking-tight text-neutral-900",
+                "placeholder:text-neutral-400",
+              )}
+              placeholder="Search..."
+            />
+          </div>
+
+          <ComboboxList className="overflow-y-auto grow outline-none">
+            {matches.map((item) => (
+              <SelectItem
+                key={item.title}
+                render={<ComboboxItem />}
+                value={item.value}
+                className={cx(
+                  "px-4 py-2.5",
+                  "border-b border-neutral-100",
+                  "flex items-center gap-2 shrink-0 outline-none",
+                  "data-[active-item]:bg-neutral-100 cursor-default group",
+                )}
+              >
+                <UiFormCheck />
+                <span className="text-[13px] text-neutral-800 tracking-tight truncate">
+                  {item.title}
+                </span>
               </SelectItem>
             ))}
           </ComboboxList>
