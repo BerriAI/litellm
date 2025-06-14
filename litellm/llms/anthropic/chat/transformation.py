@@ -479,7 +479,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=[_tool]
                 )
-            if param == "user":
+            if (
+                param == "user"
+                and value is not None
+                and isinstance(value, str)
+                and _valid_user_id(value)  # anthropic fails on emails
+            ):
                 optional_params["metadata"] = {"user_id": value}
             if param == "thinking":
                 optional_params["thinking"] = value
