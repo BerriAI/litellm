@@ -111,13 +111,11 @@ def test_xai_chat_config_map_openai_params():
     # Assert unsupported parameter is not in the result
     assert "unsupported_param" not in result
 
-    # Test 'grok-3-mini' variants, as xAI does not support stop tokens on them.
-    # See PR #11563: https://github.com/BerriAI/litellm/pull/11563
-    model = "xai/grok-3-mini"
-
-    result = config.map_openai_params(non_default_params, optional_params, model)
-
-    assert "stop" not in result
+def test_xai_check_for_stop_in_supported_params():
+    supported_params = XAIChatConfig().get_supported_openai_params(
+        model="xai/grok-3-mini"
+    )
+    assert "stop" not in supported_params
 
 
 @pytest.mark.parametrize("stream", [False, True])
