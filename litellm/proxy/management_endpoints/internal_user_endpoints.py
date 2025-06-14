@@ -180,6 +180,7 @@ async def new_user(
     - user_id: Optional[str] - Specify a user id. If not set, a unique id will be generated.
     - user_alias: Optional[str] - A descriptive name for you to know who this user id refers to.
     - teams: Optional[list] - specify a list of team id's a user belongs to.
+    - team_member_details: Optional[dict] - Specify role of team user is being added to.
     - user_email: Optional[str] - Specify a user email.
     - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
     - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
@@ -227,7 +228,11 @@ async def new_user(
     ```
     """
     try:
-        from litellm.proxy.proxy_server import _license_check, prisma_client
+        from litellm.proxy.proxy_server import (
+            _license_check,
+            prisma_client,
+            premium_user
+        )
 
         if prisma_client is None:
             raise HTTPException(
@@ -260,21 +265,39 @@ async def new_user(
         # Admin UI Logic
         # Add User to Team and Organization
         # if team_id passed add this user to the team
-        if data_json.get("team_id", None) is not None:
+        if data_json.get("team_id", None) is not None or data_json["team_member_details"]["team_id"] is not None:
             from litellm.proxy.management_endpoints.team_endpoints import (
                 team_member_add,
+                team_call_validation_checks
+            )
+
+            team_member_add_request=TeamMemberAddRequest(
+                team_id=data_json.get("team_id", None),
+                member=Member(
+                    user_id=data_json.get("user_id", None),
+                    role=data_json["team_member_details"]["team_member_role"],
+                    user_email=data_json.get("user_email", None),
+                )
+            )
+
+            response["team_member_details"] = data_json["team_member_details"]
+
+            verbose_proxy_logger.debug(
+                "Team Member Role {}".format(str(data_json["team_member_details"]["team_member_role"]))
             )
 
             try:
+                team_call_validation_checks(
+                    prisma_client=prisma_client,
+                    data=team_member_add_request,
+                    premium_user=premium_user,
+                )
+            except HTTPException as e:
+                raise HTTPException(status_code=400, detail={"error": str(e)})
+
+            try:
                 await team_member_add(
-                    data=TeamMemberAddRequest(
-                        team_id=data_json.get("team_id", None),
-                        member=Member(
-                            user_id=data_json.get("user_id", None),
-                            role="user",
-                            user_email=data_json.get("user_email", None),
-                        ),
-                    ),
+                    data=team_member_add_request,
                     user_api_key_dict=user_api_key_dict,
                 )
             except HTTPException as e:

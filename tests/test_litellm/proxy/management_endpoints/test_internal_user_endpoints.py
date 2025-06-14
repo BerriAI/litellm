@@ -241,7 +241,6 @@ def test_update_internal_user_params_reset_spend_and_max_budget():
     assert non_default_values["user_id"] == "test_user_id"
     assert "budget_duration" not in non_default_values  # Should not add default values
 
-
 @pytest.mark.asyncio
 async def test_new_user_license_over_limit(mocker):
     """
@@ -349,3 +348,181 @@ async def test_user_info_url_encoding_plus_character(mocker):
         f"mock_prisma_client.get_data.call_args: {mock_prisma_client.get_data.call_args.kwargs}"
     )
     assert mock_prisma_client.get_data.call_args.kwargs["user_id"] == expected_user_id
+
+@pytest.mark.asyncio
+async def test_assign_user_team_role_at_user_creation(mocker):
+    """
+    Test new_user to confirm that it adds a new user with user team role.
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/10109
+    """
+    from litellm.proxy._types import NewUserRequest
+    from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+
+    test_user_id = "test-user-id"
+    test_user_email = "test_user_1@berri.ai"
+    test_team_id = "test-team"
+    user_api_key_dict = UserAPIKeyAuth(user_id="test_user", user_role="proxy_admin")
+    test_team_member_details = {
+        "team_id":test_team_id,
+        "team_member_role":"user"
+    }
+    response = {
+        "models": [],
+        "spend": 0.0,
+        "max_budget": 0.0,
+        "user_id": test_user_id,
+        "user_alias": "test-user-alias",
+        "user_email": test_user_email,
+        "team_id": test_team_id,
+        "team_member_details": {},
+        "organization_id": "test-organization-id",
+        "user_role": "proxy_admin",
+        "max_parallel_requests": None,
+        "metadata": {},
+        "tpm_limit": None,
+        "rpm_limit": None,
+        "budget_duration": None,
+        "budget_reset_at": None,
+        "allowed_cache_controls": [],
+        "sso_user_id": "test-sso-user-id",
+        "object_permission_id": None,
+    }
+
+    # Mock prisma client
+    mock_prisma_client = mocker.MagicMock()
+
+    # Setup the mock count response as an async function
+    async def mock_count(*args, **kwargs):
+        return 0 
+
+    mock_prisma_client.db.litellm_usertable.count = mock_count
+
+    # Mock helper function _check_duplicate_user_email
+    async def mock__check_duplicate_user_email(*args, **kwargs):
+        return None
+    
+    # Mock helper function generate_key_helper_fn
+    async def mock_generate_key_helper_fn(*args, **kwargs):
+        return response
+    
+    # Patch the prisma client import in the endpoint
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
+        mock__check_duplicate_user_email
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+        mock_generate_key_helper_fn
+    )
+
+    # Assign team to new user and assign user role to new user
+    new_user_response = await new_user(
+        NewUserRequest(
+            user_email=test_user_email,
+            models=['no-default-models'],
+            auto_create_key=False,
+            team_id = test_team_id,
+            team_member_details = test_team_member_details
+        ), 
+        user_api_key_dict
+    )
+
+    print(f"user /new response: {new_user_response}\n")
+
+    assert new_user_response is not None
+    assert new_user_response.user_email == test_user_email # Validate that test user was created
+    assert new_user_response.team_member_details is not None
+    assert new_user_response.team_member_details["team_id"] == test_team_id
+    assert new_user_response.team_member_details["team_member_role"] == "user" # Validate test user was added to test team as "user" role
+    
+
+@pytest.mark.asyncio
+async def test_assigning_admin_team_role_at_user_creation_as_non_enterprise_user_returns_error(mocker):
+    """
+    Test that new_user returns error when adding a new user with admin team role.
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/10109
+    """
+    from litellm.proxy._types import (
+        NewUserRequest,
+        ProxyException
+    )
+    from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+
+    test_user_id = "test-user-id"
+    test_user_email = "test_user_1@berri.ai"
+    test_team_id = "test-team"
+    user_api_key_dict = UserAPIKeyAuth(user_id="test_user", user_role="proxy_admin")
+    test_team_member_details = {
+        "team_id":test_team_id,
+        "team_member_role":"admin"
+    }
+    response = {
+        "models": [],
+        "spend": 0.0,
+        "max_budget": 0.0,
+        "user_id": test_user_id,
+        "user_alias": "test-user-alias",
+        "user_email": test_user_email,
+        "team_id": test_team_id,
+        "team_member_details": {},
+        "organization_id": "test-organization-id",
+        "user_role": "proxy_admin",
+        "max_parallel_requests": None,
+        "metadata": {},
+        "tpm_limit": None,
+        "rpm_limit": None,
+        "budget_duration": None,
+        "budget_reset_at": None,
+        "allowed_cache_controls": [],
+        "sso_user_id": "test-sso-user-id",
+        "object_permission_id": None,
+    }
+
+    # Mock prisma client
+    mock_prisma_client = mocker.MagicMock()
+
+    # Setup the mock count response as an async function
+    async def mock_count(*args, **kwargs):
+        return 0 
+
+    mock_prisma_client.db.litellm_usertable.count = mock_count
+
+    # Mock helper function _check_duplicate_user_email
+    async def mock__check_duplicate_user_email(*args, **kwargs):
+        return None
+
+    # Mock helper function generate_key_helper_fn
+    async def mock_generate_key_helper_fn(*args, **kwargs):
+        return response
+    
+    # Patch the prisma client import in the endpoint
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
+        mock__check_duplicate_user_email
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+        mock_generate_key_helper_fn
+    )
+
+    with pytest.raises(ProxyException) as error_info:
+        await new_user(
+            NewUserRequest(
+                user_email=test_user_email,
+                models=['no-default-models'],
+                auto_create_key=False,
+                team_id = test_team_id,
+                team_member_details = test_team_member_details
+            ),  
+            user_api_key_dict
+        )
+
+    print(error_info.value.message)
+    
+    assert "You must be a LiteLLM Enterprise user to use this feature." in str(error_info.value.message)
