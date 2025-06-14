@@ -102,3 +102,27 @@ def decrypt_value(value: bytes, signing_key: str) -> str:
 
     plaintext = plaintext.decode("utf-8")  # type: ignore
     return plaintext  # type: ignore
+
+
+def mask_sensitive_info(value: Optional[str]) -> str:
+    """
+    Mask sensitive information (API keys, JWT tokens) for security purposes.
+    Shows only the first 4 and last 4 characters, with asterisks in between.
+    
+    Args:
+        value: The sensitive string to mask
+        
+    Returns:
+        Masked string with format: "abc1************xyz9"
+    """
+    if not value or not isinstance(value, str):
+        return value or ""
+    
+    if len(value) <= 8:
+        return value
+    
+    first_part = value[:4] 
+    last_part = value[-4:]
+    masked_middle = '*' * min(12, len(value) - 8)
+    
+    return f"{first_part}{masked_middle}{last_part}"

@@ -27,6 +27,7 @@ from litellm.types.utils import (
     SupportedCacheControls,
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.proxy.common_utils.encrypt_decrypt_utils import mask_sensitive_info
 
 service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
 
@@ -591,11 +592,13 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         )
     )
     data[_metadata_variable_name].update(user_api_key_logged_metadata)
+    
+    # Mask the user_api_key for security using centralized utility
     data[_metadata_variable_name][
         "user_api_key"
-    ] = (
+    ] = mask_sensitive_info(
         user_api_key_dict.api_key
-    )  # this is just the hashed token. [TODO]: replace variable name in repo.
+    )  # masked token for security - do not log full JWT
 
     data[_metadata_variable_name]["user_api_end_user_max_budget"] = getattr(
         user_api_key_dict, "end_user_max_budget", None

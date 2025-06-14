@@ -40,6 +40,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.encrypt_decrypt_utils import mask_sensitive_info
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -449,7 +450,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                 user_api_key_end_user_id=user_api_key_dict.end_user_id,
             )
         )
-        _metadata["user_api_key"] = user_api_key_dict.api_key
+        _metadata["user_api_key"] = mask_sensitive_info(user_api_key_dict.api_key)
         if _litellm_metadata:
             _metadata.update(_litellm_metadata)
 

@@ -15,6 +15,7 @@ from litellm.proxy._types import (
     Optional,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.encrypt_decrypt_utils import mask_sensitive_info
 
 
 async def create_object_audit_log(
@@ -48,7 +49,7 @@ async def create_object_audit_log(
             changed_by=litellm_changed_by
             or user_api_key_dict.user_id
             or litellm_proxy_admin_name,
-            changed_by_api_key=user_api_key_dict.api_key,
+            changed_by_api_key=mask_sensitive_info(user_api_key_dict.api_key),
             table_name=table_name,
             object_id=object_id,
             action=action,

@@ -186,13 +186,23 @@ export const columns: ColumnDef<LogEntry>[] = [
       const value = String(info.getValue() || "-");
       const onKeyHashClick = info.row.original.onKeyHashClick;
 
+      // Mask sensitive JWT token - show only first 4 and last 4 chars
+      const maskValue = (str: string): string => {
+        if (str === "-" || str.length <= 8) return str;
+        const firstPart = str.substring(0, 4);
+        const lastPart = str.substring(str.length - 4);
+        return `${firstPart}${'*'.repeat(Math.min(12, str.length - 8))}${lastPart}`;
+      };
+
+      const maskedValue = maskValue(value);
+
       return (
-        <Tooltip title={value}>
+        <Tooltip title="Sensitive data masked for security">
           <span 
             className="font-mono max-w-[15ch] truncate block cursor-pointer hover:text-blue-600"
             onClick={() => onKeyHashClick?.(value)}
           >
-            {value}
+            {maskedValue}
           </span>
         </Tooltip>
       );
@@ -509,13 +519,22 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
     cell: (info: any) => {
       const changedBy = info.row.original.changed_by;
       const apiKey = info.row.original.changed_by_api_key;
+
+      // Mask sensitive API key - show only first 4 and last 4 chars
+      const maskApiKey = (str: string): string => {
+        if (!str || str.length <= 8) return str;
+        const firstPart = str.substring(0, 4);
+        const lastPart = str.substring(str.length - 4);
+        return `${firstPart}${'*'.repeat(Math.min(12, str.length - 8))}${lastPart}`;
+      };
+
       return (
         <div className="space-y-1">
           <div className="font-medium">{changedBy}</div>
           {apiKey && ( // Only show API key if it exists
-            <Tooltip title={apiKey}>
+            <Tooltip title="Sensitive data masked for security">
               <div className="text-xs text-muted-foreground max-w-[15ch] truncate"> {/* Apply max-width and truncate */}
-                {apiKey}
+                {maskApiKey(apiKey)}
               </div>
             </Tooltip>
           )}
