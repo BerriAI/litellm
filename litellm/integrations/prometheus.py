@@ -655,8 +655,6 @@ class PrometheusLogger(CustomLogger):
             enum_values=enum_values,
         )
 
-        self.litellm_proxy_total_requests_metric.labels(**_labels).inc()
-
         self.litellm_spend_metric.labels(
             end_user_id,
             user_api_key,

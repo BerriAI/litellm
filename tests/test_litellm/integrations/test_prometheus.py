@@ -259,6 +259,9 @@ async def test_request_counter_semantic_validation(mock_prometheus_logger):
     is incorrectly incremented by total_tokens instead of 1.
     """
     from datetime import datetime, timedelta
+    from unittest.mock import MagicMock
+
+    from litellm.proxy._types import UserAPIKeyAuth
 
     # Test data with large token count that should NOT affect request counter
     kwargs = {
@@ -297,12 +300,30 @@ async def test_request_counter_semantic_validation(mock_prometheus_logger):
         kwargs, None, kwargs["start_time"], kwargs["end_time"]
     )
 
-    # CRITICAL ASSERTION: Request counter should be incremented by 1, NOT by token count
+    # CRITICAL ASSERTION: Request counter should not be incremented
     total_requests_metric = mock_prometheus_logger.litellm_proxy_total_requests_metric
-
     assert (
-        len(total_requests_metric.inc_calls) > 0
-    ), "Request metric should be incremented"
+        len(total_requests_metric.inc_calls) == 0
+    ), "Request metric should not be incremented"
+
+    # Call the post-call logging hook
+    await mock_prometheus_logger.async_post_call_success_hook(
+        data={},
+        user_api_key_dict=UserAPIKeyAuth(
+            end_user="test-user",
+            hashed_api_key="test-hash",
+            api_key_alias="test-alias",
+            team="test-team",
+            model="gpt-4",
+        ),
+        response=MagicMock(),
+    )
+
+    # CRITICAL ASSERTION: Request counter be incremented by 1
+    total_requests_metric = mock_prometheus_logger.litellm_proxy_total_requests_metric
+    assert (
+        len(total_requests_metric.inc_calls) == 1
+    ), "Request metric should not be incremented"
 
     # Check that ALL request counter increments are by 1 (not by token count)
     for inc_value in total_requests_metric.inc_calls:
@@ -375,8 +396,8 @@ async def test_multiple_requests_counter_semantics(mock_prometheus_logger):
     expected_total_tokens = num_requests * tokens_per_request  # 3 * 500 = 1500
 
     # With the bug, total_request_increments would be 1500 instead of 3
-    assert total_request_increments == num_requests, (
-        f"SEMANTIC BUG: Request counter total increments = {total_request_increments}, "
+    assert total_request_increments == 0, (
+        f"SEMANTIC BUG: Request counter total increments = 0, "
         f"expected {num_requests}. This suggests request counters are being incremented "
         f"by token counts instead of request counts."
     )
