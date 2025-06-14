@@ -165,15 +165,14 @@ This version is not out yet.
 - **Arize**
     - Change space_key header to space_id - [PR](https://github.com/BerriAI/litellm/pull/11595) (s/o [vanities](https://github.com/vanities))
 - **Prometheus**
-    - Fix total requests increment - https://github.com/BerriAI/litellm/pull/11718
+    - Fix total requests increment - [PR](https://github.com/BerriAI/litellm/pull/11718)
 
 #### Features
 - **Lasso Guardrails**
     - [NEW] Lasso Guardrails support - [PR](https://github.com/BerriAI/litellm/pull/11565)
 - **Users**
     - New `organizations` param on `/user/new` - allows adding users to orgs on creation - [PR](https://github.com/BerriAI/litellm/pull/11572/files)
-- **Prevent double logging when using bridge logic**
-    - [PR](https://github.com/BerriAI/litellm/pull/11687)
+- **Prevent double logging when using bridge logic** - [PR](https://github.com/BerriAI/litellm/pull/11687)
 
 ---
 
