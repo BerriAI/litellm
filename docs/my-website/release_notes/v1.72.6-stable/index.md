@@ -63,41 +63,42 @@ This version is not out yet.
 - Deepgram: `nova-3` cost per second pricing is [now supported](https://github.com/BerriAI/litellm/pull/11634).
 
 ### Updated Models
-- **Bugs**
-    - **Watsonx**
-        - Ignore space id on Watsonx deployments (throws json errors) - [PR](https://github.com/BerriAI/litellm/pull/11527)
-    - **Ollama**
-        - Set tool call id for streaming calls - [PR](https://github.com/BerriAI/litellm/pull/11528)
-    - **Gemini (VertexAI + Google AI Studio)**
-        - Fix tool call indexes - [PR](https://github.com/BerriAI/litellm/pull/11558)
-        - Handle empty string for arguments in function calls - [PR](https://github.com/BerriAI/litellm/pull/11601)
-        - Add audio/ogg mime type support when inferring from file url’s - [PR](https://github.com/BerriAI/litellm/pull/11635)
-    - **Custom LLM**
-        - Fix passing api_base, api_key, litellm_params_dict to custom_llm embedding methods - [PR](https://github.com/BerriAI/litellm/pull/11450) s/o [ElefHead](https://github.com/ElefHead)
-    - **Huggingface**
-        - Add /chat/completions to endpoint url when missing - [PR](https://github.com/BerriAI/litellm/pull/11630)
-    - **Deepgram**
-        - Support async httpx calls - [PR](https://github.com/BerriAI/litellm/pull/11641)
-    - **Anthropic**
-        - Append prefix (if set) to assistant content start - [PR](https://github.com/BerriAI/litellm/pull/11719)
-- **Features**
-    - **VertexAI**
-        - Support vertex credentials set via env var on passthrough - [PR](https://github.com/BerriAI/litellm/pull/11527)
-        - Support for choosing ‘global’ region when model is only available there - [PR](https://github.com/BerriAI/litellm/pull/11566)
-        - Anthropic passthrough cost calculation + token tracking - [PR](https://github.com/BerriAI/litellm/pull/11611)
-        - Support ‘global’ vertex region on passthrough - [PR](https://github.com/BerriAI/litellm/pull/11661)
-    - **Anthropic**
-        - ‘none’ tool choice param support - [PR](https://github.com/BerriAI/litellm/pull/11695)
-    - **Perplexity**
-        - Add ‘reasoning_effort’ support - [PR](https://github.com/BerriAI/litellm/pull/11562)
-    - **Mistral**
-        - Add mistral reasoning support - [PR](https://github.com/BerriAI/litellm/pull/11642)
-    - **SGLang**
-        - Map context window exceeded error for proper handling - [PR](https://github.com/BerriAI/litellm/pull/11575/)
-    - **Deepgram**
-        - Provider specific params support - [PR](https://github.com/BerriAI/litellm/pull/11638)
-    - **Azure**
-        - Return content safety filter results - [PR](https://github.com/BerriAI/litellm/pull/11655)
+#### Bugs
+- **Watsonx**
+    - Ignore space id on Watsonx deployments (throws json errors) - [PR](https://github.com/BerriAI/litellm/pull/11527)
+- **Ollama**
+    - Set tool call id for streaming calls - [PR](https://github.com/BerriAI/litellm/pull/11528)
+- **Gemini (VertexAI + Google AI Studio)**
+    - Fix tool call indexes - [PR](https://github.com/BerriAI/litellm/pull/11558)
+    - Handle empty string for arguments in function calls - [PR](https://github.com/BerriAI/litellm/pull/11601)
+    - Add audio/ogg mime type support when inferring from file url’s - [PR](https://github.com/BerriAI/litellm/pull/11635)
+- **Custom LLM**
+    - Fix passing api_base, api_key, litellm_params_dict to custom_llm embedding methods - [PR](https://github.com/BerriAI/litellm/pull/11450) s/o [ElefHead](https://github.com/ElefHead)
+- **Huggingface**
+    - Add /chat/completions to endpoint url when missing - [PR](https://github.com/BerriAI/litellm/pull/11630)
+- **Deepgram**
+    - Support async httpx calls - [PR](https://github.com/BerriAI/litellm/pull/11641)
+- **Anthropic**
+    - Append prefix (if set) to assistant content start - [PR](https://github.com/BerriAI/litellm/pull/11719)
+
+#### Features
+- **VertexAI**
+    - Support vertex credentials set via env var on passthrough - [PR](https://github.com/BerriAI/litellm/pull/11527)
+    - Support for choosing ‘global’ region when model is only available there - [PR](https://github.com/BerriAI/litellm/pull/11566)
+    - Anthropic passthrough cost calculation + token tracking - [PR](https://github.com/BerriAI/litellm/pull/11611)
+    - Support ‘global’ vertex region on passthrough - [PR](https://github.com/BerriAI/litellm/pull/11661)
+- **Anthropic**
+    - ‘none’ tool choice param support - [PR](https://github.com/BerriAI/litellm/pull/11695)
+- **Perplexity**
+    - Add ‘reasoning_effort’ support - [PR](https://github.com/BerriAI/litellm/pull/11562)
+- **Mistral**
+    - Add mistral reasoning support - [PR](https://github.com/BerriAI/litellm/pull/11642)
+- **SGLang**
+    - Map context window exceeded error for proper handling - [PR](https://github.com/BerriAI/litellm/pull/11575/)
+- **Deepgram**
+    - Provider specific params support - [PR](https://github.com/BerriAI/litellm/pull/11638)
+- **Azure**
+    - Return content safety filter results - [PR](https://github.com/BerriAI/litellm/pull/11655)
 ---
 
 ## LLM API Endpoints
