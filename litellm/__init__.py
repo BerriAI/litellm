@@ -312,7 +312,7 @@ custom_prometheus_metadata_labels: List[str] = []
 disable_add_prefix_to_prompt: bool = (
     False  # used by anthropic, to disable adding prefix to prompt
 )
-#### REQUEST PRIORITIZATION ####
+#### REQUEST PRIORITIZATION #####
 priority_reservation: Optional[Dict[str, float]] = None
 
 
