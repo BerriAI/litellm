@@ -348,6 +348,7 @@ export default function SpendLogsTable({
       
     }).map(log => ({
       ...log,
+      timeTaken: (Date.parse(log.endTime) - Date.parse(log.startTime)) / 1000,
       onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
       onSessionClick: (sessionId: string) => {
         if (sessionId) setSelectedSessionId(sessionId);
