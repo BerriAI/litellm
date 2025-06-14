@@ -108,3 +108,41 @@ async def test_logging_result_for_bridge_calls(logging_obj):
         )
         await asyncio.sleep(1)
         assert mock_should_run_logging.call_count == 2  # called twice per call
+
+
+@pytest.mark.asyncio
+async def test_logging_non_streaming_request():
+    import asyncio
+
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class MockPrometheusLogger(CustomLogger):
+        pass
+
+    import litellm
+
+    mock_logging_obj = MockPrometheusLogger()
+
+    litellm.callbacks = [mock_logging_obj]
+
+    with patch.object(
+        mock_logging_obj,
+        "async_log_success_event",
+    ) as mock_async_log_success_event:
+        await litellm.acompletion(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Hey"}],
+            model="openai/codex-mini-latest",
+            mock_response="Hello, world!",
+        )
+        await asyncio.sleep(1)
+        mock_async_log_success_event.assert_called_once()
+        assert mock_async_log_success_event.call_count == 1
+        print(
+            "mock_async_log_success_event.call_args.kwargs",
+            mock_async_log_success_event.call_args.kwargs,
+        )
+        standard_logging_object = mock_async_log_success_event.call_args.kwargs[
+            "kwargs"
+        ]["standard_logging_object"]
+        assert standard_logging_object["stream"] is not True
