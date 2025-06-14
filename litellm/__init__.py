@@ -878,6 +878,7 @@ from .utils import (
     TextCompletionResponse,
     get_provider_fields,
     ModelResponseListIterator,
+    get_valid_models,
 )
 
 ALL_LITELLM_RESPONSE_TYPES = [
