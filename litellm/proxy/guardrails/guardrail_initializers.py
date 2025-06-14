@@ -189,6 +189,19 @@ def initialize_pangea(litellm_params, guardrail):
 
     return _pangea_callback
 
+def initialize_prisma_airs(litellm_params, guardrail):
+    from litellm.proxy.guardrails.guardrail_hooks.prisma_airs_guardrail import prisma_airs_guardrail
+
+    _prisma_airs_guardrail_callback = prisma_airs_guardrail(
+        guardrail_name=guardrail["guardrail_name"],
+        api_base=litellm_params.api_base,
+        api_key=litellm_params.api_key,
+        default_on=litellm_params.default_on,
+    )
+    litellm.logging_callback_manager.add_litellm_callback(_prisma_airs_guardrail_callback)
+
+    return _prisma_airs_guardrail_callback
+
 
 def initialize_lasso(
     litellm_params: LitellmParams,
