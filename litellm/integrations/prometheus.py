@@ -263,12 +263,6 @@ class PrometheusLogger(CustomLogger):
                 UserAPIKeyLabelNames.API_BASE.value,
                 UserAPIKeyLabelNames.API_PROVIDER.value,
             ]
-            team_and_key_labels = [
-                "hashed_api_key",
-                "api_key_alias",
-                "team",
-                "team_alias",
-            ]
 
             # Metric for deployment state
             self.litellm_deployment_state = self._gauge_factory(
@@ -389,7 +383,80 @@ class PrometheusLogger(CustomLogger):
                 if parsed_config.include_labels:
                     label_filters[metric_name] = parsed_config.include_labels
 
+        # Pretty print the processed configuration
+        self._pretty_print_prometheus_config(label_filters)
+
         return label_filters
+
+    def _pretty_print_prometheus_config(
+        self, label_filters: Dict[str, List[str]]
+    ) -> None:
+        """Pretty print the processed prometheus configuration using rich"""
+        try:
+            from rich.console import Console
+            from rich.panel import Panel
+            from rich.table import Table
+            from rich.text import Text
+
+            console = Console()
+
+            # Create main panel title
+            title = Text("Prometheus Configuration Processed", style="bold blue")
+
+            # Create enabled metrics table
+            metrics_table = Table(
+                title="📊 Enabled Metrics",
+                show_header=True,
+                header_style="bold magenta",
+                title_justify="left",
+            )
+            metrics_table.add_column("Metric Name", style="cyan", no_wrap=True)
+
+            if hasattr(self, "enabled_metrics") and self.enabled_metrics:
+                for metric in sorted(self.enabled_metrics):
+                    metrics_table.add_row(metric)
+            else:
+                metrics_table.add_row(
+                    "[yellow]All metrics enabled (no filter applied)[/yellow]"
+                )
+
+            # Create label filters table
+            labels_table = Table(
+                title="🏷️  Label Filters",
+                show_header=True,
+                header_style="bold green",
+                title_justify="left",
+            )
+            labels_table.add_column("Metric Name", style="cyan", no_wrap=True)
+            labels_table.add_column("Allowed Labels", style="yellow")
+
+            if label_filters:
+                for metric_name, labels in sorted(label_filters.items()):
+                    labels_str = (
+                        ", ".join(labels)
+                        if labels
+                        else "[dim]No labels specified[/dim]"
+                    )
+                    labels_table.add_row(metric_name, labels_str)
+            else:
+                labels_table.add_row(
+                    "[yellow]No label filtering applied[/yellow]",
+                    "[dim]All default labels will be used[/dim]",
+                )
+
+            # Print everything in a nice panel
+            console.print("\n")
+            console.print(Panel(title, border_style="blue"))
+            console.print(metrics_table)
+            console.print(labels_table)
+            console.print("\n")
+
+        except ImportError:
+            # Fallback to simple logging if rich is not available
+            verbose_logger.info(
+                f"Enabled metrics: {sorted(self.enabled_metrics) if hasattr(self, 'enabled_metrics') else 'All metrics'}"
+            )
+            verbose_logger.info(f"Label filters: {label_filters}")
 
     def _is_metric_enabled(self, metric_name: str) -> bool:
         """Check if a metric is enabled based on configuration"""
