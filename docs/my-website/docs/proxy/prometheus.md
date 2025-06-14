@@ -248,9 +248,9 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 
 You can selectively enable specific metrics and control which labels are included to optimize performance and reduce cardinality.
 
-### Enable Specific Metrics Only
+### Enable Specific Metrics and Labels
 
-Configure which metrics to emit by specifying them in `prometheus_metrics_config`. Each configuration group needs a `group` name (for organization) and a list of `metrics` to enable:
+Configure which metrics to emit by specifying them in `prometheus_metrics_config`. Each configuration group needs a `group` name (for organization) and a list of `metrics` to enable. You can optionally include a list of `include_labels` to filter the labels for the metrics.
 
 ```yaml
 model_list:
@@ -261,12 +261,23 @@ model_list:
 litellm_settings:
   callbacks: ["prometheus"]
   prometheus_metrics_config:
-    - group: "core_metrics"
+    # High-cardinality metrics with minimal labels
+    - group: "proxy_metrics"
       metrics:
-        - "litellm_spend_metric"
-        - "litellm_total_tokens"
         - "litellm_proxy_total_requests_metric"
+        - "litellm_proxy_failed_requests_metric"
+      include_labels:
+        - "hashed_api_key"
+        - "requested_model"
+        - "model_group"
 ```
+
+On starting up LiteLLM if your metrics were correctly configured, you should see the following on your container logs
+
+<Image 
+  img={require('../../img/prom_config.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
 
 
 ### Filter Labels Per Metric
