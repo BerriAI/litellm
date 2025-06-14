@@ -4,9 +4,9 @@ import Image from '@theme/IdealImage';
 
 # /mcp [BETA] - Model Context Protocol
 
-## Expose MCP tools on LiteLLM Proxy Server
+LiteLLM Proxy provvides an MCP Gateway that allows you to use a fixed endpoint for all MCP tools and control MCP access by Key, Team. 
 
-This allows you to define tools that can be called by any MCP compatible client. Define your `mcp_servers` with LiteLLM and all your clients can list and call available tools.
+## Expose MCP tools on LiteLLM Proxy Server
 
 <Image 
   img={require('../img/mcp_2.png')}
@@ -15,6 +15,16 @@ This allows you to define tools that can be called by any MCP compatible client.
 <p style={{textAlign: 'left', color: '#666'}}>
   LiteLLM MCP Architecture: Use MCP tools with all LiteLLM supported models
 </p>
+
+## LiteLLM Proxy - Walk through MCP Gateway
+LiteLLM exposes an MCP Gateway for admins to add all their MCP servers to LiteLLM. The key benefits of using LiteLLM Proxy with MCP are:
+
+1. Use a fixed endpoint for all MCP tools
+2. MCP Permission management by Key, Team, or User
+
+This video demonstrates how you can onboard an MCP server to LiteLLM Proxy, use it and set access controls.
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/f7aa8d217879430987f3e64291757bfc" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
 
 #### How it works
 
