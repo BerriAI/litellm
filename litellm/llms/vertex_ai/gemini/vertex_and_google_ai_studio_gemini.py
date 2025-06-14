@@ -304,9 +304,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 return None
 
         for tool in value:
-            openai_function_object: Optional[ChatCompletionToolParamFunctionChunk] = (
-                None
-            )
+            openai_function_object: Optional[
+                ChatCompletionToolParamFunctionChunk
+            ] = None
             if "function" in tool:  # tools list
                 _openai_function_object = ChatCompletionToolParamFunctionChunk(  # type: ignore
                     **tool["function"]
@@ -315,6 +315,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if (
                     "parameters" in _openai_function_object
                     and _openai_function_object["parameters"] is not None
+                    and isinstance(_openai_function_object["parameters"], dict)
                 ):  # OPENAI accepts JSON Schema, Google accepts OpenAPI schema.
                     _openai_function_object["parameters"] = _build_vertex_schema(
                         _openai_function_object["parameters"]
@@ -344,6 +345,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 )
                 _description = openai_function_object.get("description", None)
                 _parameters = openai_function_object.get("parameters", None)
+                if isinstance(_parameters, str) and len(_parameters) == 0:
+                    _parameters = {
+                        "type": "object",
+                    }
                 if _description is not None:
                     gtool_func_declaration["description"] = _description
                 if _parameters is not None:
@@ -547,14 +552,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif param == "seed":
                 optional_params["seed"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
-                optional_params["thinkingConfig"] = (
-                    VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(value)
-                )
+                optional_params[
+                    "thinkingConfig"
+                ] = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(value)
             elif param == "thinking":
-                optional_params["thinkingConfig"] = (
-                    VertexGeminiConfig._map_thinking_param(
-                        cast(AnthropicThinkingParam, value)
-                    )
+                optional_params[
+                    "thinkingConfig"
+                ] = VertexGeminiConfig._map_thinking_param(
+                    cast(AnthropicThinkingParam, value)
                 )
             elif param == "modalities" and isinstance(value, list):
                 response_modalities = self.map_response_modalities(value)
@@ -776,7 +781,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _transform_parts(
         parts: List[HttpxPartType],
-        index: int,
         is_function_call: Optional[bool],
     ) -> Tuple[
         Optional[ChatCompletionToolCallFunctionChunk],
@@ -784,6 +788,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ]:
         function: Optional[ChatCompletionToolCallFunctionChunk] = None
         _tools: List[ChatCompletionToolCallChunk] = []
+        # in a single chunk, each tool call appears as a separate part
+        # they need to be separate indexes as they are separate tool calls
+        funcCallIndex = 0
         for part in parts:
             if "functionCall" in part:
                 _function_chunk = ChatCompletionToolCallFunctionChunk(
@@ -797,9 +804,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         id=f"call_{str(uuid.uuid4())}",
                         type="function",
                         function=_function_chunk,
-                        index=index,
+                        index=funcCallIndex,
                     )
                     _tools.append(_tool_response_chunk)
+                funcCallIndex += 1
         if len(_tools) == 0:
             tools: Optional[List[ChatCompletionToolCallChunk]] = None
         else:
@@ -972,9 +980,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if "promptTokensDetails" in usage_metadata:
             for detail in usage_metadata["promptTokensDetails"]:
                 if detail["modality"] == "AUDIO":
-                    audio_tokens = detail["tokenCount"]
+                    audio_tokens = detail.get("tokenCount", 0)
                 elif detail["modality"] == "TEXT":
-                    text_tokens = detail["tokenCount"]
+                    text_tokens = detail.get("tokenCount", 0)
         if "thoughtsTokenCount" in usage_metadata:
             reasoning_tokens = usage_metadata["thoughtsTokenCount"]
         prompt_tokens_details = PromptTokensDetailsWrapper(
@@ -1113,7 +1121,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
                 functions, tools = VertexGeminiConfig._transform_parts(
                     parts=candidate["content"]["parts"],
-                    index=candidate.get("index", idx),
                     is_function_call=is_function_call(standard_optional_params),
                 )
 
@@ -1230,7 +1237,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 )
 
         model_response.choices = []
-        model_response.id = completion_response.get("responseId", None)
+        response_id = completion_response.get("responseId")
+        if response_id:
+            model_response.id = response_id
         url_context_metadata: List[dict] = []
         try:
             grounding_metadata: List[dict] = []
@@ -1254,28 +1263,28 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             ## ADD METADATA TO RESPONSE ##
 
             setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)
-            model_response._hidden_params["vertex_ai_grounding_metadata"] = (
-                grounding_metadata
-            )
+            model_response._hidden_params[
+                "vertex_ai_grounding_metadata"
+            ] = grounding_metadata
 
             setattr(
                 model_response, "vertex_ai_url_context_metadata", url_context_metadata
             )
-            
-            model_response._hidden_params["vertex_ai_url_context_metadata"] = (
-                url_context_metadata
-            )
+
+            model_response._hidden_params[
+                "vertex_ai_url_context_metadata"
+            ] = url_context_metadata
 
             setattr(model_response, "vertex_ai_safety_results", safety_ratings)
-            model_response._hidden_params["vertex_ai_safety_results"] = (
-                safety_ratings  # older approach - maintaining to prevent regressions
-            )
+            model_response._hidden_params[
+                "vertex_ai_safety_results"
+            ] = safety_ratings  # older approach - maintaining to prevent regressions
 
             ## ADD CITATION METADATA ##
             setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)
-            model_response._hidden_params["vertex_ai_citation_metadata"] = (
-                citation_metadata  # older approach - maintaining to prevent regressions
-            )
+            model_response._hidden_params[
+                "vertex_ai_citation_metadata"
+            ] = citation_metadata  # older approach - maintaining to prevent regressions
 
         except Exception as e:
             raise VertexAIError(
@@ -1844,10 +1853,12 @@ class ModelResponseIterator:
 
     def chunk_parser(self, chunk: dict) -> Optional["ModelResponseStream"]:
         try:
+            verbose_logger.debug(f"RAW GEMINI CHUNK: {chunk}")
             from litellm.types.utils import ModelResponseStream
 
             processed_chunk = GenerateContentResponseBody(**chunk)  # type: ignore
-            model_response = ModelResponseStream(choices=[])
+            response_id = processed_chunk.get("responseId")
+            model_response = ModelResponseStream(choices=[], id=response_id)
             usage: Optional[Usage] = None
             _candidates: Optional[List[Candidates]] = processed_chunk.get("candidates")
             grounding_metadata: List[dict] = []
@@ -1882,6 +1893,8 @@ class ModelResponseIterator:
                     ).web_search_requests = web_search_requests
 
             setattr(model_response, "usage", usage)  # type: ignore
+
+            model_response._hidden_params["is_finished"] = False
             return model_response
 
         except json.JSONDecodeError:

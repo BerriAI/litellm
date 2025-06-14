@@ -14,3 +14,11 @@ litellm_settings:
       include_labels:
         - "api_provider"
         - "requested_model"
+  - model_name: gemini/*
+    litellm_params:
+      model: gemini/*
+      api_key: os.environ/GEMINI_API_KEY
+  - model_name: "anthropic/*"
+    litellm_params:
+      model: "anthropic/*"
+      api_key: os.environ/ANTHROPIC_API_KEY

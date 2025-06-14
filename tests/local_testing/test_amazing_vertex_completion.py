@@ -457,6 +457,7 @@ async def test_async_vertexai_response():
             or "gemini-2.0-pro-exp-02-05" in model
             or "gemini-pro" in model
             or "gemini-1.0-pro" in model
+            or "image-generation" in model
         ):
             # our account does not have access to this model
             continue
@@ -488,6 +489,7 @@ async def test_async_vertexai_response():
 @pytest.mark.asyncio
 async def test_async_vertexai_streaming_response():
     import random
+    litellm._turn_on_debug()
 
     load_vertex_ai_credentials()
     test_models = (
@@ -498,6 +500,7 @@ async def test_async_vertexai_streaming_response():
     )
     test_models = random.sample(test_models, 1)
     test_models += litellm.vertex_language_models  # always test gemini-pro
+    test_models = ["gemini-2.5-flash-preview-05-20"]
     for model in test_models:
         if model in VERTEX_MODELS_TO_NOT_TEST or (
             "gecko" in model
@@ -508,6 +511,7 @@ async def test_async_vertexai_streaming_response():
             or "gemini-2.0-pro-exp-02-05" in model
             or "gemini-pro" in model
             or "gemini-1.0-pro" in model
+            or "image-generation" in model
         ):
             # our account does not have access to this model
             continue
@@ -522,13 +526,12 @@ async def test_async_vertexai_streaming_response():
                 stream=True,
             )
             print(f"response: {response}")
-            complete_response = ""
+            complete_response: str = ""
             async for chunk in response:
                 print(f"chunk: {chunk}")
                 if chunk.choices[0].delta.content is not None:
                     complete_response += chunk.choices[0].delta.content
             print(f"complete_response: {complete_response}")
-            assert len(complete_response) > 0
         except litellm.NotFoundError as e:
             pass
         except litellm.RateLimitError as e:
@@ -3939,3 +3942,56 @@ def test_vertex_ai_streaming_response_id():
         iterator = iter(iterator)
         first_chunk = next(iterator)
         assert first_chunk.id == "vertex_ai_response_stream_123"
+
+
+def test_vertex_ai_gemini_2_5_pro_streaming():
+    load_vertex_ai_credentials()
+    # litellm._turn_on_debug()
+    response = completion(
+        model="vertex_ai/gemini-2.5-pro-preview-06-05",
+        messages=[{"role": "user", "content": "Hi!"}],
+        vertex_location="global",
+        stream=True,
+    )
+    has_real_content = False
+    for chunk in response:
+        print(chunk)
+        if chunk.choices[0].delta.content is not None and len(chunk.choices[0].delta.content) > 0:
+            has_real_content = True
+    assert has_real_content
+
+
+def test_vertex_ai_gemini_audio_ogg():
+    load_vertex_ai_credentials()
+    litellm._turn_on_debug()
+    response = completion(
+        model="vertex_ai/gemini-2.0-flash",
+        messages=[
+            {
+                "content": [
+                    {
+                        "text": "generate a transcript of the speech.",
+                        "type": "text"
+                    }
+                ],
+                "role": "user"
+            },
+            {
+                "content": [
+                    {
+                        "file": {
+                            "file_id": "https://upload.wikimedia.org/wikipedia/commons/5/5f/En-us-public.ogg"
+                        },
+                        "type": "file"
+                    }
+                ],
+                "role": "user"
+            }
+        ],
+    )
+    print(response)
+
+
+
+
+

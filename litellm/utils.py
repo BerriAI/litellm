@@ -2077,6 +2077,43 @@ def supports_reasoning(model: str, custom_llm_provider: Optional[str] = None) ->
     )
 
 
+def get_supported_regions(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> Optional[List[str]]:
+    """
+    Get a list of supported regions for a given model and provider.
+
+    Parameters:
+    model (str): The model name to be checked.
+    custom_llm_provider (Optional[str]): The provider to be checked.
+    """
+    try:
+        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
+        model_info = _get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
+        supported_regions = model_info.get("supported_regions", None)
+        if supported_regions is None:
+            return None
+
+        #########################################################
+        # Ensure only list supported regions are returned
+        #########################################################
+        if isinstance(supported_regions, list):
+            return supported_regions
+        else:
+            return None
+    except Exception as e:
+        verbose_logger.debug(
+            f"Model not found or error in checking supported_regions support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
+        )
+        return None
+
+
 def supports_embedding_image_input(
     model: str, custom_llm_provider: Optional[str] = None
 ) -> bool:
@@ -2094,9 +2131,26 @@ def supports_embedding_image_input(
 def _update_dictionary(existing_dict: Dict, new_dict: dict) -> dict:
     for k, v in new_dict.items():
         if v is not None:
-            existing_dict[k] = v
+            # Convert stringified numbers to appropriate numeric types
+            existing_dict[k] = _convert_stringified_numbers(v)
 
     return existing_dict
+
+
+def _convert_stringified_numbers(value):
+    """Convert stringified numbers (including scientific notation) to appropriate numeric types."""
+    if isinstance(value, str):
+        try:
+            # Try to convert to float first to handle scientific notation like "3e-07"
+            if "e" in value.lower() or "." in value:
+                return float(value)
+            # Try to convert to int for whole numbers like "8192"
+            else:
+                return int(value)
+        except (ValueError, TypeError):
+            # If conversion fails, return the original string
+            return value
+    return value
 
 
 def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
@@ -2117,6 +2171,7 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
 
     loaded_model_cost = {}
     if isinstance(model_cost, dict):
+        # Convert stringified numbers to appropriate numeric types
         loaded_model_cost = model_cost
     elif isinstance(model_cost, str):
         loaded_model_cost = litellm.get_model_cost_map(url=model_cost)
@@ -4267,6 +4322,10 @@ def _check_provider_match(model_info: dict, custom_llm_provider: Optional[str]) 
             "litellm_provider"
         ].startswith("bedrock"):
             return True
+        elif (
+            custom_llm_provider == "litellm_proxy"
+        ):  # litellm_proxy is a special case, it's not a provider, it's a proxy for the provider
+            return True
         else:
             return False
 
@@ -4319,20 +4378,6 @@ def _get_potential_model_names(
             custom_llm_provider,
             stripped_model_name,
         )
-
-    # we need to strip the litellm_proxy/ prefix to get the underlying model
-    if custom_llm_provider == "litellm_proxy":
-        # If model starts with litellm_proxy/, strip it
-        if model.startswith("litellm_proxy/"):
-            underlying_model = model.split("/", 1)[1]
-        else:
-            underlying_model = model
-        
-        # Use the underlying model for all lookups
-        split_model = underlying_model
-        stripped_model_name = underlying_model
-        combined_stripped_model_name = underlying_model
-
 
     return PotentialModelNamesAndCustomLLMProvider(
         split_model=split_model,
@@ -4407,6 +4452,7 @@ def _is_potential_model_name_in_model_cost(
         potential_model_name in litellm.model_cost
         for potential_model_name in potential_model_names.values()
     )
+
 
 def _get_model_info_helper(  # noqa: PLR0915
     model: str, custom_llm_provider: Optional[str] = None
@@ -4518,7 +4564,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 if not _check_provider_match(
                     model_info=_model_info, custom_llm_provider=custom_llm_provider
                 ):
-                    _model_info = None 
+                    _model_info = None
 
             if _model_info is None or key is None:
                 raise ValueError(
@@ -7100,6 +7146,16 @@ def add_openai_metadata(metadata: dict) -> dict:
         for k, v in metadata.items()
         if k != "hidden_params" and isinstance(v, (str))
     }
+
+    # max 16 keys allowed by openai - trim down to 16
+    if len(visible_metadata) > 16:
+        filtered_metadata = {}
+        idx = 0
+        for k, v in visible_metadata.items():
+            if idx < 16:
+                filtered_metadata[k] = v
+            idx += 1
+        visible_metadata = filtered_metadata
 
     return visible_metadata.copy()
 

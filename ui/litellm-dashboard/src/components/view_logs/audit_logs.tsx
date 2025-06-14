@@ -258,6 +258,39 @@ export default function AuditLogs({
     return completeFilteredLogs.slice(start, end);
   }, [completeFilteredLogs, clientCurrentPage, pageSize]);
 
+  // Check if audit logs are empty (not loading and no data)
+  const showAuditLogsInfo = (!allLogsQuery.data || allLogsQuery.data.length === 0);
+
+  // Custom AuditLogsInfoMessage component
+  const AuditLogsInfoMessage = ({ show }: { show: boolean }) => {
+    if (!show) return null;
+    
+    return (
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-start mb-6">
+        <div className="text-blue-500 mr-3 flex-shrink-0 mt-0.5">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="16" x2="12" y2="12"></line>
+            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+          </svg>
+        </div>
+        <div>
+          <h4 className="text-sm font-medium text-blue-800">Audit Logs Not Available</h4>
+          <p className="text-sm text-blue-700 mt-1">
+            To enable audit logging, add the following configuration to your LiteLLM proxy configuration file:
+          </p>
+          <pre className="mt-2 bg-white p-3 rounded border border-blue-200 text-xs font-mono overflow-auto">
+{`litellm_settings:
+  store_audit_logs: true`}
+          </pre>
+          <p className="text-xs text-blue-700 mt-2">
+            Note: This will only affect new requests after the configuration change and proxy restart.
+          </p>
+        </div>
+      </div>
+    );
+  };
+
   const renderSubComponent = useCallback(({ row }: { row: any }) => {
     const AuditLogRowExpansionPanel = ({ rowData }: { rowData: AuditLogEntry }) => {
       const { before_value, updated_values, table_name, action } = rowData;
@@ -356,8 +389,29 @@ export default function AuditLogs({
 
   if (!premiumUser) {
     return (
-      <div>
-        <Text>This is a LiteLLM Enterprise feature, and requires a valid key to use. Get a trial key <a href="https://litellm.ai/pricing" target="_blank" rel="noopener noreferrer">here</a>.</Text>
+      <div style={{ textAlign: 'center', marginTop: '20px' }}>
+        <h1 style={{ display: 'block', marginBottom: '10px' }}>
+        ✨ Enterprise Feature.
+        </h1>
+        <Text style={{ display: 'block', marginBottom: '10px' }}>
+          
+          This is a LiteLLM Enterprise feature, and requires a valid key to use. 
+        </Text>
+        <Text style={{ display: 'block', marginBottom: '20px', fontStyle: 'italic' }}>
+          Here&apos;s a preview of what Audit Logs offer:
+        </Text>
+        <img 
+          src="/audit-logs-preview.png"
+          alt="Audit Logs Preview" 
+          style={{ 
+            maxWidth: '100%', 
+            maxHeight: '700px',
+            border: '1px solid #ccc', 
+            borderRadius: '8px',
+            boxShadow: '0 4px 8px rgba(0,0,0,0.1)',
+            margin: '0 auto'
+          }} 
+        />
       </div>
     );
   }
@@ -376,6 +430,10 @@ export default function AuditLogs({
         <h1 className="text-xl font-semibold py-4">
               Audit Logs
             </h1>
+          
+          {/* Show Audit Logs Info Message when no data */}
+          <AuditLogsInfoMessage show={showAuditLogsInfo} />
+          
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
             
             <div className="flex flex-wrap items-center gap-3">

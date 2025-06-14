@@ -2,7 +2,7 @@
 Handles transforming from Responses API -> LiteLLM completion  (Chat Completion API)
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, cast
 
 from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
@@ -31,6 +31,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParamFunctionChunk,
     ChatCompletionUserMessage,
     GenericChatCompletionMessage,
+    OpenAIMcpServerTool,
     Reasoning,
     ResponseAPIUsage,
     ResponseInputParam,
@@ -390,6 +391,26 @@ class LiteLLMCompletionResponsesConfig:
         return [tool_output_message]
 
     @staticmethod
+    def _transform_input_file_item_to_file_item(item: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Transform a Responses API input_file item to a Chat Completion file item
+
+        Args:
+            item: Dictionary containing input_file type with file_id and/or file_data
+
+        Returns:
+            Dictionary with transformed file structure for Chat Completion
+        """
+        file_dict: Dict[str, Any] = {}
+        keys = ["file_id", "file_data"]
+        for key in keys:
+            if item.get(key):
+                file_dict[key] = item.get(key)
+
+        new_item: Dict[str, Any] = {"type": "file", "file": file_dict}
+        return new_item
+
+    @staticmethod
     def _transform_responses_api_content_to_chat_completion_content(
         content: Any,
     ) -> Union[str, List[Union[str, Dict[str, Any]]]]:
@@ -405,14 +426,21 @@ class LiteLLMCompletionResponsesConfig:
                 if isinstance(item, str):
                     content_list.append(item)
                 elif isinstance(item, dict):
-                    content_list.append(
-                        {
-                            "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
-                                item.get("type") or "text"
-                            ),
-                            "text": item.get("text"),
-                        }
-                    )
+                    if item.get("type") == "input_file":
+                        content_list.append(
+                            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
+                                item
+                            )
+                        )
+                    else:
+                        content_list.append(
+                            {
+                                "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
+                                    item.get("type") or "text"
+                                ),
+                                "text": item.get("text"),
+                            }
+                        )
             return content_list
         else:
             raise ValueError(f"Invalid content type: {type(content)}")
@@ -439,26 +467,32 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def transform_responses_api_tools_to_chat_completion_tools(
-        tools: Optional[List[FunctionToolParam]],
-    ) -> List[ChatCompletionToolParam]:
+        tools: Optional[List[Union[FunctionToolParam, OpenAIMcpServerTool]]],
+    ) -> List[Union[ChatCompletionToolParam, OpenAIMcpServerTool]]:
         """
         Transform a Responses API tools into a Chat Completion tools
         """
         if tools is None:
             return []
-        chat_completion_tools: List[ChatCompletionToolParam] = []
+        chat_completion_tools: List[
+            Union[ChatCompletionToolParam, OpenAIMcpServerTool]
+        ] = []
         for tool in tools:
-            chat_completion_tools.append(
-                ChatCompletionToolParam(
-                    type="function",
-                    function=ChatCompletionToolParamFunctionChunk(
-                        name=tool["name"],
-                        description=tool.get("description") or "",
-                        parameters=dict(tool.get("parameters", {}) or {}),
-                        strict=tool.get("strict", False) or False,
-                    ),
+            if tool.get("type") == "mcp":
+                chat_completion_tools.append(cast(OpenAIMcpServerTool, tool))
+            else:
+                typed_tool = cast(FunctionToolParam, tool)
+                chat_completion_tools.append(
+                    ChatCompletionToolParam(
+                        type="function",
+                        function=ChatCompletionToolParamFunctionChunk(
+                            name=typed_tool["name"],
+                            description=typed_tool.get("description") or "",
+                            parameters=dict(typed_tool.get("parameters", {}) or {}),
+                            strict=typed_tool.get("strict", False) or False,
+                        ),
+                    )
                 )
-            )
         return chat_completion_tools
 
     @staticmethod

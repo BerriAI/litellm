@@ -46,7 +46,7 @@ class _TextCompletionRequest:
 
     # This mutates the original dict, but we'll still return it anyways
     def update_original_body(self, prompt_messages: list[dict]) -> Any:
-        assert(len(prompt_messages) == 1)
+        assert len(prompt_messages) == 1
         self.body["prompt"] = prompt_messages[0]["content"]
         return self.body
 
@@ -63,7 +63,7 @@ class _TextCompletionResponse:
         return messages
 
     def update_original_body(self, prompt_messages: list[dict]) -> Any:
-        assert(len(prompt_messages) == len(self.body["choices"]))
+        assert len(prompt_messages) == len(self.body["choices"])
 
         for choice, prompt_message in zip(self.body["choices"], prompt_messages):
             choice["text"] = prompt_message["content"]
@@ -104,7 +104,7 @@ class _ChatCompletionRequest:
                         content_part["text"] = prompt_messages[count]["content"]
                         count += 1
 
-        assert(len(prompt_messages) == count)
+        assert len(prompt_messages) == count
         return self.body
 
 
@@ -116,12 +116,17 @@ class _ChatCompletionResponse:
         messages = []
 
         for choice in self.body["choices"]:
-            messages.append({"role": choice["message"]["role"], "content": choice["message"]["content"]})
+            messages.append(
+                {
+                    "role": choice["message"]["role"],
+                    "content": choice["message"]["content"],
+                }
+            )
 
         return messages
 
     def update_original_body(self, prompt_messages: list[dict]) -> Any:
-        assert(len(prompt_messages) == len(self.body["choices"]))
+        assert len(prompt_messages) == len(self.body["choices"])
 
         for choice, prompt_message in zip(self.body["choices"], prompt_messages):
             choice["message"]["content"] = prompt_message["content"]
@@ -147,7 +152,6 @@ def _get_transformer_for_response(body) -> Optional[_Transformer]:
             return _ChatCompletionResponse(body)
 
     return None
-
 
 
 class PangeaHandler(CustomGuardrail):
@@ -202,9 +206,7 @@ class PangeaHandler(CustomGuardrail):
             f"Initialized Pangea Guardrail: name={guardrail_name}, recipe={pangea_input_recipe}, api_base={self.api_base}"
         )
 
-    async def _call_pangea_guard(
-        self, payload: dict, hook_name: str
-    ) -> dict:
+    async def _call_pangea_guard(self, payload: dict, hook_name: str) -> dict:
         """
         Makes the API call to the Pangea AI Guard endpoint.
         The function itself will raise an error in the case that a response
@@ -266,7 +268,7 @@ class PangeaHandler(CustomGuardrail):
             raise e
         except Exception as e:
             verbose_proxy_logger.error(
-                    f"Pangea Guardrail ({hook_name}): Error calling API: {e}. Response text: {getattr(e, 'response', None) and getattr(e.response, 'text', None)}"  # type: ignore
+                f"Pangea Guardrail ({hook_name}): Error calling API: {e}. Response text: {getattr(e, 'response', None) and getattr(e.response, 'text', None)}"  # type: ignore
             )
             # Decide if you want to block by default on error, or allow through
             # Raising an exception here will block the request.
@@ -286,15 +288,14 @@ class PangeaHandler(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: str
+        call_type: str,
     ):
         event_type = GuardrailEventHooks.pre_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             verbose_proxy_logger.debug(
-                f"Pangea Guardail (async_pre_call_hook): Guardrail is disabled {self.guardrail_name}."
+                f"Pangea Guardrail (async_pre_call_hook): Guardrail is disabled {self.guardrail_name}."
             )
             return data
-
 
         transformer = _get_transformer_for_request(data, call_type)
         if not transformer:
@@ -319,7 +320,9 @@ class PangeaHandler(CustomGuardrail):
         if self.pangea_input_recipe:
             ai_guard_payload["recipe"] = self.pangea_input_recipe
 
-        ai_guard_response = await self._call_pangea_guard(ai_guard_payload, "async_pre_call_hook")
+        ai_guard_response = await self._call_pangea_guard(
+            ai_guard_payload, "async_pre_call_hook"
+        )
         # Add guardrail name to header if passed
         add_guardrail_to_applied_guardrails_header(
             request_data=data, guardrail_name=self.guardrail_name
@@ -335,7 +338,7 @@ class PangeaHandler(CustomGuardrail):
                     "error": "Failed to update original request body",
                     "guardrail_name": self.guardrail_name,
                     "exceptions": str(e),
-                }
+                },
             ) from e
 
     @log_guardrail_information
@@ -357,7 +360,7 @@ class PangeaHandler(CustomGuardrail):
         event_type = GuardrailEventHooks.post_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             verbose_proxy_logger.debug(
-                f"Pangea Guardail (async_pre_call_hook): Guardrail is disabled {self.guardrail_name}."
+                f"Pangea Guardrail (async_pre_call_hook): Guardrail is disabled {self.guardrail_name}."
             )
             return data
 
@@ -370,9 +373,7 @@ class PangeaHandler(CustomGuardrail):
             return
 
         messages = transformer.get_messages()
-        verbose_proxy_logger.warning(
-            f"GOT MESSAGES: {messages}"
-        )
+        verbose_proxy_logger.warning(f"GOT MESSAGES: {messages}")
         ai_guard_payload = {
             "debug": False,  # Or make this configurable if needed
             "messages": messages,
@@ -380,7 +381,9 @@ class PangeaHandler(CustomGuardrail):
         if self.pangea_output_recipe:
             ai_guard_payload["recipe"] = self.pangea_output_recipe
 
-        ai_guard_response = await self._call_pangea_guard(ai_guard_payload, "post_call_success_hook")
+        ai_guard_response = await self._call_pangea_guard(
+            ai_guard_payload, "post_call_success_hook"
+        )
         prompt_messages = ai_guard_response.get("result", {}).get("prompt_messages", [])
 
         try:
@@ -392,5 +395,5 @@ class PangeaHandler(CustomGuardrail):
                     "error": "Failed to update original response body",
                     "guardrail_name": self.guardrail_name,
                     "exceptions": str(e),
-                }
+                },
             ) from e

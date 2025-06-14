@@ -1170,6 +1170,35 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> Optional[float]:
         return self._response_cost_calculator(result=result, cache_hit=cache_hit)
 
+    def should_run_logging(
+        self,
+        event_type: Literal[
+            "async_success", "sync_success", "async_failure", "sync_failure"
+        ],
+        stream: bool = False,
+    ) -> bool:
+        try:
+            if self.model_call_details.get(f"has_logged_{event_type}", False) is True:
+                return False
+
+            return True
+        except Exception:
+            return True
+
+    def has_run_logging(
+        self,
+        event_type: Literal[
+            "async_success", "sync_success", "async_failure", "sync_failure"
+        ],
+    ) -> None:
+        if self.stream is not None and self.stream is True:
+            """
+            Ignore check on stream, as there can be multiple chunks
+            """
+            return
+        self.model_call_details[f"has_logged_{event_type}"] = True
+        return
+
     def should_run_callback(
         self, callback: litellm.CALLBACK_TYPES, litellm_params: dict, event_hook: str
     ) -> bool:
@@ -1326,6 +1355,18 @@ class Logging(LiteLLMLoggingBaseClass):
             else:  # streaming chunks + image gen.
                 self.model_call_details["response_cost"] = None
 
+            ## RESPONSES API USAGE OBJECT TRANSFORMATION ##
+            # MAP RESPONSES API USAGE OBJECT TO LITELLM USAGE OBJECT
+            if isinstance(result, ResponsesAPIResponse):
+                result = result.model_copy()
+                setattr(
+                    result,
+                    "usage",
+                    ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                        result.usage
+                    ),
+                )
+
             if (
                 litellm.max_budget
                 and self.stream is False
@@ -1353,6 +1394,10 @@ class Logging(LiteLLMLoggingBaseClass):
         verbose_logger.debug(
             f"Logging Details LiteLLM-Success Call: Cache_hit={cache_hit}"
         )
+        if not self.should_run_logging(
+            event_type="sync_success"
+        ):  # prevent double logging
+            return
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time,
             end_time=end_time,
@@ -1419,6 +1464,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         call_type=self.call_type,
                     )
 
+            self.has_run_logging(event_type="sync_success")
             for callback in callbacks:
                 try:
                     litellm_params = self.model_call_details.get("litellm_params", {})
@@ -1829,6 +1875,10 @@ class Logging(LiteLLMLoggingBaseClass):
         print_verbose(
             "Logging Details LiteLLM-Async Success Call, cache_hit={}".format(cache_hit)
         )
+        if not self.should_run_logging(
+            event_type="async_success"
+        ):  # prevent double logging
+            return
 
         ## CALCULATE COST FOR BATCH JOBS
         if self.call_type == CallTypes.aretrieve_batch.value and isinstance(
@@ -1947,6 +1997,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     call_type=self.call_type,
                 )
 
+        self.has_run_logging(event_type="async_success")
         for callback in callbacks:
             # check if callback can run for this request
             litellm_params = self.model_call_details.get("litellm_params", {})
@@ -2165,6 +2216,10 @@ class Logging(LiteLLMLoggingBaseClass):
         verbose_logger.debug(
             f"Logging Details LiteLLM-Failure Call: {litellm.failure_callback}"
         )
+        if not self.should_run_logging(
+            event_type="sync_failure"
+        ):  # prevent double logging
+            return
         try:
             start_time, end_time = self._failure_handler_helper_fn(
                 exception=exception,
@@ -2187,6 +2242,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 ),
                 result=result,
             )
+            self.has_run_logging(event_type="sync_failure")
             for callback in callbacks:
                 try:
                     if callback == "lunary" and lunaryLogger is not None:
@@ -2349,6 +2405,10 @@ class Logging(LiteLLMLoggingBaseClass):
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
         """
         await self.special_failure_handlers(exception=exception)
+        if not self.should_run_logging(
+            event_type="async_failure"
+        ):  # prevent double logging
+            return
         start_time, end_time = self._failure_handler_helper_fn(
             exception=exception,
             traceback_exception=traceback_exception,
@@ -2363,6 +2423,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         result = None  # result sent to all loggers, init this to None incase it's not created
 
+        self.has_run_logging(event_type="async_failure")
         for callback in callbacks:
             try:
                 if isinstance(callback, CustomLogger):  # custom logger class
@@ -2600,20 +2661,38 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         if self.stream and isinstance(result, ModelResponse):
             return result
+        elif isinstance(result, ModelResponse):
+            return result
 
-        result = litellm.AnthropicConfig().transform_response(
-            raw_response=self.model_call_details["httpx_response"],
-            model_response=litellm.ModelResponse(),
-            model=self.model,
-            messages=[],
-            logging_obj=self,
-            optional_params={},
-            api_key="",
-            request_data={},
-            encoding=litellm.encoding,
-            json_mode=False,
-            litellm_params={},
-        )
+        if "httpx_response" in self.model_call_details:
+            result = litellm.AnthropicConfig().transform_response(
+                raw_response=self.model_call_details.get("httpx_response", None),
+                model_response=litellm.ModelResponse(),
+                model=self.model,
+                messages=[],
+                logging_obj=self,
+                optional_params={},
+                api_key="",
+                request_data={},
+                encoding=litellm.encoding,
+                json_mode=False,
+                litellm_params={},
+            )
+        else:
+            from litellm.types.llms.anthropic import AnthropicResponse
+
+            pydantic_result = AnthropicResponse.model_validate(result)
+            import httpx
+
+            result = litellm.AnthropicConfig().transform_parsed_response(
+                completion_response=pydantic_result.model_dump(),
+                raw_response=httpx.Response(
+                    status_code=200,
+                    headers={},
+                ),
+                model_response=litellm.ModelResponse(),
+                json_mode=None,
+            )
         return result
 
 
@@ -2912,7 +2991,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
 
             os.environ[
                 "OTEL_EXPORTER_OTLP_TRACES_HEADERS"
-            ] = f"space_key={arize_config.space_key},api_key={arize_config.api_key}"
+            ] = f"space_id={arize_config.space_key},api_key={arize_config.api_key}"
             for callback in _in_memory_loggers:
                 if (
                     isinstance(callback, ArizeLogger)

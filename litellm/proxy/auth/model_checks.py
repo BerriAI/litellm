@@ -72,6 +72,7 @@ def get_key_models(
     proxy_model_list: List[str],
     model_access_groups: Dict[str, List[str]],
     include_model_access_groups: Optional[bool] = False,
+    only_model_access_groups: Optional[bool] = False,
 ) -> List[str]:
     """
     Returns:
@@ -108,17 +109,19 @@ def get_team_models(
     - Empty list if no models set
     - If model_access_groups is provided, only return models that are in the access groups
     """
-    all_models = []
+    all_models_set: Set[str] = set()
     if len(team_models) > 0:
-        all_models = team_models
-        if SpecialModelNames.all_team_models.value in all_models:
-            all_models = team_models
-        if SpecialModelNames.all_proxy_models.value in all_models:
-            all_models = proxy_model_list
+        all_models_set.update(team_models)
+        if SpecialModelNames.all_team_models.value in all_models_set:
+            all_models_set.update(team_models)
+        if SpecialModelNames.all_proxy_models.value in all_models_set:
+            all_models_set.update(proxy_model_list)
+
+    all_models = list(all_models_set)
 
     all_models = _get_models_from_access_groups(
         model_access_groups=model_access_groups,
-        all_models=all_models,
+        all_models=list(all_models_set),
         include_model_access_groups=include_model_access_groups,
     )
 
@@ -136,6 +139,7 @@ def get_complete_model_list(
     llm_router: Optional[Router] = None,
     model_access_groups: Dict[str, List[str]] = {},
     include_model_access_groups: Optional[bool] = False,
+    only_model_access_groups: Optional[bool] = False,
 ) -> List[str]:
     """Logic for returning complete model list for a given key + team pair"""
 
@@ -145,6 +149,7 @@ def get_complete_model_list(
 
     If list contains wildcard -> return known provider models
     """
+
     unique_models: Set[str] = set()
     if key_models:
         unique_models.update(key_models)
@@ -161,6 +166,13 @@ def get_complete_model_list(
         if infer_model_from_keys:
             valid_models = get_valid_models()
             unique_models.update(valid_models)
+
+    if only_model_access_groups:
+        model_access_groups_to_return: List[str] = []
+        for model in unique_models:
+            if model in model_access_groups:
+                model_access_groups_to_return.append(model)
+        return model_access_groups_to_return
 
     all_wildcard_models = _get_wildcard_models(
         unique_models=unique_models,
