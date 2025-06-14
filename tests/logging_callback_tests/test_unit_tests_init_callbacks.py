@@ -35,6 +35,7 @@ from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.argilla import ArgillaLogger
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.s3_v2 import S3Logger
+from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.vector_stores.bedrock_vector_store import BedrockVectorStore
 from litellm.integrations.langfuse.langfuse_prompt_management import (
@@ -44,10 +45,18 @@ from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLog
 from litellm.integrations.agentops import AgentOps
 from litellm.integrations.humanloop import HumanloopLogger
 from litellm.proxy.hooks.dynamic_rate_limiter import _PROXY_DynamicRateLimitHandler
-from litellm_enterprise.enterprise_callbacks.generic_api_callback import GenericAPILogger
-from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import ResendEmailLogger
-from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import SMTPEmailLogger
-from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import PagerDutyAlerting
+from litellm_enterprise.enterprise_callbacks.generic_api_callback import (
+    GenericAPILogger,
+)
+from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
+    ResendEmailLogger,
+)
+from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
+    SMTPEmailLogger,
+)
+from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import (
+    PagerDutyAlerting,
+)
 from unittest.mock import patch
 
 # clear prometheus collectors / registry
@@ -90,6 +99,7 @@ callback_class_str_to_classType = {
     "smtp_email": SMTPEmailLogger,
     "deepeval": DeepEvalLogger,
     "s3_v2": S3Logger,
+    "langfuse_otel": LangfuseOtelLogger,
 }
 
 expected_env_vars = {
