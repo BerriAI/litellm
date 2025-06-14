@@ -290,7 +290,7 @@ def test_get_metric_labels():
     logger = PrometheusLogger()
 
     # Get filtered labels
-    labels = logger._get_metric_labels("litellm_deployment_failure_responses")
+    labels = logger.get_labels_for_metric("litellm_deployment_failure_responses")
 
     # Verify only configured labels are returned
     assert "litellm_model_name" in labels
@@ -312,7 +312,7 @@ def test_no_prometheus_config():
     logger = PrometheusLogger()
 
     # Should return default labels when no config is set
-    labels = logger._get_metric_labels("litellm_deployment_failure_responses")
+    labels = logger.get_labels_for_metric("litellm_deployment_failure_responses")
     # Should return some labels (the default ones)
     assert isinstance(labels, list)
     # Should have more than 0 labels (the default ones)
