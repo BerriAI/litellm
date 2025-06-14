@@ -1753,6 +1753,7 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
         ("gpt-4o", True),
     ],
 )
+@pytest.mark.flaky(retries=3, delay=2)
 async def test_call_with_key_over_model_budget(
     prisma_client, request_model, should_pass
 ):

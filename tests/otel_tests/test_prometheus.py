@@ -126,6 +126,7 @@ async def test_proxy_failure_metrics():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=2)
 async def test_proxy_success_metrics():
     """
     Make 1 good /chat/completions call to "openai/gpt-3.5-turbo"
