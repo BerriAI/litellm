@@ -18,6 +18,10 @@ from litellm.proxy._types import (
     LiteLLM_OrganizationTable,
     LiteLLM_TeamTable,
     LitellmUserRoles,
+    Member,
+    ProxyErrorTypes,
+    ProxyException,
+    TeamMemberAddRequest,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
     user_api_key_auth,  # Assuming this dependency is needed
@@ -26,6 +30,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     GetTeamMemberPermissionsResponse,
     UpdateTeamMemberPermissionsRequest,
     router,
+    team_member_add_duplication_check,
     validate_team_org_change,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
@@ -510,3 +515,69 @@ async def test_team_update_object_permissions_missing_permission_record(monkeypa
 
     # Verify upsert was called to create new record
     mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_called_once()
+
+
+def test_team_member_add_duplication_check_raises_proxy_exception():
+    """
+    Test that team_member_add_duplication_check raises ProxyException when a user is already in the team
+    """
+    # Create a mock team with existing members
+    existing_team_row = MagicMock(spec=LiteLLM_TeamTable)
+    existing_team_row.team_id = "test-team-123"
+    existing_team_row.members_with_roles = [
+        Member(user_id="existing-user-id", role="user"),
+        Member(user_id="another-user-id", role="admin"),
+    ]
+
+    # Create a request to add a member who is already in the team
+    duplicate_member = Member(user_id="existing-user-id", role="user")
+    data = TeamMemberAddRequest(
+        team_id="test-team-123",
+        member=duplicate_member,
+    )
+
+    # Test that ProxyException is raised with the correct error type
+    with pytest.raises(ProxyException) as exc_info:
+        team_member_add_duplication_check(
+            data=data,
+            existing_team_row=existing_team_row,
+        )
+
+    # Verify the exception details
+    assert exc_info.value.type == ProxyErrorTypes.team_member_already_in_team
+    assert exc_info.value.param == "user_id"
+    assert exc_info.value.code == "400"
+    assert "existing-user-id" in str(exc_info.value.message)
+    assert "already in team" in str(exc_info.value.message)
+
+
+def test_team_member_add_duplication_check_allows_new_member():
+    """
+    Test that team_member_add_duplication_check allows adding a new member who is not already in the team
+    """
+    # Create a mock team with existing members
+    existing_team_row = MagicMock(spec=LiteLLM_TeamTable)
+    existing_team_row.team_id = "test-team-123"
+    existing_team_row.members_with_roles = [
+        Member(user_id="existing-user-id", role="user"),
+        Member(user_id="another-user-id", role="admin"),
+    ]
+
+    # Create a request to add a member who is NOT already in the team
+    new_member = Member(user_id="new-user-id", role="user")
+    data = TeamMemberAddRequest(
+        team_id="test-team-123",
+        member=new_member,
+    )
+
+    # Test that no exception is raised for a new member
+    try:
+        team_member_add_duplication_check(
+            data=data,
+            existing_team_row=existing_team_row,
+        )
+        # If we reach here, no exception was raised, which is expected
+        assert True
+    except ProxyException:
+        # If a ProxyException is raised, the test should fail
+        pytest.fail("ProxyException should not be raised for a new member")
