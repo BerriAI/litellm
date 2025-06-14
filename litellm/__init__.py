@@ -16,7 +16,6 @@ from litellm.types.utils import (
     all_litellm_params,
     all_litellm_params as _litellm_completion_params,
     CredentialItem,
-    get_valid_models,
 )  # maintain backwards compatibility for root param
 from litellm._logging import (
     set_verbose,
@@ -868,6 +867,7 @@ from .utils import (
     TextCompletionResponse,
     get_provider_fields,
     ModelResponseListIterator,
+    get_valid_models,
 )
 
 ALL_LITELLM_RESPONSE_TYPES = [
