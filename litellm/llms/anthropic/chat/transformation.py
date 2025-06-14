@@ -930,6 +930,29 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return model_response
 
+    def get_prefix_prompt(self, messages: List[AllMessageValues]) -> Optional[str]:
+        """
+        Get the prefix prompt from the messages.
+
+        Check last message
+        - if it's assistant message, with 'prefix': true, return the content
+
+        E.g. :    {"role": "assistant", "content": "Argentina", "prefix": True}
+        """
+        if len(messages) == 0:
+            return None
+
+        message = messages[-1]
+        message_content = message.get("content")
+        if (
+            message["role"] == "assistant"
+            and message.get("prefix", False)
+            and isinstance(message_content, str)
+        ):
+            return message_content
+
+        return None
+
     def transform_response(
         self,
         model: str,
@@ -965,11 +988,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 headers=response_headers,
             )
 
+        prefix_prompt = self.get_prefix_prompt(messages=messages)
+
         model_response = self.transform_parsed_response(
             completion_response=completion_response,
             raw_response=raw_response,
             model_response=model_response,
             json_mode=json_mode,
+            prefix_prompt=prefix_prompt,
         )
         return model_response
 
