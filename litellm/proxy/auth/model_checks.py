@@ -72,6 +72,7 @@ def get_key_models(
     proxy_model_list: List[str],
     model_access_groups: Dict[str, List[str]],
     include_model_access_groups: Optional[bool] = False,
+    only_model_access_groups: Optional[bool] = False,
 ) -> List[str]:
     """
     Returns:
@@ -138,6 +139,7 @@ def get_complete_model_list(
     llm_router: Optional[Router] = None,
     model_access_groups: Dict[str, List[str]] = {},
     include_model_access_groups: Optional[bool] = False,
+    only_model_access_groups: Optional[bool] = False,
 ) -> List[str]:
     """Logic for returning complete model list for a given key + team pair"""
 
@@ -147,6 +149,7 @@ def get_complete_model_list(
 
     If list contains wildcard -> return known provider models
     """
+
     unique_models: Set[str] = set()
     if key_models:
         unique_models.update(key_models)
@@ -163,6 +166,13 @@ def get_complete_model_list(
         if infer_model_from_keys:
             valid_models = get_valid_models()
             unique_models.update(valid_models)
+
+    if only_model_access_groups:
+        model_access_groups_to_return: List[str] = []
+        for model in unique_models:
+            if model in model_access_groups:
+                model_access_groups_to_return.append(model)
+        return model_access_groups_to_return
 
     all_wildcard_models = _get_wildcard_models(
         unique_models=unique_models,

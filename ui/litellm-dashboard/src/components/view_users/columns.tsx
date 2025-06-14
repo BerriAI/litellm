@@ -8,7 +8,8 @@ export const columns = (
   possibleUIRoles: Record<string, Record<string, string>>,
   handleEdit: (user: UserInfo) => void,
   handleDelete: (userId: string) => void,
-  handleResetPassword: (userId: string) => void
+  handleResetPassword: (userId: string) => void,
+  handleUserClick: (userId: string, openInEditMode?: boolean) => void
 ): ColumnDef<UserInfo>[] => [
   {
     header: "User ID",
@@ -111,11 +112,11 @@ export const columns = (
     header: "",
     cell: ({ row }) => (
       <div className="flex gap-2">
-        <Tooltip title="Edit user" zIndex={9999}>
+        <Tooltip title="Edit user details" zIndex={9999}>
           <Icon
             icon={PencilAltIcon}
             size="sm"
-            onClick={() => handleEdit(row.original)}
+            onClick={() => handleUserClick(row.original.user_id, true)}
           />
         </Tooltip>
         <Tooltip title="Delete user" zIndex={9999}>

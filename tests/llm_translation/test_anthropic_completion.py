@@ -482,7 +482,6 @@ class TestAnthropicCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
         result = convert_to_anthropic_tool_invoke([tool_call_no_arguments])
         print(result)
 
-
     def test_tool_call_and_json_response_format(self):
         """
         Test that the tool call and JSON response format is supported by the LLM API
@@ -888,7 +887,7 @@ def test_anthropic_citations_api():
     """
     from litellm import completion
 
-    try: 
+    try:
         resp = completion(
             model="claude-3-5-sonnet-20241022",
             messages=[
@@ -994,7 +993,6 @@ def test_anthropic_thinking_output(model):
     assert resp.choices[0].message.thinking_blocks[0]["signature"] is not None
 
 
-
 @pytest.mark.parametrize(
     "model",
     [
@@ -1031,12 +1029,13 @@ def test_anthropic_thinking_output_stream(model):
                 print(chunk.choices[0].delta.thinking_blocks[0])
                 if chunk.choices[0].delta.thinking_blocks[0].get("signature"):
                     signature_block_exists = True
-                    assert chunk.choices[0].delta.thinking_blocks[0]["type"] == "thinking"
+                    assert (
+                        chunk.choices[0].delta.thinking_blocks[0]["type"] == "thinking"
+                    )
         assert reasoning_content_exists
         assert signature_block_exists
     except litellm.Timeout:
         pytest.skip("Model is timing out")
-
 
 
 def test_anthropic_custom_headers():
@@ -1113,7 +1112,6 @@ def test_anthropic_thinking_in_assistant_message(model):
     response = litellm.completion(**params)
 
     assert response is not None
-
 
 
 @pytest.mark.parametrize(
@@ -1216,6 +1214,7 @@ async def test_anthropic_api_max_completion_tokens(model: str):
             "model": model.split("/")[-1],
         }
 
+
 @pytest.mark.parametrize(
     "optional_params",
     [
@@ -1226,17 +1225,15 @@ async def test_anthropic_api_max_completion_tokens(model: str):
         #         "max_uses": 5
         #     }]
         # },
-        {
-            "web_search_options": {} 
-        }
-    ]
+        {"web_search_options": {}}
+    ],
 )
 def test_anthropic_websearch(optional_params: dict):
     litellm._turn_on_debug()
     params = {
         "model": "anthropic/claude-3-5-sonnet-latest",
         "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
-        **optional_params
+        **optional_params,
     }
 
     try:
@@ -1257,21 +1254,19 @@ def test_anthropic_text_editor():
         "messages": [
             {
                 "role": "user",
-                "content": "There'\''s a syntax error in my primes.py file. Can you help me fix it?"
+                "content": "There'''s a syntax error in my primes.py file. Can you help me fix it?",
             }
         ],
-        "tools": [{
-            "type": "text_editor_20250124",
-            "name": "str_replace_editor"
-        }]
+        "tools": [{"type": "text_editor_20250124", "name": "str_replace_editor"}],
     }
-    
+
     try:
         response = litellm.completion(**params)
     except litellm.InternalServerError as e:
         print(e)
 
     assert response is not None
+
 
 @pytest.mark.parametrize("spec", ["anthropic", "openai"])
 def test_anthropic_mcp_server_tool_use(spec: str):
@@ -1286,7 +1281,7 @@ def test_anthropic_mcp_server_tool_use(spec: str):
             }
         ]
     elif spec == "openai":
-        tools=[
+        tools = [
             {
                 "type": "mcp",
                 "server_label": "deepwiki",
@@ -1298,7 +1293,7 @@ def test_anthropic_mcp_server_tool_use(spec: str):
     params = {
         "model": "anthropic/claude-sonnet-4-20250514",
         "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
-        "tools": tools
+        "tools": tools,
     }
 
     try:
@@ -1308,24 +1303,42 @@ def test_anthropic_mcp_server_tool_use(spec: str):
 
     assert response is not None
 
-@pytest.mark.parametrize("model", ["openai/gpt-4.1", "anthropic/claude-sonnet-4-20250514"])
+
+@pytest.mark.parametrize(
+    "model", ["openai/gpt-4.1", "anthropic/claude-sonnet-4-20250514"]
+)
 def test_anthropic_mcp_server_responses_api(model: str):
     from litellm import responses
-    
-    tools=[
-            {
-                "type": "mcp",
-                "server_label": "deepwiki",
-                "server_url": "https://mcp.deepwiki.com/mcp",
-                "require_approval": "never",
-            },
-        ]
+
+    tools = [
+        {
+            "type": "mcp",
+            "server_label": "deepwiki",
+            "server_url": "https://mcp.deepwiki.com/mcp",
+            "require_approval": "never",
+        },
+    ]
 
     response = litellm.responses(
         model=model,
         input="Who won the World Cup in 2022?",
         max_output_tokens=100,
-        tools=tools
+        tools=tools,
     )
 
     assert response is not None
+
+
+def test_anthropic_prefix_prompt():
+    params = {
+        "model": "anthropic/claude-3-5-sonnet-latest",
+        "messages": [
+            {"role": "user", "content": "Who won the World Cup in 2022?"},
+            {"role": "assistant", "content": "Argentina", "prefix": True},
+        ],
+    }
+
+    response = litellm.completion(**params)
+    print(f"response: {response}")
+    assert response is not None
+    assert response.choices[0].message.content.startswith("Argentina")

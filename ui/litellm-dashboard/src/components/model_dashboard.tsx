@@ -255,6 +255,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [showColumnDropdown, setShowColumnDropdown] = useState(false);
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const dropdownRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<TableInstance<any>>(null);
 
@@ -1202,17 +1203,19 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     </div>
 
                     <ModelDataTable
-                      columns={columns(
-                        userRole,
-                        userID,
-                        premiumUser,
-                        setSelectedModelId,
-                        setSelectedTeamId,
-                        getDisplayModelName,
-                        handleEditClick,
-                        handleRefreshClick,
-                        setEditModel,
-                      )}
+                        columns={columns(
+                          userRole,
+                          userID,
+                          premiumUser,
+                          setSelectedModelId,
+                          setSelectedTeamId,
+                          getDisplayModelName,
+                          handleEditClick,
+                          handleRefreshClick,
+                          setEditModel,
+                          expandedRows,
+                          setExpandedRows,
+                        )}
                       data={modelData.data.filter(
                         (model: any) => (
                           (selectedModelGroup === "all" || model.model_name === selectedModelGroup || !selectedModelGroup) &&
