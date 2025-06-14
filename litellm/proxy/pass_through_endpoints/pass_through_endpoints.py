@@ -447,6 +447,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                 user_api_key_org_id=user_api_key_dict.org_id,
                 user_api_key_team_alias=user_api_key_dict.team_alias,
                 user_api_key_end_user_id=user_api_key_dict.end_user_id,
+                user_api_key_request_route=user_api_key_dict.request_route,
             )
         )
         _metadata["user_api_key"] = user_api_key_dict.api_key
