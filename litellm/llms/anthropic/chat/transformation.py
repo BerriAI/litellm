@@ -338,7 +338,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def _map_reasoning_effort(
-        reasoning_effort: Optional[Union[REASONING_EFFORT, str]]
+        reasoning_effort: Optional[Union[REASONING_EFFORT, str]],
     ) -> Optional[AnthropicThinkingParam]:
         if reasoning_effort is None:
             return None
@@ -475,7 +475,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=[_tool]
                 )
-            if param == "user":
+            if (
+                param == "user"
+                and value is not None
+                and isinstance(value, str)
+                and _valid_user_id(value)  # anthropic fails on emails
+            ):
                 optional_params["metadata"] = {"user_id": value}
             if param == "thinking":
                 optional_params["thinking"] = value
@@ -832,9 +837,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
             completion_tokens_details=completion_token_details,
-            server_tool_use=ServerToolUse(web_search_requests=web_search_requests)
-            if web_search_requests is not None
-            else None,
+            server_tool_use=(
+                ServerToolUse(web_search_requests=web_search_requests)
+                if web_search_requests is not None
+                else None
+            ),
         )
         return usage
 
