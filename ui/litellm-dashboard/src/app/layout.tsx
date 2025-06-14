@@ -7,6 +7,7 @@ const inter = Inter({ subsets: ["latin"] });
 export const metadata: Metadata = {
   title: "LiteLLM Dashboard",
   description: "LiteLLM Proxy Admin UI",
+  icons: { icon: "./favicon.ico" },
 };
 
 export default function RootLayout({
