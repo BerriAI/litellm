@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any, Dict, List, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -159,7 +159,7 @@ async def cache_delete(request: Request):
         )
 
 
-def _get_redis_client_info(cache_instance) -> tuple[list, int]:
+def _get_redis_client_info(cache_instance) -> Tuple[List, int]:
     """
     Helper function to safely get Redis client list information.
 
