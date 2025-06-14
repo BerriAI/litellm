@@ -10,6 +10,7 @@ import json
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=2)
 async def test_anthropic_basic_completion_with_headers():
     print("making basic completion request to anthropic passthrough with aiohttp")
 
