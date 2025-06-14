@@ -62,7 +62,7 @@ class PrometheusLogger(CustomLogger):
             self.litellm_proxy_failed_requests_metric = self._counter_factory(
                 name="litellm_proxy_failed_requests_metric",
                 documentation="Total number of failed responses from proxy - the client did not get a success response from litellm proxy",
-                labelnames=self._get_metric_labels(
+                labelnames=self.get_labels_for_metric(
                     "litellm_proxy_failed_requests_metric"
                 ),
             )
@@ -70,7 +70,7 @@ class PrometheusLogger(CustomLogger):
             self.litellm_proxy_total_requests_metric = self._counter_factory(
                 name="litellm_proxy_total_requests_metric",
                 documentation="Total number of requests made to the proxy server - track number of client side requests",
-                labelnames=self._get_metric_labels(
+                labelnames=self.get_labels_for_metric(
                     "litellm_proxy_total_requests_metric"
                 ),
             )
@@ -79,7 +79,7 @@ class PrometheusLogger(CustomLogger):
             self.litellm_request_total_latency_metric = self._histogram_factory(
                 "litellm_request_total_latency_metric",
                 "Total latency (seconds) for a request to LiteLLM",
-                labelnames=self._get_metric_labels(
+                labelnames=self.get_labels_for_metric(
                     "litellm_request_total_latency_metric"
                 ),
                 buckets=LATENCY_BUCKETS,
@@ -88,7 +88,7 @@ class PrometheusLogger(CustomLogger):
             self.litellm_llm_api_latency_metric = self._histogram_factory(
                 "litellm_llm_api_latency_metric",
                 "Total latency (seconds) for a models LLM API call",
-                labelnames=self._get_metric_labels("litellm_llm_api_latency_metric"),
+                labelnames=self.get_labels_for_metric("litellm_llm_api_latency_metric"),
                 buckets=LATENCY_BUCKETS,
             )
 
@@ -124,26 +124,26 @@ class PrometheusLogger(CustomLogger):
             self.litellm_tokens_metric = self._counter_factory(
                 "litellm_total_tokens",
                 "Total number of input + output tokens from LLM requests",
-                labelnames=self._get_metric_labels("litellm_total_tokens_metric"),
+                labelnames=self.get_labels_for_metric("litellm_total_tokens_metric"),
             )
 
             self.litellm_input_tokens_metric = self._counter_factory(
                 "litellm_input_tokens",
                 "Total number of input tokens from LLM requests",
-                labelnames=self._get_metric_labels("litellm_input_tokens_metric"),
+                labelnames=self.get_labels_for_metric("litellm_input_tokens_metric"),
             )
 
             self.litellm_output_tokens_metric = self._counter_factory(
                 "litellm_output_tokens",
                 "Total number of output tokens from LLM requests",
-                labelnames=self._get_metric_labels("litellm_output_tokens_metric"),
+                labelnames=self.get_labels_for_metric("litellm_output_tokens_metric"),
             )
 
             # Remaining Budget for Team
             self.litellm_remaining_team_budget_metric = self._gauge_factory(
                 "litellm_remaining_team_budget_metric",
                 "Remaining budget for team",
-                labelnames=self._get_metric_labels(
+                labelnames=self.get_labels_for_metric(
                     "litellm_remaining_team_budget_metric"
                 ),
             )
@@ -152,14 +152,14 @@ class PrometheusLogger(CustomLogger):
             self.litellm_team_max_budget_metric = self._gauge_factory(
                 "litellm_team_max_budget_metric",
                 "Maximum budget set for team",
-                labelnames=self._get_metric_labels("litellm_team_max_budget_metric"),
+                labelnames=self.get_labels_for_metric("litellm_team_max_budget_metric"),
             )
 
             # Team Budget Reset At
             self.litellm_team_budget_remaining_hours_metric = self._gauge_factory(
                 "litellm_team_budget_remaining_hours_metric",
                 "Remaining days for team budget to be reset",
-                labelnames=self._get_metric_labels(
+                labelnames=self.get_labels_for_metric(
                     "litellm_team_budget_remaining_hours_metric"
                 ),
             )
@@ -168,7 +168,7 @@ class PrometheusLogger(CustomLogger):
             self.litellm_remaining_api_key_budget_metric = self._gauge_factory(
                 "litellm_remaining_api_key_budget_metric",
                 "Remaining budget for api key",
-                labelnames=self._get_metric_labels(
+                labelnames=self.get_labels_for_metric(
                     "litellm_remaining_api_key_budget_metric"
                 ),
             )
@@ -177,13 +177,15 @@ class PrometheusLogger(CustomLogger):
             self.litellm_api_key_max_budget_metric = self._gauge_factory(
                 "litellm_api_key_max_budget_metric",
                 "Maximum budget set for api key",
-                labelnames=self._get_metric_labels("litellm_api_key_max_budget_metric"),
+                labelnames=self.get_labels_for_metric(
+                    "litellm_api_key_max_budget_metric"
+                ),
             )
 
             self.litellm_api_key_budget_remaining_hours_metric = self._gauge_factory(
                 "litellm_api_key_budget_remaining_hours_metric",
                 "Remaining hours for api key budget to be reset",
-                labelnames=self._get_metric_labels(
+                labelnames=self.get_labels_for_metric(
                     "litellm_api_key_budget_remaining_hours_metric"
                 ),
             )
@@ -280,14 +282,14 @@ class PrometheusLogger(CustomLogger):
             self.litellm_deployment_success_responses = self._counter_factory(
                 name="litellm_deployment_success_responses",
                 documentation="LLM Deployment Analytics - Total number of successful LLM API calls via litellm",
-                labelnames=self._get_metric_labels(
+                labelnames=self.get_labels_for_metric(
                     "litellm_deployment_success_responses"
                 ),
             )
             self.litellm_deployment_failure_responses = self._counter_factory(
                 name="litellm_deployment_failure_responses",
                 documentation="LLM Deployment Analytics - Total number of failed LLM API calls for a specific LLM deploymeny. exception_status is the status of the exception from the llm api",
-                labelnames=self._get_metric_labels(
+                labelnames=self.get_labels_for_metric(
                     "litellm_deployment_failure_responses"
                 ),
             )
@@ -304,14 +306,16 @@ class PrometheusLogger(CustomLogger):
             self.litellm_deployment_total_requests = self._counter_factory(
                 name="litellm_deployment_total_requests",
                 documentation="LLM Deployment Analytics - Total number of LLM API calls via litellm - success + failure",
-                labelnames=self._get_metric_labels("litellm_deployment_total_requests"),
+                labelnames=self.get_labels_for_metric(
+                    "litellm_deployment_total_requests"
+                ),
             )
 
             # Deployment Latency tracking
             self.litellm_deployment_latency_per_output_token = self._histogram_factory(
                 name="litellm_deployment_latency_per_output_token",
                 documentation="LLM Deployment Analytics - Latency per output token",
-                labelnames=self._get_metric_labels(
+                labelnames=self.get_labels_for_metric(
                     "litellm_deployment_latency_per_output_token"
                 ),
             )
@@ -319,13 +323,13 @@ class PrometheusLogger(CustomLogger):
             self.litellm_deployment_successful_fallbacks = self._counter_factory(
                 "litellm_deployment_successful_fallbacks",
                 "LLM Deployment Analytics - Number of successful fallback requests from primary model -> fallback model",
-                self._get_metric_labels("litellm_deployment_successful_fallbacks"),
+                self.get_labels_for_metric("litellm_deployment_successful_fallbacks"),
             )
 
             self.litellm_deployment_failed_fallbacks = self._counter_factory(
                 "litellm_deployment_failed_fallbacks",
                 "LLM Deployment Analytics - Number of failed fallback requests from primary model -> fallback model",
-                self._get_metric_labels("litellm_deployment_failed_fallbacks"),
+                self.get_labels_for_metric("litellm_deployment_failed_fallbacks"),
             )
 
             self.litellm_llm_api_failed_requests_metric = self._counter_factory(
@@ -345,7 +349,7 @@ class PrometheusLogger(CustomLogger):
             self.litellm_requests_metric = self._counter_factory(
                 name="litellm_requests_metric",
                 documentation="deprecated - use litellm_proxy_total_requests_metric. Total number of LLM calls to litellm - track total per API Key, team, user",
-                labelnames=self._get_metric_labels("litellm_requests_metric"),
+                labelnames=self.get_labels_for_metric("litellm_requests_metric"),
             )
         except Exception as e:
             print_verbose(f"Got exception on init prometheus client {str(e)}")
@@ -484,14 +488,14 @@ class PrometheusLogger(CustomLogger):
 
         return factory
 
-    def _get_metric_labels(self, metric_name: str) -> List[str]:
-        """Get the labels for a metric, filtered if configured"""
+    def get_labels_for_metric(
+        self, metric_name: DEFINED_PROMETHEUS_METRICS
+    ) -> List[str]:
+        """
+        Get the labels for a metric, filtered if configured
+        """
         # Get default labels for this metric from PrometheusMetricLabels
-        if hasattr(PrometheusMetricLabels, metric_name):
-            default_labels = getattr(PrometheusMetricLabels, metric_name)
-        else:
-            # Fallback for metrics that don't have defined labels
-            default_labels = []
+        default_labels = PrometheusMetricLabels.get_labels(metric_name)
 
         # If no label filtering is configured for this metric, use default labels
         if metric_name not in self.label_filters:
@@ -660,8 +664,8 @@ class PrometheusLogger(CustomLogger):
             standard_logging_payload["stream"] is True
         ):  # log successful streaming requests from logging event hook.
             _labels = prometheus_label_factory(
-                supported_enum_labels=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_proxy_total_requests_metric"
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_proxy_total_requests_metric"
                 ),
                 enum_values=enum_values,
             )
@@ -688,15 +692,15 @@ class PrometheusLogger(CustomLogger):
             _tags = standard_logging_payload["request_tags"]
 
         _labels = prometheus_label_factory(
-            supported_enum_labels=PrometheusMetricLabels.get_labels(
-                label_name="litellm_proxy_total_requests_metric"
+            supported_enum_labels=self.get_labels_for_metric(
+                metric_name="litellm_proxy_total_requests_metric"
             ),
             enum_values=enum_values,
         )
 
         _labels = prometheus_label_factory(
-            supported_enum_labels=PrometheusMetricLabels.get_labels(
-                label_name="litellm_total_tokens_metric"
+            supported_enum_labels=self.get_labels_for_metric(
+                metric_name="litellm_total_tokens_metric"
             ),
             enum_values=enum_values,
         )
@@ -705,8 +709,8 @@ class PrometheusLogger(CustomLogger):
         )
 
         _labels = prometheus_label_factory(
-            supported_enum_labels=PrometheusMetricLabels.get_labels(
-                label_name="litellm_input_tokens_metric"
+            supported_enum_labels=self.get_labels_for_metric(
+                metric_name="litellm_input_tokens_metric"
             ),
             enum_values=enum_values,
         )
@@ -715,8 +719,8 @@ class PrometheusLogger(CustomLogger):
         )
 
         _labels = prometheus_label_factory(
-            supported_enum_labels=PrometheusMetricLabels.get_labels(
-                label_name="litellm_output_tokens_metric"
+            supported_enum_labels=self.get_labels_for_metric(
+                metric_name="litellm_output_tokens_metric"
             ),
             enum_values=enum_values,
         )
@@ -776,8 +780,8 @@ class PrometheusLogger(CustomLogger):
         enum_values: UserAPIKeyLabelValues,
     ):
         _labels = prometheus_label_factory(
-            supported_enum_labels=PrometheusMetricLabels.get_labels(
-                label_name="litellm_requests_metric"
+            supported_enum_labels=self.get_labels_for_metric(
+                metric_name="litellm_requests_metric"
             ),
             enum_values=enum_values,
         )
@@ -785,8 +789,8 @@ class PrometheusLogger(CustomLogger):
         self.litellm_requests_metric.labels(**_labels).inc()
 
         _labels = prometheus_label_factory(
-            supported_enum_labels=PrometheusMetricLabels.get_labels(
-                label_name="litellm_proxy_total_requests_metric"
+            supported_enum_labels=self.get_labels_for_metric(
+                metric_name="litellm_proxy_total_requests_metric"
             ),
             enum_values=enum_values,
         )
@@ -878,8 +882,8 @@ class PrometheusLogger(CustomLogger):
         )
         if api_call_total_time_seconds is not None:
             _labels = prometheus_label_factory(
-                supported_enum_labels=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_llm_api_latency_metric"
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_llm_api_latency_metric"
                 ),
                 enum_values=enum_values,
             )
@@ -894,8 +898,8 @@ class PrometheusLogger(CustomLogger):
         )
         if total_time_seconds is not None:
             _labels = prometheus_label_factory(
-                supported_enum_labels=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_request_total_latency_metric"
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_request_total_latency_metric"
                 ),
                 enum_values=enum_values,
             )
@@ -985,16 +989,16 @@ class PrometheusLogger(CustomLogger):
                 route=user_api_key_dict.request_route,
             )
             _labels = prometheus_label_factory(
-                supported_enum_labels=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_proxy_failed_requests_metric"
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_proxy_failed_requests_metric"
                 ),
                 enum_values=enum_values,
             )
             self.litellm_proxy_failed_requests_metric.labels(**_labels).inc()
 
             _labels = prometheus_label_factory(
-                supported_enum_labels=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_proxy_total_requests_metric"
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_proxy_total_requests_metric"
                 ),
                 enum_values=enum_values,
             )
@@ -1026,8 +1030,8 @@ class PrometheusLogger(CustomLogger):
                 route=user_api_key_dict.request_route,
             )
             _labels = prometheus_label_factory(
-                supported_enum_labels=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_proxy_total_requests_metric"
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_proxy_total_requests_metric"
                 ),
                 enum_values=enum_values,
             )
@@ -1294,8 +1298,8 @@ class PrometheusLogger(CustomLogger):
             if output_tokens is not None and output_tokens > 0:
                 latency_per_token = _latency_seconds / output_tokens
                 _labels = prometheus_label_factory(
-                    supported_enum_labels=PrometheusMetricLabels.get_labels(
-                        label_name="litellm_deployment_latency_per_output_token"
+                    supported_enum_labels=self.get_labels_for_metric(
+                        metric_name="litellm_deployment_latency_per_output_token"
                     ),
                     enum_values=enum_values,
                 )
@@ -1366,8 +1370,8 @@ class PrometheusLogger(CustomLogger):
             tags=_tags,
         )
         _labels = prometheus_label_factory(
-            supported_enum_labels=PrometheusMetricLabels.get_labels(
-                label_name="litellm_deployment_successful_fallbacks"
+            supported_enum_labels=self.get_labels_for_metric(
+                metric_name="litellm_deployment_successful_fallbacks"
             ),
             enum_values=enum_values,
         )
@@ -1411,8 +1415,8 @@ class PrometheusLogger(CustomLogger):
         )
 
         _labels = prometheus_label_factory(
-            supported_enum_labels=PrometheusMetricLabels.get_labels(
-                label_name="litellm_deployment_failed_fallbacks"
+            supported_enum_labels=self.get_labels_for_metric(
+                metric_name="litellm_deployment_failed_fallbacks"
             ),
             enum_values=enum_values,
         )
@@ -1759,8 +1763,8 @@ class PrometheusLogger(CustomLogger):
         )
 
         _labels = prometheus_label_factory(
-            supported_enum_labels=PrometheusMetricLabels.get_labels(
-                label_name="litellm_remaining_team_budget_metric"
+            supported_enum_labels=self.get_labels_for_metric(
+                metric_name="litellm_remaining_team_budget_metric"
             ),
             enum_values=enum_values,
         )
@@ -1773,8 +1777,8 @@ class PrometheusLogger(CustomLogger):
 
         if team.max_budget is not None:
             _labels = prometheus_label_factory(
-                supported_enum_labels=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_team_max_budget_metric"
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_team_max_budget_metric"
                 ),
                 enum_values=enum_values,
             )
@@ -1782,8 +1786,8 @@ class PrometheusLogger(CustomLogger):
 
         if team.budget_reset_at is not None:
             _labels = prometheus_label_factory(
-                supported_enum_labels=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_team_budget_remaining_hours_metric"
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_team_budget_remaining_hours_metric"
                 ),
                 enum_values=enum_values,
             )
@@ -1806,8 +1810,8 @@ class PrometheusLogger(CustomLogger):
             api_key_alias=user_api_key_dict.key_alias or "",
         )
         _labels = prometheus_label_factory(
-            supported_enum_labels=PrometheusMetricLabels.get_labels(
-                label_name="litellm_remaining_api_key_budget_metric"
+            supported_enum_labels=self.get_labels_for_metric(
+                metric_name="litellm_remaining_api_key_budget_metric"
             ),
             enum_values=enum_values,
         )
@@ -1820,8 +1824,8 @@ class PrometheusLogger(CustomLogger):
 
         if user_api_key_dict.max_budget is not None:
             _labels = prometheus_label_factory(
-                supported_enum_labels=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_api_key_max_budget_metric"
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_api_key_max_budget_metric"
                 ),
                 enum_values=enum_values,
             )
