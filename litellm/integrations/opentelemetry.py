@@ -578,6 +578,13 @@ class OpenTelemetry(CustomLogger):
                     span, kwargs, response_obj
                 )
                 return
+            elif self.callback_name == "langfuse_otel":
+                from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
+
+                LangfuseOtelLogger.set_langfuse_otel_attributes(
+                    span, kwargs, response_obj
+                )
+                return
             from litellm.proxy._types import SpanAttributes
 
             optional_params = kwargs.get("optional_params", {})
