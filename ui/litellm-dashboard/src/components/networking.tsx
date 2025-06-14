@@ -1933,9 +1933,7 @@ export const modelAvailableCall = async (
     if (return_wildcard_routes === true) {
       params.append('return_wildcard_routes', 'True');
     }
-    if (include_model_access_groups === true) {
-      params.append('include_model_access_groups', 'True');
-    }
+    params.append('include_model_access_groups', 'True');
     if (teamID) {
       params.append('team_id', teamID.toString());
     }
