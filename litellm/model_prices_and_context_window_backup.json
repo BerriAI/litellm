@@ -4263,6 +4263,20 @@
         "supports_assistant_prefill": true,
         "supports_tool_choice": true
     },
+    "mistral/magistral-medium-latest": {
+        "max_tokens": 40000,
+        "max_input_tokens": 40000,
+        "max_output_tokens": 40000,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 5e-06,
+        "litellm_provider": "mistral",
+        "mode": "chat",
+        "source": "https://mistral.ai/news/magistral",
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true
+    },
     "mistral/magistral-medium-2506": {
         "max_tokens": 40000,
         "max_input_tokens": 40000,
@@ -4277,15 +4291,29 @@
         "supports_tool_choice": true,
         "supports_reasoning": true
     },
+    "mistral/magistral-small-latest": {
+        "max_tokens": 40000,
+        "max_input_tokens": 40000,
+        "max_output_tokens": 40000,
+        "input_cost_per_token": 0.5e-6,
+        "output_cost_per_token": 1.5e-6,
+        "litellm_provider": "mistral",
+        "mode": "chat",
+        "source": "https://mistral.ai/pricing#api-pricing",
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true
+    },
     "mistral/magistral-small-2506": {
         "max_tokens": 40000,
         "max_input_tokens": 40000,
         "max_output_tokens": 40000,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
+        "input_cost_per_token": 0.5e-06,
+        "output_cost_per_token": 1.5e-06,
         "litellm_provider": "mistral",
         "mode": "chat",
-        "source": "https://mistral.ai/news/magistral",
+        "source": "https://mistral.ai/pricing#api-pricing",
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
         "supports_tool_choice": true,
