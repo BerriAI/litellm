@@ -2174,14 +2174,12 @@ jobs:
       - run:
           name: Build Docker image
           command: |
-            cd docker/build_from_pip
-            docker build -t my-app:latest -f Dockerfile.build_from_pip .
+            docker build -t my-app:latest -f docker/build_from_pip/Dockerfile.build_from_pip .
       - run:
           name: Run Docker container
           # intentionally give bad redis credentials here
           # the OTEL test - should get this as a trace
           command: |
-            cd docker/build_from_pip
             docker run -d \
               -p 4000:4000 \
               -e DATABASE_URL=$PROXY_DATABASE_URL \
@@ -2205,7 +2203,7 @@ jobs:
               -e DD_SITE=$DD_SITE \
               -e GCS_FLUSH_INTERVAL="1" \
               --name my-app \
-              -v $(pwd)/litellm_config.yaml:/app/config.yaml \
+              -v $(pwd)/docker/build_from_pip/litellm_config.yaml:/app/config.yaml \
               my-app:latest \
               --config /app/config.yaml \
               --port 4000 \
