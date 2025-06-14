@@ -733,6 +733,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             error_body = getattr(e, "body", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
+            if not error_text:
+                error_text = getattr(e, "message", str(e))
             raise OpenAIError(
                 status_code=status_code,
                 message=error_text,
