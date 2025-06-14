@@ -87,6 +87,13 @@ class ResponsesAPIRequestUtils:
             )
             filtered_params["previous_response_id"] = decoded_previous_response_id
 
+        if "metadata" in filtered_params:
+            from litellm.utils import add_openai_metadata
+
+            filtered_params["metadata"] = add_openai_metadata(
+                filtered_params["metadata"]
+            )
+
         return cast(ResponsesAPIOptionalRequestParams, filtered_params)
 
     @staticmethod
