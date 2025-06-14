@@ -32,6 +32,7 @@ This version is not out yet.
 ## TLDR
 
 * **Why Upgrade**
+
 * **Who Should Read**
 * **Risk of Upgrade**
 
@@ -185,6 +186,33 @@ This version is not out yet.
 #### Features
 - **Caching**
     - New optional ‘litellm[caching]’ pip install for adding disk cache dependencies - [PR](https://github.com/BerriAI/litellm/pull/11600)
+
+---
+
+## General Proxy Improvements
+
+#### Bugs
+- **aiohttp**
+    - fixes for transfer encoding error on aiohttp transport - [PR](https://github.com/BerriAI/litellm/pull/11561)
+
+#### Features
+- **aiohttp**
+    - Enable System Proxy Support for aiohttp transport - [PR](https://github.com/BerriAI/litellm/pull/11616) (s/o [idootop](https://github.com/idootop))
+- **CLI**
+    - Make all commands show server URL - [PR](https://github.com/BerriAI/litellm/pull/10801)
+- **Unicorn**
+    - Allow setting keep alive timeout - [PR](https://github.com/BerriAI/litellm/pull/11594)
+- **Experimental Rate Limiting v2**
+    - Support specifying rate limit by output_tokens only [NEEDS DOCS] - [PR](https://github.com/BerriAI/litellm/pull/11646)
+    - Decrement parallel requests on call failure - [PR](https://github.com/BerriAI/litellm/pull/11646)
+    - In-memory only rate limiting support - [PR](https://github.com/BerriAI/litellm/pull/11646)
+    - Return remaining rate limits by key/user/team - [PR](https://github.com/BerriAI/litellm/pull/11646)
+- **Helm**
+    - support extraContainers in migrations-job.yaml - [PR](https://github.com/BerriAI/litellm/pull/11649)
+
+
+
+
 ---
 
 ## New Contributors
