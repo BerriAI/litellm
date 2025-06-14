@@ -880,7 +880,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 tool_calls,
             ) = self.extract_response_content(completion_response=completion_response)
 
-            if prefix_prompt is not None and not text_content.startswith(prefix_prompt):
+            if (
+                prefix_prompt is not None
+                and not text_content.startswith(prefix_prompt)
+                and not litellm.disable_add_prefix_to_prompt
+            ):
                 text_content = prefix_prompt + text_content
 
             _message = litellm.Message(
