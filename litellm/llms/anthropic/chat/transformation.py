@@ -338,7 +338,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def _map_reasoning_effort(
-        reasoning_effort: Optional[Union[REASONING_EFFORT, str]]
+        reasoning_effort: Optional[Union[REASONING_EFFORT, str]],
     ) -> Optional[AnthropicThinkingParam]:
         if reasoning_effort is None:
             return None
@@ -832,9 +832,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
             completion_tokens_details=completion_token_details,
-            server_tool_use=ServerToolUse(web_search_requests=web_search_requests)
-            if web_search_requests is not None
-            else None,
+            server_tool_use=(
+                ServerToolUse(web_search_requests=web_search_requests)
+                if web_search_requests is not None
+                else None
+            ),
         )
         return usage
 
@@ -844,6 +846,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         json_mode: Optional[bool] = None,
+        prefix_prompt: Optional[str] = None,
     ):
         _hidden_params: Dict = {}
         _hidden_params["additional_headers"] = process_anthropic_headers(
@@ -876,6 +879,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 reasoning_content,
                 tool_calls,
             ) = self.extract_response_content(completion_response=completion_response)
+
+            if (
+                prefix_prompt is not None
+                and not text_content.startswith(prefix_prompt)
+                and not litellm.disable_add_prefix_to_prompt
+            ):
+                text_content = prefix_prompt + text_content
 
             _message = litellm.Message(
                 tool_calls=tool_calls,
@@ -920,6 +930,29 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return model_response
 
+    def get_prefix_prompt(self, messages: List[AllMessageValues]) -> Optional[str]:
+        """
+        Get the prefix prompt from the messages.
+
+        Check last message
+        - if it's assistant message, with 'prefix': true, return the content
+
+        E.g. :    {"role": "assistant", "content": "Argentina", "prefix": True}
+        """
+        if len(messages) == 0:
+            return None
+
+        message = messages[-1]
+        message_content = message.get("content")
+        if (
+            message["role"] == "assistant"
+            and message.get("prefix", False)
+            and isinstance(message_content, str)
+        ):
+            return message_content
+
+        return None
+
     def transform_response(
         self,
         model: str,
@@ -955,11 +988,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 headers=response_headers,
             )
 
+        prefix_prompt = self.get_prefix_prompt(messages=messages)
+
         model_response = self.transform_parsed_response(
             completion_response=completion_response,
             raw_response=raw_response,
             model_response=model_response,
             json_mode=json_mode,
+            prefix_prompt=prefix_prompt,
         )
         return model_response
 

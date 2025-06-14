@@ -3499,6 +3499,7 @@ async def model_list(
     return_wildcard_routes: Optional[bool] = False,
     team_id: Optional[str] = None,
     include_model_access_groups: Optional[bool] = False,
+    only_model_access_groups: Optional[bool] = False,
 ):
     """
     Use `/model/info` - to get detailed model information, example - pricing, mode, etc.
@@ -3514,6 +3515,15 @@ async def model_list(
     else:
         proxy_model_list = llm_router.get_model_names()
         model_access_groups = llm_router.get_model_access_groups()
+
+    ## if only_model_access_groups is True,
+    """
+    1. Get all models key/user/team has access to
+    2. Filter out models that are not model access groups
+    3. Return the models
+    """
+    if only_model_access_groups is True:
+        include_model_access_groups = True
 
     key_models = get_key_models(
         user_api_key_dict=user_api_key_dict,
@@ -3552,6 +3562,7 @@ async def model_list(
         llm_router=llm_router,
         model_access_groups=model_access_groups,
         include_model_access_groups=include_model_access_groups,
+        only_model_access_groups=only_model_access_groups,
     )
 
     return dict(
