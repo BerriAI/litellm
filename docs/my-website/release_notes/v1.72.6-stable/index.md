@@ -203,7 +203,7 @@ This version is not out yet.
 - **Unicorn**
     - Allow setting keep alive timeout - [PR](https://github.com/BerriAI/litellm/pull/11594)
 - **Experimental Rate Limiting v2**
-    - Support specifying rate limit by output_tokens only [NEEDS DOCS] - [PR](https://github.com/BerriAI/litellm/pull/11646)
+    - Support specifying rate limit by output_tokens only - [PR](https://github.com/BerriAI/litellm/pull/11646)
     - Decrement parallel requests on call failure - [PR](https://github.com/BerriAI/litellm/pull/11646)
     - In-memory only rate limiting support - [PR](https://github.com/BerriAI/litellm/pull/11646)
     - Return remaining rate limits by key/user/team - [PR](https://github.com/BerriAI/litellm/pull/11646)
