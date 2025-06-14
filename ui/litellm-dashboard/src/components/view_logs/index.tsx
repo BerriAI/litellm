@@ -369,6 +369,7 @@ export default function SpendLogsTable({
       
     }).map(log => ({
       ...log,
+      duration: (Date.parse(log.endTime) - Date.parse(log.startTime)) / 1000,
       onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
       onSessionClick: (sessionId: string) => {
         if (sessionId) setSelectedSessionId(sessionId);
@@ -930,6 +931,10 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
             <div className="flex">
               <span className="font-medium w-1/3">End Time:</span>
               <span>{row.original.endTime}</span>
+            </div>
+            <div className="flex">
+              <span className="font-medium w-1/3">Duration:</span>
+              <span>{row.original.duration} s.</span>
             </div>
           </div>
         </div>

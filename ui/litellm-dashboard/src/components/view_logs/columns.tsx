@@ -46,6 +46,7 @@ export type LogEntry = {
   proxy_server_request?: string | any[] | Record<string, any>;
   session_id?: string;
   status?: string;
+  duration?: number;
   onKeyHashClick?: (keyHash: string) => void;
   onSessionClick?: (sessionId: string) => void;
 };
@@ -158,6 +159,15 @@ export const columns: ColumnDef<LogEntry>[] = [
     accessorKey: "spend",
     cell: (info: any) => (
       <span>${Number(info.getValue() || 0).toFixed(6)}</span>
+    ),
+  },
+  {
+    header: "Duration",
+    accessorKey: "duration",
+    cell: (info: any) => (
+      <Tooltip title={String(info.getValue() || "-")}>
+        <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
+      </Tooltip>
     ),
   },
   {
