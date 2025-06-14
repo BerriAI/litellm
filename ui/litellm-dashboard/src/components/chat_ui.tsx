@@ -19,12 +19,12 @@ import {
   Text,
   SelectItem,
   TextInput,
-  Button,
+  Button as TremorButton,
   Divider,
 } from "@tremor/react";
 import { v4 as uuidv4 } from 'uuid';
 
-import { message, Select, Spin, Typography, Tooltip, Input, Upload } from "antd";
+import { message, Select, Spin, Typography, Tooltip, Input, Upload, Modal, Button } from "antd";
 import { makeOpenAIChatCompletionRequest } from "./chat_ui/llm_calls/chat_completion";
 import { makeOpenAIImageGenerationRequest } from "./chat_ui/llm_calls/image_generation";
 import { makeOpenAIImageEditsRequest } from "./chat_ui/llm_calls/image_edits";
@@ -55,7 +55,8 @@ import {
   InfoCircleOutlined,
   SafetyOutlined,
   UploadOutlined,
-  PictureOutlined
+  PictureOutlined,
+  CodeOutlined
 } from "@ant-design/icons";
 
 const { TextArea } = Input;
@@ -97,8 +98,17 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [messageTraceId, setMessageTraceId] = useState<string | null>(null);
   const [uploadedImage, setUploadedImage] = useState<File | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
+  const [isGetCodeModalVisible, setIsGetCodeModalVisible] = useState(false);
+  const [generatedCode, setGeneratedCode] = useState("");
+  const [selectedSdk, setSelectedSdk] = useState<'openai' | 'azure'>('openai');
 
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (isGetCodeModalVisible) {
+      generateCodeSnippet();
+    }
+  }, [isGetCodeModalVisible, selectedSdk]);
 
   useEffect(() => {
     let userApiKey = apiKeySource === 'session' ? accessToken : apiKey;
@@ -151,6 +161,409 @@ const ChatUI: React.FC<ChatUIProps> = ({
       }, 100);
     }
   }, [chatHistory]);
+
+  interface CodeGenMetadata {
+    tags?: string[];
+    vector_stores?: string[];
+    guardrails?: string[];
+  }
+
+  const generateCodeSnippet = () => {
+    const effectiveApiKey = apiKeySource === 'session' ? accessToken : apiKey;
+    const apiBase = window.location.origin;
+    
+    // Always get the input message early on, regardless of what happens later
+    const userPrompt = inputMessage || "Your prompt here"; // Fallback if inputMessage is empty
+    
+    // Safely escape the prompt to prevent issues with quotes
+    const safePrompt = userPrompt.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+
+    const messages = chatHistory
+      .filter(msg => !msg.isImage)
+      .map(({ role, content }) => ({ role, content }));
+
+    const metadata: CodeGenMetadata = {};
+    if (selectedTags.length > 0) metadata.tags = selectedTags;
+    if (selectedVectorStores.length > 0) metadata.vector_stores = selectedVectorStores;
+    if (selectedGuardrails.length > 0) metadata.guardrails = selectedGuardrails;
+
+    const endpointName = endpointType.charAt(0).toUpperCase() + endpointType.slice(1);
+    const modelNameForCode = selectedModel || 'your-model-name';
+
+    const clientInitialization = selectedSdk === 'azure'
+      ? `import openai
+
+client = openai.AzureOpenAI(
+    api_key="${effectiveApiKey || 'YOUR_LITELLM_API_KEY'}",
+    azure_endpoint="${apiBase}",
+    api_version="2024-02-01"
+)`
+      : `import openai
+
+client = openai.OpenAI(
+    api_key="${effectiveApiKey || 'YOUR_LITELLM_API_KEY'}",
+    base_url="${apiBase}"
+)`;
+
+    let endpointSpecificCode;
+    switch (endpointType) {
+      case EndpointType.CHAT: {
+        const metadataIsNotEmpty = Object.keys(metadata).length > 0;
+        let extraBodyCode = '';
+        if (metadataIsNotEmpty) {
+          const extraBodyObject = { metadata };
+          const extraBodyString = JSON.stringify(extraBodyObject, null, 2);
+          const indentedExtraBodyString = extraBodyString.split('\n').map(line => ' '.repeat(4) + line).join('\n').trim();
+          
+          extraBodyCode = `,\n    extra_body=${indentedExtraBodyString}`;
+        }
+
+        endpointSpecificCode = `
+# request sent to model set on litellm proxy, \`litellm --model\`
+response = client.chat.completions.create(
+    model="${modelNameForCode}",
+    messages = ${JSON.stringify(messages, null, 4)}${extraBodyCode}
+)
+
+print(response)
+`;
+        break;
+      }
+      case EndpointType.RESPONSES: {
+        const metadataIsNotEmpty = Object.keys(metadata).length > 0;
+        let extraBodyCode = '';
+        if (metadataIsNotEmpty) {
+          const extraBodyObject = { metadata };
+          const extraBodyString = JSON.stringify(extraBodyObject, null, 2);
+          const indentedExtraBodyString = extraBodyString.split('\n').map(line => ' '.repeat(4) + line).join('\n').trim();
+          
+          extraBodyCode = `,\n    extra_body=${indentedExtraBodyString}`;
+        }
+
+        endpointSpecificCode = `
+# request sent to model set on litellm proxy, \`litellm --model\`
+response = client.responses.create(
+    model="${modelNameForCode}",
+    messages = ${JSON.stringify(messages, null, 4)}${extraBodyCode}
+)
+
+print(response)
+`;
+        break;
+      }
+      case EndpointType.IMAGE:
+        if (selectedSdk === 'azure') {
+          endpointSpecificCode = `
+# NOTE: The Azure SDK does not have a direct equivalent to the multi-modal 'responses.create' method shown for OpenAI.
+# This snippet uses 'client.images.generate' and will create a new image based on your prompt.
+# It does not use the uploaded image, as 'client.images.generate' does not support image inputs in this context.
+import os
+import requests
+import json
+import time
+from PIL import Image
+
+result = client.images.generate(
+    model="${modelNameForCode}",
+    prompt="${inputMessage}",
+    n=1
+)
+
+json_response = json.loads(result.model_dump_json())
+
+# Set the directory for the stored image
+image_dir = os.path.join(os.curdir, 'images')
+
+# If the directory doesn't exist, create it
+if not os.path.isdir(image_dir):
+    os.mkdir(image_dir)
+
+# Initialize the image path
+image_filename = f"generated_image_{int(time.time())}.png"
+image_path = os.path.join(image_dir, image_filename)
+
+try:
+    # Retrieve the generated image
+    if json_response.get("data") and len(json_response["data"]) > 0 and json_response["data"][0].get("url"):
+        image_url = json_response["data"][0]["url"]
+        generated_image = requests.get(image_url).content
+        with open(image_path, "wb") as image_file:
+            image_file.write(generated_image)
+
+        print(f"Image saved to {image_path}")
+        # Display the image
+        image = Image.open(image_path)
+        image.show()
+    else:
+        print("Could not find image URL in response.")
+        print("Full response:", json_response)
+except Exception as e:
+    print(f"An error occurred: {e}")
+    print("Full response:", json_response)
+`;
+        } else {
+          endpointSpecificCode = `
+import base64
+import os
+import time
+import json
+from PIL import Image
+import requests
+
+# Helper function to encode images to base64
+def encode_image(image_path):
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
+# Helper function to create a file (simplified for this example)
+def create_file(image_path):
+    # In a real implementation, this would upload the file to OpenAI
+    # For this example, we'll just return a placeholder ID
+    return f"file_{os.path.basename(image_path).replace('.', '_')}"
+
+# The prompt entered by the user
+prompt = "${safePrompt}"
+
+# Encode images to base64
+base64_image1 = encode_image("body-lotion.png")
+base64_image2 = encode_image("soap.png")
+
+# Create file IDs
+file_id1 = create_file("body-lotion.png")
+file_id2 = create_file("incense-kit.png")
+
+response = client.responses.create(
+    model="${modelNameForCode}",
+    input=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": prompt},
+                {
+                    "type": "input_image",
+                    "image_url": f"data:image/jpeg;base64,{base64_image1}",
+                },
+                {
+                    "type": "input_image",
+                    "image_url": f"data:image/jpeg;base64,{base64_image2}",
+                },
+                {
+                    "type": "input_image",
+                    "file_id": file_id1,
+                },
+                {
+                    "type": "input_image",
+                    "file_id": file_id2,
+                }
+            ],
+        }
+    ],
+    tools=[{"type": "image_generation"}],
+)
+
+# Process the response
+image_generation_calls = [
+    output
+    for output in response.output
+    if output.type == "image_generation_call"
+]
+
+image_data = [output.result for output in image_generation_calls]
+
+if image_data:
+    image_base64 = image_data[0]
+    image_filename = f"edited_image_{int(time.time())}.png"
+    with open(image_filename, "wb") as f:
+        f.write(base64.b64decode(image_base64))
+    print(f"Image saved to {image_filename}")
+else:
+    # If no image is generated, there might be a text response with an explanation
+    text_response = [output.text for output in response.output if hasattr(output, 'text')]
+    if text_response:
+        print("No image generated. Model response:")
+        print("\\n".join(text_response))
+    else:
+        print("No image data found in response.")
+    print("Full response for debugging:")
+    print(response)
+`;
+        }
+        break;
+
+      case EndpointType.IMAGE_EDITS:
+        if (selectedSdk === 'azure') {
+          endpointSpecificCode = `
+import base64
+import os
+import time
+import json
+from PIL import Image
+import requests
+
+# Helper function to encode images to base64
+def encode_image(image_path):
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
+# The prompt entered by the user
+prompt = "${safePrompt}"
+
+# Encode images to base64
+base64_image1 = encode_image("body-lotion.png")
+base64_image2 = encode_image("soap.png")
+
+# Create file IDs
+file_id1 = create_file("body-lotion.png")
+file_id2 = create_file("incense-kit.png")
+
+response = client.responses.create(
+    model="${modelNameForCode}",
+    input=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": prompt},
+                {
+                    "type": "input_image",
+                    "image_url": f"data:image/jpeg;base64,{base64_image1}",
+                },
+                {
+                    "type": "input_image",
+                    "image_url": f"data:image/jpeg;base64,{base64_image2}",
+                },
+                {
+                    "type": "input_image",
+                    "file_id": file_id1,
+                },
+                {
+                    "type": "input_image",
+                    "file_id": file_id2,
+                }
+            ],
+        }
+    ],
+    tools=[{"type": "image_generation"}],
+)
+
+# Process the response
+image_generation_calls = [
+    output
+    for output in response.output
+    if output.type == "image_generation_call"
+]
+
+image_data = [output.result for output in image_generation_calls]
+
+if image_data:
+    image_base64 = image_data[0]
+    image_filename = f"edited_image_{int(time.time())}.png"
+    with open(image_filename, "wb") as f:
+        f.write(base64.b64decode(image_base64))
+    print(f"Image saved to {image_filename}")
+else:
+    # If no image is generated, there might be a text response with an explanation
+    text_response = [output.text for output in response.output if hasattr(output, 'text')]
+    if text_response:
+        print("No image generated. Model response:")
+        print("\\n".join(text_response))
+    else:
+        print("No image data found in response.")
+    print("Full response for debugging:")
+    print(response)
+`;
+        } else {
+          endpointSpecificCode = `
+import base64
+import os
+import time
+
+# Helper function to encode images to base64
+def encode_image(image_path):
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
+# Helper function to create a file (simplified for this example)
+def create_file(image_path):
+    # In a real implementation, this would upload the file to OpenAI
+    # For this example, we'll just return a placeholder ID
+    return f"file_{os.path.basename(image_path).replace('.', '_')}"
+
+# The prompt entered by the user
+prompt = "${safePrompt}"
+
+# Encode images to base64
+base64_image1 = encode_image("body-lotion.png")
+base64_image2 = encode_image("soap.png")
+
+# Create file IDs
+file_id1 = create_file("body-lotion.png")
+file_id2 = create_file("incense-kit.png")
+
+response = client.responses.create(
+    model="${modelNameForCode}",
+    input=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": prompt},
+                {
+                    "type": "input_image",
+                    "image_url": f"data:image/jpeg;base64,{base64_image1}",
+                },
+                {
+                    "type": "input_image",
+                    "image_url": f"data:image/jpeg;base64,{base64_image2}",
+                },
+                {
+                    "type": "input_image",
+                    "file_id": file_id1,
+                },
+                {
+                    "type": "input_image",
+                    "file_id": file_id2,
+                }
+            ],
+        }
+    ],
+    tools=[{"type": "image_generation"}],
+)
+
+# Process the response
+image_generation_calls = [
+    output
+    for output in response.output
+    if output.type == "image_generation_call"
+]
+
+image_data = [output.result for output in image_generation_calls]
+
+if image_data:
+    image_base64 = image_data[0]
+    image_filename = f"edited_image_{int(time.time())}.png"
+    with open(image_filename, "wb") as f:
+        f.write(base64.b64decode(image_base64))
+    print(f"Image saved to {image_filename}")
+else:
+    # If no image is generated, there might be a text response with an explanation
+    text_response = [output.text for output in response.output if hasattr(output, 'text')]
+    if text_response:
+        print("No image generated. Model response:")
+        print("\\n".join(text_response))
+    else:
+        print("No image data found in response.")
+    print("Full response for debugging:")
+    print(response)
+`;
+        }
+        break;
+      default:
+        endpointSpecificCode = "\n# Code generation for this endpoint is not implemented yet.";
+    }
+
+    const finalCode = `${clientInitialization}\n${endpointSpecificCode}`;
+
+    setGeneratedCode(finalCode);
+  };
 
   const updateTextUI = (role: string, chunk: string, model?: string) => {
     console.log("updateTextUI called with:", role, chunk, model);
@@ -467,10 +880,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
   return (
     <div className="w-full h-screen p-4 bg-white">
     <Card className="w-full rounded-xl shadow-md overflow-hidden">
-      <div className="flex h-[80vh] w-full">
+      <div className="flex h-[80vh] w-full gap-4">
         {/* Left Sidebar with Controls */}
-        <div className="w-1/4 p-4 border-r border-gray-200 bg-gray-50">
-          <div className="mb-6">
+        <div className="w-1/4 p-4 bg-gray-50">
+          <Title className="text-xl font-semibold mb-6 mt-2">Configurations</Title>
             <div className="space-y-6">
               <div>
                 <Text className="font-medium block mb-2 text-gray-700 flex items-center">
@@ -602,19 +1015,30 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 />
               </div>
               
-              <Button
-                onClick={clearChatHistory}
-                className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300 mt-4"
-                icon={ClearOutlined}
-              >
-                Clear Chat
-              </Button>
+              <div className="space-y-2 mt-6">
+                <TremorButton
+                  onClick={clearChatHistory}
+                  className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
+                  icon={ClearOutlined}
+                >
+                  Clear Chat
+                </TremorButton>
+              </div>
             </div>
-          </div>
         </div>
         
         {/* Main Chat Area */}
         <div className="w-3/4 flex flex-col bg-white">
+          <div className="p-4 border-b border-gray-200 flex justify-between items-center">
+            <Title className="text-xl font-semibold mb-0">Test Key</Title>
+            <TremorButton
+              onClick={() => setIsGetCodeModalVisible(true)}
+              className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
+              icon={CodeOutlined}
+            >
+              Get Code
+            </TremorButton>
+          </div>
           <div className="flex-1 overflow-auto p-4 pb-0">
             {chatHistory.length === 0 && (
               <div className="h-full flex flex-col items-center justify-center text-gray-400">
@@ -774,28 +1198,71 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 style={{ resize: 'none', paddingRight: '10px', paddingLeft: '10px' }}
               />
               {isLoading ? (
-                <Button
+                <TremorButton
                   onClick={handleCancelRequest}
                   className="ml-2 bg-red-50 hover:bg-red-100 text-red-600 border-red-200"
                   icon={DeleteOutlined}
                 >
                   Cancel
-                </Button>
+                </TremorButton>
               ) : (
-                <Button
+                <TremorButton
                   onClick={handleSendMessage}
                   className="ml-2 text-white"
-                  icon={endpointType === EndpointType.CHAT ? SendOutlined : RobotOutlined}
+                  icon={endpointType === EndpointType.CHAT || endpointType === EndpointType.RESPONSES ? SendOutlined : PictureOutlined}
                 >
-                  {endpointType === EndpointType.CHAT ? "Send" : 
+                  {endpointType === EndpointType.CHAT || endpointType === EndpointType.RESPONSES ? "Send" : 
                    endpointType === EndpointType.IMAGE_EDITS ? "Edit" : "Generate"}
-                </Button>
+                </TremorButton>
               )}
             </div>
           </div>
         </div>
       </div>
     </Card>
+    <Modal
+      title="Generated Code"
+      visible={isGetCodeModalVisible}
+      onCancel={() => setIsGetCodeModalVisible(false)}
+      footer={null}
+      width={800}
+    >
+      <div className="flex justify-between items-end my-4">
+        <div>
+          <Text className="font-medium block mb-1 text-gray-700">SDK Type</Text>
+          <Select
+            value={selectedSdk}
+            onChange={(value) => setSelectedSdk(value as 'openai' | 'azure')}
+            style={{ width: 150 }}
+            options={[
+                { value: 'openai', label: 'OpenAI SDK' },
+                { value: 'azure', label: 'Azure SDK' },
+            ]}
+          />
+        </div>
+        <Button 
+          onClick={() => {
+            navigator.clipboard.writeText(generatedCode);
+            message.success("Copied to clipboard!");
+          }}
+        >
+          Copy to Clipboard
+        </Button>
+      </div>
+      <SyntaxHighlighter
+        language="python"
+        style={coy as any}
+        wrapLines={true}
+        wrapLongLines={true}
+        className="rounded-md"
+        customStyle={{
+          maxHeight: '60vh',
+          overflowY: 'auto',
+        }}
+      >
+        {generatedCode}
+      </SyntaxHighlighter>
+    </Modal>
     </div>
   );
 };
