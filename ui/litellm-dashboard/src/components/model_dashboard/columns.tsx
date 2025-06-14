@@ -17,6 +17,8 @@ export const columns = (
   handleEditClick: (model: any) => void,
   handleRefreshClick: () => void,
   setEditModel: (edit: boolean) => void,
+  expandedRows: Set<string>,
+  setExpandedRows: (expandedRows: Set<string>) => void,
 ): ColumnDef<ModelData>[] => [
   {
     header: "Model ID",
@@ -191,7 +193,6 @@ export const columns = (
     cell: ({ row }) => {
       const model = row.original;
       const accessGroups = model.model_info.access_groups;
-      const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
       
       if (!accessGroups || accessGroups.length === 0) {
         return "-";
