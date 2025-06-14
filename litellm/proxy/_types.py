@@ -1467,6 +1467,9 @@ class ConfigFieldDelete(LiteLLMPydanticObjectBase):
     config_type: Literal["general_settings"]
     field_name: str
 
+class CallbackDelete(LiteLLMPydanticObjectBase):
+    callback_name: str
+
 
 class FieldDetail(BaseModel):
     field_name: str
