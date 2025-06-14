@@ -545,8 +545,6 @@ class AsyncHTTPHandler:
         - [Default] If force_ipv4 is False, it will create an AiohttpTransport with default settings
         """
         from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
-        
-        from litellm.secret_managers.main import str_to_bool
 
         #########################################################
         # If ssl_verify is None, set it to True
@@ -555,20 +553,10 @@ class AsyncHTTPHandler:
         #########################################################
         if ssl_verify is None:
             ssl_verify = True
-            
-        #########################################################
-        # Check if user disabled aiohttp trust env
-        # When True, aiohttp will not trust environment variables for proxy settings
-        ########################################################
-        disable_trust_env = (
-            litellm.disable_aiohttp_trust_env is True
-            or str_to_bool(os.getenv("DISABLE_AIOHTTP_TRUST_ENV", "False")) is True
-        )
 
         verbose_logger.debug("Creating AiohttpTransport...")
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
-                trust_env=not disable_trust_env,
                 connector=TCPConnector(
                     verify_ssl=ssl_verify,
                     ssl_context=ssl_context,
