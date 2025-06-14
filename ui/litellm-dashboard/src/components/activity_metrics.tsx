@@ -1,12 +1,109 @@
 import React from 'react';
 import { Card, Grid, Text, Title, Accordion, AccordionHeader, AccordionBody } from '@tremor/react';
 import { AreaChart, BarChart } from '@tremor/react';
+import type { CustomTooltipProps } from '@tremor/react';
 import { SpendMetrics, DailyData, ModelActivityData, MetricWithMetadata, KeyMetricWithMetadata } from './usage/types';
 import { Collapse } from 'antd';
+import { valueFormatter, valueFormatterSpend } from '../components/usage/utils/value_formatters';
 
 interface ActivityMetricsProps {
   modelMetrics: Record<string, ModelActivityData>;
 }
+
+interface ChartDataPoint {
+  date: string;
+  metrics: SpendMetrics;
+}
+
+const colorNameToHex: { [key: string]: string } = {
+    blue: '#3b82f6',
+    cyan: '#06b6d4',
+    indigo: '#6366f1',
+    green: '#22c55e',
+    red: '#ef4444',
+    purple: '#8b5cf6',
+};
+
+export const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
+  if (active && payload && payload.length) {
+    const formatCategoryName = (name: string): string => {
+        return name.replace('metrics.', '')
+                   .replace(/_/g, ' ')
+                   .split(' ')
+                   .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+                   .join(' ');
+    };
+
+    const getRawValue = (dataPoint: ChartDataPoint, key: string): number | undefined => {
+      // key is like "metrics.total_tokens"
+      const metricKey = key.substring(key.indexOf('.') + 1) as keyof SpendMetrics;
+      if (dataPoint.metrics && metricKey in dataPoint.metrics) {
+        return dataPoint.metrics[metricKey];
+      }
+      return undefined;
+    }
+
+    return (
+      <div className="w-56 rounded-tremor-default border border-tremor-border bg-tremor-background p-2 text-tremor-default shadow-tremor-dropdown">
+        <p className="text-tremor-content-strong">{label}</p>
+        {payload.map((item) => {
+          const dataKey = item.dataKey?.toString();
+          if (!dataKey || !item.payload) return null;
+
+          const rawValue = getRawValue(item.payload, dataKey);
+          const isSpend = dataKey.includes('spend');
+          const formattedValue = rawValue !== undefined
+            ? isSpend
+              ? `$${rawValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+              : rawValue.toLocaleString()
+            : 'N/A';
+          
+          const colorName = item.color as keyof typeof colorNameToHex;
+          const hexColor = colorNameToHex[colorName] || item.color;
+          return (
+            <div key={dataKey} className="flex items-center justify-between space-x-4">
+              <div className="flex items-center space-x-2">
+                <span className={`h-2 w-2 shrink-0 rounded-full ring-2 ring-white drop-shadow-md`} style={{backgroundColor: hexColor}} />
+                <p className="font-medium text-tremor-content dark:text-dark-tremor-content">{formatCategoryName(dataKey)}</p>
+              </div>
+              <p className="font-medium text-tremor-content-emphasis dark:text-dark-tremor-content-emphasis">
+                {formattedValue}
+              </p>
+            </div>
+          )
+        })}
+      </div>
+    );
+  }
+  return null;
+};
+
+const CustomLegend = ({ categories, colors }: { categories: string[], colors: string[] }) => {
+    const formatCategoryName = (name: string): string => {
+        return name.replace('metrics.', '')
+                   .replace(/_/g, ' ')
+                   .split(' ')
+                   .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+                   .join(' ');
+    };
+
+    return (
+        <div className="flex items-center justify-end space-x-4">
+            {categories.map((category, idx) => {
+                const colorName = colors[idx] as keyof typeof colorNameToHex;
+                const hexColor = colorNameToHex[colorName] || colors[idx];
+                return (
+                    <div key={category} className="flex items-center space-x-2">
+                        <span className={`h-2 w-2 shrink-0 rounded-full ring-4 ring-white`} style={{backgroundColor: hexColor}} />
+                        <p className="text-sm text-tremor-content dark:text-dark-tremor-content">
+                            {formatCategoryName(category)}
+                        </p>
+                    </div>
+                );
+            })}
+        </div>
+    );
+};
 
 const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: ModelActivityData }) => {
   return (
@@ -36,62 +133,92 @@ const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: Mode
       {/* Charts */}
       <Grid numItems={2} className="gap-4">
         <Card>
-          <Title>Total Tokens</Title>
-          <AreaChart    
+          <div className="flex justify-between items-center">
+            <Title>Total Tokens</Title>
+            <CustomLegend categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]} colors={["blue", "cyan", "indigo"]} />
+          </div>
+          <AreaChart
+            className="mt-4"
             data={metrics.daily_data}
             index="date"
             categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]}
             colors={["blue", "cyan", "indigo"]}
-            valueFormatter={(number: number) => number.toLocaleString()}
+            valueFormatter={valueFormatter}
+            customTooltip={CustomTooltip}
+            showLegend={false}
           />
         </Card>
 
         <Card>
-          <Title>Requests per day</Title>
+          <div className="flex justify-between items-center">
+            <Title>Requests per day</Title>
+            <CustomLegend categories={["metrics.api_requests"]} colors={["blue"]} />
+          </div>
           <BarChart
+            className="mt-4"
             data={metrics.daily_data}
             index="date"
             categories={["metrics.api_requests"]}
             colors={["blue"]}
-            valueFormatter={(number: number) => number.toLocaleString()}
+            valueFormatter={valueFormatter}
+            customTooltip={CustomTooltip}
+            showLegend={false}
           />
         </Card>
 
         <Card>
-          <Title>Spend per day</Title>
+          <div className="flex justify-between items-center">
+            <Title>Spend per day</Title>
+            <CustomLegend categories={["metrics.spend"]} colors={["green"]} />
+          </div>
           <BarChart
+            className="mt-4"
             data={metrics.daily_data}
             index="date"
             categories={["metrics.spend"]}
             colors={["green"]}
-            valueFormatter={(value: number) => `$${value.toFixed(2)}`}
+            valueFormatter={valueFormatterSpend}
+            customTooltip={CustomTooltip}
+            showLegend={false}
           />
         </Card>
 
         <Card>
-          <Title>Success vs Failed Requests</Title>
+          <div className="flex justify-between items-center">
+            <Title>Success vs Failed Requests</Title>
+            <CustomLegend categories={["metrics.successful_requests", "metrics.failed_requests"]} colors={["green", "red"]} />
+          </div>
           <AreaChart
+            className="mt-4"
             data={metrics.daily_data}
             index="date"
             categories={["metrics.successful_requests", "metrics.failed_requests"]}
-            colors={["emerald", "red"]}
-            valueFormatter={(number: number) => number.toLocaleString()}
+            colors={["green", "red"]}
+            valueFormatter={valueFormatter}
             stack
+            customTooltip={CustomTooltip}
+            showLegend={false}
           />
         </Card>
         
         <Card>
-          <Title>Prompt Caching Metrics</Title>
+          <div className="flex justify-between items-center">
+            <Title>Prompt Caching Metrics</Title>
+            <CustomLegend categories={["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"]} colors={["cyan", "purple"]} />
+          </div>
           <div className="mb-2">
             <Text>Cache Read: {metrics.total_cache_read_input_tokens?.toLocaleString() || 0} tokens</Text>
             <Text>Cache Creation: {metrics.total_cache_creation_input_tokens?.toLocaleString() || 0} tokens</Text>
           </div>
           <AreaChart
+            className="mt-4"
             data={metrics.daily_data}
             index="date"
             categories={["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"]}
             colors={["cyan", "purple"]}
-            valueFormatter={(number: number) => number.toLocaleString()}
+            valueFormatter={valueFormatter}
+            customTooltip={CustomTooltip}
+            showLegend={false}
           />
         </Card>
       </Grid>
@@ -194,24 +321,36 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
 
         <Grid numItems={2} className="gap-4">
           <Card>
-            <Title>Total Tokens Over Time</Title>
-            <AreaChart    
+            <div className="flex justify-between items-center">
+              <Title>Total Tokens Over Time</Title>
+              <CustomLegend categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]} colors={["blue", "cyan", "indigo"]} />
+            </div>
+            <AreaChart
+              className="mt-4"
               data={sortedDailyData}
               index="date"
               categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]}
               colors={["blue", "cyan", "indigo"]}
-              valueFormatter={(number: number) => number.toLocaleString()}
+              valueFormatter={valueFormatter}
+              customTooltip={CustomTooltip}
+              showLegend={false}
             />
           </Card>
           <Card>
-            <Title>Total Requests Over Time</Title>
+            <div className="flex justify-between items-center">
+              <Title>Total Requests Over Time</Title>
+              <CustomLegend categories={["metrics.successful_requests", "metrics.failed_requests"]} colors={["green", "red"]} />
+            </div>
             <AreaChart
+              className="mt-4"
               data={sortedDailyData}
               index="date"
               categories={["metrics.successful_requests", "metrics.failed_requests"]}
-              colors={["emerald", "red"]}
-              valueFormatter={(number: number) => number.toLocaleString()}
+              colors={["green", "red"]}
+              valueFormatter={valueFormatter}
               stack
+              customTooltip={CustomTooltip}
+              showLegend={false}
             />
           </Card>
         </Grid>
