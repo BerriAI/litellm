@@ -75,6 +75,7 @@ callback_class_str_to_classType = {
     # OTEL compatible loggers
     "logfire": OpenTelemetry,
     "arize": OpenTelemetry,
+    "langfuse_otel": OpenTelemetry,
     "arize_phoenix": OpenTelemetry,
     "langtrace": OpenTelemetry,
     "mlflow": MlflowLogger,
