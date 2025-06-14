@@ -54,8 +54,6 @@ from litellm import (
 )
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -63,6 +61,8 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import (
     AlertType,
@@ -2461,15 +2461,23 @@ class PrismaClient:
         )
 
     # Health Check Database Methods
-    def _validate_response_time(self, response_time_ms: Optional[float]) -> Optional[float]:
+    def _validate_response_time(
+        self, response_time_ms: Optional[float]
+    ) -> Optional[float]:
         """Validate and clean response time value"""
         if response_time_ms is None:
             return None
         try:
             value = float(response_time_ms)
-            return value if value == value and value not in (float('inf'), float('-inf')) else None
+            return (
+                value
+                if value == value and value not in (float("inf"), float("-inf"))
+                else None
+            )
         except (ValueError, TypeError):
-            verbose_proxy_logger.warning(f"Invalid response_time_ms value: {response_time_ms}")
+            verbose_proxy_logger.warning(
+                f"Invalid response_time_ms value: {response_time_ms}"
+            )
             return None
 
     def _clean_details(self, details: Optional[dict]) -> Optional[dict]:
@@ -2503,7 +2511,7 @@ class PrismaClient:
                 "healthy_count": int(healthy_count),
                 "unhealthy_count": int(unhealthy_count),
             }
-            
+
             # Add optional fields using dict comprehension and helper methods
             optional_fields = {
                 "error_message": str(error_message)[:500] if error_message else None,
@@ -2512,15 +2520,19 @@ class PrismaClient:
                 "checked_by": str(checked_by) if checked_by else None,
                 "model_id": str(model_id) if model_id else None,
             }
-            
+
             # Add only non-None optional fields
-            health_check_data.update({k: v for k, v in optional_fields.items() if v is not None})
-            
+            health_check_data.update(
+                {k: v for k, v in optional_fields.items() if v is not None}
+            )
+
             verbose_proxy_logger.debug(f"Saving health check data: {health_check_data}")
             return await self.db.litellm_healthchecktable.create(data=health_check_data)
-            
+
         except Exception as e:
-            verbose_proxy_logger.error(f"Error saving health check result for model {model_name}: {e}")
+            verbose_proxy_logger.error(
+                f"Error saving health check result for model {model_name}: {e}"
+            )
             return None
 
     async def get_health_check_history(
@@ -2560,13 +2572,13 @@ class PrismaClient:
             all_checks = await self.db.litellm_healthchecktable.find_many(
                 order={"checked_at": "desc"}
             )
-            
+
             # Group by model_name and get the latest for each
             latest_checks = {}
             for check in all_checks:
                 if check.model_name not in latest_checks:
                     latest_checks[check.model_name] = check
-            
+
             return list(latest_checks.values())
         except Exception as e:
             verbose_proxy_logger.error(f"Error getting all latest health checks: {e}")
@@ -2574,6 +2586,7 @@ class PrismaClient:
 
 
 ### HELPER FUNCTIONS ###
+
 
 async def _cache_user_row(user_id: str, cache: DualCache, db: PrismaClient):
     """
@@ -3072,40 +3085,32 @@ def is_known_model(model: Optional[str], llm_router: Optional[Router]) -> bool:
 
 
 def join_paths(base_path: str, route: str) -> str:
-    # Remove trailing slashes from base_path and leading slashes from route
+    # Remove trailing/leading slashes
     base_path = base_path.rstrip("/")
     route = route.lstrip("/")
-    
-    # If base_path is empty, return route with leading slash
-    if not base_path:
-        return f"/{route}" if route else "/"
-    
-    # If route is empty, return just base_path
-    if not route:
-        return base_path
-    
-    # Join with single slash
+
+    # Join with a single slash
     return f"{base_path}/{route}"
 
 
 def get_custom_url(request_base_url: str, route: Optional[str] = None) -> str:
-    # Use environment variable value, otherwise use URL from request
-    server_base_url = get_proxy_base_url()
-    if server_base_url is not None:
-        base_url = server_base_url
-    else:
-        base_url = request_base_url
-    
-    server_root_path = get_server_root_path()
+    """
+    Use proxy base url, if set.
+
+    Else, use request base url.
+    """
+    from httpx import URL
+
+    proxy_base_url = os.getenv("PROXY_BASE_URL")
+    server_root_path = os.getenv("SERVER_ROOT_PATH") or ""
     if route is not None:
-        if server_root_path != "":
-            # First join base_url with server_root_path, then with route
-            intermediate_url = join_paths(base_url, server_root_path)
-            return join_paths(intermediate_url, route)
-        else:
-            return join_paths(base_url, route)
+        server_root_path = join_paths(base_path=server_root_path, route=route)
+    if proxy_base_url:
+        ui_link = str(URL(proxy_base_url).join(server_root_path))
     else:
-        return join_paths(base_url, server_root_path)
+        ui_link = str(URL(request_base_url).join(server_root_path))
+
+    return ui_link
 
 
 def get_proxy_base_url() -> Optional[str]:
