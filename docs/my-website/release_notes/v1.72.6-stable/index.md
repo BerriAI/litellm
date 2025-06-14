@@ -103,108 +103,103 @@ This version is not out yet.
 
 ## LLM API Endpoints
 
-- **[Images API](../../docs/image_generation)**
-    - Azure endpoint support for image endpoints - [PR](https://github.com/BerriAI/litellm/pull/11482)
-- **[Anthropic Messages API](../../docs/completion/chat)**
-    - Support for ALL LiteLLM Providers (OpenAI, Azure, Bedrock, Vertex, DeepSeek, etc.) on /v1/messages API Spec - [PR](https://github.com/BerriAI/litellm/pull/11502)
-    - Performance improvements for /v1/messages route - [PR](https://github.com/BerriAI/litellm/pull/11421)
-    - Return streaming usage statistics when using LiteLLM with Bedrock models - [PR](https://github.com/BerriAI/litellm/pull/11469)
-- **[Embeddings API](../../docs/embedding/supported_embedding)**
-    - Provider-specific optional params handling for embedding calls - [PR](https://github.com/BerriAI/litellm/pull/11346)
-    - Proper Sagemaker request attribute usage for embeddings - [PR](https://github.com/BerriAI/litellm/pull/11362)
-- **[Rerank API](../../docs/rerank/supported_rerank)**
-    - New HuggingFace rerank provider support - [PR](https://github.com/BerriAI/litellm/pull/11438), [Guide](../../docs/providers/huggingface_rerank)
+#### Bugs
+- **Chat Completion**
+    - Streaming - Ensure consistent ‘created’ across chunks - [PR](https://github.com/BerriAI/litellm/pull/11528)
+#### Features
+- **MCP**
+    - Add controls for MCP Permission Management - [PR](https://github.com/BerriAI/litellm/pull/11598), 
+    - Add permission management for MCP List + Call Tool operations - [PR](https://github.com/BerriAI/litellm/pull/11682)
+    - Streamable HTTP server support - [PR](https://github.com/BerriAI/litellm/pull/11628), [PR](https://github.com/BerriAI/litellm/pull/11645)
+    - Use Experimental dedicated Rest endpoints for list, calling MCP tools - [PR](https://github.com/BerriAI/litellm/pull/11684)
+- **Responses API**
+    - NEW API Endpoint - List input items - [PR](https://github.com/BerriAI/litellm/pull/11602)
+    - Background mode for OpenAI + Azure OpenAI - [PR](https://github.com/BerriAI/litellm/pull/11640)
+    - Langfuse/other Logging support on responses api requests - [PR](https://github.com/BerriAI/litellm/pull/11685)
+- **Chat Completions**
+    - Bridge for Responses API - allows calling codex-mini via `/chat/completions` and `/v1/messages` - [PR](https://github.com/BerriAI/litellm/pull/11632), [PR](https://github.com/BerriAI/litellm/pull/11685)
+
 
 ---
 
 ## Spend Tracking
 
-- Added token tracking for anthropic batch calls via /anthropic passthrough route- [PR](https://github.com/BerriAI/litellm/pull/11388)
+#### Bugs
+- **End Users**
+    - Update enduser spend and budget reset date based on budget duration - [PR](https://github.com/BerriAI/litellm/pull/8460) (s/o [laurien16](https://github.com/laurien16))
+- **Custom Pricing**
+    - Convert scientific notation str to int - [PR](https://github.com/BerriAI/litellm/pull/11655)
 
 ---
 
 ## Management Endpoints / UI
 
+#### Bugs
+- **Users**
+    - `/user/info` - fix passing user with `+` in user id
+    - Add admin-initiated password reset flow - [PR](https://github.com/BerriAI/litellm/pull/11618)
+    - Fixes default user settings UI rendering error - [PR](https://github.com/BerriAI/litellm/pull/11674)
+- **Budgets**
+    - Correct success message when new user budget is created - [PR](https://github.com/BerriAI/litellm/pull/11608)
 
-- **SSO/Authentication**
-    - SSO configuration endpoints and UI integration with persistent settings - [PR](https://github.com/BerriAI/litellm/pull/11417)
-    - Update proxy admin ID role in DB + Handle SSO redirects with custom root path - [PR](https://github.com/BerriAI/litellm/pull/11384)
-    - Support returning virtual key in custom auth - [PR](https://github.com/BerriAI/litellm/pull/11346)
-    - User ID validation to ensure it is not an email or phone number - [PR](https://github.com/BerriAI/litellm/pull/10102)
-- **Teams**
-    - Fixed Create/Update team member API 500 error - [PR](https://github.com/BerriAI/litellm/pull/10479)
-    - Enterprise feature gating for RegenerateKeyModal in KeyInfoView - [PR](https://github.com/BerriAI/litellm/pull/11400)
-- **SCIM**
-    - Fixed SCIM running patch operation case sensitivity - [PR](https://github.com/BerriAI/litellm/pull/11335)
-- **General**
-    - Converted action buttons to sticky footer action buttons - [PR](https://github.com/BerriAI/litellm/pull/11293)
-    - Custom Server Root Path - support for serving UI on a custom root path - [Guide](../../docs/proxy/custom_root_ui)
+#### Features
+- **Leftnav**
+    - Show remaining Enterprise users on UI
+- **MCP**
+    - New server add form - [PR](https://github.com/BerriAI/litellm/pull/11604)
+    - Allow editing mcp servers - [PR](https://github.com/BerriAI/litellm/pull/11693)
+- **Models**
+    - Add deepgram models on UI
+    - Model Access Group support on UI - [PR](https://github.com/BerriAI/litellm/pull/11719)
+- **Keys**
+    - Trim long user id’s - [PR](https://github.com/BerriAI/litellm/pull/11488)
+- **Logs**
+    - Add live tail feature to logs view, allows user to disable auto refresh in high traffic - [PR](https://github.com/BerriAI/litellm/pull/11712)
+    - Audit Logs - preview screenshot - [PR](https://github.com/BerriAI/litellm/pull/11715)
+
 ---
 
 ## Logging / Guardrails Integrations
 
-#### Logging
-- **[S3](../../docs/proxy/logging#s3)**
-    - Async + Batched S3 Logging for improved performance - [PR](https://github.com/BerriAI/litellm/pull/11340)
-- **[DataDog](../../docs/observability/datadog_integration)**
-    - Add instrumentation for streaming chunks - [PR](https://github.com/BerriAI/litellm/pull/11338)
-    - Add DD profiler to monitor Python profile of LiteLLM CPU% - [PR](https://github.com/BerriAI/litellm/pull/11375)
-    - Bump DD trace version - [PR](https://github.com/BerriAI/litellm/pull/11426)
-- **[Prometheus](../../docs/proxy/prometheus)**
-    - Pass custom metadata labels in litellm_total_token metrics - [PR](https://github.com/BerriAI/litellm/pull/11414)
-- **[GCS](../../docs/proxy/logging#google-cloud-storage)**
-    - Update GCSBucketBase to handle GSM project ID if passed - [PR](https://github.com/BerriAI/litellm/pull/11409)
+#### Bugs
+- **Arize**
+    - Change space_key header to space_id - [PR](https://github.com/BerriAI/litellm/pull/11595) (s/o [vanities](https://github.com/vanities))
+- **Prometheus**
+    - Fix total requests increment - https://github.com/BerriAI/litellm/pull/11718
 
-#### Guardrails
-- **[Presidio](../../docs/proxy/guardrails/presidio)**
-    - Add presidio_language yaml configuration support for guardrails - [PR](https://github.com/BerriAI/litellm/pull/11331)
+#### Features
+- **Lasso Guardrails**
+    - [NEW] Lasso Guardrails support - [PR](https://github.com/BerriAI/litellm/pull/11565)
+- **Users**
+    - New `organizations` param on `/user/new` - allows adding users to orgs on creation - [PR](https://github.com/BerriAI/litellm/pull/11572/files)
+- **Prevent double logging when using bridge logic**
+    - [PR](https://github.com/BerriAI/litellm/pull/11687)
 
 ---
 
 ## Performance / Reliability Improvements
 
-- **Performance Optimizations**
-    - Don't run auth on /health/liveliness endpoints - [PR](https://github.com/BerriAI/litellm/pull/11378)
-    - Don't create 1 task for every hanging request alert - [PR](https://github.com/BerriAI/litellm/pull/11385)
-    - Add debugging endpoint to track active /asyncio-tasks - [PR](https://github.com/BerriAI/litellm/pull/11382)
-    - Make batch size for maximum retention in spend logs controllable - [PR](https://github.com/BerriAI/litellm/pull/11459)
-    - Expose flag to disable token counter - [PR](https://github.com/BerriAI/litellm/pull/11344)
-    - Support pipeline redis lpop for older redis versions - [PR](https://github.com/BerriAI/litellm/pull/11425)
----
+#### Bugs
+- **Tag based routing**
+    - Do not consider ‘default’ models when request specifies a tag - [PR](https://github.com/BerriAI/litellm/pull/11454) (s/o [thiagosalvatore](https://github.com/thiagosalvatore))
 
-## Bug Fixes
-
-- **LLM API Fixes**
-    - **Anthropic**: Fix regression when passing file url's to the 'file_id' parameter - [PR](https://github.com/BerriAI/litellm/pull/11387)
-    - **Vertex AI**: Fix Vertex AI any_of issues for Description and Default. - [PR](https://github.com/BerriAI/litellm/issues/11383) 
-    - Fix transcription model name mapping - [PR](https://github.com/BerriAI/litellm/pull/11333)
-    - **Image Generation**: Fix None values in usage field for gpt-image-1 model responses - [PR](https://github.com/BerriAI/litellm/pull/11448)
-    - **Responses API**: Fix _transform_responses_api_content_to_chat_completion_content doesn't support file content type - [PR](https://github.com/BerriAI/litellm/pull/11494)
-    - **Fireworks AI**: Fix rate limit exception mapping - detect "rate limit" text in error messages - [PR](https://github.com/BerriAI/litellm/pull/11455)
-- **Spend Tracking/Budgets**
-    - Respect user_header_name property for budget selection and user identification - [PR](https://github.com/BerriAI/litellm/pull/11419)
-- **MCP Server**
-    - Remove duplicate server_id MCP config servers - [PR](https://github.com/BerriAI/litellm/pull/11327)
-- **Function Calling**
-    - supports_function_calling works with llm_proxy models - [PR](https://github.com/BerriAI/litellm/pull/11381)
-- **Knowledge Base**
-    - Fixed Knowledge Base Call returning error - [PR](https://github.com/BerriAI/litellm/pull/11467)
-
+#### Features
+- **Caching**
+    - New optional ‘litellm[caching]’ pip install for adding disk cache dependencies - [PR](https://github.com/BerriAI/litellm/pull/11600)
 ---
 
 ## New Contributors
-* [@mjnitz02](https://github.com/mjnitz02) made their first contribution in [#10385](https://github.com/BerriAI/litellm/pull/10385)
-* [@hagan](https://github.com/hagan) made their first contribution in [#10479](https://github.com/BerriAI/litellm/pull/10479)
-* [@wwells](https://github.com/wwells) made their first contribution in [#11409](https://github.com/BerriAI/litellm/pull/11409)
-* [@likweitan](https://github.com/likweitan) made their first contribution in [#11400](https://github.com/BerriAI/litellm/pull/11400)
-* [@raz-alon](https://github.com/raz-alon) made their first contribution in [#10102](https://github.com/BerriAI/litellm/pull/10102)
-* [@jtsai-quid](https://github.com/jtsai-quid) made their first contribution in [#11394](https://github.com/BerriAI/litellm/pull/11394)
-* [@tmbo](https://github.com/tmbo) made their first contribution in [#11362](https://github.com/BerriAI/litellm/pull/11362)
-* [@wangsha](https://github.com/wangsha) made their first contribution in [#11351](https://github.com/BerriAI/litellm/pull/11351)
-* [@seankwalker](https://github.com/seankwalker) made their first contribution in [#11452](https://github.com/BerriAI/litellm/pull/11452)
-* [@pazevedo-hyland](https://github.com/pazevedo-hyland) made their first contribution in [#11381](https://github.com/BerriAI/litellm/pull/11381)
-* [@cainiaoit](https://github.com/cainiaoit) made their first contribution in [#11438](https://github.com/BerriAI/litellm/pull/11438)
-* [@vuanhtu52](https://github.com/vuanhtu52) made their first contribution in [#11508](https://github.com/BerriAI/litellm/pull/11508)
+* @laurien16 made their first contribution in https://github.com/BerriAI/litellm/pull/8460
+* @fengbohello made their first contribution in https://github.com/BerriAI/litellm/pull/11547
+* @lapinek made their first contribution in https://github.com/BerriAI/litellm/pull/11570
+* @yanwork made their first contribution in https://github.com/BerriAI/litellm/pull/11586
+* @dhs-shine made their first contribution in https://github.com/BerriAI/litellm/pull/11575
+* @ElefHead made their first contribution in https://github.com/BerriAI/litellm/pull/11450
+* @idootop made their first contribution in https://github.com/BerriAI/litellm/pull/11616
+* @stevenaldinger made their first contribution in https://github.com/BerriAI/litellm/pull/11649
+* @thiagosalvatore made their first contribution in https://github.com/BerriAI/litellm/pull/11454
+* @vanities made their first contribution in https://github.com/BerriAI/litellm/pull/11595
+* @alvarosevilla95 made their first contribution in https://github.com/BerriAI/litellm/pull/11661
 
 ---
 
@@ -217,4 +212,4 @@ Here's a Demo Instance to test changes:
     - Username: admin
     - Password: sk-1234
 
-## [Git Diff](https://github.com/BerriAI/litellm/releases/tag/v1.72.2-stable)
+## [Git Diff](https://github.com/BerriAI/litellm/compare/v1.72.2-stable...1.72.6.rc)
