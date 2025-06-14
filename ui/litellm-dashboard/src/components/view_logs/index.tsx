@@ -871,7 +871,11 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">End Time:</span>
-              <span>{row.original.endTime} <span className="font-medium">Duration:</span>({row.original.duration} s.)</span>
+              <span>{row.original.endTime}</span>
+            </div>
+            <div className="flex">
+              <span className="font-medium w-1/3">Duration:</span>
+              <span>{row.original.duration} s.</span>
             </div>
           </div>
         </div>
