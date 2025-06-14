@@ -1921,7 +1921,8 @@ export const modelAvailableCall = async (
   userRole: String,
   return_wildcard_routes: boolean = false,
   teamID: String | null = null,
-  include_model_access_groups: boolean = false
+  include_model_access_groups: boolean = false,
+  only_model_access_groups: boolean = false
 ) => {
   /**
    * Get all the models user has access to
@@ -1930,11 +1931,12 @@ export const modelAvailableCall = async (
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/models` : `/models`;
     const params = new URLSearchParams();
+    params.append('include_model_access_groups', 'True');
     if (return_wildcard_routes === true) {
       params.append('return_wildcard_routes', 'True');
     }
-    if (include_model_access_groups === true) {
-      params.append('include_model_access_groups', 'True');
+    if (only_model_access_groups === true) {
+      params.append('only_model_access_groups', 'True');
     }
     if (teamID) {
       params.append('team_id', teamID.toString());
