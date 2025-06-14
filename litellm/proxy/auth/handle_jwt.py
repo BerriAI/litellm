@@ -876,25 +876,61 @@ class JWTAuthManager:
         if not team_object:
             return None
 
-        # check if user is in team
+        # check if user is in team - improved check with multiple conditions
+        user_id_to_check = user_object.user_id
+        
+        # Check both user_id and user_email fields to ensure we catch all cases
         for member in team_object.members_with_roles:
-            if member.user_id and member.user_id == user_object.user_id:
+            # Check by user_id (primary check)
+            if member.user_id and member.user_id == user_id_to_check:
+                verbose_proxy_logger.debug(
+                    f"User {user_id_to_check} already in team {team_object.team_id} - skipping addition"
+                )
+                return None
+            
+            # Check by user_email as backup (in case user_id matches email)
+            if (member.user_email and 
+                hasattr(user_object, 'user_email') and 
+                user_object.user_email and 
+                member.user_email == user_object.user_email):
+                verbose_proxy_logger.debug(
+                    f"User {user_object.user_email} already in team {team_object.team_id} by email - skipping addition"
+                )
                 return None
 
-        data = TeamMemberAddRequest(
-            member=Member(
-                user_id=user_object.user_id,
-                role="user",  # [TODO]: allow controlling role within team based on jwt token
-            ),
-            team_id=team_object.team_id,
-        )
-        # add user to team
-        await team_member_add(
-            data=data,
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN
-            ),  # [TODO]: expose an internal service role, for better tracking
-        )
+        try:
+            data = TeamMemberAddRequest(
+                member=Member(
+                    user_id=user_object.user_id,
+                    role="user",  # [TODO]: allow controlling role within team based on jwt token
+                ),
+                team_id=team_object.team_id,
+            )
+            # add user to team
+            await team_member_add(
+                data=data,
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN
+                ),  # [TODO]: expose an internal service role, for better tracking
+            )
+            verbose_proxy_logger.debug(
+                f"Successfully added user {user_object.user_id} to team {team_object.team_id}"
+            )
+        except Exception as e:
+            # Handle the case where user is already in team (race condition or other edge cases)
+            error_msg = str(e).lower()
+            if "already in team" in error_msg or "duplicate" in error_msg:
+                verbose_proxy_logger.debug(
+                    f"User {user_object.user_id} already in team {team_object.team_id} - ignoring duplicate addition error"
+                )
+                return None
+            else:
+                # Re-raise other unexpected errors
+                verbose_proxy_logger.error(
+                    f"Failed to add user {user_object.user_id} to team {team_object.team_id}: {str(e)}"
+                )
+                raise e
+        
         return None
 
     @staticmethod
