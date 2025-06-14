@@ -16,6 +16,7 @@ from litellm.types.utils import (
     all_litellm_params,
     all_litellm_params as _litellm_completion_params,
     CredentialItem,
+    get_valid_models,
 )  # maintain backwards compatibility for root param
 from litellm._logging import (
     set_verbose,
