@@ -15,7 +15,8 @@ litellm_settings:
     - group: "proxy_metrics"
       metrics:
         - "litellm_proxy_total_requests_metric"
-        - "litellm_proxy_total_requests_metric"
+        - "litellm_proxy_failed_requests_metric"
       include_labels:
         - "hashed_api_key"
         - "requested_model"
+        - "model_group"
