@@ -209,6 +209,15 @@ def test_add_code_execution_tool():
     assert tools[0]["type"] == "code_execution_20250522"
 
 
+def test_map_tool_choice():
+    config = AnthropicConfig()
+
+    tool_choice = "none"
+    result = config._map_tool_choice(tool_choice=tool_choice, parallel_tool_use=True)
+    assert result is not None
+    assert result["type"] == "none"
+    print(result)
+
 def test_transform_response_with_prefix_prompt():
     import httpx
 
@@ -252,3 +261,4 @@ def test_transform_response_with_prefix_prompt():
         result.choices[0].message.content
         == "You are a helpful assistant. The grass is green."
     )
+
