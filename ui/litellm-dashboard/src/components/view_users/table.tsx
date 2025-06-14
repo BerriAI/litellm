@@ -19,6 +19,7 @@ import {
 import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
 import { UserInfo } from "./types";
 import UserInfoView from "./user_info_view";
+import { columns as createColumns } from "./columns";
 
 interface UserDataTableProps {
   data: UserInfo[];
@@ -32,17 +33,23 @@ interface UserDataTableProps {
   accessToken: string | null;
   userRole: string | null;
   possibleUIRoles: Record<string, Record<string, string>> | null;
+  handleEdit: (user: UserInfo) => void;
+  handleDelete: (userId: string) => void;
+  handleResetPassword: (userId: string) => void;
 }
 
 export function UserDataTable({
   data = [],
-  columns,
+  columns: originalColumns,
   isLoading = false,
   onSortChange,
   currentSort,
   accessToken,
   userRole,
   possibleUIRoles,
+  handleEdit,
+  handleDelete,
+  handleResetPassword,
 }: UserDataTableProps) {
   const [sorting, setSorting] = React.useState<SortingState>([
     { 
@@ -51,6 +58,28 @@ export function UserDataTable({
     }
   ]);
   const [selectedUserId, setSelectedUserId] = React.useState<string | null>(null);
+
+  const handleUserClick = (userId: string) => {
+    setSelectedUserId(userId);
+  };
+
+  const handleCloseUserInfo = () => {
+    setSelectedUserId(null);
+  };
+
+  // Create columns with the handleUserClick function
+  const columns = React.useMemo(() => {
+    if (possibleUIRoles) {
+      return createColumns(
+        possibleUIRoles,
+        handleEdit,
+        handleDelete,
+        handleResetPassword,
+        handleUserClick
+      );
+    }
+    return originalColumns;
+  }, [possibleUIRoles, handleEdit, handleDelete, handleResetPassword, handleUserClick, originalColumns]);
 
   const table = useReactTable({
     data,
@@ -71,14 +100,6 @@ export function UserDataTable({
     getSortedRowModel: getSortedRowModel(),
     enableSorting: true,
   });
-
-  const handleUserClick = (userId: string) => {
-    setSelectedUserId(userId);
-  };
-
-  const handleCloseUserInfo = () => {
-    setSelectedUserId(null);
-  };
 
   // Update local sorting state when currentSort prop changes
   React.useEffect(() => {
