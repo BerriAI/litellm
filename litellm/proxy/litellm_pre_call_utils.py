@@ -9,6 +9,7 @@ from starlette.datastructures import Headers
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     AddTeamCallback,
     CommonProxyErrors,
@@ -26,7 +27,6 @@ from litellm.types.utils import (
     StandardLoggingUserAPIKeyMetadata,
     SupportedCacheControls,
 )
-from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
 service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
 
@@ -256,23 +256,29 @@ class LiteLLMProxyRequestSetup:
         return None
 
     @staticmethod
-    def get_user_from_headers(headers: dict, general_settings: Optional[Dict] = None) -> Optional[str]:
+    def get_user_from_headers(
+        headers: dict, general_settings: Optional[Dict] = None
+    ) -> Optional[str]:
         """
         Get the user from the specified header if `general_settings.user_header_name` is set.
         """
         if general_settings is None:
             return None
-        
+
         header_name = general_settings.get("user_header_name")
         if header_name is None or header_name == "":
             return None
-        
-        if not isinstance(header_name, str):
-            raise TypeError(f"Expected user_header_name to be a str but got {type(header_name)}")
 
-        user = LiteLLMProxyRequestSetup._get_case_insensitive_header(headers, header_name)
+        if not isinstance(header_name, str):
+            raise TypeError(
+                f"Expected user_header_name to be a str but got {type(header_name)}"
+            )
+
+        user = LiteLLMProxyRequestSetup._get_case_insensitive_header(
+            headers, header_name
+        )
         if user is not None:
-            verbose_logger.info(f"found user \"{user}\" in header \"{header_name}\"")
+            verbose_logger.info(f'found user "{user}" in header "{header_name}"')
 
         return user
 
@@ -367,6 +373,7 @@ class LiteLLMProxyRequestSetup:
             user_api_key_team_alias=user_api_key_dict.team_alias,
             user_api_key_end_user_id=user_api_key_dict.end_user_id,
             user_api_key_user_email=user_api_key_dict.user_email,
+            user_api_key_request_route=user_api_key_dict.request_route,
         )
         return user_api_key_logged_metadata
 
@@ -580,7 +587,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         if isinstance(data["metadata"], str):
             data["metadata"] = safe_json_loads(data["metadata"])
             if not isinstance(data["metadata"], dict):
-                verbose_proxy_logger.warning(f"Failed to parse 'metadata' as JSON dict. Received value: {data['metadata']}")
+                verbose_proxy_logger.warning(
+                    f"Failed to parse 'metadata' as JSON dict. Received value: {data['metadata']}"
+                )
         data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(
             data["metadata"]
         )
@@ -645,6 +654,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name][
         "user_api_key_team_spend"
     ] = user_api_key_dict.team_spend
+    data[_metadata_variable_name][
+        "user_api_key_request_route"
+    ] = user_api_key_dict.request_route
 
     # API Key spend, budget - used by prometheus.py
     data[_metadata_variable_name]["user_api_key_spend"] = user_api_key_dict.spend

@@ -443,6 +443,9 @@ class PrometheusLogger(CustomLogger):
                 metadata=standard_logging_payload["metadata"].get("requester_metadata")
                 or {}
             ),
+            route=standard_logging_payload["metadata"].get(
+                "user_api_key_request_route"
+            ),
         )
 
         if (
