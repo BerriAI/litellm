@@ -1921,7 +1921,8 @@ export const modelAvailableCall = async (
   userRole: String,
   return_wildcard_routes: boolean = false,
   teamID: String | null = null,
-  include_model_access_groups: boolean = false
+  include_model_access_groups: boolean = false,
+  only_model_access_groups: boolean = false
 ) => {
   /**
    * Get all the models user has access to
@@ -1930,11 +1931,12 @@ export const modelAvailableCall = async (
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/models` : `/models`;
     const params = new URLSearchParams();
+    params.append('include_model_access_groups', 'True');
     if (return_wildcard_routes === true) {
       params.append('return_wildcard_routes', 'True');
     }
-    if (include_model_access_groups === true) {
-      params.append('include_model_access_groups', 'True');
+    if (only_model_access_groups === true) {
+      params.append('only_model_access_groups', 'True');
     }
     if (teamID) {
       params.append('team_id', teamID.toString());
@@ -4574,6 +4576,33 @@ export const createMCPServer = async (
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const updateMCPServer = async (
+  accessToken: string,
+  formValues: Record<string, any>
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
+    const response = await fetch(url, {
+      method: "PUT",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(formValues),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to update MCP server:", error);
     throw error;
   }
 };

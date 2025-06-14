@@ -1536,7 +1536,7 @@ def test_logging_standard_payload_failure_call():
         assert "additional_headers" in standard_logging_object["hidden_params"]
 
 
-@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.parametrize("stream", [False, True])
 def test_logging_standard_payload_llm_headers(stream):
     from litellm.types.utils import StandardLoggingPayload
 

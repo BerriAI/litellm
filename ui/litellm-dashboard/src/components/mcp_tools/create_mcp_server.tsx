@@ -13,6 +13,10 @@ import { createMCPServer } from "../networking";
 import { MCPServer } from "./types";
 import { isAdminRole } from "@/utils/roles";
 
+
+const asset_logos_folder = '../ui/assets/logos/';
+export const mcpLogoImg = `${asset_logos_folder}mcp_logo.png`;
+
 interface CreateMCPServerProps {
   userRole: string;
   accessToken: string | null;
@@ -66,7 +70,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   return (
     <div>
       <Button 
-        className="mx-auto" 
+        className="mx-auto mb-4" 
         onClick={() => setModalVisible(true)}
       >
         + Add New MCP Server
@@ -75,17 +79,18 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       <Modal
         title={
           <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
-            <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center shadow-sm border border-gray-200">
               <img 
-                src="/assets/logos/mcp_logo.png" 
+                src={mcpLogoImg}
                 alt="MCP Logo" 
                 className="w-8 h-8 object-contain"
+                style={{ 
+                  height: '20px', 
+                  width: '20px', 
+                  marginRight: '8px',
+                  objectFit: 'contain'
+                }}
               />
-            </div>
-            <div>
               <h2 className="text-xl font-semibold text-gray-900">Add New MCP Server</h2>
-              <p className="text-sm text-gray-500 mt-1">Configure your MCP server connection</p>
-            </div>
           </div>
         }
         open={isModalVisible}
@@ -238,7 +243,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 variant="primary"
                 loading={isLoading}
               >
-                {isLoading ? 'Creating...' : 'Create MCP Server'}
+                {isLoading ? 'Creating...' : 'Add MCP Server'}
               </Button>
             </div>
           </Form>
