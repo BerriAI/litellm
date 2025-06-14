@@ -7147,6 +7147,16 @@ def add_openai_metadata(metadata: dict) -> dict:
         if k != "hidden_params" and isinstance(v, (str))
     }
 
+    # max 16 keys allowed by openai - trim down to 16
+    if len(visible_metadata) > 16:
+        filtered_metadata = {}
+        idx = 0
+        for k, v in visible_metadata.items():
+            if idx < 16:
+                filtered_metadata[k] = v
+            idx += 1
+        visible_metadata = filtered_metadata
+
     return visible_metadata.copy()
 
 
