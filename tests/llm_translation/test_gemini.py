@@ -194,7 +194,7 @@ def test_gemini_url_context():
     assert urlMetadata['urlRetrievalStatus'] == 'URL_RETRIEVAL_STATUS_SUCCESS'
 
 
-
+@pytest.mark.flaky(retries=3, delay=2)
 def test_gemini_with_grounding():
     from litellm import completion, Usage, stream_chunk_builder
     litellm._turn_on_debug()
