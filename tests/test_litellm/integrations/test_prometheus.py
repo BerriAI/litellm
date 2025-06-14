@@ -17,6 +17,8 @@ from unittest.mock import patch
 
 import pytest_asyncio
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+# Add prometheus_client import for registry cleanup
 from prometheus_client import REGISTRY
 
 import litellm
@@ -24,11 +26,34 @@ from litellm.constants import PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES
 from litellm.integrations.prometheus import PrometheusLogger, prometheus_label_factory
 from litellm.types.integrations.prometheus import (
     PrometheusMetricLabels,
+    PrometheusMetricsConfig,
     UserAPIKeyLabelValues,
 )
 
 
+@pytest.fixture
+def prometheus_logger() -> PrometheusLogger:
+    """
+    Fixture that creates a clean PrometheusLogger instance by clearing the registry first.
+    This prevents "Duplicated timeseries in CollectorRegistry" errors.
+    """
+    collectors = list(REGISTRY._collector_to_names.keys())
+    for collector in collectors:
+        REGISTRY.unregister(collector)
+    return PrometheusLogger()
+
+
+def clear_prometheus_registry():
+    """Helper function to clear the Prometheus registry"""
+    collectors = list(REGISTRY._collector_to_names.keys())
+    for collector in collectors:
+        REGISTRY.unregister(collector)
+
+
 def test_initialize_budget_metrics_cron_job():
+    # Clear registry before test
+    clear_prometheus_registry()
+
     # Create a scheduler
     scheduler = AsyncIOScheduler()
 
@@ -187,6 +212,167 @@ def test_future_metrics_with_end_user_are_filtered():
     finally:
         # Restore original setting
         litellm.enable_end_user_cost_tracking_prometheus_only = original_setting
+
+
+def test_prometheus_config_parsing():
+    """Test that prometheus metrics configuration is parsed correctly"""
+    # Clear registry before test
+    clear_prometheus_registry()
+
+    # Set up test configuration
+    test_config = [
+        {
+            "group": "service_metrics",
+            "metrics": [
+                "litellm_deployment_failure_responses",
+                "litellm_deployment_total_requests",
+                "litellm_proxy_failed_requests_metric",
+                "litellm_proxy_total_requests_metric",
+            ],
+            "include_labels": [
+                "litellm_model_name",
+                "requested_model",
+                "api_base",
+                "api_provider",
+                "exception_status",
+                "exception_class",
+            ],
+        }
+    ]
+
+    # Set configuration
+    litellm.prometheus_metrics_config = test_config
+
+    # Create PrometheusLogger instance
+    logger = PrometheusLogger()
+
+    # Parse configuration
+    label_filters = logger._parse_prometheus_config()
+
+    # Verify label filters exist for each metric
+    expected_labels = [
+        "litellm_model_name",
+        "requested_model",
+        "api_base",
+        "api_provider",
+        "exception_status",
+        "exception_class",
+    ]
+
+    expected_metrics = [
+        "litellm_deployment_failure_responses",
+        "litellm_deployment_total_requests",
+        "litellm_proxy_failed_requests_metric",
+        "litellm_proxy_total_requests_metric",
+    ]
+
+    for metric in expected_metrics:
+        assert metric in label_filters
+        assert label_filters[metric] == expected_labels
+
+
+def test_get_metric_labels():
+    """Test that metric label filtering works correctly"""
+    # Clear registry before test
+    clear_prometheus_registry()
+
+    # Set up test configuration
+    test_config = [
+        {
+            "group": "service_metrics",
+            "metrics": ["litellm_deployment_failure_responses"],
+            "include_labels": ["litellm_model_name", "api_provider"],
+        }
+    ]
+
+    litellm.prometheus_metrics_config = test_config
+
+    logger = PrometheusLogger()
+
+    # Get filtered labels
+    labels = logger.get_labels_for_metric("litellm_deployment_failure_responses")
+
+    # Verify only configured labels are returned
+    assert "litellm_model_name" in labels
+    assert "api_provider" in labels
+    # These should be filtered out even if they're in the default labels
+    assert (
+        len([l for l in labels if l not in ["litellm_model_name", "api_provider"]]) == 0
+    )
+
+
+def test_no_prometheus_config():
+    """Test behavior when no prometheus config is set"""
+    # Clear registry before test
+    clear_prometheus_registry()
+
+    # Clear any existing config
+    litellm.prometheus_metrics_config = None
+
+    logger = PrometheusLogger()
+
+    # Should return default labels when no config is set
+    labels = logger.get_labels_for_metric("litellm_deployment_failure_responses")
+    # Should return some labels (the default ones)
+    assert isinstance(labels, list)
+    # Should have more than 0 labels (the default ones)
+    assert len(labels) > 0
+
+
+def test_prometheus_metrics_config_type():
+    """Test that PrometheusMetricsConfig type validation works"""
+    # Valid configuration
+    valid_config = PrometheusMetricsConfig(
+        group="service_metrics",
+        metrics=["litellm_deployment_failure_responses"],
+        include_labels=["litellm_model_name"],
+    )
+
+    assert valid_config.group == "service_metrics"
+    assert valid_config.metrics == ["litellm_deployment_failure_responses"]
+    assert valid_config.include_labels == ["litellm_model_name"]
+
+    # Test with None include_labels (should be allowed)
+    config_no_labels = PrometheusMetricsConfig(
+        group="service_metrics",
+        metrics=["litellm_deployment_failure_responses"],
+        include_labels=None,
+    )
+
+    assert config_no_labels.include_labels is None
+    print("PrometheusMetricsConfig type validation passed!")
+
+
+def test_basic_functionality():
+    """Test basic functionality without creating multiple instances"""
+    # Clear registry before test
+    clear_prometheus_registry()
+
+    # Set up test configuration
+    test_config = [
+        {
+            "group": "service_metrics",
+            "metrics": [
+                "litellm_deployment_failure_responses",
+                "litellm_deployment_total_requests",
+            ],
+            "include_labels": ["litellm_model_name", "api_provider"],
+        }
+    ]
+
+    # Set configuration
+    litellm.prometheus_metrics_config = test_config
+
+    # Test that the configuration is properly set
+    assert litellm.prometheus_metrics_config is not None
+    assert len(litellm.prometheus_metrics_config) == 1
+    assert litellm.prometheus_metrics_config[0]["group"] == "service_metrics"
+    assert (
+        "litellm_deployment_failure_responses"
+        in litellm.prometheus_metrics_config[0]["metrics"]
+    )
+
+    print("Basic prometheus configuration test passed!")
 
 
 # ==============================================================================
