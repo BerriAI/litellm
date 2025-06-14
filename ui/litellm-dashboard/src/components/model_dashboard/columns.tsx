@@ -190,6 +190,7 @@ export const columns = (
   {
     header: "Model Access Group",
     accessorKey: "model_info.model_access_group",
+    enableSorting: false,
     cell: ({ row }) => {
       const model = row.original;
       const accessGroups = model.model_info.access_groups;

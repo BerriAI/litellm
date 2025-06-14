@@ -14,9 +14,9 @@ interface UsageIndicatorProps {
 }
 
 interface UsageData {
-  total_users: number
+  total_users: number | null
   total_users_used: number
-  total_users_remaining: number
+  total_users_remaining: number | null
 }
 
 export default function UsageIndicator({accessToken, width = 220}: UsageIndicatorProps) {
@@ -58,11 +58,9 @@ export default function UsageIndicator({accessToken, width = 220}: UsageIndicato
       }
     }
 
-    const isOverLimit = data.total_users_remaining <= 0
-    const isNearLimit = data.total_users_remaining <= 5 && data.total_users_remaining > 0
-    const usagePercentage = data.total_users > 0 
-      ? (data.total_users_used / data.total_users) * 100 
-      : 0
+    const isOverLimit = data.total_users_remaining ? data.total_users_remaining <= 0 : false
+    const isNearLimit = data.total_users_remaining ? data.total_users_remaining <= 5 && data.total_users_remaining > 0 : false
+    const usagePercentage = data.total_users ? (data.total_users_used / data.total_users) * 100 : 0
 
     return { isOverLimit, isNearLimit, usagePercentage }
   }
@@ -353,8 +351,8 @@ export default function UsageIndicator({accessToken, width = 220}: UsageIndicato
     )
   }
 
-  // Don't render anything if no access token
-  if (!accessToken) {
+  // Don't render anything if no access token or if total_users is null
+  if (!accessToken || data?.total_users === null) {
     return null
   }
 
