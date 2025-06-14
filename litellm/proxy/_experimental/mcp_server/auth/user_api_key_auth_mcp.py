@@ -33,6 +33,9 @@ class UserAPIKeyAuthMCP:
         Raises:
             HTTPException: If headers are invalid or missing required headers
         """
+        # Debug HTTPS connection if verbose logging is enabled
+        UserAPIKeyAuthMCP._debug_https_connection(scope)
+
         headers = UserAPIKeyAuthMCP._safe_get_headers_from_scope(scope)
         litellm_api_key = (
             UserAPIKeyAuthMCP.get_litellm_api_key_from_headers(headers) or ""
@@ -65,17 +68,45 @@ class UserAPIKeyAuthMCP:
         Args:
             headers: Starlette Headers object that handles case insensitivity
         """
+        # Debug: Log all available headers for HTTPS debugging
+        all_headers = dict(headers.items()) if headers else {}
+        verbose_logger.debug(f"MCP Auth: Available headers: {list(all_headers.keys())}")
+
         # Headers object handles case insensitivity automatically
         api_key = headers.get(UserAPIKeyAuthMCP.LITELLM_API_KEY_HEADER_NAME_PRIMARY)
         if api_key:
+            verbose_logger.debug(
+                f"MCP Auth: Found API key via {UserAPIKeyAuthMCP.LITELLM_API_KEY_HEADER_NAME_PRIMARY}"
+            )
             return api_key
 
         auth_header = headers.get(
             UserAPIKeyAuthMCP.LITELLM_API_KEY_HEADER_NAME_SECONDARY
         )
         if auth_header:
+            verbose_logger.debug(
+                f"MCP Auth: Found API key via {UserAPIKeyAuthMCP.LITELLM_API_KEY_HEADER_NAME_SECONDARY}"
+            )
             return auth_header
 
+        # Fallback: Check for common proxy headers that might contain the auth info
+        proxy_headers = [
+            "x-forwarded-authorization",
+            "x-original-authorization",
+            "x-real-authorization",
+            "x-forwarded-api-key",
+            "x-original-api-key",
+        ]
+
+        for proxy_header in proxy_headers:
+            proxy_value = headers.get(proxy_header)
+            if proxy_value:
+                verbose_logger.debug(
+                    f"MCP Auth: Found API key via proxy header {proxy_header}"
+                )
+                return proxy_value
+
+        verbose_logger.debug("MCP Auth: No API key found in any headers")
         return None
 
     @staticmethod
@@ -90,11 +121,34 @@ class UserAPIKeyAuthMCP:
         try:
             # ASGI headers are list of [name: bytes, value: bytes] pairs
             raw_headers = scope.get("headers", [])
+
+            # Debug logging for HTTPS header issues
+            verbose_logger.debug(
+                f"MCP Auth: Raw ASGI headers count: {len(raw_headers)}"
+            )
+            verbose_logger.debug(
+                f"MCP Auth: ASGI scope type: {scope.get('type', 'unknown')}"
+            )
+            verbose_logger.debug(
+                f"MCP Auth: ASGI scheme: {scope.get('scheme', 'unknown')}"
+            )
+
             # Convert bytes to strings and create dict for Headers constructor
-            headers_dict = {
-                name.decode("latin-1"): value.decode("latin-1")
-                for name, value in raw_headers
-            }
+            headers_dict = {}
+            for name, value in raw_headers:
+                try:
+                    name_str = name.decode("latin-1")
+                    value_str = value.decode("latin-1")
+                    headers_dict[name_str] = value_str
+                    verbose_logger.debug(
+                        f"MCP Auth: Header {name_str}: {value_str[:50]}{'...' if len(value_str) > 50 else ''}"
+                    )
+                except Exception as decode_error:
+                    verbose_logger.warning(
+                        f"MCP Auth: Failed to decode header {name}: {decode_error}"
+                    )
+
+            verbose_logger.debug(f"MCP Auth: Total headers parsed: {len(headers_dict)}")
             return Headers(headers_dict)
         except Exception as e:
             verbose_logger.exception(f"Error getting headers from scope: {e}")
@@ -196,3 +250,58 @@ class UserAPIKeyAuthMCP:
             return []
 
         return object_permissions.mcp_servers or []
+
+    @staticmethod
+    def _debug_https_connection(scope: Scope) -> None:
+        """
+        Debug HTTPS connection and proxy configuration issues
+        """
+        scheme = scope.get("scheme", "unknown")
+        server = scope.get("server", ("unknown", "unknown"))
+        client = scope.get("client", ("unknown", "unknown"))
+
+        verbose_logger.debug(f"MCP Auth HTTPS Debug:")
+        verbose_logger.debug(f"  - Scheme: {scheme}")
+        verbose_logger.debug(f"  - Server: {server[0]}:{server[1]}")
+        verbose_logger.debug(f"  - Client: {client[0]}:{client[1]}")
+
+        # Check for common proxy indicators
+        raw_headers = scope.get("headers", [])
+        proxy_indicators = [
+            b"x-forwarded-for",
+            b"x-forwarded-proto",
+            b"x-forwarded-host",
+            b"x-real-ip",
+            b"cf-connecting-ip",  # Cloudflare
+            b"x-cluster-client-ip",  # GKE
+            b"x-forwarded-prefix",
+            b"forwarded",
+        ]
+
+        found_proxy_headers = []
+        for name, value in raw_headers:
+            if name.lower() in proxy_indicators:
+                found_proxy_headers.append(
+                    (name.decode("latin-1"), value.decode("latin-1"))
+                )
+
+        if found_proxy_headers:
+            verbose_logger.debug(f"  - Proxy headers detected: {found_proxy_headers}")
+        else:
+            verbose_logger.debug("  - No proxy headers detected")
+
+        # Check if this looks like a direct HTTPS connection vs proxied
+        if scheme == "https" and not found_proxy_headers:
+            verbose_logger.debug("  - Direct HTTPS connection detected")
+        elif scheme == "http" and found_proxy_headers:
+            verbose_logger.debug(
+                "  - Proxied connection detected (HTTPS terminated at proxy)"
+            )
+        elif scheme == "https" and found_proxy_headers:
+            verbose_logger.debug(
+                "  - HTTPS connection through proxy (headers should be preserved)"
+            )
+        else:
+            verbose_logger.debug(
+                f"  - Unknown connection type (scheme={scheme}, proxy_headers={bool(found_proxy_headers)})"
+            )
