@@ -245,12 +245,12 @@ class VertexPassthroughLoggingHandler:
     ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
         parsed_chunks = []
         if "generateContent" in url_route or "streamGenerateContent" in url_route:
-            vertex_iterator = VertexModelResponseIterator(
+            vertex_iterator: Any = VertexModelResponseIterator(
                 streaming_response=None,
                 sync_stream=False,
                 logging_obj=litellm_logging_obj,
             )
-            chunk_parsing_logic = vertex_iterator._common_chunk_parsing_logic
+            chunk_parsing_logic: Any = vertex_iterator._common_chunk_parsing_logic
             parsed_chunks = [chunk_parsing_logic(chunk) for chunk in all_chunks]
         elif "rawPredict" in url_route or "streamRawPredict" in url_route:
             from litellm.llms.anthropic.chat.handler import ModelResponseIterator
