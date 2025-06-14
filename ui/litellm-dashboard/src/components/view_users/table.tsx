@@ -58,13 +58,16 @@ export function UserDataTable({
     }
   ]);
   const [selectedUserId, setSelectedUserId] = React.useState<string | null>(null);
+  const [openInEditMode, setOpenInEditMode] = React.useState<boolean>(false);
 
-  const handleUserClick = (userId: string) => {
+  const handleUserClick = (userId: string, openInEditMode: boolean = false) => {
     setSelectedUserId(userId);
+    setOpenInEditMode(openInEditMode);
   };
 
   const handleCloseUserInfo = () => {
     setSelectedUserId(null);
+    setOpenInEditMode(false);
   };
 
   // Create columns with the handleUserClick function
@@ -119,6 +122,8 @@ export function UserDataTable({
         accessToken={accessToken}
         userRole={userRole}
         possibleUIRoles={possibleUIRoles}
+        initialTab={openInEditMode ? 1 : 0}
+        startInEditMode={openInEditMode}
       />
     );
   }
@@ -189,7 +194,7 @@ export function UserDataTable({
                       }`}
                       onClick={() => {
                         if (cell.column.id === 'user_id') {
-                          handleUserClick(cell.getValue() as string);
+                          handleUserClick(cell.getValue() as string, false);
                         }
                       }}
                       style={{

@@ -27,6 +27,8 @@ interface UserInfoViewProps {
   userRole: string | null;
   onDelete?: () => void;
   possibleUIRoles: Record<string, Record<string, string>> | null;
+  initialTab?: number; // 0 for Overview, 1 for Details
+  startInEditMode?: boolean;
 }
 
 interface UserInfo {
@@ -46,15 +48,25 @@ interface UserInfo {
   teams: any[] | null;
 }
 
-export default function UserInfoView({ userId, onClose, accessToken, userRole, onDelete, possibleUIRoles }: UserInfoViewProps) {
+export default function UserInfoView({ 
+  userId, 
+  onClose, 
+  accessToken, 
+  userRole, 
+  onDelete, 
+  possibleUIRoles,
+  initialTab = 0,
+  startInEditMode = false
+}: UserInfoViewProps) {
   const [userData, setUserData] = useState<UserInfo | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [isEditing, setIsEditing] = useState(false);
+  const [isEditing, setIsEditing] = useState(startInEditMode);
   const [userModels, setUserModels] = useState<string[]>([]);
   const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
   const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState(initialTab);
 
   React.useEffect(() => {
     setBaseUrl(getProxyBaseUrl());
@@ -250,7 +262,7 @@ export default function UserInfoView({ userId, onClose, accessToken, userRole, o
         </div>
       )}
 
-      <TabGroup>
+      <TabGroup defaultIndex={activeTab} onIndexChange={setActiveTab}>
         <TabList className="mb-4">
           <Tab>Overview</Tab>
           <Tab>Details</Tab>
