@@ -1,10 +1,13 @@
 # ruff: noqa: T201
+import atexit
 import importlib
 import json
 import os
 import random
+import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.parse as urlparse
 from typing import TYPE_CHECKING, Any, Optional, Union
 
@@ -799,6 +802,24 @@ def run_server(  # noqa: PLR0915
             if loop_type:
                 uvicorn_args["loop"] = loop_type
 
+                # If we're using prometheus and will be using multiple workers we need to set the PROMETHEUS_MULTIPROC_DIR
+                # See https://prometheus.github.io/client_python/multiprocess/
+                if num_workers > 1 and "prometheus" in  _config.get("litellm_settings", {}).get("callbacks", []):
+                    if 'PROMETHEUS_MULTIPROC_DIR' in os.environ:
+                        print(f"LITELLM: Using PROMETHEUS_MULTIPROC_DIR dir: {os.environ['PROMETHEUS_MULTIPROC_DIR']}")
+                    else:
+                        # Setup the temp dir for prometheus
+                        shared_dir = tempfile.mkdtemp(prefix="litellm_prometheus_")
+                        os.environ['PROMETHEUS_MULTIPROC_DIR'] = shared_dir
+
+                        print(f"LITELLM: Using PROMETHEUS_MULTIPROC_DIR dir: {os.environ['PROMETHEUS_MULTIPROC_DIR']}")
+
+                        def cleanup():
+                            if os.path.exists(shared_dir):
+                                shutil.rmtree(shared_dir)
+                                print(f"Cleaned up: {shared_dir}")
+
+                        atexit.register(cleanup)
             uvicorn.run(
                 **uvicorn_args,
                 workers=num_workers,
