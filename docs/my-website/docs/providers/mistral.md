@@ -205,11 +205,13 @@ assert isinstance(
 )
 ```
 
-## Reasoning Capabilities (Magistral Models)
+## Reasoning
 
-Mistral's Magistral models support advanced reasoning capabilities that allow the model to think step-by-step before providing answers. LiteLLM provides seamless integration with these reasoning features through OpenAI-compatible parameters.
+Mistral does not directly support reasoning, instead it recommends a specific [system prompt](https://docs.mistral.ai/capabilities/reasoning/) to use with their magistral models. By setting the `reasoning_effort` parameter, LiteLLM will prepend the system prompt to the request. 
 
-### Supported Magistral Models
+If an existing system message is provided, LiteLLM will send both as a list of system messages (you can verify this by enabling `litellm._turn_on_debug()`).
+
+### Supported Models
 
 | Model Name     | Function Call                                                |
 |----------------|--------------------------------------------------------------|
