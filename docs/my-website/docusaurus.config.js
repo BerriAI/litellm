@@ -120,7 +120,7 @@ const config = {
             label: 'Docs',
           },
           {
-            sidebarId: 'tutorialSidebar',
+            sidebarId: 'integrationsSidebar',
             position: 'left',
             label: 'Integrations',
             to: "docs/integrations"
