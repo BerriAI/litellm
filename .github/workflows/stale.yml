@@ -9,7 +9,7 @@ jobs:
   stale:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/stale@v8
+      - uses: actions/stale@1160a2240286f5da8ec72b1c0816ce2481aabf84  # v8
         with:
           repo-token: "${{ secrets.GITHUB_TOKEN }}"
           stale-issue-message: "This issue has been automatically marked as stale because it has not had recent activity. It will be closed if no further activity occurs."
