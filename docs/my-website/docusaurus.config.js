@@ -122,14 +122,14 @@ const config = {
           {
             sidebarId: 'tutorialSidebar',
             position: 'left',
-            label: 'Enterprise',
-            to: "docs/enterprise"
+            label: 'Integrations',
+            to: "docs/integrations"
           },
           {
             sidebarId: 'tutorialSidebar',
             position: 'left',
-            label: 'Hosted',
-            to: "docs/hosted"
+            label: 'Enterprise',
+            to: "docs/enterprise"
           },
           { to: '/release_notes', label: 'Release Notes', position: 'left' },
           {
