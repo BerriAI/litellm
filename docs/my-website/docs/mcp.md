@@ -425,9 +425,3 @@ async with stdio_client(server_params) as (read, write):
 
 </TabItem>
 </Tabs>
-
-### Permission Management
-
-Currently, all Virtual Keys are able to access the MCP endpoints. We are working on a feature to allow restricting MCP access by keys/teams/users/orgs.
-
-Join the discussion [here](https://github.com/BerriAI/litellm/discussions/9891)
