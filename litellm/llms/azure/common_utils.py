@@ -162,6 +162,7 @@ def get_azure_ad_token_from_oidc(
     azure_ad_token: str,
     azure_client_id: Optional[str],
     azure_tenant_id: Optional[str],
+    scope: str = "https://cognitiveservices.azure.com/.default",
 ) -> str:
     """
     Get Azure AD token from OIDC token
@@ -170,6 +171,7 @@ def get_azure_ad_token_from_oidc(
         azure_ad_token: str
         azure_client_id: Optional[str]
         azure_tenant_id: Optional[str]
+        scope: str
 
     Returns:
         `azure_ad_token_access_token` - str
@@ -212,7 +214,7 @@ def get_azure_ad_token_from_oidc(
         data={
             "client_id": azure_client_id,
             "grant_type": "client_credentials",
-            "scope": "https://cognitiveservices.azure.com/.default",
+            "scope": scope,
             "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
             "client_assertion": oidc_token,
         },
@@ -335,6 +337,8 @@ class BaseAzureLLM(BaseOpenAILLM):
         azure_password = litellm_params.get(
             "azure_password", os.getenv("AZURE_PASSWORD")
         )
+        scope = litellm_params.get(
+            "azure_scope", os.getenv("AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"))
         max_retries = litellm_params.get("max_retries")
         timeout = litellm_params.get("timeout")
         if (
@@ -349,6 +353,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 tenant_id=tenant_id,
                 client_id=client_id,
                 client_secret=client_secret,
+                scope=scope,
             )
         if azure_ad_token_provider is None and azure_username and azure_password and client_id:
             verbose_logger.debug("Using Azure Username and Password for Azure Auth")
@@ -356,6 +361,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 azure_username=azure_username,
                 azure_password=azure_password,
                 client_id=client_id,
+                scope=scope,
             )
 
         if azure_ad_token is not None and azure_ad_token.startswith("oidc/"):
@@ -364,6 +370,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 azure_ad_token=azure_ad_token,
                 azure_client_id=client_id,
                 azure_tenant_id=tenant_id,
+                scope=scope,
             )
         elif (
             not api_key
@@ -435,6 +442,8 @@ class BaseAzureLLM(BaseOpenAILLM):
         ## build base url - assume api base includes resource name
         tenant_id = litellm_params.get("tenant_id", os.getenv("AZURE_TENANT_ID"))
         client_id = litellm_params.get("client_id", os.getenv("AZURE_CLIENT_ID"))
+        scope = litellm_params.get("azure_scope", os.getenv(
+            "AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"))
         if client is None:
             if not api_base.endswith("/"):
                 api_base += "/"
@@ -455,6 +464,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                         azure_ad_token=azure_ad_token,
                         azure_client_id=client_id,
                         azure_tenant_id=tenant_id,
+                        scope=scope,
                     )
 
                 azure_client_params["azure_ad_token"] = azure_ad_token

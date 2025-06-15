@@ -82,7 +82,8 @@ def test_initialize_with_tenant_credentials_env_var(setup_mocks, monkeypatch):
     monkeypatch.setenv("AZURE_TENANT_ID", "test-tenant-id")
     monkeypatch.setenv("AZURE_CLIENT_ID", "test-client-id")
     monkeypatch.setenv("AZURE_CLIENT_SECRET", "test-client-secret")
-
+    monkeypatch.setenv("AZURE_SCOPE", "test-azure-scope")
+    
     result = BaseAzureLLM().initialize_azure_sdk_client(
         litellm_params={},
         api_key=None,
@@ -97,6 +98,7 @@ def test_initialize_with_tenant_credentials_env_var(setup_mocks, monkeypatch):
         tenant_id="test-tenant-id",
         client_id="test-client-id",
         client_secret="test-client-secret",
+        scope="test-azure-scope"
     )
 
     # Verify expected result
@@ -112,6 +114,7 @@ def test_initialize_with_tenant_credentials(setup_mocks):
             "tenant_id": "test-tenant-id",
             "client_id": "test-client-id",
             "client_secret": "test-client-secret",
+            "azure_scope": "test-azure-scope",
         },
         api_key=None,
         api_base="https://test.openai.azure.com",
@@ -125,6 +128,7 @@ def test_initialize_with_tenant_credentials(setup_mocks):
         tenant_id="test-tenant-id",
         client_id="test-client-id",
         client_secret="test-client-secret",
+        scope="test-azure-scope",
     )
 
     # Verify expected result
@@ -139,6 +143,7 @@ def test_initialize_with_username_password(monkeypatch, setup_mocks):
     monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
     monkeypatch.delenv("AZURE_USERNAME", raising=False)
     monkeypatch.delenv("AZURE_PASSWORD", raising=False)
+    monkeypatch.delenv("AZURE_SCOPE", raising=False)
 
     # Test with azure_username, azure_password, and client_id provided
     result = BaseAzureLLM().initialize_azure_sdk_client(
@@ -146,6 +151,7 @@ def test_initialize_with_username_password(monkeypatch, setup_mocks):
             "azure_username": "test-username",
             "azure_password": "test-password",
             "client_id": "test-client-id",
+            "azure_scope": "test-azure-scope"
         },
         api_key=None,
         api_base="https://test.openai.azure.com",
@@ -167,6 +173,7 @@ def test_initialize_with_username_password(monkeypatch, setup_mocks):
         azure_username="test-username",
         azure_password="test-password",
         client_id="test-client-id",
+        scope="test-azure-scope"
     )
 
     # Verify expected result
@@ -176,6 +183,8 @@ def test_initialize_with_username_password(monkeypatch, setup_mocks):
 def test_initialize_with_oidc_token(setup_mocks, monkeypatch):
     monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
     monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    monkeypatch.delenv("AZURE_SCOPE", raising=False)
+    
     # Test with azure_ad_token that starts with "oidc/"
     result = BaseAzureLLM().initialize_azure_sdk_client(
         litellm_params={"azure_ad_token": "oidc/test-token"},
@@ -186,9 +195,9 @@ def test_initialize_with_oidc_token(setup_mocks, monkeypatch):
         is_async=False,
     )
 
-    # Verify that get_azure_ad_token_from_oidc was called
     setup_mocks["oidc_token"].assert_called_once_with(
-        azure_ad_token="oidc/test-token", azure_client_id=None, azure_tenant_id=None
+        azure_ad_token="oidc/test-token", azure_client_id=None, azure_tenant_id=None,
+        scope="https://cognitiveservices.azure.com/.default"
     )
 
     # Verify expected result
@@ -202,6 +211,7 @@ def test_initialize_with_oidc_token_and_client_params(setup_mocks):
             "azure_ad_token": "oidc/test-token",
             "client_id": "test-client-id",
             "tenant_id": "test-tenant-id",
+            "azure_scope": "test-azure-scope",
         },
         api_key=None,
         api_base="https://test.openai.azure.com",
@@ -215,6 +225,7 @@ def test_initialize_with_oidc_token_and_client_params(setup_mocks):
         azure_ad_token="oidc/test-token",
         azure_client_id="test-client-id",
         azure_tenant_id="test-tenant-id",
+        scope="test-azure-scope"
     )
 
     # Verify expected result
@@ -243,6 +254,7 @@ def test_initialize_with_oidc_token_fallback_to_env(setup_mocks, monkeypatch):
         azure_ad_token="oidc/test-token",
         azure_client_id="env-client-id",
         azure_tenant_id="env-tenant-id",
+        scope="https://cognitiveservices.azure.com/.default"
     )
 
     # Verify expected result
@@ -253,6 +265,7 @@ def test_initialize_with_oidc_token_no_credentials(setup_mocks, monkeypatch):
     # Clear environment variables
     monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
     monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    monkeypatch.delenv("AZURE_SCOPE", raising=False)
 
     # Test with azure_ad_token that starts with "oidc/" but no credentials anywhere
     result = BaseAzureLLM().initialize_azure_sdk_client(
@@ -268,7 +281,8 @@ def test_initialize_with_oidc_token_no_credentials(setup_mocks, monkeypatch):
 
     # Verify that get_azure_ad_token_from_oidc was called with None values
     setup_mocks["oidc_token"].assert_called_once_with(
-        azure_ad_token="oidc/test-token", azure_client_id=None, azure_tenant_id=None
+        azure_ad_token="oidc/test-token", azure_client_id=None, azure_tenant_id=None,
+        scope="https://cognitiveservices.azure.com/.default" 
     )
 
     # Verify expected result

@@ -558,6 +558,7 @@ model_list:
       tenant_id: os.environ/AZURE_TENANT_ID
       client_id: os.environ/AZURE_CLIENT_ID
       client_secret: os.environ/AZURE_CLIENT_SECRET
+      azure_scope: os.environ/AZURE_SCOPE  # defaults to "https://cognitiveservices.azure.com/.default"
 ```
 
 Test it 
@@ -594,6 +595,7 @@ model_list:
       client_id: os.environ/AZURE_CLIENT_ID
       azure_username: os.environ/AZURE_USERNAME
       azure_password: os.environ/AZURE_PASSWORD
+      azure_scope: os.environ/AZURE_SCOPE  # defaults to "https://cognitiveservices.azure.com/.default"
 ```
 
 Test it 
