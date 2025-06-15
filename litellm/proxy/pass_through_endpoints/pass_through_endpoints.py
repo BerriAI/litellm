@@ -303,7 +303,12 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
     @staticmethod
     def get_endpoint_type(url: str) -> EndpointType:
         parsed_url = urlparse(url)
-        if ("generateContent") in url or ("streamGenerateContent") in url:
+        if (
+            ("generateContent") in url
+            or ("streamGenerateContent") in url
+            or ("rawPredict") in url
+            or ("streamRawPredict") in url
+        ):
             return EndpointType.VERTEX_AI
         elif parsed_url.hostname == "api.anthropic.com":
             return EndpointType.ANTHROPIC

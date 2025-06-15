@@ -135,7 +135,7 @@ class VertexPassthroughLoggingHandler:
             _json_response = httpx_response.json()
 
             litellm_prediction_response = ModelResponse()
-            
+
             if vertex_publisher_or_api_spec is not None:
                 vertex_ai_partner_model_config = get_vertex_ai_partner_model_config(
                     model=model,
@@ -206,6 +206,7 @@ class VertexPassthroughLoggingHandler:
                 all_chunks=all_chunks,
                 litellm_logging_obj=litellm_logging_obj,
                 model=model,
+                url_route=url_route,
             )
         )
 
@@ -240,12 +241,37 @@ class VertexPassthroughLoggingHandler:
         all_chunks: List[str],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
+        url_route: str,
     ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
-        vertex_iterator = VertexModelResponseIterator(
-            streaming_response=None,
-            sync_stream=False,
-            logging_obj=litellm_logging_obj,
-        )
+        parsed_chunks = []
+        if "generateContent" in url_route or "streamGenerateContent" in url_route:
+            vertex_iterator: Any = VertexModelResponseIterator(
+                streaming_response=None,
+                sync_stream=False,
+                logging_obj=litellm_logging_obj,
+            )
+            chunk_parsing_logic: Any = vertex_iterator._common_chunk_parsing_logic
+            parsed_chunks = [chunk_parsing_logic(chunk) for chunk in all_chunks]
+        elif "rawPredict" in url_route or "streamRawPredict" in url_route:
+            from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+            from litellm.llms.base_llm.base_model_iterator import (
+                BaseModelResponseIterator,
+            )
+
+            vertex_iterator = ModelResponseIterator(
+                streaming_response=None,
+                sync_stream=False,
+            )
+            chunk_parsing_logic = vertex_iterator.chunk_parser
+            for chunk in all_chunks:
+                dict_chunk = BaseModelResponseIterator._string_to_dict_parser(chunk)
+                if dict_chunk is None:
+                    continue
+                parsed_chunks.append(chunk_parsing_logic(dict_chunk))
+        else:
+            return None
+        if len(parsed_chunks) == 0:
+            return None
         litellm_custom_stream_wrapper = litellm.CustomStreamWrapper(
             completion_stream=vertex_iterator,
             model=model,
@@ -253,11 +279,17 @@ class VertexPassthroughLoggingHandler:
             custom_llm_provider="vertex_ai",
         )
         all_openai_chunks = []
-        for chunk in all_chunks:
-            generic_chunk = vertex_iterator._common_chunk_parsing_logic(chunk)
-            litellm_chunk = litellm_custom_stream_wrapper.chunk_creator(
-                chunk=generic_chunk
-            )
+        for parsed_chunk in parsed_chunks:
+            try:
+                litellm_chunk = litellm_custom_stream_wrapper.chunk_creator(
+                    chunk=parsed_chunk
+                )
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    "Error creating litellm chunk from vertex passthrough endpoint: %s",
+                    str(e),
+                )
+                continue
             if litellm_chunk is not None:
                 all_openai_chunks.append(litellm_chunk)
 
@@ -315,6 +347,7 @@ class VertexPassthroughLoggingHandler:
         response_cost = litellm.completion_cost(
             completion_response=litellm_model_response,
             model=model,
+            custom_llm_provider="vertex_ai",
         )
 
         kwargs["response_cost"] = response_cost
