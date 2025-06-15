@@ -89,11 +89,11 @@ This version is not out yet.
     - Anthropic passthrough cost calculation + token tracking - [PR](https://github.com/BerriAI/litellm/pull/11611)
     - Support ‘global’ vertex region on passthrough - [PR](https://github.com/BerriAI/litellm/pull/11661)
 - **Anthropic**
-    - ‘none’ tool choice param support - [PR](https://github.com/BerriAI/litellm/pull/11695)
+    - ‘none’ tool choice param support - [PR](https://github.com/BerriAI/litellm/pull/11695) [NEEDS DOCS]
 - **Perplexity**
-    - Add ‘reasoning_effort’ support - [PR](https://github.com/BerriAI/litellm/pull/11562)
+    - Add ‘reasoning_effort’ support - [PR](https://github.com/BerriAI/litellm/pull/11562) [NEEDS DOCS]
 - **Mistral**
-    - Add mistral reasoning support - [PR](https://github.com/BerriAI/litellm/pull/11642)
+    - Add mistral reasoning support - [PR](https://github.com/BerriAI/litellm/pull/11642) [NEEDS DOCS]
 - **SGLang**
     - Map context window exceeded error for proper handling - [PR](https://github.com/BerriAI/litellm/pull/11575/)
 - **Deepgram**
@@ -109,12 +109,12 @@ This version is not out yet.
     - Streaming - Ensure consistent ‘created’ across chunks - [PR](https://github.com/BerriAI/litellm/pull/11528)
 #### Features
 - **MCP**
-    - Add controls for MCP Permission Management - [PR](https://github.com/BerriAI/litellm/pull/11598), 
-    - Add permission management for MCP List + Call Tool operations - [PR](https://github.com/BerriAI/litellm/pull/11682)
-    - Streamable HTTP server support - [PR](https://github.com/BerriAI/litellm/pull/11628), [PR](https://github.com/BerriAI/litellm/pull/11645)
-    - Use Experimental dedicated Rest endpoints for list, calling MCP tools - [PR](https://github.com/BerriAI/litellm/pull/11684)
+    - Add controls for MCP Permission Management - [PR](https://github.com/BerriAI/litellm/pull/11598) [NEEDS DOCS]
+    - Add permission management for MCP List + Call Tool operations - [PR](https://github.com/BerriAI/litellm/pull/11682) [NEEDS DOCS]
+    - Streamable HTTP server support - [PR](https://github.com/BerriAI/litellm/pull/11628), [PR](https://github.com/BerriAI/litellm/pull/11645) [NEEDS DOCS]
+    - Use Experimental dedicated Rest endpoints for list, calling MCP tools - [PR](https://github.com/BerriAI/litellm/pull/11684) [NEEDS DOCS]
 - **Responses API**
-    - NEW API Endpoint - List input items - [PR](https://github.com/BerriAI/litellm/pull/11602)
+    - NEW API Endpoint - List input items - [PR](https://github.com/BerriAI/litellm/pull/11602) [NEEDS DOCS]
     - Background mode for OpenAI + Azure OpenAI - [PR](https://github.com/BerriAI/litellm/pull/11640)
     - Langfuse/other Logging support on responses api requests - [PR](https://github.com/BerriAI/litellm/pull/11685)
 - **Chat Completions**
@@ -170,7 +170,7 @@ This version is not out yet.
 
 #### Features
 - **Lasso Guardrails**
-    - [NEW] Lasso Guardrails support - [PR](https://github.com/BerriAI/litellm/pull/11565)
+    - [NEW] Lasso Guardrails support - [PR](https://github.com/BerriAI/litellm/pull/11565), [NEEDS DOCS]
 - **Users**
     - New `organizations` param on `/user/new` - allows adding users to orgs on creation - [PR](https://github.com/BerriAI/litellm/pull/11572/files)
 - **Prevent double logging when using bridge logic** - [PR](https://github.com/BerriAI/litellm/pull/11687)
