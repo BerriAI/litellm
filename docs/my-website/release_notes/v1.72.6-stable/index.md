@@ -31,16 +31,51 @@ This version is not out yet.
 
 ## TLDR
 
+
 * **Why Upgrade**
-
+    - Codex-mini on Claude Code: You can now use `codex-mini` (OpenAI’s code assistant model) via Claude Code.
+    - MCP Permissions Management: Manage permissions for MCP Servers by Keys, Teams, Organizations (entities) on LiteLLM.
+    - UI: Turn on/off auto refresh on logs view. 
+    - Rate Limiting: Support for output token-only rate limiting.  
 * **Who Should Read**
+    - Teams using `/v1/messages` API (Claude Code)
+    - Teams using **MCP**
+    - Teams giving access to self-hosted models and setting rate limits
 * **Risk of Upgrade**
-
+    - **Low**
+        - No major changes to existing functionality or package updates.
 
 
 ---
 
 ## Key Highlights
+
+
+### MCP Permissions Management
+
+This release brings support for managing permissions for MCP Servers by Keys, Teams, Organizations (entities) on LiteLLM. When a MCP client attempts to list tools, LiteLLM will only return the tools the entity has permissions to access.
+
+This is great for use cases that require access to restricted data (e.g Jira MCP) that you don't want everyone to use.
+
+For Proxy Admins, this enables centralized management of all MCP Servers with access control. For developers, this means you'll only see the MCP tools assigned to you.
+
+
+<Image img={require('../../img/release_notes/mcp_permissions.png')}/>
+
+### Codex-mini on Claude Code
+
+This release brings support for calling `codex-mini` (OpenAI’s code assistant model) via Claude Code.
+
+This is done by LiteLLM enabling any Responses API model (including `o3-pro`) to be called via `/chat/completions` and `/v1/messages` endpoints. This includes:
+
+- Streaming calls
+- Non-streaming calls
+- Cost Tracking on success + failure for Responses API models
+
+Here's how to use it [today](../../docs/tutorials/claude_responses_api)
+
+
+<Image img={require('../../img/release_notes/codex_on_claude_code.jpg')} />
 
 ---
 
@@ -202,7 +237,7 @@ This version is not out yet.
     - Make all commands show server URL - [PR](https://github.com/BerriAI/litellm/pull/10801)
 - **Unicorn**
     - Allow setting keep alive timeout - [PR](https://github.com/BerriAI/litellm/pull/11594)
-- **Experimental Rate Limiting v2**
+- **Experimental Rate Limiting v2** (enable via `EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING="True"`)
     - Support specifying rate limit by output_tokens only - [PR](https://github.com/BerriAI/litellm/pull/11646)
     - Decrement parallel requests on call failure - [PR](https://github.com/BerriAI/litellm/pull/11646)
     - In-memory only rate limiting support - [PR](https://github.com/BerriAI/litellm/pull/11646)

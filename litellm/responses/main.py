@@ -233,6 +233,7 @@ def responses(
 
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
+
         ## MOCK RESPONSE LOGIC
         if litellm_params.mock_response and isinstance(
             litellm_params.mock_response, str

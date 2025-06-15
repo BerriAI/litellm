@@ -1,6 +1,7 @@
 """
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
+
 import json
 from typing import (
     TYPE_CHECKING,
@@ -62,7 +63,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 if isinstance(content, str):
                     instructions = content
                 else:
-                    raise ValueError(f"System message must be a string: {content}")
+                    input_items.append(
+                        {
+                            "type": "message",
+                            "role": role,
+                            "content": self._convert_content_to_responses_format(
+                                content, role  # type: ignore
+                            ),
+                        }
+                    )
             elif role == "tool":
                 # Convert tool message to function call output format
                 input_items.append(
@@ -93,7 +102,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     {
                         "type": "message",
                         "role": role,
-                        "content": self._convert_content_to_responses_format(content),
+                        "content": self._convert_content_to_responses_format(
+                            content, cast(str, role)
+                        ),
                     }
                 )
 
@@ -301,6 +312,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             streaming_response, sync_stream, json_mode
         )
 
+    def _convert_content_str_to_input_text(
+        self, content: str, role: str
+    ) -> Dict[str, Any]:
+        if role == "user" or role == "system":
+            return {"type": "input_text", "text": content}
+        else:
+            return {"type": "output_text", "text": content}
+
     def _convert_content_to_responses_format(
         self,
         content: Union[
@@ -309,6 +328,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 Union["OpenAIMessageContentListBlock", "ChatCompletionThinkingBlock"]
             ],
         ],
+        role: str,
     ) -> List[Dict[str, Any]]:
         """Convert chat completion content to responses API format"""
         verbose_logger.debug(
@@ -316,7 +336,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         )
 
         if isinstance(content, str):
-            result = [{"type": "input_text", "text": content}]
+            result = [self._convert_content_str_to_input_text(content, role)]
             verbose_logger.debug(f"Chat provider: String content -> {result}")
             return result
         elif isinstance(content, list):
@@ -326,14 +346,16 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     f"Chat provider: Processing content item {i}: {type(item)} = {item}"
                 )
                 if isinstance(item, str):
-                    converted = {"type": "input_text", "text": item}
+                    converted = self._convert_content_str_to_input_text(item, role)
                     result.append(converted)
                     verbose_logger.debug(f"Chat provider:   -> {converted}")
                 elif isinstance(item, dict):
                     # Handle multimodal content
                     original_type = item.get("type")
                     if original_type == "text":
-                        converted = {"type": "input_text", "text": item.get("text", "")}
+                        converted = self._convert_content_str_to_input_text(
+                            item.get("text", ""), role
+                        )
                         result.append(converted)
                         verbose_logger.debug(f"Chat provider:   text -> {converted}")
                     elif original_type == "image_url":
@@ -371,10 +393,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             )
                         else:
                             # Default to input_text for unknown types
-                            converted = {
-                                "type": "input_text",
-                                "text": str(item.get("text", item)),
-                            }
+                            converted = self._convert_content_str_to_input_text(
+                                str(item.get("text", item)), role
+                            )
                             result.append(converted)
                             verbose_logger.debug(
                                 f"Chat provider:   unknown({original_type}) -> {converted}"
@@ -382,7 +403,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             verbose_logger.debug(f"Chat provider: Final converted content: {result}")
             return result
         else:
-            result = [{"type": "input_text", "text": str(content)}]
+            result = [self._convert_content_str_to_input_text(str(content), role)]
             verbose_logger.debug(f"Chat provider: Other content type -> {result}")
             return result
 
