@@ -4,7 +4,7 @@ import Image from '@theme/IdealImage';
 
 # /mcp [BETA] - Model Context Protocol
 
-LiteLLM Proxy provvides an MCP Gateway that allows you to use a fixed endpoint for all MCP tools and control MCP access by Key, Team. 
+LiteLLM Proxy provides an MCP Gateway that allows you to use a fixed endpoint for all MCP tools and control MCP access by Key, Team. 
 
 ## Expose MCP tools on LiteLLM Proxy Server
 
