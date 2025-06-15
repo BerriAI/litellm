@@ -53,7 +53,7 @@ const sidebars = {
         "proxy/prometheus",
         "proxy/alerting",
         "proxy/pagerduty"
-      ]
+      ].sort()
     },
     {
       type: "category",
@@ -61,7 +61,7 @@ const sidebars = {
       items: [
         "proxy/prompt_management",
         "proxy/custom_prompt_management"
-      ],
+      ].sort()
     },
     
   ],
