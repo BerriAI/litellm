@@ -52,14 +52,22 @@ This is great for use cases that require access to restricted data (e.g Jira MCP
 For Proxy Admins, this enables centralized management of all MCP Servers with access control. For developers, this means you'll only see the MCP tools assigned to you.
 
 
-<Image img={require('../../img/release_notes/mcp_permissions.png')}  style={{ width: '800px', height: 'auto' }} />
+<Image img={require('../../img/release_notes/mcp_permissions.png')}/>
 
 ### Responses API
 
-This release brings support for calling the Responses API models like `codex-mini` and `o3-pro` from `/v1/messages` and `/chat/completions` endpoints.
+This release brings support for calling `codex-mini` (OpenAI’s code assistant model) via Claude Code.
+
+This is done by LiteLLM enabling any Responses API model (including `o3-pro`) to be called via `/chat/completions` and `/v1/messages` endpoints. This includes:
+
+- Streaming calls
+- Non-streaming calls
+- Cost Tracking on success + failure for Responses API models
+
+Here's how to use it [today](../../docs/tutorials/claude_responses_api)
 
 
-
+<Image img={require('../../img/release_notes/codex_on_claude_code.jpg')} />
 
 ---
 
