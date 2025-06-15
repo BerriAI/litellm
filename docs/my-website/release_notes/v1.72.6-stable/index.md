@@ -42,6 +42,25 @@ This version is not out yet.
 
 ## Key Highlights
 
+
+### MCP Permissions Management
+
+This release brings support for managing permissions for MCP Servers by Keys, Teams, Organizations (entities) on LiteLLM. When a MCP client attempts to list tools, LiteLLM will only return the tools the entity has permissions to access.
+
+This is great for use cases that require access to restricted data (e.g Jira MCP) that you don't want everyone to use.
+
+For Proxy Admins, this enables centralized management of all MCP Servers with access control. For developers, this means you'll only see the MCP tools assigned to you.
+
+
+<Image img={require('../../img/release_notes/mcp_permissions.png')}  style={{ width: '800px', height: 'auto' }} />
+
+### Responses API
+
+This release brings support for calling the Responses API models like `codex-mini` and `o3-pro` from `/v1/messages` and `/chat/completions` endpoints.
+
+
+
+
 ---
 
 
