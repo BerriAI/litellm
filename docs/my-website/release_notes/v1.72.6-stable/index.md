@@ -53,6 +53,8 @@ This version is not out yet.
 
 ### MCP Permissions Management
 
+<Image img={require('../../img/release_notes/mcp_permissions.png')}/>
+
 This release brings support for managing permissions for MCP Servers by Keys, Teams, Organizations (entities) on LiteLLM. When a MCP client attempts to list tools, LiteLLM will only return the tools the entity has permissions to access.
 
 This is great for use cases that require access to restricted data (e.g Jira MCP) that you don't want everyone to use.
@@ -60,9 +62,11 @@ This is great for use cases that require access to restricted data (e.g Jira MCP
 For Proxy Admins, this enables centralized management of all MCP Servers with access control. For developers, this means you'll only see the MCP tools assigned to you.
 
 
-<Image img={require('../../img/release_notes/mcp_permissions.png')}/>
+
 
 ### Codex-mini on Claude Code
+
+<Image img={require('../../img/release_notes/codex_on_claude_code.jpg')} />
 
 This release brings support for calling `codex-mini` (OpenAI’s code assistant model) via Claude Code.
 
@@ -75,7 +79,7 @@ This is done by LiteLLM enabling any Responses API model (including `o3-pro`) to
 Here's how to use it [today](../../docs/tutorials/claude_responses_api)
 
 
-<Image img={require('../../img/release_notes/codex_on_claude_code.jpg')} />
+
 
 ---
 
