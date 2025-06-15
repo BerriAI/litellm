@@ -507,6 +507,7 @@ const sidebars = {
         "tutorials/tag_management",
         'tutorials/litellm_proxy_aporia',
         "tutorials/gemini_realtime_with_audio",
+        "tutorials/claude_responses_api",
         {
           type: "category",
           label: "LiteLLM Python SDK Tutorials",
