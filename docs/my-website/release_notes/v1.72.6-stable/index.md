@@ -109,9 +109,9 @@ This version is not out yet.
     - Streaming - Ensure consistent ‘created’ across chunks - [PR](https://github.com/BerriAI/litellm/pull/11528)
 #### Features
 - **MCP**
-    - Add controls for MCP Permission Management - [PR](https://github.com/BerriAI/litellm/pull/11598), 
-    - Add permission management for MCP List + Call Tool operations - [PR](https://github.com/BerriAI/litellm/pull/11682)
-    - Streamable HTTP server support - [PR](https://github.com/BerriAI/litellm/pull/11628), [PR](https://github.com/BerriAI/litellm/pull/11645)
+    - Add controls for MCP Permission Management - [PR](https://github.com/BerriAI/litellm/pull/11598), [Docs](../../docs/mcp#-mcp-permission-management)
+    - Add permission management for MCP List + Call Tool operations - [PR](https://github.com/BerriAI/litellm/pull/11682), [Docs](../../docs/mcp#-mcp-permission-management)
+    - Streamable HTTP server support - [PR](https://github.com/BerriAI/litellm/pull/11628), [PR](https://github.com/BerriAI/litellm/pull/11645), [Docs](../../docs/mcp#using-your-mcp)
     - Use Experimental dedicated Rest endpoints for list, calling MCP tools - [PR](https://github.com/BerriAI/litellm/pull/11684)
 - **Responses API**
     - NEW API Endpoint - List input items - [PR](https://github.com/BerriAI/litellm/pull/11602)
