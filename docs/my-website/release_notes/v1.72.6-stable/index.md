@@ -126,9 +126,9 @@ This version is not out yet.
 ## Spend Tracking
 
 #### Bugs
-- **End Users**
+- **[End Users](../../docs/proxy/customers)**
     - Update enduser spend and budget reset date based on budget duration - [PR](https://github.com/BerriAI/litellm/pull/8460) (s/o [laurien16](https://github.com/laurien16))
-- **Custom Pricing**
+- **[Custom Pricing](../../docs/proxy/custom_pricing)**
     - Convert scientific notation str to int - [PR](https://github.com/BerriAI/litellm/pull/11655)
 
 ---
@@ -136,11 +136,11 @@ This version is not out yet.
 ## Management Endpoints / UI
 
 #### Bugs
-- **Users**
+- **[Users](../../docs/proxy/users)**
     - `/user/info` - fix passing user with `+` in user id
     - Add admin-initiated password reset flow - [PR](https://github.com/BerriAI/litellm/pull/11618)
     - Fixes default user settings UI rendering error - [PR](https://github.com/BerriAI/litellm/pull/11674)
-- **Budgets**
+- **[Budgets](../../docs/proxy/users)**
     - Correct success message when new user budget is created - [PR](https://github.com/BerriAI/litellm/pull/11608)
 
 #### Features
@@ -163,15 +163,15 @@ This version is not out yet.
 ## Logging / Guardrails Integrations
 
 #### Bugs
-- **Arize**
+- **[Arize](../../docs/observability/arize_integration)**
     - Change space_key header to space_id - [PR](https://github.com/BerriAI/litellm/pull/11595) (s/o [vanities](https://github.com/vanities))
-- **Prometheus**
+- **[Prometheus](../../docs/proxy/prometheus)**
     - Fix total requests increment - [PR](https://github.com/BerriAI/litellm/pull/11718)
 
 #### Features
-- **Lasso Guardrails**
+- **[Lasso Guardrails](../../docs/proxy/guardrails/lasso_security)**
     - [NEW] Lasso Guardrails support - [PR](https://github.com/BerriAI/litellm/pull/11565), [NEEDS DOCS]
-- **Users**
+- **[Users](../../docs/proxy/users)**
     - New `organizations` param on `/user/new` - allows adding users to orgs on creation - [PR](https://github.com/BerriAI/litellm/pull/11572/files)
 - **Prevent double logging when using bridge logic** - [PR](https://github.com/BerriAI/litellm/pull/11687)
 
@@ -180,11 +180,11 @@ This version is not out yet.
 ## Performance / Reliability Improvements
 
 #### Bugs
-- **Tag based routing**
+- **[Tag based routing](../../docs/proxy/tag_routing)**
     - Do not consider ‘default’ models when request specifies a tag - [PR](https://github.com/BerriAI/litellm/pull/11454) (s/o [thiagosalvatore](https://github.com/thiagosalvatore))
 
 #### Features
-- **Caching**
+- **[Caching](../../docs/caching/all_caches)**
     - New optional ‘litellm[caching]’ pip install for adding disk cache dependencies - [PR](https://github.com/BerriAI/litellm/pull/11600)
 
 ---
