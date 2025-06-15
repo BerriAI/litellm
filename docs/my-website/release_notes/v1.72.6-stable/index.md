@@ -65,60 +65,60 @@ This version is not out yet.
 
 ### Updated Models
 #### Bugs
-- **Watsonx**
+- **[Watsonx](../../docs/providers/watsonx)**
     - Ignore space id on Watsonx deployments (throws json errors) - [PR](https://github.com/BerriAI/litellm/pull/11527)
-- **Ollama**
+- **[Ollama](../../docs/providers/ollama)**
     - Set tool call id for streaming calls - [PR](https://github.com/BerriAI/litellm/pull/11528)
-- **Gemini (VertexAI + Google AI Studio)**
+- **Gemini ([VertexAI](../../docs/providers/vertex) + [Google AI Studio](../../docs/providers/gemini))**
     - Fix tool call indexes - [PR](https://github.com/BerriAI/litellm/pull/11558)
     - Handle empty string for arguments in function calls - [PR](https://github.com/BerriAI/litellm/pull/11601)
     - Add audio/ogg mime type support when inferring from file url’s - [PR](https://github.com/BerriAI/litellm/pull/11635)
-- **Custom LLM**
+- **[Custom LLM](../../docs/providers/custom_llm_server)**
     - Fix passing api_base, api_key, litellm_params_dict to custom_llm embedding methods - [PR](https://github.com/BerriAI/litellm/pull/11450) s/o [ElefHead](https://github.com/ElefHead)
-- **Huggingface**
+- **[Huggingface](../../docs/providers/huggingface)**
     - Add /chat/completions to endpoint url when missing - [PR](https://github.com/BerriAI/litellm/pull/11630)
-- **Deepgram**
+- **[Deepgram](../../docs/providers/deepgram)**
     - Support async httpx calls - [PR](https://github.com/BerriAI/litellm/pull/11641)
-- **Anthropic**
+- **[Anthropic](../../docs/providers/anthropic)**
     - Append prefix (if set) to assistant content start - [PR](https://github.com/BerriAI/litellm/pull/11719)
 
 #### Features
-- **VertexAI**
+- **[VertexAI](../../docs/providers/vertex)**
     - Support vertex credentials set via env var on passthrough - [PR](https://github.com/BerriAI/litellm/pull/11527)
     - Support for choosing ‘global’ region when model is only available there - [PR](https://github.com/BerriAI/litellm/pull/11566)
     - Anthropic passthrough cost calculation + token tracking - [PR](https://github.com/BerriAI/litellm/pull/11611)
     - Support ‘global’ vertex region on passthrough - [PR](https://github.com/BerriAI/litellm/pull/11661)
-- **Anthropic**
+- **[Anthropic](../../docs/providers/anthropic)**
     - ‘none’ tool choice param support - [PR](https://github.com/BerriAI/litellm/pull/11695), [Get Started](../../docs/providers/anthropic#disable-tool-calling)
-- **Perplexity**
+- **[Perplexity](../../docs/providers/perplexity)**
     - Add ‘reasoning_effort’ support - [PR](https://github.com/BerriAI/litellm/pull/11562), [Get Started](../../docs/providers/perplexity#reasoning-effort)
-- **Mistral**
+- **[Mistral](../../docs/providers/mistral)**
     - Add mistral reasoning support - [PR](https://github.com/BerriAI/litellm/pull/11642), [Get Started](../../docs/providers/mistral#reasoning)
-- **SGLang**
+- **[SGLang](../../docs/providers/openai_compatible)**
     - Map context window exceeded error for proper handling - [PR](https://github.com/BerriAI/litellm/pull/11575/)
-- **Deepgram**
+- **[Deepgram](../../docs/providers/deepgram)**
     - Provider specific params support - [PR](https://github.com/BerriAI/litellm/pull/11638)
-- **Azure**
+- **[Azure](../../docs/providers/azure)**
     - Return content safety filter results - [PR](https://github.com/BerriAI/litellm/pull/11655)
 ---
 
 ## LLM API Endpoints
 
 #### Bugs
-- **Chat Completion**
+- **[Chat Completion](../../docs/completion/input)**
     - Streaming - Ensure consistent ‘created’ across chunks - [PR](https://github.com/BerriAI/litellm/pull/11528)
 #### Features
-- **MCP**
+- **[MCP](../../docs/mcp)**
     - Add controls for MCP Permission Management - [PR](https://github.com/BerriAI/litellm/pull/11598) [NEEDS DOCS]
     - Add permission management for MCP List + Call Tool operations - [PR](https://github.com/BerriAI/litellm/pull/11682) [NEEDS DOCS]
     - Streamable HTTP server support - [PR](https://github.com/BerriAI/litellm/pull/11628), [PR](https://github.com/BerriAI/litellm/pull/11645) [NEEDS DOCS]
-    - Use Experimental dedicated Rest endpoints for list, calling MCP tools - [PR](https://github.com/BerriAI/litellm/pull/11684) [NEEDS DOCS]
-- **Responses API**
+    - Use Experimental dedicated Rest endpoints for list, calling MCP tools - [PR](https://github.com/BerriAI/litellm/pull/11684)
+- **[Responses API](../../docs/response_api)**
     - NEW API Endpoint - List input items - [PR](https://github.com/BerriAI/litellm/pull/11602) [NEEDS DOCS]
     - Background mode for OpenAI + Azure OpenAI - [PR](https://github.com/BerriAI/litellm/pull/11640)
     - Langfuse/other Logging support on responses api requests - [PR](https://github.com/BerriAI/litellm/pull/11685)
-- **Chat Completions**
-    - Bridge for Responses API - allows calling codex-mini via `/chat/completions` and `/v1/messages` - [PR](https://github.com/BerriAI/litellm/pull/11632), [PR](https://github.com/BerriAI/litellm/pull/11685)
+- **[Chat Completions](../../docs/completion/input)**
+    - Bridge for Responses API - allows calling codex-mini via `/chat/completions` and `/v1/messages` - [PR](https://github.com/BerriAI/litellm/pull/11632), [PR](https://github.com/BerriAI/litellm/pull/11685) [NEEDS DOCS]
 
 
 ---
