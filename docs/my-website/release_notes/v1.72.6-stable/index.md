@@ -89,9 +89,9 @@ This version is not out yet.
     - Anthropic passthrough cost calculation + token tracking - [PR](https://github.com/BerriAI/litellm/pull/11611)
     - Support ‘global’ vertex region on passthrough - [PR](https://github.com/BerriAI/litellm/pull/11661)
 - **Anthropic**
-    - ‘none’ tool choice param support - [PR](https://github.com/BerriAI/litellm/pull/11695) [NEEDS DOCS]
+    - ‘none’ tool choice param support - [PR](https://github.com/BerriAI/litellm/pull/11695) [Get Started](../../docs/providers/anthropic#disable-tool-calling)
 - **Perplexity**
-    - Add ‘reasoning_effort’ support - [PR](https://github.com/BerriAI/litellm/pull/11562) [NEEDS DOCS]
+    - Add ‘reasoning_effort’ support - [PR](https://github.com/BerriAI/litellm/pull/11562) [Get Started](../../docs/providers/perplexity#reasoning-effort)
 - **Mistral**
     - Add mistral reasoning support - [PR](https://github.com/BerriAI/litellm/pull/11642) [NEEDS DOCS]
 - **SGLang**
