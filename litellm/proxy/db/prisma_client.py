@@ -55,7 +55,7 @@ class PrismaWrapper:
         expiration_time = token_time + timedelta(seconds=expires_int)
 
         # Current time in UTC
-        current_time = datetime.utcnow()
+        current_time = datetime.utcnow()  # intentionally using no tzinfo
 
         # Check if the token is expired
         return current_time > expiration_time
