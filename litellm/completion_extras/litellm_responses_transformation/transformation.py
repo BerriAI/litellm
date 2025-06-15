@@ -103,7 +103,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         "type": "message",
                         "role": role,
                         "content": self._convert_content_to_responses_format(
-                            content, role
+                            content, cast(str, role)
                         ),
                     }
                 )
