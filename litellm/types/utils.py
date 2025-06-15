@@ -2255,6 +2255,7 @@ class LlmProviders(str, Enum):
     GROQ = "groq"
     NVIDIA_NIM = "nvidia_nim"
     CEREBRAS = "cerebras"
+    CENTML = "centml"
     AI21_CHAT = "ai21_chat"
     VOLCENGINE = "volcengine"
     CODESTRAL = "codestral"
