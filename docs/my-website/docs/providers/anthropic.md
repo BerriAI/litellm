@@ -666,7 +666,7 @@ response = completion(
 
 ### Disable Tool Calling
 
-You can disable tool calling by setting the `tool_choice` to `none`.
+You can disable tool calling by setting the `tool_choice` to `"none"`.
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
