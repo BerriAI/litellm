@@ -744,7 +744,7 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
 
 
 router = APIRouter()
-origins = ["*"]
+origins = [origin.strip() for origin in os.getenv("ALLOWED_ORIGINS", "*").split(",")]
 
 
 # get current directory
