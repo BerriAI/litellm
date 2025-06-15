@@ -153,7 +153,7 @@ Here's how to use it [today](../../docs/tutorials/claude_responses_api)
     - Streamable HTTP server support - [PR](https://github.com/BerriAI/litellm/pull/11628), [PR](https://github.com/BerriAI/litellm/pull/11645), [Docs](../../docs/mcp#using-your-mcp)
     - Use Experimental dedicated Rest endpoints for list, calling MCP tools - [PR](https://github.com/BerriAI/litellm/pull/11684)
 - **[Responses API](../../docs/response_api)**
-    - NEW API Endpoint - List input items - [PR](https://github.com/BerriAI/litellm/pull/11602) [NEEDS DOCS]
+    - NEW API Endpoint - List input items - [PR](https://github.com/BerriAI/litellm/pull/11602) 
     - Background mode for OpenAI + Azure OpenAI - [PR](https://github.com/BerriAI/litellm/pull/11640)
     - Langfuse/other Logging support on responses api requests - [PR](https://github.com/BerriAI/litellm/pull/11685)
 - **[Chat Completions](../../docs/completion/input)**
