@@ -25,6 +25,185 @@ LiteLLM Proxy provides an MCP Gateway that allows you to use a fixed endpoint fo
 
 ## Using your MCP
 
+<Tabs>
+<TabItem value="openai" label="OpenAI API">
+
+#### Connect via OpenAI Responses API
+
+Use the OpenAI Responses API to connect to your LiteLLM MCP server:
+
+```bash title="cURL Example" showLineNumbers
+curl --location 'https://api.openai.com/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $OPENAI_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "<your-litellm-proxy-base-url>/mcp",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "YOUR_LITELLM_API_KEY"
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
+```
+
+</TabItem>
+
+<TabItem value="litellm" label="LiteLLM Proxy">
+
+#### Connect via LiteLLM Proxy Responses API
+
+Use this when calling LiteLLM Proxy for LLM API requests to `/v1/responses` endpoint.
+
+```bash title="cURL Example" showLineNumbers
+curl --location '<your-litellm-proxy-base-url>/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $LITELLM_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "<your-litellm-proxy-base-url>/mcp",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "YOUR_LITELLM_API_KEY"
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
+```
+
+</TabItem>
+
+<TabItem value="cursor" label="Cursor IDE">
+
+#### Connect via Cursor IDE
+
+Use tools directly from Cursor IDE with LiteLLM MCP:
+
+**Setup Instructions:**
+
+1. **Open Cursor Settings**: Use `⇧+⌘+J` (Mac) or `Ctrl+Shift+J` (Windows/Linux)
+2. **Navigate to MCP Tools**: Go to the "MCP Tools" tab and click "New MCP Server"
+3. **Add Configuration**: Copy and paste the JSON configuration below, then save with `Cmd+S` or `Ctrl+S`
+
+```json title="Cursor MCP Configuration" showLineNumbers
+{
+  "mcpServers": {
+    "LiteLLM": {
+      "url": "<your-litellm-proxy-base-url>/mcp",
+      "headers": {
+        "x-litellm-api-key": "$LITELLM_API_KEY"
+      }
+    }
+  }
+}
+```
+
+</TabItem>
+
+<TabItem value="http" label="Streamable HTTP">
+
+#### Connect via Streamable HTTP Transport
+
+Connect to LiteLLM MCP using HTTP transport. Compatible with any MCP client that supports HTTP streaming:
+
+**Server URL:**
+```text showLineNumbers
+<your-litellm-proxy-base-url>/mcp
+```
+
+**Headers:**
+```text showLineNumbers
+x-litellm-api-key: YOUR_LITELLM_API_KEY
+```
+
+This URL can be used with any MCP client that supports HTTP transport. Refer to your client documentation to determine the appropriate transport method.
+
+</TabItem>
+
+<TabItem value="fastmcp" label="Python FastMCP">
+
+#### Connect via Python FastMCP Client
+
+Use the Python FastMCP client to connect to your LiteLLM MCP server:
+
+**Installation:**
+
+```bash title="Install FastMCP" showLineNumbers
+pip install fastmcp
+```
+
+or with uv:
+
+```bash title="Install with uv" showLineNumbers
+uv pip install fastmcp
+```
+
+**Usage:**
+
+```python title="Python FastMCP Example" showLineNumbers
+import asyncio
+import json
+
+from fastmcp import Client
+from fastmcp.client.transports import StreamableHttpTransport
+
+# Create the transport with your LiteLLM MCP server URL
+server_url = "<your-litellm-proxy-base-url>/mcp"
+transport = StreamableHttpTransport(
+    server_url,
+    headers={
+        "x-litellm-api-key": "YOUR_LITELLM_API_KEY"
+    }
+)
+
+# Initialize the client with the transport
+client = Client(transport=transport)
+
+
+async def main():
+    # Connection is established here
+    print("Connecting to LiteLLM MCP server...")
+    async with client:
+        print(f"Client connected: {client.is_connected()}")
+
+        # Make MCP calls within the context
+        print("Fetching available tools...")
+        tools = await client.list_tools()
+
+        print(f"Available tools: {json.dumps([t.name for t in tools], indent=2)}")
+        
+        # Example: Call a tool (replace 'tool_name' with an actual tool name)
+        if tools:
+            tool_name = tools[0].name
+            print(f"Calling tool: {tool_name}")
+            
+            # Call the tool with appropriate arguments
+            result = await client.call_tool(tool_name, arguments={})
+            print(f"Tool result: {result}")
+
+
+# Run the example
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+</TabItem>
+</Tabs>
+
+
 ## MCP Permission Management
 
 
@@ -48,8 +227,6 @@ When MCP clients connect to LiteLLM's MCP Gateway they can run the following MCP
 1. List Tools: List all available MCP tools on LiteLLM
 2. Call Tools: Call a specific MCP tool with the provided arguments
 
-
-#### Usage
 
 #### 1. Define your tools on under `mcp_servers` in your config.yaml file.
 
