@@ -65,47 +65,47 @@ This version is not out yet.
 
 ### Updated Models
 #### Bugs
-- **Watsonx**
+- **[Watsonx](../../docs/providers/watsonx)**
     - Ignore space id on Watsonx deployments (throws json errors) - [PR](https://github.com/BerriAI/litellm/pull/11527)
-- **Ollama**
+- **[Ollama](../../docs/providers/ollama)**
     - Set tool call id for streaming calls - [PR](https://github.com/BerriAI/litellm/pull/11528)
-- **Gemini (VertexAI + Google AI Studio)**
+- **Gemini ([VertexAI](../../docs/providers/vertex) + [Google AI Studio](../../docs/providers/gemini))**
     - Fix tool call indexes - [PR](https://github.com/BerriAI/litellm/pull/11558)
     - Handle empty string for arguments in function calls - [PR](https://github.com/BerriAI/litellm/pull/11601)
     - Add audio/ogg mime type support when inferring from file url’s - [PR](https://github.com/BerriAI/litellm/pull/11635)
-- **Custom LLM**
+- **[Custom LLM](../../docs/providers/custom_llm_server)**
     - Fix passing api_base, api_key, litellm_params_dict to custom_llm embedding methods - [PR](https://github.com/BerriAI/litellm/pull/11450) s/o [ElefHead](https://github.com/ElefHead)
-- **Huggingface**
+- **[Huggingface](../../docs/providers/huggingface)**
     - Add /chat/completions to endpoint url when missing - [PR](https://github.com/BerriAI/litellm/pull/11630)
-- **Deepgram**
+- **[Deepgram](../../docs/providers/deepgram)**
     - Support async httpx calls - [PR](https://github.com/BerriAI/litellm/pull/11641)
-- **Anthropic**
+- **[Anthropic](../../docs/providers/anthropic)**
     - Append prefix (if set) to assistant content start - [PR](https://github.com/BerriAI/litellm/pull/11719)
 
 #### Features
-- **VertexAI**
+- **[VertexAI](../../docs/providers/vertex)**
     - Support vertex credentials set via env var on passthrough - [PR](https://github.com/BerriAI/litellm/pull/11527)
     - Support for choosing ‘global’ region when model is only available there - [PR](https://github.com/BerriAI/litellm/pull/11566)
     - Anthropic passthrough cost calculation + token tracking - [PR](https://github.com/BerriAI/litellm/pull/11611)
     - Support ‘global’ vertex region on passthrough - [PR](https://github.com/BerriAI/litellm/pull/11661)
-- **Anthropic**
-    - ‘none’ tool choice param support - [PR](https://github.com/BerriAI/litellm/pull/11695)
-- **Perplexity**
-    - Add ‘reasoning_effort’ support - [PR](https://github.com/BerriAI/litellm/pull/11562)
-- **Mistral**
-    - Add mistral reasoning support - [PR](https://github.com/BerriAI/litellm/pull/11642)
-- **SGLang**
+- **[Anthropic](../../docs/providers/anthropic)**
+    - ‘none’ tool choice param support - [PR](https://github.com/BerriAI/litellm/pull/11695), [Get Started](../../docs/providers/anthropic#disable-tool-calling)
+- **[Perplexity](../../docs/providers/perplexity)**
+    - Add ‘reasoning_effort’ support - [PR](https://github.com/BerriAI/litellm/pull/11562), [Get Started](../../docs/providers/perplexity#reasoning-effort)
+- **[Mistral](../../docs/providers/mistral)**
+    - Add mistral reasoning support - [PR](https://github.com/BerriAI/litellm/pull/11642), [Get Started](../../docs/providers/mistral#reasoning)
+- **[SGLang](../../docs/providers/openai_compatible)**
     - Map context window exceeded error for proper handling - [PR](https://github.com/BerriAI/litellm/pull/11575/)
-- **Deepgram**
+- **[Deepgram](../../docs/providers/deepgram)**
     - Provider specific params support - [PR](https://github.com/BerriAI/litellm/pull/11638)
-- **Azure**
+- **[Azure](../../docs/providers/azure)**
     - Return content safety filter results - [PR](https://github.com/BerriAI/litellm/pull/11655)
 ---
 
 ## LLM API Endpoints
 
 #### Bugs
-- **Chat Completion**
+- **[Chat Completion](../../docs/completion/input)**
     - Streaming - Ensure consistent ‘created’ across chunks - [PR](https://github.com/BerriAI/litellm/pull/11528)
 #### Features
 - **MCP**
@@ -113,11 +113,11 @@ This version is not out yet.
     - Add permission management for MCP List + Call Tool operations - [PR](https://github.com/BerriAI/litellm/pull/11682), [Docs](../../docs/mcp#-mcp-permission-management)
     - Streamable HTTP server support - [PR](https://github.com/BerriAI/litellm/pull/11628), [PR](https://github.com/BerriAI/litellm/pull/11645), [Docs](../../docs/mcp#using-your-mcp)
     - Use Experimental dedicated Rest endpoints for list, calling MCP tools - [PR](https://github.com/BerriAI/litellm/pull/11684)
-- **Responses API**
-    - NEW API Endpoint - List input items - [PR](https://github.com/BerriAI/litellm/pull/11602)
+- **[Responses API](../../docs/response_api)**
+    - NEW API Endpoint - List input items - [PR](https://github.com/BerriAI/litellm/pull/11602) [NEEDS DOCS]
     - Background mode for OpenAI + Azure OpenAI - [PR](https://github.com/BerriAI/litellm/pull/11640)
     - Langfuse/other Logging support on responses api requests - [PR](https://github.com/BerriAI/litellm/pull/11685)
-- **Chat Completions**
+- **[Chat Completions](../../docs/completion/input)**
     - Bridge for Responses API - allows calling codex-mini via `/chat/completions` and `/v1/messages` - [PR](https://github.com/BerriAI/litellm/pull/11632), [PR](https://github.com/BerriAI/litellm/pull/11685)
 
 
@@ -126,9 +126,9 @@ This version is not out yet.
 ## Spend Tracking
 
 #### Bugs
-- **End Users**
+- **[End Users](../../docs/proxy/customers)**
     - Update enduser spend and budget reset date based on budget duration - [PR](https://github.com/BerriAI/litellm/pull/8460) (s/o [laurien16](https://github.com/laurien16))
-- **Custom Pricing**
+- **[Custom Pricing](../../docs/proxy/custom_pricing)**
     - Convert scientific notation str to int - [PR](https://github.com/BerriAI/litellm/pull/11655)
 
 ---
@@ -136,11 +136,11 @@ This version is not out yet.
 ## Management Endpoints / UI
 
 #### Bugs
-- **Users**
+- **[Users](../../docs/proxy/users)**
     - `/user/info` - fix passing user with `+` in user id
     - Add admin-initiated password reset flow - [PR](https://github.com/BerriAI/litellm/pull/11618)
     - Fixes default user settings UI rendering error - [PR](https://github.com/BerriAI/litellm/pull/11674)
-- **Budgets**
+- **[Budgets](../../docs/proxy/users)**
     - Correct success message when new user budget is created - [PR](https://github.com/BerriAI/litellm/pull/11608)
 
 #### Features
@@ -163,15 +163,15 @@ This version is not out yet.
 ## Logging / Guardrails Integrations
 
 #### Bugs
-- **Arize**
+- **[Arize](../../docs/observability/arize_integration)**
     - Change space_key header to space_id - [PR](https://github.com/BerriAI/litellm/pull/11595) (s/o [vanities](https://github.com/vanities))
-- **Prometheus**
+- **[Prometheus](../../docs/proxy/prometheus)**
     - Fix total requests increment - [PR](https://github.com/BerriAI/litellm/pull/11718)
 
 #### Features
-- **Lasso Guardrails**
+- **[Lasso Guardrails](../../docs/proxy/guardrails/lasso_security)**
     - [NEW] Lasso Guardrails support - [PR](https://github.com/BerriAI/litellm/pull/11565)
-- **Users**
+- **[Users](../../docs/proxy/users)**
     - New `organizations` param on `/user/new` - allows adding users to orgs on creation - [PR](https://github.com/BerriAI/litellm/pull/11572/files)
 - **Prevent double logging when using bridge logic** - [PR](https://github.com/BerriAI/litellm/pull/11687)
 
@@ -180,11 +180,11 @@ This version is not out yet.
 ## Performance / Reliability Improvements
 
 #### Bugs
-- **Tag based routing**
+- **[Tag based routing](../../docs/proxy/tag_routing)**
     - Do not consider ‘default’ models when request specifies a tag - [PR](https://github.com/BerriAI/litellm/pull/11454) (s/o [thiagosalvatore](https://github.com/thiagosalvatore))
 
 #### Features
-- **Caching**
+- **[Caching](../../docs/caching/all_caches)**
     - New optional ‘litellm[caching]’ pip install for adding disk cache dependencies - [PR](https://github.com/BerriAI/litellm/pull/11600)
 
 ---
