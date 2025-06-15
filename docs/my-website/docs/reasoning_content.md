@@ -40,7 +40,7 @@ LiteLLM will standardize the `reasoning_content` in the response and `thinking_b
 ## Quick Start 
 
 <Tabs>
-<TabItem value="anthropic" label="Anthropic">
+<TabItem value="sdk" label="SDK">
 
 ```python showLineNumbers
 from litellm import completion
@@ -54,25 +54,6 @@ response = completion(
     {"role": "user", "content": "What is the capital of France?"},
   ],
   reasoning_effort="low", 
-)
-print(response.choices[0].message.content)
-```
-
-</TabItem>
-<TabItem value="mistral" label="Mistral">
-
-```python showLineNumbers
-from litellm import completion
-import os 
-
-os.environ["MISTRAL_API_KEY"] = ""
-
-response = completion(
-  model="mistral/magistral-medium-2506",
-  messages=[
-    {"role": "user", "content": "What is 15 multiplied by 7? Show your reasoning."},
-  ],
-  reasoning_effort="medium", 
 )
 print(response.choices[0].message.content)
 ```
