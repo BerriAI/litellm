@@ -118,7 +118,7 @@ This version is not out yet.
     - Background mode for OpenAI + Azure OpenAI - [PR](https://github.com/BerriAI/litellm/pull/11640)
     - Langfuse/other Logging support on responses api requests - [PR](https://github.com/BerriAI/litellm/pull/11685)
 - **[Chat Completions](../../docs/completion/input)**
-    - Bridge for Responses API - allows calling codex-mini via `/chat/completions` and `/v1/messages` - [PR](https://github.com/BerriAI/litellm/pull/11632), [PR](https://github.com/BerriAI/litellm/pull/11685) [NEEDS DOCS]
+    - Bridge for Responses API - allows calling codex-mini via `/chat/completions` and `/v1/messages` - [PR](https://github.com/BerriAI/litellm/pull/11632), [PR](https://github.com/BerriAI/litellm/pull/11685)
 
 
 ---
@@ -170,7 +170,7 @@ This version is not out yet.
 
 #### Features
 - **[Lasso Guardrails](../../docs/proxy/guardrails/lasso_security)**
-    - [NEW] Lasso Guardrails support - [PR](https://github.com/BerriAI/litellm/pull/11565), [NEEDS DOCS]
+    - [NEW] Lasso Guardrails support - [PR](https://github.com/BerriAI/litellm/pull/11565)
 - **[Users](../../docs/proxy/users)**
     - New `organizations` param on `/user/new` - allows adding users to orgs on creation - [PR](https://github.com/BerriAI/litellm/pull/11572/files)
 - **Prevent double logging when using bridge logic** - [PR](https://github.com/BerriAI/litellm/pull/11687)
