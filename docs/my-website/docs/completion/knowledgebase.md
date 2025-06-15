@@ -17,6 +17,7 @@ LiteLLM integrates with vector stores, allowing your models to access your organ
 
 ## Supported Vector Stores
 - [Bedrock Knowledge Bases](https://aws.amazon.com/bedrock/knowledge-bases/)
+- [Qdrant](https://qdrant.tech/)
 
 ## Quick Start
 
