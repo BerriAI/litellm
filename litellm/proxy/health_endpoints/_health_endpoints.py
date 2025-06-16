@@ -381,7 +381,7 @@ async def _perform_health_check_and_save(
     healthy_endpoints, unhealthy_endpoints = await perform_health_check(
         model_list=model_list, 
         cli_model=cli_model, 
-        target_model=target_model,
+        model=target_model,
         details=details
     )
     
