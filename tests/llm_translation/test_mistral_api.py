@@ -36,3 +36,17 @@ class TestMistralCompletion(BaseLLMChatTest):
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
+
+@pytest.mark.parametrize("model", ["mistral/devstral-small-latest","mistral/mistral-small-latest"])
+def test_mistral_parallel_tool_calls(model):
+    litellm.completion(
+        model=model,
+        messages=[
+            {
+                "role": "user",
+                "content": "foo",
+            }
+        ],
+        parallel_tool_calls=True,
+        drop_params=False,
+    )
