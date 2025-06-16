@@ -294,7 +294,7 @@ Then provide a clear, concise answer based on your reasoning."""
         Otherwise, we drop `name`
         """
         _name = message.get("name")  # type: ignore
-        if _name is not None and (message["role"] != "tool" or len(_name.strip()) == 0):
+        if _name is not None and (message["role"] != "tool" or (isinstance(_name, str) and len(_name.strip()) == 0)):
             message.pop("name", None)  # type: ignore
 
         return message
