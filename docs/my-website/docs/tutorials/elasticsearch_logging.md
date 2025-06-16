@@ -272,39 +272,3 @@ curl -X GET "localhost:9200/_search" -H "Content-Type: application/json" -d '{
   }
 }'
 ```
-
-## What's Logged
-
-LiteLLM sends OpenTelemetry traces for every request including:
-
-- **Trace & Span Data**: Structured trace information with parent-child relationships
-- **Attributes**: Model, token usage, costs, response times, user metadata
-- **Events**: Request input, response output, and error information
-- **Resource Info**: Service name, version, and deployment information
-- **Timing**: Precise start/end times and duration measurements
-
-The data follows OpenTelemetry semantic conventions for better standardization and tooling compatibility.
-
-## Advanced Configuration
-
-**Custom span attributes:**
-```python
-import litellm
-
-# Add custom metadata to traces
-response = litellm.completion(
-    model="gpt-4.1",
-    messages=[{"role": "user", "content": "Hello!"}],
-    metadata={
-        "user_id": "user123",
-        "session_id": "session456",
-        "environment": "production"
-    }
-)
-```
-
-**Debug OTEL logging:**
-```bash
-export DEBUG_OTEL=true
-litellm --config config.yaml --detailed_debug
-```
