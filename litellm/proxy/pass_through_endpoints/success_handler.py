@@ -229,7 +229,8 @@ class PassThroughEndpointLogging:
         return False
 
     def is_langfuse_route(self, url_route: str):
+        parsed_url = urlparse(url_route)
         for route in self.TRACKED_LANGFUSE_ROUTES:
-            if route in url_route:
+            if route in parsed_url.path:
                 return True
         return False
