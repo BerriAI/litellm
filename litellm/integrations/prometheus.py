@@ -41,6 +41,9 @@ class PrometheusLogger(CustomLogger):
 
             from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
 
+            # Always initialize label_filters, even for non-premium users
+            self.label_filters = self._parse_prometheus_config()
+
             if premium_user is not True:
                 verbose_logger.warning(
                     f"🚨🚨🚨 Prometheus Metrics is on LiteLLM Enterprise\n🚨 {CommonProxyErrors.not_premium_user.value}"
@@ -50,9 +53,6 @@ class PrometheusLogger(CustomLogger):
                     documentation=f"🚨🚨🚨 Prometheus Metrics is on LiteLLM Enterprise. 🚨 {CommonProxyErrors.not_premium_user.value}",
                 )
                 return
-
-            # Parse prometheus metrics configuration for label filtering
-            self.label_filters = self._parse_prometheus_config()
 
             # Create metric factory functions
             self._counter_factory = self._create_metric_factory(Counter)
