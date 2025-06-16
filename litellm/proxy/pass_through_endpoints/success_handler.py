@@ -48,6 +48,9 @@ class PassThroughEndpointLogging:
             AssemblyAIPassthroughLoggingHandler()
         )
 
+        # Langfuse
+        self.TRACKED_LANGFUSE_ROUTES = ["/langfuse/"]
+
     async def _handle_logging(
         self,
         logging_obj: LiteLLMLoggingObj,
@@ -103,9 +106,9 @@ class PassThroughEndpointLogging:
         standard_logging_response_object: Optional[
             PassThroughEndpointLoggingResultValues
         ] = None
-        logging_obj.model_call_details[
-            "passthrough_logging_payload"
-        ] = passthrough_logging_payload
+        logging_obj.model_call_details["passthrough_logging_payload"] = (
+            passthrough_logging_payload
+        )
         if self.is_vertex_route(url_route):
             vertex_passthrough_logging_handler_result = (
                 VertexPassthroughLoggingHandler.vertex_passthrough_handler(
@@ -181,6 +184,9 @@ class PassThroughEndpointLogging:
                 **kwargs,
             )
             return
+        elif self.is_langfuse_route(url_route):
+            # Don't log langfuse pass-through requests
+            return
 
         if standard_logging_response_object is None:
             standard_logging_response_object = StandardPassThroughResponseObject(
@@ -220,4 +226,10 @@ class PassThroughEndpointLogging:
             return True
         elif "/transcript" in parsed_url.path:
             return True
+        return False
+
+    def is_langfuse_route(self, url_route: str):
+        for route in self.TRACKED_LANGFUSE_ROUTES:
+            if route in url_route:
+                return True
         return False
