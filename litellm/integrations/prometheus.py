@@ -1191,14 +1191,13 @@ class PrometheusLogger(CustomLogger):
             if litellm_overhead_time_ms := standard_logging_payload[
                 "hidden_params"
             ].get("litellm_overhead_time_ms"):
-                self.litellm_overhead_latency_metric.labels(
-                    model_group,
-                    llm_provider,
-                    api_base,
-                    litellm_model_name,
-                    standard_logging_payload["metadata"]["user_api_key_hash"],
-                    standard_logging_payload["metadata"]["user_api_key_alias"],
-                ).observe(
+                _labels = prometheus_label_factory(
+                    supported_enum_labels=self.get_labels_for_metric(
+                        metric_name="litellm_overhead_latency_metric"
+                    ),
+                    enum_values=enum_values,
+                )
+                self.litellm_overhead_latency_metric.labels(**_labels).observe(
                     litellm_overhead_time_ms / 1000
                 )  # set as seconds
 
@@ -1209,24 +1208,26 @@ class PrometheusLogger(CustomLogger):
                 "api_base",
                 "litellm_model_name"
                 """
-                self.litellm_remaining_requests_metric.labels(
-                    model_group,
-                    llm_provider,
-                    api_base,
-                    litellm_model_name,
-                    standard_logging_payload["metadata"]["user_api_key_hash"],
-                    standard_logging_payload["metadata"]["user_api_key_alias"],
-                ).set(remaining_requests)
+                _labels = prometheus_label_factory(
+                    supported_enum_labels=self.get_labels_for_metric(
+                        metric_name="litellm_remaining_requests_metric"
+                    ),
+                    enum_values=enum_values,
+                )
+                self.litellm_remaining_requests_metric.labels(**_labels).set(
+                    remaining_requests
+                )
 
             if remaining_tokens:
-                self.litellm_remaining_tokens_metric.labels(
-                    model_group,
-                    llm_provider,
-                    api_base,
-                    litellm_model_name,
-                    standard_logging_payload["metadata"]["user_api_key_hash"],
-                    standard_logging_payload["metadata"]["user_api_key_alias"],
-                ).set(remaining_tokens)
+                _labels = prometheus_label_factory(
+                    supported_enum_labels=self.get_labels_for_metric(
+                        metric_name="litellm_remaining_tokens_metric"
+                    ),
+                    enum_values=enum_values,
+                )
+                self.litellm_remaining_tokens_metric.labels(**_labels).set(
+                    remaining_tokens
+                )
 
             """
             log these labels
@@ -1239,41 +1240,21 @@ class PrometheusLogger(CustomLogger):
                 api_provider=llm_provider or "",
             )
 
-            self.litellm_deployment_success_responses.labels(
-                litellm_model_name=litellm_model_name,
-                model_id=model_id,
-                api_base=api_base,
-                api_provider=llm_provider,
-                requested_model=model_group,
-                hashed_api_key=standard_logging_payload["metadata"][
-                    "user_api_key_hash"
-                ],
-                api_key_alias=standard_logging_payload["metadata"][
-                    "user_api_key_alias"
-                ],
-                team=standard_logging_payload["metadata"]["user_api_key_team_id"],
-                team_alias=standard_logging_payload["metadata"][
-                    "user_api_key_team_alias"
-                ],
-            ).inc()
+            _labels = prometheus_label_factory(
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_deployment_success_responses"
+                ),
+                enum_values=enum_values,
+            )
+            self.litellm_deployment_success_responses.labels(**_labels).inc()
 
-            self.litellm_deployment_total_requests.labels(
-                litellm_model_name=litellm_model_name,
-                model_id=model_id,
-                api_base=api_base,
-                api_provider=llm_provider,
-                requested_model=model_group,
-                hashed_api_key=standard_logging_payload["metadata"][
-                    "user_api_key_hash"
-                ],
-                api_key_alias=standard_logging_payload["metadata"][
-                    "user_api_key_alias"
-                ],
-                team=standard_logging_payload["metadata"]["user_api_key_team_id"],
-                team_alias=standard_logging_payload["metadata"][
-                    "user_api_key_team_alias"
-                ],
-            ).inc()
+            _labels = prometheus_label_factory(
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_deployment_total_requests"
+                ),
+                enum_values=enum_values,
+            )
+            self.litellm_deployment_total_requests.labels(**_labels).inc()
 
             # Track deployment Latency
             response_ms: timedelta = end_time - start_time
