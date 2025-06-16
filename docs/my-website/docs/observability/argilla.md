@@ -50,7 +50,7 @@ For further configuration, please refer to the [Argilla documentation](https://d
 ## Usage
 
 <Tabs>
-<Tab value="sdk" label="SDK">
+<TabItem value="sdk" label="SDK">
 
 ```python
 import os
@@ -78,9 +78,9 @@ response = completion(
 )
 ```
 
-</Tab>
+</TabItem>
 
-<Tab value="proxy" label="PROXY">
+<TabItem value="proxy" label="PROXY">
 
 ```yaml
 litellm_settings:
@@ -90,7 +90,7 @@ litellm_settings:
     llm_output: "response"
 ```
 
-</Tab>
+</TabItem>
 </Tabs>
 
 ## Example Output
