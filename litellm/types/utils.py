@@ -1798,6 +1798,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_user_email: Optional[str]
     user_api_key_team_alias: Optional[str]
     user_api_key_end_user_id: Optional[str]
+    user_api_key_request_route: Optional[str]
 
 
 class StandardLoggingMCPToolCall(TypedDict, total=False):
@@ -2152,6 +2153,7 @@ all_litellm_params = [
     "client_id",
     "azure_username",
     "azure_password",
+    "azure_scope",
     "client_secret",
     "user_continue_message",
     "configurable_clientside_auth_params",

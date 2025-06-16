@@ -125,6 +125,7 @@ from ..integrations.humanloop import HumanloopLogger
 from ..integrations.lago import LagoLogger
 from ..integrations.langfuse.langfuse import LangFuseLogger
 from ..integrations.langfuse.langfuse_handler import LangFuseHandler
+from ..integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from ..integrations.langfuse.langfuse_prompt_management import LangfusePromptManagement
 from ..integrations.langsmith import LangsmithLogger
 from ..integrations.literal_ai import LiteralAILogger
@@ -1175,15 +1176,29 @@ class Logging(LiteLLMLoggingBaseClass):
         event_type: Literal[
             "async_success", "sync_success", "async_failure", "sync_failure"
         ],
+        stream: bool = False,
     ) -> bool:
         try:
             if self.model_call_details.get(f"has_logged_{event_type}", False) is True:
                 return False
 
-            self.model_call_details[f"has_logged_{event_type}"] = True
             return True
         except Exception:
             return True
+
+    def has_run_logging(
+        self,
+        event_type: Literal[
+            "async_success", "sync_success", "async_failure", "sync_failure"
+        ],
+    ) -> None:
+        if self.stream is not None and self.stream is True:
+            """
+            Ignore check on stream, as there can be multiple chunks
+            """
+            return
+        self.model_call_details[f"has_logged_{event_type}"] = True
+        return
 
     def should_run_callback(
         self, callback: litellm.CALLBACK_TYPES, litellm_params: dict, event_hook: str
@@ -1450,6 +1465,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         call_type=self.call_type,
                     )
 
+            self.has_run_logging(event_type="sync_success")
             for callback in callbacks:
                 try:
                     litellm_params = self.model_call_details.get("litellm_params", {})
@@ -1982,6 +1998,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     call_type=self.call_type,
                 )
 
+        self.has_run_logging(event_type="async_success")
         for callback in callbacks:
             # check if callback can run for this request
             litellm_params = self.model_call_details.get("litellm_params", {})
@@ -2226,6 +2243,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 ),
                 result=result,
             )
+            self.has_run_logging(event_type="sync_failure")
             for callback in callbacks:
                 try:
                     if callback == "lunary" and lunaryLogger is not None:
@@ -2406,6 +2424,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         result = None  # result sent to all loggers, init this to None incase it's not created
 
+        self.has_run_logging(event_type="async_failure")
         for callback in callbacks:
             try:
                 if isinstance(callback, CustomLogger):  # custom logger class
@@ -3128,6 +3147,30 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             langfuse_logger = LangfusePromptManagement()
             _in_memory_loggers.append(langfuse_logger)
             return langfuse_logger  # type: ignore
+        elif logging_integration == "langfuse_otel":
+            from litellm.integrations.opentelemetry import (
+                OpenTelemetry,
+                OpenTelemetryConfig,
+            )
+
+            langfuse_otel_config = LangfuseOtelLogger.get_langfuse_otel_config()
+            
+            # The endpoint and headers are now set as environment variables by get_langfuse_otel_config()
+            otel_config = OpenTelemetryConfig(
+                exporter=langfuse_otel_config.protocol,
+            )
+
+            for callback in _in_memory_loggers:
+                if (
+                    isinstance(callback, OpenTelemetry)
+                    and callback.callback_name == "langfuse_otel"
+                ):
+                    return callback  # type: ignore
+            _otel_logger = OpenTelemetry(
+                config=otel_config, callback_name="langfuse_otel"
+            )
+            _in_memory_loggers.append(_otel_logger)
+            return _otel_logger  # type: ignore
         elif logging_integration == "pagerduty":
             for callback in _in_memory_loggers:
                 if isinstance(callback, PagerDutyAlerting):
@@ -3501,6 +3544,7 @@ class StandardLoggingPayloadSetup:
             vector_store_request_metadata=vector_store_request_metadata,
             usage_object=usage_object,
             requester_custom_headers=None,
+            user_api_key_request_route=None,
         )
         if isinstance(metadata, dict):
             # Filter the metadata dictionary to include only the specified keys
@@ -3924,7 +3968,7 @@ def get_standard_logging_object_payload(
         if (
             kwargs.get("complete_streaming_response") is not None
             or kwargs.get("async_complete_streaming_response") is not None
-        ):
+        ) and kwargs.get("stream") is True:
             stream = True
 
         payload: StandardLoggingPayload = StandardLoggingPayload(
@@ -4026,6 +4070,7 @@ def get_standard_logging_metadata(
         vector_store_request_metadata=None,
         usage_object=None,
         requester_custom_headers=None,
+        user_api_key_request_route=None,
     )
     if isinstance(metadata, dict):
         # Filter the metadata dictionary to include only the specified keys

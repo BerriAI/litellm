@@ -24,7 +24,7 @@ import {
   ToolOutlined,
   TagsOutlined,
 } from '@ant-design/icons';
-import { old_admin_roles, v2_admin_role_names, all_admin_roles, rolesAllowedToSeeUsage, rolesWithWriteAccess, internalUserRoles } from '../utils/roles';
+import { old_admin_roles, v2_admin_role_names, all_admin_roles, rolesAllowedToSeeUsage, rolesWithWriteAccess, internalUserRoles, isAdminRole } from '../utils/roles';
 import UsageIndicator from './usage_indicator';
 const { Sider } = Layout;
 
@@ -67,16 +67,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     { key: "16", page: "model-hub", label: "Model Hub", icon: <AppstoreOutlined /> },
     { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined />},
     { key: "11", page: "guardrails", label: "Guardrails", icon: <SafetyOutlined />, roles: all_admin_roles },
-    {
-      key: "llm-tools",
-      page: "llm-tools",
-      label: "LLM Tools",
-      icon: <ToolOutlined />,
-      roles: all_admin_roles,
-      children: [
-        { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined />, roles: all_admin_roles },
-      ]
-    },
+    { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined />, roles: all_admin_roles },
     { 
       key: "experimental", 
       page: "experimental",
@@ -175,7 +166,11 @@ const Sidebar: React.FC<SidebarProps> = ({
             } : undefined
           }))}
         />
-        <UsageIndicator accessToken={accessToken} width={220}/>
+        {
+          isAdminRole(userRole) && (
+            <UsageIndicator accessToken={accessToken} width={220}/>
+          )
+        }
       </Sider>
     </Layout>
   );
