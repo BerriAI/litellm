@@ -40,7 +40,8 @@ class PrometheusLogger(CustomLogger):
             from prometheus_client import Counter, Gauge, Histogram
 
             from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
-
+            self.label_filters = self._parse_prometheus_config()
+            
             if premium_user is not True:
                 verbose_logger.warning(
                     f"🚨🚨🚨 Prometheus Metrics is on LiteLLM Enterprise\n🚨 {CommonProxyErrors.not_premium_user.value}"
