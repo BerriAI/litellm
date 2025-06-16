@@ -1,0 +1,122 @@
+name: LLM Translation Testing for Release Candidates
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_candidate_tag:
+        description: 'Release candidate tag/version'
+        required: true
+        type: string
+  push:
+    tags:
+      - 'v*-rc*'  # Triggers on release candidate tags like v1.0.0-rc1
+  
+jobs:
+  llm-translation-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.release_candidate_tag || github.ref }}
+      
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          pip install "pytest==7.3.1"
+          pip install "pytest-retry==1.6.3"
+          pip install "pytest-cov==5.0.0"
+          pip install "pytest-asyncio==0.21.1"
+          pip install "respx==0.22.0"
+          pip install "pytest-xdist==3.6.1"
+          pip install "pytest-html==4.1.1"
+      
+      - name: Create test results directory
+        run: mkdir -p test-results
+      
+      - name: Run LLM Translation Tests
+        run: |
+          python -m pytest -vv tests/llm_translation \
+            --cov=litellm \
+            --cov-report=xml \
+            --cov-report=html \
+            --junitxml=test-results/junit.xml \
+            --html=test-results/report.html \
+            --self-contained-html \
+            --durations=10 \
+            -n 4 \
+            -x
+        continue-on-error: true
+      
+      - name: Generate test summary
+        run: |
+          echo "# LLM Translation Testing Results" > test-results/summary.md
+          echo "" >> test-results/summary.md
+          echo "**Release Candidate:** ${{ github.event.inputs.release_candidate_tag || github.ref_name }}" >> test-results/summary.md
+          echo "**Run Date:** $(date)" >> test-results/summary.md
+          echo "**Commit:** ${{ github.sha }}" >> test-results/summary.md
+          echo "" >> test-results/summary.md
+          
+          # Parse junit.xml for test statistics if it exists
+          if [ -f "test-results/junit.xml" ]; then
+            python -c "
+          import xml.etree.ElementTree as ET
+          try:
+              tree = ET.parse('test-results/junit.xml')
+              root = tree.getroot()
+              tests = root.get('tests', '0')
+              failures = root.get('failures', '0')
+              errors = root.get('errors', '0')
+              skipped = root.get('skipped', '0')
+              time = root.get('time', '0')
+              
+              print(f'**Total Tests:** {tests}')
+              print(f'**Passed:** {int(tests) - int(failures) - int(errors) - int(skipped)}')
+              print(f'**Failed:** {failures}')
+              print(f'**Errors:** {errors}')
+              print(f'**Skipped:** {skipped}')
+              print(f'**Duration:** {time} seconds')
+          except Exception as e:
+              print(f'Could not parse test results: {e}')
+          " >> test-results/summary.md
+          fi
+          
+          echo "" >> test-results/summary.md
+          echo "## Test Files Covered" >> test-results/summary.md
+          ls tests/llm_translation/*.py | sed 's/^/- /' >> test-results/summary.md
+      
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: llm-translation-test-results-${{ github.event.inputs.release_candidate_tag || github.ref_name }}
+          path: |
+            test-results/
+            coverage.xml
+            htmlcov/
+            .coverage
+          retention-days: 30
+      
+      - name: Upload JUnit test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-xml-${{ github.event.inputs.release_candidate_tag || github.ref_name }}
+          path: test-results/junit.xml
+          retention-days: 30 
