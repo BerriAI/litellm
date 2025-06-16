@@ -65,8 +65,8 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _set_object_metadata_field,
-    _user_has_admin_view,
     _upsert_budget_and_membership,
+    _user_has_admin_view,
 )
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
@@ -112,9 +112,7 @@ async def get_all_team_memberships(
 ) -> List[LiteLLM_TeamMembership]:
     """Get all team memberships for a given user"""
     ## GET ALL MEMBERSHIPS ##
-    where_obj: Dict[str, Dict[str, List[str]]] = {
-        "team_id": {"in": team_ids}
-    }
+    where_obj: Dict[str, Dict[str, List[str]]] = {"team_id": {"in": team_ids}}
     if user_id is not None:
         where_obj["user_id"] = {"in": [user_id]}
     # if user_id is None:
@@ -699,12 +697,12 @@ async def update_team(
             updated_kv["model_id"] = _model_id
 
     updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
-    team_row: Optional[
-        LiteLLM_TeamTable
-    ] = await prisma_client.db.litellm_teamtable.update(
-        where={"team_id": data.team_id},
-        data=updated_kv,
-        include={"litellm_model_table": True},  # type: ignore
+    team_row: Optional[LiteLLM_TeamTable] = (
+        await prisma_client.db.litellm_teamtable.update(
+            where={"team_id": data.team_id},
+            data=updated_kv,
+            include={"litellm_model_table": True},  # type: ignore
+        )
     )
 
     if team_row is None or team_row.team_id is None:
@@ -825,11 +823,11 @@ def team_member_add_duplication_check(
 ):
     def _check_member_duplication(member: Member):
         if member.user_id in [m.user_id for m in existing_team_row.members_with_roles]:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": f"User={member.user_id} already in team. Existing members={existing_team_row.members_with_roles}"
-                },
+            raise ProxyException(
+                message=f"User={member.user_id} already in team. Existing members={existing_team_row.members_with_roles}",
+                type=ProxyErrorTypes.team_member_already_in_team,
+                param="user_id",
+                code="400",
             )
 
     if isinstance(data.member, Member):
@@ -1351,10 +1349,10 @@ async def delete_team(
     team_rows: List[LiteLLM_TeamTable] = []
     for team_id in data.team_ids:
         try:
-            team_row_base: Optional[
-                BaseModel
-            ] = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": team_id}
+            team_row_base: Optional[BaseModel] = (
+                await prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": team_id}
+                )
             )
             if team_row_base is None:
                 raise Exception
@@ -1512,11 +1510,11 @@ async def team_info(
             )
 
         try:
-            team_info: Optional[
-                BaseModel
-            ] = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": team_id},
-                include={"object_permission": True},
+            team_info: Optional[BaseModel] = (
+                await prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": team_id},
+                    include={"object_permission": True},
+                )
             )
             if team_info is None:
                 raise Exception

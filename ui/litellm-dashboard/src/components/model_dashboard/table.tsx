@@ -45,7 +45,7 @@ export function ModelDataTable<TData, TValue>({
                         position: header.id === 'actions' ? 'sticky' : 'relative',
                         right: header.id === 'actions' ? 0 : 'auto',
                       }}
-                      onClick={header.column.getToggleSortingHandler()}
+                      onClick={header.column.getCanSort() ? header.column.getToggleSortingHandler() : undefined}
                     >
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center">
@@ -56,7 +56,7 @@ export function ModelDataTable<TData, TValue>({
                             )
                           )}
                         </div>
-                        {header.id !== 'actions' && (
+                        {header.id !== 'actions' && header.column.getCanSort() && (
                           <div className="w-4">
                             {header.column.getIsSorted() ? (
                               {
