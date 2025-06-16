@@ -19,8 +19,8 @@ import {
 } from "@ariakit/react";
 import { CheckIcon, ChevronDown, XIcon } from "lucide-react";
 import { forwardRef, startTransition, useMemo, useState } from "react";
-import { AiModel, models } from "./data";
-import { title } from "process";
+import { models } from "./data";
+import { Setter } from "@/types";
 
 export function UiFormGroup({
   className,
@@ -44,7 +44,10 @@ export function UiFormLabelGroup({
 }: React.ComponentProps<"div">) {
   return (
     <div
-      className={cx("flex flex-col gap-1.5 shrink-0 max-w-[320px]", className)}
+      className={cx(
+        "flex flex-col gap-1.5 shrink-0 grow max-w-[320px]",
+        className,
+      )}
       {...props}
     />
   );
@@ -113,17 +116,29 @@ export const UiFormTextInput = forwardRef<
   );
 });
 
-type UiFormRadioGroupProps = Omit<RadioGroupProps, "defaultValue"> & {
-  defaultValue?: RadioProviderProps["defaultValue"];
-};
+export function UiFormError({
+  className,
+  ...props
+}: React.ComponentProps<"p">) {
+  return <p className={cx("text-[12px] text-red-500", className)} {...props} />;
+}
+
+type UiFormRadioGroupProps = Omit<RadioGroupProps, "defaultValue"> &
+  Pick<RadioProviderProps, "defaultValue" | "value" | "setValue">;
 
 export function UiFormRadioGroup({
   className,
   defaultValue,
+  value,
+  setValue,
   ...props
 }: UiFormRadioGroupProps) {
   return (
-    <RadioProvider defaultValue={defaultValue}>
+    <RadioProvider
+      defaultValue={defaultValue}
+      value={value}
+      setValue={setValue}
+    >
       <RadioGroup className={cx("flex flex-col gap-2", className)} {...props} />
     </RadioProvider>
   );
@@ -186,7 +201,7 @@ export function UiFormRadio({ className, children, ...props }: RadioProps) {
       onFocusVisible={() => {
         store?.setValue(props.value);
       }}
-      render={<button />}
+      render={<button type="button" />}
       className={cx("group outline-none", className)}
       {...props}
     >
@@ -203,21 +218,35 @@ export function UiFormRadio({ className, children, ...props }: RadioProps) {
 export type UiFormComboboxItem = {
   title: string;
   subtitle?: string;
+  value: string;
 };
 
 type UiFormComboboxProps = SelectProps & {
   placeholder?: string;
   items: UiFormComboboxItem[];
+  value?: string;
+  setValue?: (value: string) => void;
 };
 
 export function UiFormCombobox({
   className,
   placeholder,
+  value,
+  setValue,
   items,
   ...props
 }: UiFormComboboxProps) {
   const [searchValue, setSearchValue] = useState("");
+  const [localValue, setLocalValue] = useState<string>("");
+  const selectedValue = value ?? localValue;
+  const setSelectedValue = setValue ?? setLocalValue;
+
   const resolvedPlaceholder = placeholder || "Select an item...";
+
+  const selectedItem = useMemo(() => {
+    if (!selectedValue) return null;
+    return items.find((item) => item.value === selectedValue) || null;
+  }, [items, selectedValue]);
 
   const matches = useMemo(() => {
     return items.filter((item) => {
@@ -240,22 +269,41 @@ export function UiFormCombobox({
         });
       }}
     >
-      <SelectProvider>
+      <SelectProvider value={selectedValue} setValue={setSelectedValue}>
         <Select
           className={cx(
             "relative block w-full max-w-[400px] h-[34px] truncate rounded-md bg-neutral-50 px-4",
-            "border-none",
+            "border-none text-start",
             "ring-[0.7px] ring-black/[0.12]",
             "shadow-md shadow-black/[0.05]",
             "transition-colors",
-            "text-start",
             className,
           )}
           {...props}
         >
-          <span className="text-[13px] font-normal tracking-tight text-neutral-400">
-            {resolvedPlaceholder}
-          </span>
+          {selectedItem ? (
+            <div className="flex items-center gap-2 min-w-0 pr-3">
+              <span className="text-[13px] text-neutral-800 tracking-tight truncate">
+                {selectedItem.title}
+              </span>
+
+              {selectedItem.subtitle ? (
+                <span className="text-[11px] text-neutral-500 truncate">
+                  {selectedItem.subtitle}
+                </span>
+              ) : null}
+            </div>
+          ) : selectedValue ? (
+            <div className="flex items-center gap-2 min-w-0 pr-3">
+              <span className="text-[13px] text-neutral-800 tracking-tight truncate">
+                {selectedValue}
+              </span>
+            </div>
+          ) : (
+            <span className="text-[13px] font-normal tracking-tight text-neutral-400">
+              {resolvedPlaceholder}
+            </span>
+          )}
 
           <span
             className={cx(
@@ -282,7 +330,7 @@ export function UiFormCombobox({
             "data-[enter]:translate-y-0 data-[enter]:opacity-100",
           )}
         >
-          <div className={cx("", "border-b border-neutral-200")}>
+          <div className={cx("border-b border-neutral-200")}>
             <Combobox
               autoFocus
               style={{ boxShadow: "none" }}
@@ -302,6 +350,7 @@ export function UiFormCombobox({
               <SelectItem
                 key={item.title}
                 render={<ComboboxItem />}
+                value={item.value}
                 className={cx(
                   "px-4 py-2.5",
                   "border-b border-neutral-100",
@@ -371,12 +420,21 @@ function transformModels(ids: string[]): AiModelOption[] {
   });
 }
 
-type UiModelSelectProps = SelectProps & {};
+type UiModelSelectProps = SelectProps & {
+  value?: string[];
+  setValue?: Setter<string[]>;
+};
 
-export function UiModelSelect({ className, ...props }: UiModelSelectProps) {
+export function UiModelSelect({
+  className,
+  value,
+  setValue,
+  ...props
+}: UiModelSelectProps) {
   const [searchValue, setSearchValue] = useState("");
-  const [selectedValues, setSelectedValues] = useState<string[]>([]);
-  console.log(selectedValues);
+  const [localSselectedValues, setLocalSelectedValues] = useState<string[]>([]);
+  const selectedValues = value ?? localSselectedValues;
+  const setSelectedValues = setValue ?? setLocalSelectedValues;
   const placeholder = "Select Models";
 
   const items = useMemo(() => {
@@ -436,14 +494,17 @@ export function UiModelSelect({ className, ...props }: UiModelSelectProps) {
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={(event) => {
                       event.preventDefault();
-                      setSelectedValues((v) => {
-                        return v.reduce<string[]>((result, item, index) => {
-                          if (index !== optionIndex) {
-                            result.push(item);
-                          }
-                          return result;
-                        }, []);
-                      });
+                      setSelectedValues(
+                        selectedValues.reduce<string[]>(
+                          (result, item, index) => {
+                            if (index !== optionIndex) {
+                              result.push(item);
+                            }
+                            return result;
+                          },
+                          [],
+                        ),
+                      );
                     }}
                   >
                     <XIcon

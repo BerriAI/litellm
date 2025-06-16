@@ -245,6 +245,7 @@ export function VirtualKeyTable() {
   return (
     <Fragment>
       <CreateVirtualKeyDialog store={createVirtualKeyDialogStore} />
+
       <div className="flex flex-col min-h-0 gap-3">
         <div className="flex shrink-0 items-center justify-between gap-4 min-w-0">
           <div className="h-[48px] flex items-center gap-4 px-2 bg-neutral-50 min-w-0 rounded-lg">

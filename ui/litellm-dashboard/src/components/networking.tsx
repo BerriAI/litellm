@@ -553,7 +553,9 @@ export const keyCreateCall = async (
       throw new Error(errorData);
     }
 
-    const data = await response.json();
+    const data = await response.json() as {
+      key: string
+    };
     console.log("API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
