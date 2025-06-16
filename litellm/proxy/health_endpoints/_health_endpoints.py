@@ -4,6 +4,7 @@ import os
 import traceback
 from datetime import datetime, timedelta
 from typing import Dict, Literal, Optional, Union
+import time
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -300,6 +301,111 @@ async def health_services_endpoint(  # noqa: PLR0915
             param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+def _convert_health_check_to_dict(check) -> dict:
+    """Convert health check database record to dictionary format"""
+    return {
+        "health_check_id": check.health_check_id,
+        "model_name": check.model_name,
+        "model_id": check.model_id,
+        "status": check.status,
+        "healthy_count": check.healthy_count,
+        "unhealthy_count": check.unhealthy_count,
+        "error_message": check.error_message,
+        "response_time_ms": check.response_time_ms,
+        "details": check.details,
+        "checked_by": check.checked_by,
+        "checked_at": check.checked_at.isoformat() if check.checked_at else None,
+        "created_at": check.created_at.isoformat() if check.created_at else None,
+    }
+
+
+def _check_prisma_client():
+    """Helper to check if prisma_client is available and raise appropriate error"""
+    from litellm.proxy.proxy_server import prisma_client
+    
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Database not initialized"},
+        )
+    return prisma_client
+
+
+async def _save_health_check_to_db(
+    prisma_client, 
+    model_name: str, 
+    healthy_endpoints: list, 
+    unhealthy_endpoints: list, 
+    start_time: float, 
+    user_id: Optional[str],
+    model_id: Optional[str] = None
+):
+    """Helper function to save health check results to database"""
+    try:
+        # Extract error message from first unhealthy endpoint if available
+        error_message = (
+            str(unhealthy_endpoints[0]["error"])[:500] 
+            if unhealthy_endpoints and unhealthy_endpoints[0].get("error") 
+            else None
+        )
+        
+        await prisma_client.save_health_check_result(
+            model_name=model_name,
+            model_id=model_id,
+            status="healthy" if healthy_endpoints else "unhealthy",
+            healthy_count=len(healthy_endpoints),
+            unhealthy_count=len(unhealthy_endpoints),
+            error_message=error_message,
+            response_time_ms=(time.time() - start_time) * 1000,
+            details=None,  # Skip details for now to avoid JSON serialization issues
+            checked_by=user_id,
+        )
+    except Exception as db_error:
+        verbose_proxy_logger.warning(f"Failed to save health check to database for model {model_name}: {db_error}")
+        # Continue execution - don't let database save failure break health checks
+
+
+async def _perform_health_check_and_save(
+    model_list,
+    model,
+    cli_model,
+    details,
+    prisma_client,
+    start_time,
+    user_id,
+    model_id=None
+):
+    """Helper function to perform health check and save results to database"""
+    healthy_endpoints, unhealthy_endpoints = await perform_health_check(
+        model_list=model_list, 
+        cli_model=cli_model, 
+        model=model,
+        details=details
+    )
+    
+    # Optionally save health check result to database (non-blocking)
+    if prisma_client is not None:
+        # For CLI model, use cli_model name; for router models, use model
+        model_name_for_db = cli_model if cli_model is not None else model
+        if model_name_for_db is not None:
+            asyncio.create_task(_save_health_check_to_db(
+                prisma_client,
+                model_name_for_db,
+                healthy_endpoints,
+                unhealthy_endpoints,
+                start_time,
+                user_id,
+                model_id=model_id
+            ))
+    
+    return {
+        "healthy_endpoints": healthy_endpoints,
+        "unhealthy_endpoints": unhealthy_endpoints,
+        "healthy_count": len(healthy_endpoints),
+        "unhealthy_count": len(unhealthy_endpoints),
+    }
 
 
 @router.get("/health", tags=["health"], dependencies=[Depends(user_api_key_auth)])
