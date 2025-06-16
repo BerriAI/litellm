@@ -116,7 +116,7 @@ def strip_none_values_from_message(message: AllMessageValues) -> AllMessageValue
 
 
 def convert_content_list_to_str(
-    message: Union[AllMessageValues, ChatCompletionResponseMessage]
+    message: Union[AllMessageValues, ChatCompletionResponseMessage],
 ) -> str:
     """
     - handles scenario where content is list and not string
@@ -532,6 +532,7 @@ def _get_image_mime_type_from_url(url: str) -> Optional[str]:
     audio/mpeg
     audio/mp3
     audio/wav
+    audio/ogg
     image/png
     image/jpeg
     image/webp
@@ -565,6 +566,7 @@ def _get_image_mime_type_from_url(url: str) -> Optional[str]:
         (".mp3",): "audio/mp3",
         (".wav",): "audio/wav",
         (".mpeg",): "audio/mpeg",
+        (".ogg",): "audio/ogg",
         # Documents
         (".pdf",): "application/pdf",
         (".txt",): "text/plain",
@@ -621,7 +623,6 @@ def get_file_ids_from_messages(messages: List[AllMessageValues]) -> List[str]:
     return file_ids
 
 
-
 def check_is_function_call(logging_obj: "LoggingClass") -> bool:
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         is_function_call,
@@ -634,6 +635,7 @@ def check_is_function_call(logging_obj: "LoggingClass") -> bool:
             return True
 
     return False
+
 
 def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:
     """
@@ -686,5 +688,3 @@ def migrate_file_to_image_url(
     if format and isinstance(image_url_object["image_url"], dict):
         image_url_object["image_url"]["format"] = format
     return image_url_object
-
-
