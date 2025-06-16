@@ -154,4 +154,4 @@ jobs:
         with:
           name: junit-xml-${{ github.event.inputs.release_candidate_tag || github.ref_name }}
           path: test-results/junit.xml
-          retention-days: 30 
+          retention-days: 30
