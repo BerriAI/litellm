@@ -13,11 +13,10 @@ import {
   UiFormTextInput,
   UiModelSelect,
 } from "./forms";
-import { teams } from "./data";
 import { UiDialog } from "./ui-dialog";
 import { Controller, SubmitHandler, useForm } from "react-hook-form";
 import { AuthContext, useAuthContext } from "./auth-context";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Fragment, useState } from "react";
 import { keyCreateCall } from "@/components/networking";
 import { message } from "antd";
@@ -25,6 +24,9 @@ import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { CopyApiKeyDialog } from "./copy-api-key-dialog";
 import { Record } from "openai/core.mjs";
+import { modelAvailableCall, teamListCall } from "../../components/networking";
+import { Team } from "../../components/key_team_helpers/key_list";
+import { AiModel } from "../../types";
 
 type CreateVirtualKeyFormData = {
   owner: "you" | "service_account";
@@ -69,10 +71,12 @@ function transformFormSubmissionData(args: {
 function CreateVirtualKeyForm() {
   const authCtx = useAuthContext();
   const createVirtualKeyDialogStore = useDialogContext();
+  const queryClient = useQueryClient();
 
   const [copyApiKeyDialogUiState, setCopyApiKeyDialogUiState] = useState<
     { type: "hidden" } | { type: "visible"; apiKey: string }
   >({ type: "hidden" });
+
   const copyApiKeyDialogStore = useDialogStore({
     setOpen(open) {
       if (open === false) {
@@ -98,6 +102,7 @@ function CreateVirtualKeyForm() {
       return await keyCreateCall(authCtx.key, authCtx.user_id, payload);
     },
     onSuccess(data) {
+      queryClient.invalidateQueries({ queryKey: ["keys"] });
       setCopyApiKeyDialogUiState({ type: "visible", apiKey: data.key });
       copyApiKeyDialogStore.show();
     },
@@ -105,6 +110,24 @@ function CreateVirtualKeyForm() {
       message.error(parseErrorMessage(error));
     },
   });
+
+  const teamsQuery = useQuery<Team[]>({
+    initialData: () => [],
+    queryKey: ["teams"],
+    queryFn: () => teamListCall(authCtx.key, null),
+  });
+
+  const modelsQuery = useQuery<AiModel[]>({
+    queryKey: ["models"],
+    initialData: () => [],
+    queryFn: () =>
+      modelAvailableCall(authCtx.key, authCtx.user_id, authCtx.user_role).then(
+        (res) => res.data,
+      ),
+  });
+
+  const teams = teamsQuery.data;
+  const models = modelsQuery.data;
 
   const busy = createVirtualKeyMutation.isPending;
 
@@ -239,9 +262,9 @@ function CreateVirtualKeyForm() {
                       value={field.value}
                       setValue={field.onChange}
                       items={teams.map((team) => ({
-                        title: team.name,
-                        subtitle: team.id,
-                        value: team.id,
+                        title: team.team_alias,
+                        subtitle: team.team_id,
+                        value: team.team_id,
                       }))}
                     />
                   )}
@@ -293,6 +316,7 @@ function CreateVirtualKeyForm() {
                         <UiModelSelect
                           value={field.value}
                           setValue={field.onChange}
+                          models={models}
                         />
                       )}
                     />

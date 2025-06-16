@@ -19,8 +19,8 @@ import {
 } from "@ariakit/react";
 import { CheckIcon, ChevronDown, XIcon } from "lucide-react";
 import { forwardRef, startTransition, useMemo, useState } from "react";
-import { models } from "./data";
 import { Setter } from "@/types";
+import { AiModel } from "../../types";
 
 export function UiFormGroup({
   className,
@@ -423,12 +423,14 @@ function transformModels(ids: string[]): AiModelOption[] {
 type UiModelSelectProps = SelectProps & {
   value?: string[];
   setValue?: Setter<string[]>;
+  models: AiModel[];
 };
 
 export function UiModelSelect({
   className,
   value,
   setValue,
+  models,
   ...props
 }: UiModelSelectProps) {
   const [searchValue, setSearchValue] = useState("");
@@ -438,8 +440,8 @@ export function UiModelSelect({
   const placeholder = "Select Models";
 
   const items = useMemo(() => {
-    return transformModels(models);
-  }, []);
+    return transformModels(models.map((m) => m.id));
+  }, [models]);
 
   const matches = useMemo(() => {
     return items.filter((item) => {
