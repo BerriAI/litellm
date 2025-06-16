@@ -518,6 +518,10 @@ jobs:
           command: |
             trivy fs --scanners vuln --dependency-tree --exit-code 1 --severity HIGH,CRITICAL,MEDIUM ./docs/
       - run:
+          name: Run Trivy scan on LiteLLM UI
+          command: |
+            trivy fs --scanners vuln --dependency-tree --exit-code 1 --severity HIGH,CRITICAL,MEDIUM ./ui/
+      - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
             set +e
