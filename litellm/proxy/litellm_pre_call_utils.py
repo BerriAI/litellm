@@ -483,6 +483,11 @@ class LiteLLMProxyRequestSetup:
                 tags = [tag.strip() for tag in _tags]
             elif isinstance(headers["x-litellm-tags"], list):
                 tags = headers["x-litellm-tags"]
+        if "user-agent" in headers:
+            # add user-agent to tags
+            if tags is None:
+                tags = []
+            tags.append(headers["user-agent"])
         # Check request body for tags
         if "tags" in data and isinstance(data["tags"], list):
             tags = data["tags"]
