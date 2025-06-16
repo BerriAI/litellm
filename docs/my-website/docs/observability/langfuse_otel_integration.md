@@ -2,6 +2,10 @@
 
 The Langfuse OpenTelemetry integration allows you to send LiteLLM traces and observability data to Langfuse using the OpenTelemetry protocol. This provides a standardized way to collect and analyze your LLM usage data.
 
+:::info Recommended for Langfuse SDK v3.0+
+This integration is the recommended approach when using Langfuse SDK v3.0+ which moved to OpenTelemetry. It avoids compatibility issues with the legacy Langfuse integration.
+:::
+
 ## Features
 
 - Automatic trace collection for all LiteLLM requests

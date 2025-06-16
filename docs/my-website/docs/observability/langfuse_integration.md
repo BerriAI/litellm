@@ -24,6 +24,12 @@ Ensure you have run `pip install langfuse` for this integration
 pip install langfuse==2.45.0 litellm
 ```
 
+:::warning Langfuse SDK v3.0+ Compatibility
+If you're using Langfuse SDK v3.0+, consider using the new OpenTelemetry-based integration instead:
+- Use `langfuse_otel` instead of `langfuse` in your callbacks
+- See [Langfuse OpenTelemetry Integration](./langfuse_otel_integration) for details
+:::
+
 ### Quick Start
 Use just 2 lines of code, to instantly log your responses **across all providers** with Langfuse:
 
