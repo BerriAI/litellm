@@ -31,7 +31,7 @@ jobs:
     - name: Run Black formatting
       run: |
         cd litellm
-        poetry run black .
+        poetry run black . --check
         cd ..
 
     - name: Run Ruff linting
