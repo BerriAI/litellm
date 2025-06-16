@@ -3,7 +3,7 @@ import TabItem from '@theme/TabItem';
 
 # Elasticsearch Logging with LiteLLM
 
-Send your LLM requests, responses, costs, and performance data to Elasticsearch for analytics and monitoring.
+Send your LLM requests, responses, costs, and performance data to Elasticsearch for analytics and monitoring using OpenTelemetry.
 
 ## Quick Start
 
@@ -19,7 +19,60 @@ docker run -d \
   docker.elastic.co/elasticsearch/elasticsearch:8.11.0
 ```
 
-### 2. Configure LiteLLM
+### 2. Set up OpenTelemetry Collector
+
+Create an OTEL collector configuration file `otel_config.yaml`:
+
+```yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+
+exporters:
+  logging:
+    loglevel: debug
+  otlphttp/elastic:
+    endpoint: "http://localhost:9200"
+    headers: 
+      "Content-Type": "application/json"
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      exporters: [logging, otlphttp/elastic]
+    traces:
+      receivers: [otlp]
+      exporters: [logging, otlphttp/elastic]
+    logs: 
+      receivers: [otlp]
+      exporters: [logging, otlphttp/elastic]
+```
+
+Start the OpenTelemetry collector:
+```bash
+docker run -p 4317:4317 -p 4318:4318 \
+    -v $(pwd)/otel_config.yaml:/etc/otel-collector-config.yaml \
+    otel/opentelemetry-collector:latest \
+    --config=/etc/otel-collector-config.yaml
+```
+
+### 3. Install OpenTelemetry Dependencies
+
+```bash
+pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp
+```
+
+### 4. Configure LiteLLM
 
 <Tabs>
 <TabItem value="proxy" label="LiteLLM Proxy">
@@ -34,36 +87,32 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
 
 litellm_settings:
-  success_callback: ["generic"]
-  failure_callback: ["generic"]
+  callbacks: ["otel"]
 
 general_settings:
-  generic_logger_endpoint: "http://localhost:9200/litellm-logs/_doc"
-  generic_logger_headers: 
-    "Content-Type": "application/json"
+  otel: true
 ```
 
-Start the proxy:
+Set environment variables and start the proxy:
 ```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4317"
 litellm --config config.yaml
 ```
 
 </TabItem>
 <TabItem value="python-sdk" label="Python SDK">
 
-Configure the generic logger in your Python code:
+Configure OpenTelemetry in your Python code:
 
 ```python
 import litellm
 import os
 
-# Set up Elasticsearch endpoint
-os.environ["GENERIC_LOGGER_ENDPOINT"] = "http://localhost:9200/litellm-logs/_doc"
-os.environ["GENERIC_LOGGER_HEADERS"] = "Content-Type=application/json"
+# Configure OpenTelemetry
+os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://localhost:4317"
 
-# Enable logging
-litellm.success_callback = ["generic"]
-litellm.failure_callback = ["generic"]
+# Enable OTEL logging
+litellm.callbacks = ["otel"]
 
 # Make your LLM calls
 response = litellm.completion(
@@ -75,7 +124,7 @@ response = litellm.completion(
 </TabItem>
 </Tabs>
 
-### 3. Test the Integration
+### 5. Test the Integration
 
 Make a test request to verify logging is working:
 
@@ -109,56 +158,27 @@ print("Response:", response.choices[0].message.content)
 </TabItem>
 </Tabs>
 
-### 4. Verify It's Working
+### 6. Verify It's Working
 
 ```bash
-# Check if logs are being created
-curl "localhost:9200/litellm-logs/_search?pretty&size=1"
+# Check if traces are being created in Elasticsearch
+curl "localhost:9200/_search?pretty&size=1"
 ```
 
-You should see your LLM requests with fields like `model`, `response_cost`, `total_tokens`, `messages`, etc.
-
-## Analytics Examples
-
-**Total costs by model:**
-```bash
-curl -X GET "localhost:9200/litellm-logs/_search" -H "Content-Type: application/json" -d '{
-  "size": 0,
-  "aggs": {
-    "models": {
-      "terms": {"field": "model"},
-      "aggs": {"total_cost": {"sum": {"field": "response_cost"}}}
-    }
-  }
-}'
-```
-
-**Average response time:**
-```bash
-curl -X GET "localhost:9200/litellm-logs/_search" -H "Content-Type: application/json" -d '{
-  "size": 0,
-  "aggs": {"avg_response_time": {"avg": {"field": "response_time"}}}
-}'
-```
-
-**Recent errors:**
-```bash
-curl -X GET "localhost:9200/litellm-logs/_search" -H "Content-Type: application/json" -d '{
-  "query": {"term": {"status": "failure"}},
-  "size": 10,
-  "sort": [{"endTime": {"order": "desc"}}]
-}'
-```
+You should see OpenTelemetry trace data with structured fields for your LLM requests.
 
 ## Production Setup
 
 **With Elasticsearch Cloud:**
+
+Update your `otel_config.yaml`:
 ```yaml
-general_settings:
-  generic_logger_endpoint: "https://your-deployment.es.region.cloud.es.io/litellm-logs/_doc"
-  generic_logger_headers:
-    "Content-Type": "application/json"
-    "Authorization": "Bearer your-api-key"
+exporters:
+  otlphttp/elastic:
+    endpoint: "https://your-deployment.es.region.cloud.es.io"
+    headers: 
+      "Authorization": "Bearer your-api-key"
+      "Content-Type": "application/json"
 ```
 
 **Docker Compose (Full Stack):**
@@ -174,16 +194,29 @@ services:
     ports:
       - "9200:9200"
       
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel_config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    depends_on:
+      - elasticsearch
+      
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
     ports:
       - "4000:4000"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - GENERIC_LOGGER_ENDPOINT=http://elasticsearch:9200/litellm-logs/_doc
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
     command: ["--config", "/app/config.yaml"]
     volumes:
       - ./config.yaml:/app/config.yaml
+    depends_on:
+      - otel-collector
 ```
 
 **config.yaml:**
@@ -195,24 +228,83 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
 
 litellm_settings:
-  success_callback: ["generic"]
-  failure_callback: ["generic"]
+  callbacks: ["otel"]
 
 general_settings:
   master_key: sk-1234
+  otel: true
+```
+
+## Analytics Examples
+
+**Query traces by service:**
+```bash
+curl -X GET "localhost:9200/_search" -H "Content-Type: application/json" -d '{
+  "query": {
+    "term": {"resource.service.name": "litellm"}
+  },
+  "size": 10
+}'
+```
+
+**Filter by LLM model:**
+```bash
+curl -X GET "localhost:9200/_search" -H "Content-Type: application/json" -d '{
+  "query": {
+    "term": {"attributes.model": "gpt-4.1"}
+  },
+  "size": 10
+}'
+```
+
+**Aggregate response times:**
+```bash
+curl -X GET "localhost:9200/_search" -H "Content-Type: application/json" -d '{
+  "size": 0,
+  "aggs": {
+    "avg_duration": {
+      "avg": {
+        "script": {
+          "source": "(doc[\"end_time\"].value - doc[\"start_time\"].value) / 1000000"
+        }
+      }
+    }
+  }
+}'
 ```
 
 ## What's Logged
 
-LiteLLM sends a payload for every request including:
+LiteLLM sends OpenTelemetry traces for every request including:
 
-- `model` - Model used (e.g., gpt-4.1)
-- `response_cost` - Cost in USD
-- `total_tokens`, `prompt_tokens`, `completion_tokens` - Token usage
-- `response_time` - How long the request took
-- `status` - "success" or "failure"
-- `messages` - Input messages
-- `response` - LLM response
-- `metadata` - User info, API keys, etc.
+- **Trace & Span Data**: Structured trace information with parent-child relationships
+- **Attributes**: Model, token usage, costs, response times, user metadata
+- **Events**: Request input, response output, and error information
+- **Resource Info**: Service name, version, and deployment information
+- **Timing**: Precise start/end times and duration measurements
 
-See the full [StandardLoggingPayload specification](../proxy/logging_spec) for all available fields.
+The data follows OpenTelemetry semantic conventions for better standardization and tooling compatibility.
+
+## Advanced Configuration
+
+**Custom span attributes:**
+```python
+import litellm
+
+# Add custom metadata to traces
+response = litellm.completion(
+    model="gpt-4.1",
+    messages=[{"role": "user", "content": "Hello!"}],
+    metadata={
+        "user_id": "user123",
+        "session_id": "session456",
+        "environment": "production"
+    }
+)
+```
+
+**Debug OTEL logging:**
+```bash
+export DEBUG_OTEL=true
+litellm --config config.yaml --detailed_debug
+```
