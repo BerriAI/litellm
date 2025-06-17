@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react";
 import { DeleteVirtualKeyDialogProps } from "./delete-virtual-key-dialog";
+import { EditVirtualKeyDialogProps } from "./edit-virtual-key-dialog";
 
 export type AuthContext = {
   auth_header_name: string;
@@ -28,6 +29,9 @@ export function useAuthContext() {
 export type GlobalOverlaysContext = {
   deleteVirtualKeyDialogProps: DeleteVirtualKeyDialogProps | null;
   deleteVirtualKey: (props: DeleteVirtualKeyDialogProps) => void;
+
+  editVirtualKeyDialogProps: EditVirtualKeyDialogProps | null;
+  editVirtualKey: (props: EditVirtualKeyDialogProps) => void;
 };
 
 export const globalOverlaysContext = createContext<

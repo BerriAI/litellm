@@ -49,7 +49,6 @@ import {
 import { CreateVirtualKeyDialog } from "./create-virtual-key-dialog";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { usePagination } from "./pagination";
-import { DeleteVirtualKeyDialog } from "./delete-virtual-key-dialog";
 import { GlobalOverlaysProvider } from "./global-overlays";
 
 function getCookie(name: string) {
@@ -96,14 +95,18 @@ function getPinStyles(column: Column<any>): CSSProperties {
 
 function TitleCell(props: { cellContext: CellContext<KeyResponse, unknown> }) {
   const virtualKey = props.cellContext.row.original;
+  const overlays = useGlobalOverlaysContext();
 
   return (
     <div
       className={cx("flex flex-col gap-1 items-start tracking-tight min-w-0")}
     >
-      <span className="text-blue-600 text-[14px] truncate max-w-[320px] bg-blue-50 px-1 py-0.5 rounded">
+      <button
+        className="text-blue-600 text-[14px] truncate max-w-[320px] bg-blue-50 px-1 py-0.5 rounded"
+        onClick={() => overlays.editVirtualKey({ virtualKey })}
+      >
         {virtualKey.key_alias}
-      </span>
+      </button>
 
       <span className="text-[13px] text-neutral-400 truncate max-w-[200px]">
         {virtualKey.token}
@@ -230,7 +233,10 @@ function ActionsCell(props: {
         <Trash2Icon className="size-3.5 text-neutral-600" />
       </button>
 
-      <button className="inline-flex items-center gap-1 h-[24px] px-2 rounded bg-neutral-100">
+      <button
+        className="inline-flex items-center gap-1 h-[24px] px-2 rounded bg-neutral-100"
+        onClick={() => overlays.editVirtualKey({ virtualKey })}
+      >
         <SettingsIcon className="size-3.5 text-neutral-600" />
       </button>
     </div>

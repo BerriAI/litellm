@@ -11,6 +11,7 @@ import { parseErrorMessage } from "@/components/shared/errorUtils";
 
 type ContentProps = {
   virtualKey: KeyResponse;
+  onSuccess?: () => void;
 };
 
 function Content(props: ContentProps) {
@@ -35,6 +36,9 @@ function Content(props: ContentProps) {
 
       message.success("Key deleted successfully");
       store?.hide();
+      if (props.onSuccess) {
+        props.onSuccess();
+      }
     },
     onError(error) {
       message.error(parseErrorMessage(error));
@@ -107,12 +111,13 @@ function Content(props: ContentProps) {
 export type DeleteVirtualKeyDialogProps = {
   store?: DialogStore;
   virtualKey: KeyResponse;
+  onSuccess?: () => void;
 };
 
 export function DeleteVirtualKeyDialog(props: DeleteVirtualKeyDialogProps) {
   return (
     <UiDialog store={props.store} className="max-w-[520px]">
-      <Content virtualKey={props.virtualKey} />
+      <Content virtualKey={props.virtualKey} onSuccess={props.onSuccess} />
     </UiDialog>
   );
 }
