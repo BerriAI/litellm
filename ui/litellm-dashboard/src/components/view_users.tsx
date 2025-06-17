@@ -260,9 +260,8 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   );
 
   return (
-    <div className="w-full p-6">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-xl font-semibold">Users</h1>
+    <div className="w-full p-6 mx-4">
+      <div className="flex items-center justify-between mb-4 mt-4">
         <div className="flex space-x-3">
           <CreateUser
             userID={userID}

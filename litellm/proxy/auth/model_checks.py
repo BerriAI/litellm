@@ -37,10 +37,6 @@ def get_provider_models(
         provider_models = get_valid_models(
             custom_llm_provider=provider, litellm_params=litellm_params
         )
-        # provider_models = copy.deepcopy(litellm.models_by_provider[provider])
-        for idx, _model in enumerate(provider_models):
-            if provider not in _model:
-                provider_models[idx] = f"{provider}/{_model}"
         return provider_models
     return None
 
@@ -189,26 +185,39 @@ def get_known_models_from_wildcard(
     wildcard_model: str, litellm_params: Optional[LiteLLM_Params] = None
 ) -> List[str]:
     try:
-        provider, model = wildcard_model.split("/", 1)
+        wildcard_provider_prefix, wildcard_suffix = wildcard_model.split("/", 1)
     except ValueError:  # safely fail
         return []
+
+    if litellm_params is None:  # need litellm params to extract litellm model name
+        return []
+
+    try:
+        provider = litellm_params.model.split("/", 1)[0]
+    except ValueError:
+        provider = wildcard_provider_prefix
+
     # get all known provider models
     wildcard_models = get_provider_models(
         provider=provider, litellm_params=litellm_params
     )
     if wildcard_models is None:
         return []
-    if model == "*":
-        return wildcard_models or []
-    else:
-        model_prefix = model.replace("*", "")
+    if wildcard_suffix != "*":
+        model_prefix = wildcard_suffix.replace("*", "")
         filtered_wildcard_models = [
             wc_model
             for wc_model in wildcard_models
-            if wc_model.split("/")[1].startswith(model_prefix)
+            if wc_model.startswith(model_prefix)
         ]
+        wildcard_models = filtered_wildcard_models
 
-        return filtered_wildcard_models
+    suffix_appended_wildcard_models = []
+    for model in wildcard_models:
+        if not model.startswith(wildcard_provider_prefix):
+            model = f"{wildcard_provider_prefix}/{model}"
+        suffix_appended_wildcard_models.append(model)
+    return suffix_appended_wildcard_models or []
 
 
 def _get_wildcard_models(
