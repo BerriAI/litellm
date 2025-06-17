@@ -88,7 +88,7 @@ class MCPServerManager:
                 name=server_name,
                 url=server_config["url"],
                 # TODO: utility fn the default values
-                transport=server_config.get("transport", MCPTransport.sse),
+                transport=server_config.get("transport", MCPTransport.http),
                 spec_version=server_config.get("spec_version", MCPSpecVersion.mar_2025),
                 auth_type=server_config.get("auth_type", None),
                 mcp_info=mcp_info,
