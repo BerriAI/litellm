@@ -1259,23 +1259,12 @@ class CustomStreamWrapper:
 
                 if response_obj["usage"] is not None:
                     if isinstance(response_obj["usage"], dict):
+                        # Pass all fields from the usage dictionary to the Usage object
+                        # This ensures fields like 'cost' from OpenRouter are preserved
                         setattr(
                             model_response,
                             "usage",
-                            litellm.Usage(
-                                prompt_tokens=response_obj["usage"].get(
-                                    "prompt_tokens", None
-                                )
-                                or None,
-                                completion_tokens=response_obj["usage"].get(
-                                    "completion_tokens", None
-                                )
-                                or None,
-                                total_tokens=response_obj["usage"].get(
-                                    "total_tokens", None
-                                )
-                                or None,
-                            ),
+                            litellm.Usage(**response_obj["usage"]),
                         )
                     elif isinstance(response_obj["usage"], Usage):
                         setattr(
