@@ -472,13 +472,23 @@ def test_reading_openai_org_id_from_headers():
 @pytest.mark.parametrize(
     "headers, general_settings, expected_data",
     [
-        ({"X-OpenWebUI-User-Id": "ishaan3"}, {"user_header_name":"X-OpenWebUI-User-Id"}, "ishaan3"),
-        ({"x-openwebui-user-id": "ishaan3"}, {"user_header_name":"X-OpenWebUI-User-Id"}, "ishaan3"),
+        (
+            {"X-OpenWebUI-User-Id": "ishaan3"},
+            {"user_header_name": "X-OpenWebUI-User-Id"},
+            "ishaan3",
+        ),
+        (
+            {"x-openwebui-user-id": "ishaan3"},
+            {"user_header_name": "X-OpenWebUI-User-Id"},
+            "ishaan3",
+        ),
         ({"X-OpenWebUI-User-Id": "ishaan3"}, {}, None),
         ({}, None, None),
     ],
 )
-def test_add_litellm_data_for_backend_llm_call(headers, general_settings, expected_data):
+def test_add_litellm_data_for_backend_llm_call(
+    headers, general_settings, expected_data
+):
     import json
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
     from litellm.proxy._types import UserAPIKeyAuth
@@ -572,6 +582,7 @@ def test_update_internal_new_user_params_with_no_initial_role_set():
         == litellm.default_internal_user_params["budget_duration"]
     )
 
+
 def test_update_internal_new_user_params_with_user_defined_values():
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
         _update_internal_new_user_params,
@@ -585,14 +596,16 @@ def test_update_internal_new_user_params_with_user_defined_values():
         "user_role": "proxy_admin",
     }
 
-    data = NewUserRequest(user_email="krrish3@berri.ai", max_budget=1000, budget_duration="1mo")
+    data = NewUserRequest(
+        user_email="krrish3@berri.ai", max_budget=1000, budget_duration="1mo"
+    )
     data_json = data.model_dump()
     updated_data_json = _update_internal_new_user_params(data_json, data)
     assert updated_data_json["user_email"] == "krrish3@berri.ai"
     assert updated_data_json["user_role"] == "proxy_admin"
     assert updated_data_json["max_budget"] == 1000
     assert updated_data_json["budget_duration"] == "1mo"
-    
+
 
 @pytest.mark.asyncio
 async def test_proxy_config_update_from_db():
@@ -831,9 +844,9 @@ async def test_add_litellm_data_to_request_duplicate_tags(
             {"service_account_settings": {"enforced_params": ["user"]}},
             UserAPIKeyAuth(
                 api_key="test_api_key",
-                user_id="test_user_id", 
+                user_id="test_user_id",
                 org_id="test_org_id",
-                metadata={"service_account_id": "test_service_account_id"}
+                metadata={"service_account_id": "test_service_account_id"},
             ),
             {},
             True,
@@ -868,7 +881,7 @@ async def test_add_litellm_data_to_request_duplicate_tags(
             {"service_account_settings": {"enforced_params": ["user"]}},
             UserAPIKeyAuth(
                 api_key="test_api_key",
-                metadata={"service_account_id": "test_service_account_id"}
+                metadata={"service_account_id": "test_service_account_id"},
             ),
             {"user": "test_user"},
             False,
@@ -1004,13 +1017,13 @@ def test_update_config_fields():
     assert team_config["langfuse_public_key"] == "my-fake-key"
     assert team_config["langfuse_secret"] == "my-fake-secret"
 
+
 def test_update_config_fields_default_internal_user_params(monkeypatch):
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
 
     monkeypatch.setattr(litellm, "default_internal_user_params", None)
-
 
     args = {
         "current_config": {},
@@ -1031,23 +1044,44 @@ def test_update_config_fields_default_internal_user_params(monkeypatch):
         "budget_duration": "1mo",
     }
 
-    monkeypatch.setattr(litellm, "default_internal_user_params", None) # reset to default
+    monkeypatch.setattr(
+        litellm, "default_internal_user_params", None
+    )  # reset to default
 
 
 @pytest.mark.parametrize(
-    "proxy_model_list,provider",
+    "proxy_model_list,model_list,provider",
     [
-        (["openai/*"], "openai"),
-        (["bedrock/*"], "bedrock"),
-        (["anthropic/*"], "anthropic"),
-        (["cohere/*"], "cohere"),
+        (
+            ["openai/*"],
+            [{"model_name": "openai/*", "litellm_params": {"model": "openai/*"}}],
+            "openai",
+        ),
+        (
+            ["bedrock/*"],
+            [{"model_name": "bedrock/*", "litellm_params": {"model": "bedrock/*"}}],
+            "bedrock",
+        ),
+        (
+            ["anthropic/*"],
+            [{"model_name": "anthropic/*", "litellm_params": {"model": "anthropic/*"}}],
+            "anthropic",
+        ),
+        (
+            ["cohere/*"],
+            [{"model_name": "cohere/*", "litellm_params": {"model": "cohere/*"}}],
+            "cohere",
+        ),
     ],
 )
-def test_get_complete_model_list(proxy_model_list, provider):
+def test_get_complete_model_list(proxy_model_list, model_list, provider):
     """
     Test that get_complete_model_list correctly expands model groups like 'openai/*' into individual models with provider prefixes
     """
     from litellm.proxy.auth.model_checks import get_complete_model_list
+    from litellm import Router
+
+    llm_router = Router(model_list=model_list)
 
     complete_list = get_complete_model_list(
         proxy_model_list=proxy_model_list,
@@ -1055,6 +1089,7 @@ def test_get_complete_model_list(proxy_model_list, provider):
         team_models=[],
         user_model=None,
         infer_model_from_keys=False,
+        llm_router=llm_router,
     )
 
     # Check that we got a non-empty list back
@@ -1565,6 +1600,7 @@ async def test_end_user_transactions_reset():
             end_user_list_transactions=end_user_list_transactions,
         )
 
+
 @pytest.mark.asyncio
 async def test_spend_logs_cleanup_after_error():
     # Setup test data
@@ -1665,22 +1701,34 @@ from litellm.proxy._types import LiteLLM_UserTable
 
 
 @pytest.mark.parametrize(
-    "wildcard_model, expected_models",
+    "wildcard_model, litellm_params, expected_models",
     [
         (
             "anthropic/*",
+            {"model": "anthropic/*"},
             ["anthropic/claude-3-5-haiku-20241022", "anthropic/claude-3-opus-20240229"],
         ),
         (
             "vertex_ai/gemini-*",
+            {"model": "vertex_ai/gemini-*"},
             ["vertex_ai/gemini-1.5-flash", "vertex_ai/gemini-1.5-pro"],
+        ),
+        (
+            "foo/*",
+            {"model": "openai/*"},
+            ["foo/gpt-4o", "foo/gpt-4o-mini"],
         ),
     ],
 )
-def test_get_known_models_from_wildcard(wildcard_model, expected_models):
+def test_get_known_models_from_wildcard(
+    wildcard_model, litellm_params, expected_models
+):
     from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
 
-    wildcard_models = get_known_models_from_wildcard(wildcard_model=wildcard_model)
+    wildcard_models = get_known_models_from_wildcard(
+        wildcard_model=wildcard_model, litellm_params=LiteLLM_Params(**litellm_params)
+    )
     # Check if all expected models are in the returned list
     print(f"wildcard_models: {wildcard_models}\n")
     for model in expected_models:
