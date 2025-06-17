@@ -26,7 +26,11 @@ import ChatUI from "@/components/chat_ui";
 import Sidebar from "@/components/leftnav";
 import Usage from "@/components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
-import { getUiConfig, proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
+import {
+  getUiConfig,
+  proxyBaseUrl,
+  setGlobalLitellmHeaderName,
+} from "@/components/networking";
 import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
 import TransformRequestPanel from "@/components/transform_request";
@@ -36,7 +40,8 @@ import { MCPToolsViewer, MCPServers } from "@/components/mcp_tools";
 import TagManagement from "@/components/tag_management";
 import VectorStoreManagement from "@/components/vector_store_management";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import { cx } from '@/lib/cva.config';
+import { cx } from "@/lib/cva.config";
+import { VirtualKeysPage } from "@/components/virtual_keys_page/virtual-keys-page";
 
 function getCookie(name: string) {
   const cookieValue = document.cookie
@@ -80,15 +85,13 @@ interface ProxySettings {
   PROXY_LOGOUT_URL: string;
 }
 
-const queryClient = new QueryClient();
-
 function LoadingScreen() {
   return (
     <div className={cx("h-screen", "flex items-center justify-center gap-4")}>
       <div className="text-lg font-medium py-2 pr-4 border-r border-r-gray-200">
         🚅 LiteLLM
       </div>
-      
+
       <div className="flex items-center justify-center gap-2">
         <UiLoadingSpinner className="size-4" />
         <span className="text-gray-600 text-sm">Loading...</span>
@@ -127,6 +130,8 @@ export default function CreateKeyPage() {
     return searchParams.get("page") || "api-keys";
   });
 
+  const [queryClient] = useState(() => new QueryClient());
+
   // Custom setPage function that updates URL
   const updatePage = (newPage: string) => {
     // Update URL without full page reload
@@ -142,14 +147,16 @@ export default function CreateKeyPage() {
   const [accessToken, setAccessToken] = useState<string | null>(null);
 
   const addKey = (data: any) => {
-    setKeys((prevData) => (prevData ? [...prevData, data] : [data]))
+    setKeys((prevData) => (prevData ? [...prevData, data] : [data]));
     setCreateClicked(() => !createClicked);
-  } 
-  const redirectToLogin = authLoading === false && token === null && invitation_id === null;
+  };
+  const redirectToLogin =
+    authLoading === false && token === null && invitation_id === null;
 
   useEffect(() => {
     const token = getCookie("token");
-    getUiConfig().then((data) => { // get the information for constructing the proxy base url, and then set the token and auth loading
+    getUiConfig().then((data) => {
+      // get the information for constructing the proxy base url, and then set the token and auth loading
       console.log("ui config in page.tsx:", data);
       setToken(token);
       setAuthLoading(false);
@@ -158,16 +165,15 @@ export default function CreateKeyPage() {
 
   useEffect(() => {
     if (redirectToLogin) {
-      window.location.href = (proxyBaseUrl || "") + "/sso/key/generate"
+      window.location.href = (proxyBaseUrl || "") + "/sso/key/generate";
     }
-  }, [redirectToLogin])
+  }, [redirectToLogin]);
 
   useEffect(() => {
     if (!token) {
       return;
     }
 
- 
     const decoded = jwtDecode(token) as { [key: string]: any };
     if (decoded) {
       // cast decoded to dictionary
@@ -218,13 +224,9 @@ export default function CreateKeyPage() {
       if (decoded.user_id) {
         setUserID(decoded.user_id);
       }
-
     }
-
-    
   }, [token]);
 
-  
   useEffect(() => {
     if (accessToken && userID && userRole) {
       fetchUserModels(userID, userRole, accessToken, setUserModels);
@@ -238,7 +240,7 @@ export default function CreateKeyPage() {
   }, [accessToken, userID, userRole]);
 
   if (authLoading || redirectToLogin) {
-    return <LoadingScreen />
+    return <LoadingScreen />;
   }
 
   return (
@@ -261,7 +263,7 @@ export default function CreateKeyPage() {
             createClicked={createClicked}
           />
         ) : (
-          <div className="flex flex-col min-h-screen">
+          <div className="flex flex-col h-full min-h-0">
             <Navbar
               userID={userID}
               userRole={userRole}
@@ -271,8 +273,8 @@ export default function CreateKeyPage() {
               proxySettings={proxySettings}
               accessToken={accessToken}
             />
-            <div className="flex flex-1 overflow-auto">
-              <div className="mt-8">
+            <div className="flex grow min-h-0">
+              <div>
                 <Sidebar
                   accessToken={accessToken}
                   setPage={updatePage}
@@ -369,8 +371,11 @@ export default function CreateKeyPage() {
               ) : page == "budgets" ? (
                 <BudgetPanel accessToken={accessToken} />
               ) : page == "guardrails" ? (
-                <GuardrailsPanel accessToken={accessToken} userRole={userRole} />
-              ): page == "transform-request" ? (
+                <GuardrailsPanel
+                  accessToken={accessToken}
+                  userRole={userRole}
+                />
+              ) : page == "transform-request" ? (
                 <TransformRequestPanel accessToken={accessToken} />
               ) : page == "general-settings" ? (
                 <GeneralSettings
@@ -406,7 +411,7 @@ export default function CreateKeyPage() {
                   userRole={userRole}
                   token={token}
                   accessToken={accessToken}
-                  allTeams={teams as Team[] ?? []}
+                  allTeams={(teams as Team[]) ?? []}
                   premiumUser={premiumUser}
                 />
               ) : page == "mcp-servers" ? (
@@ -435,6 +440,8 @@ export default function CreateKeyPage() {
                   teams={(teams as Team[]) ?? []}
                   premiumUser={premiumUser}
                 />
+              ) : page === "virtual-keys" ? (
+                <VirtualKeysPage />
               ) : (
                 <Usage
                   userID={userID}
