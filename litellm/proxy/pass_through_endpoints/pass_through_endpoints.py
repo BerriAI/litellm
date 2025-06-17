@@ -413,10 +413,10 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
 
         for field_name, field_value in form_data.items():
             if isinstance(field_value, (StarletteUploadFile, UploadFile)):
-                files[
-                    field_name
-                ] = await HttpPassThroughEndpointHelpers._build_request_files_from_upload_file(
-                    upload_file=field_value
+                files[field_name] = (
+                    await HttpPassThroughEndpointHelpers._build_request_files_from_upload_file(
+                        upload_file=field_value
+                    )
                 )
             else:
                 form_data_dict[field_name] = field_value
@@ -473,9 +473,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             "passthrough_logging_payload": passthrough_logging_payload,
         }
 
-        logging_obj.model_call_details[
-            "passthrough_logging_payload"
-        ] = passthrough_logging_payload
+        logging_obj.model_call_details["passthrough_logging_payload"] = (
+            passthrough_logging_payload
+        )
 
         return kwargs
 
@@ -918,6 +918,72 @@ def _is_streaming_response(response: httpx.Response) -> bool:
     return False
 
 
+class InitPassThroughEndpointHelpers:
+    @staticmethod
+    def add_exact_path_route(
+        app,
+        path: str,
+        target: str,
+        custom_headers: Optional[dict],
+        forward_headers: Optional[bool],
+        merge_query_params: Optional[bool],
+        dependencies: Optional[List],
+    ):
+        """Add exact path route for pass-through endpoint"""
+        verbose_proxy_logger.debug(
+            "adding exact pass through endpoint: %s, dependencies: %s",
+            path,
+            dependencies,
+        )
+
+        app.add_api_route(  # type: ignore
+            path=path,
+            endpoint=create_pass_through_route(  # type: ignore
+                path,
+                target,
+                custom_headers,
+                forward_headers,
+                merge_query_params,
+                dependencies,
+            ),
+            methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+            dependencies=dependencies,
+        )
+
+    @staticmethod
+    def add_subpath_route(
+        app,
+        path: str,
+        target: str,
+        custom_headers: Optional[dict],
+        forward_headers: Optional[bool],
+        merge_query_params: Optional[bool],
+        dependencies: Optional[List],
+    ):
+        """Add wildcard route for sub-paths"""
+        wildcard_path = f"{path}/{{subpath:path}}"
+        verbose_proxy_logger.debug(
+            "adding wildcard pass through endpoint: %s, dependencies: %s",
+            wildcard_path,
+            dependencies,
+        )
+
+        app.add_api_route(  # type: ignore
+            path=wildcard_path,
+            endpoint=create_pass_through_route(  # type: ignore
+                path,
+                target,
+                custom_headers,
+                forward_headers,
+                merge_query_params,
+                dependencies,
+                include_subpath=True,
+            ),
+            methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+            dependencies=dependencies,
+        )
+
+
 async def initialize_pass_through_endpoints(pass_through_endpoints: list):
     verbose_proxy_logger.debug("initializing pass through endpoints")
     from litellm.proxy._types import CommonProxyErrors, LiteLLMRoutes
@@ -947,40 +1013,28 @@ async def initialize_pass_through_endpoints(pass_through_endpoints: list):
         if _target is None:
             continue
 
-        verbose_proxy_logger.debug(
-            "adding pass through endpoint: %s, dependencies: %s", _path, _dependencies
-        )
         # Add exact path route
-        app.add_api_route(  # type: ignore
+        InitPassThroughEndpointHelpers.add_exact_path_route(
+            app=app,
             path=_path,
-            endpoint=create_pass_through_route(  # type: ignore
-                _path,
-                _target,
-                _custom_headers,
-                _forward_headers,
-                _merge_query_params,
-                _dependencies,
-            ),
-            methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+            target=_target,
+            custom_headers=_custom_headers,
+            forward_headers=_forward_headers,
+            merge_query_params=_merge_query_params,
             dependencies=_dependencies,
         )
 
         # Add wildcard route for sub-paths
-        wildcard_path = f"{_path}/{{subpath:path}}"
-        app.add_api_route(  # type: ignore
-            path=wildcard_path,
-            endpoint=create_pass_through_route(  # type: ignore
-                _path,
-                _target,
-                _custom_headers,
-                _forward_headers,
-                _merge_query_params,
-                _dependencies,
-                include_subpath=True,
-            ),
-            methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
-            dependencies=_dependencies,
-        )
+        if endpoint.get("include_subpath", False) is True:
+            InitPassThroughEndpointHelpers.add_subpath_route(
+                app=app,
+                path=_path,
+                target=_target,
+                custom_headers=_custom_headers,
+                forward_headers=_forward_headers,
+                merge_query_params=_merge_query_params,
+                dependencies=_dependencies,
+            )
 
         verbose_proxy_logger.debug("Added new pass through endpoint: %s", _path)
 
