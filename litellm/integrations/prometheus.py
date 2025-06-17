@@ -40,7 +40,7 @@ class PrometheusLogger(CustomLogger):
             from prometheus_client import Counter, Gauge, Histogram
 
             from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
-
+            
             # Always initialize label_filters, even for non-premium users
             self.label_filters = self._parse_prometheus_config()
 
