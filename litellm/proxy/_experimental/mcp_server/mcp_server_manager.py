@@ -9,7 +9,6 @@ This is a Proxy
 import asyncio
 import hashlib
 import json
-import uuid
 from typing import Any, Dict, List, Optional, cast
 
 from mcp import ClientSession

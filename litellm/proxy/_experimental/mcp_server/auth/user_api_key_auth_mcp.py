@@ -166,12 +166,7 @@ class UserAPIKeyAuthMCP:
         first we check if the team has a object_permission_id attached
             - if it does then we look up the object_permission for the team
         """
-        from litellm.proxy.auth.auth_checks import get_team_object
-        from litellm.proxy.proxy_server import (
-            prisma_client,
-            proxy_logging_obj,
-            user_api_key_cache,
-        )
+        from litellm.proxy.proxy_server import prisma_client
 
         if user_api_key_auth is None:
             return []
