@@ -274,7 +274,6 @@ class AmazonConverseConfig(BaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        is_thinking_enabled = self.is_thinking_enabled(non_default_params)
 
         for param, value in non_default_params.items():
             if param == "response_format" and isinstance(value, dict):
