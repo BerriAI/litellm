@@ -40,7 +40,7 @@ class PrometheusLogger(CustomLogger):
             from prometheus_client import Counter, Gauge, Histogram
 
             from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
-            
+
             # Always initialize label_filters, even for non-premium users
             self.label_filters = self._parse_prometheus_config()
 
@@ -1169,9 +1169,7 @@ class PrometheusLogger(CustomLogger):
             if standard_logging_payload is None:
                 return
 
-            model_group = standard_logging_payload["model_group"]
             api_base = standard_logging_payload["api_base"]
-            _response_headers = request_kwargs.get("response_headers")
             _litellm_params = request_kwargs.get("litellm_params", {}) or {}
             _metadata = _litellm_params.get("metadata", {})
             litellm_model_name = request_kwargs.get("model", None)
