@@ -426,164 +426,168 @@ type UiModelSelectProps = SelectProps & {
   models: AiModel[];
 };
 
-export function UiModelSelect({
-  className,
-  value,
-  setValue,
-  models,
-  ...props
-}: UiModelSelectProps) {
-  const [searchValue, setSearchValue] = useState("");
-  const [localSselectedValues, setLocalSelectedValues] = useState<string[]>([]);
-  const selectedValues = value ?? localSselectedValues;
-  const setSelectedValues = setValue ?? setLocalSelectedValues;
-  const placeholder = "Select Models";
+export const UiModelSelect = forwardRef<HTMLButtonElement, UiModelSelectProps>(
+  function UiModelSelect(
+    { className, value, setValue, models, ...props },
+    ref,
+  ) {
+    const [searchValue, setSearchValue] = useState("");
+    const [localSelectedValues, setLocalSelectedValues] = useState<string[]>(
+      [],
+    );
+    const selectedValues = value ?? localSelectedValues;
+    const setSelectedValues = setValue ?? setLocalSelectedValues;
+    const placeholder = "Select Models";
 
-  const items = useMemo(() => {
-    return transformModels(models.map((m) => m.id));
-  }, [models]);
+    const items = useMemo(() => {
+      return transformModels(models.map((m) => m.id));
+    }, [models]);
 
-  const matches = useMemo(() => {
-    return items.filter((item) => {
-      return item.title.toLowerCase().includes(searchValue);
-    });
-  }, [searchValue, items]);
+    const matches = useMemo(() => {
+      return items.filter((item) => {
+        return item.title.toLowerCase().includes(searchValue);
+      });
+    }, [searchValue, items]);
 
-  return (
-    <ComboboxProvider
-      includesBaseElement={false}
-      resetValueOnHide
-      setValue={(value) => {
-        startTransition(() => {
-          setSearchValue(value);
-        });
-      }}
-    >
-      <SelectProvider value={selectedValues} setValue={setSelectedValues}>
-        <Select
-          className={cx(
-            "relative block w-full min-h-[34px] truncate rounded-md",
-            "border-none text-start",
-            "ring-[0.7px] ring-black/[0.12]",
-            "shadow-md shadow-black/[0.05] transition-colors",
-            selectedValues.length === 0 ? "bg-neutral-50" : "bg-white",
-            className,
-          )}
-          {...props}
-        >
-          {selectedValues.length === 0 ? (
-            <span className="text-[13px] font-normal tracking-tight text-neutral-400 px-4">
-              {placeholder}
-            </span>
-          ) : (
-            <div className="flex flex-wrap items-center gap-1 px-1 py-1">
-              {selectedValues.map(transformModel).map((option, optionIndex) => (
-                <div
-                  key={option.value}
-                  className={cx(
-                    "bg-black/[0.07] rounded inline-flex items-center gap-1",
-                  )}
-                >
-                  <span className="text-[12px] inline-block py-1 pl-2">
-                    {option.title}
-                  </span>
+    return (
+      <ComboboxProvider
+        includesBaseElement={false}
+        resetValueOnHide
+        setValue={(value) => {
+          startTransition(() => {
+            setSearchValue(value);
+          });
+        }}
+      >
+        <SelectProvider value={selectedValues} setValue={setSelectedValues}>
+          <Select
+            className={cx(
+              "relative block w-full min-h-[34px] truncate rounded-md",
+              "border-none text-start",
+              "ring-[0.7px] ring-black/[0.12]",
+              "shadow-md shadow-black/[0.05] transition-colors",
+              selectedValues.length === 0 ? "bg-neutral-50" : "bg-white",
+              className,
+            )}
+            ref={ref}
+            {...props}
+          >
+            {selectedValues.length === 0 ? (
+              <span className="text-[13px] font-normal tracking-tight text-neutral-400 px-4">
+                {placeholder}
+              </span>
+            ) : (
+              <div className="flex flex-wrap items-center gap-1 px-1 py-1">
+                {selectedValues
+                  .map(transformModel)
+                  .map((option, optionIndex) => (
+                    <div
+                      key={option.value}
+                      className={cx(
+                        "bg-black/[0.07] rounded inline-flex items-center gap-1",
+                      )}
+                    >
+                      <span className="text-[12px] inline-block py-1 pl-2">
+                        {option.title}
+                      </span>
 
-                  <div
-                    className={cx(
-                      "flex items-center group/close",
-                      "shrink-0 pr-2",
-                    )}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={(event) => {
-                      event.preventDefault();
-                      setSelectedValues(
-                        selectedValues.reduce<string[]>(
-                          (result, item, index) => {
-                            if (index !== optionIndex) {
-                              result.push(item);
-                            }
-                            return result;
-                          },
-                          [],
-                        ),
-                      );
-                    }}
-                  >
-                    <XIcon
-                      size={14}
-                      strokeWidth={3}
-                      className="text-neutral-400 group-hover/close:text-neutral-600"
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+                      <div
+                        className={cx(
+                          "flex items-center group/close",
+                          "shrink-0 pr-2",
+                        )}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          setSelectedValues(
+                            selectedValues.reduce<string[]>(
+                              (result, item, index) => {
+                                if (index !== optionIndex) {
+                                  result.push(item);
+                                }
+                                return result;
+                              },
+                              [],
+                            ),
+                          );
+                        }}
+                      >
+                        <XIcon
+                          size={14}
+                          strokeWidth={3}
+                          className="text-neutral-400 group-hover/close:text-neutral-600"
+                        />
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            )}
 
-          {selectedValues.length === 0 ? (
-            <span
-              className={cx(
-                "absolute right-0 inset-y-0 pr-3 pointer-events-none",
-                "flex items-center justify-center",
-              )}
-            >
-              <ChevronDown size={16} className="text-neutral-500" />
-            </span>
-          ) : null}
-        </Select>
-
-        <SelectPopover
-          gutter={8}
-          sameWidth
-          unmountOnHide
-          className={cx(
-            "bg-white rounded-md overflow-x-hidden",
-            "flex flex-col",
-            "max-h-[min(320px,var(--popover-available-height,320px))]",
-            "ring-[0.7px] ring-black/[0.12] outline-none",
-            "shadow-lg shadow-black/[0.08]",
-            "transition-transform duration-[150ms] ease-out",
-            "translate-y-[-2%] opacity-0",
-            "data-[enter]:translate-y-0 data-[enter]:opacity-100 z-10",
-          )}
-        >
-          <div className={cx("", "border-b border-neutral-200")}>
-            <Combobox
-              autoFocus
-              style={{ boxShadow: "none" }}
-              autoSelect
-              className={cx(
-                "block w-full h-[34px] truncate rounded-none bg-transparent px-4",
-                "border-none outline-none",
-                "text-[13px] font-normal tracking-tight text-neutral-900",
-                "placeholder:text-neutral-400",
-              )}
-              placeholder="Search..."
-            />
-          </div>
-
-          <ComboboxList className="overflow-y-auto grow outline-none">
-            {matches.map((item) => (
-              <SelectItem
-                key={item.title}
-                render={<ComboboxItem />}
-                value={item.value}
+            {selectedValues.length === 0 ? (
+              <span
                 className={cx(
-                  "px-4 py-2.5",
-                  "border-b border-neutral-100",
-                  "flex items-center gap-2 shrink-0 outline-none",
-                  "data-[active-item]:bg-neutral-100 cursor-default group",
+                  "absolute right-0 inset-y-0 pr-3 pointer-events-none",
+                  "flex items-center justify-center",
                 )}
               >
-                <UiFormCheck />
-                <span className="text-[13px] text-neutral-800 tracking-tight truncate">
-                  {item.title}
-                </span>
-              </SelectItem>
-            ))}
-          </ComboboxList>
-        </SelectPopover>
-      </SelectProvider>
-    </ComboboxProvider>
-  );
-}
+                <ChevronDown size={16} className="text-neutral-500" />
+              </span>
+            ) : null}
+          </Select>
+
+          <SelectPopover
+            gutter={8}
+            sameWidth
+            unmountOnHide
+            className={cx(
+              "bg-white rounded-md overflow-x-hidden",
+              "flex flex-col",
+              "max-h-[min(320px,var(--popover-available-height,320px))]",
+              "ring-[0.7px] ring-black/[0.12] outline-none",
+              "shadow-lg shadow-black/[0.08]",
+              "transition-transform duration-[150ms] ease-out",
+              "translate-y-[-2%] opacity-0",
+              "data-[enter]:translate-y-0 data-[enter]:opacity-100 z-10",
+            )}
+          >
+            <div className={cx("", "border-b border-neutral-200")}>
+              <Combobox
+                autoFocus
+                style={{ boxShadow: "none" }}
+                autoSelect
+                className={cx(
+                  "block w-full h-[34px] truncate rounded-none bg-transparent px-4",
+                  "border-none outline-none",
+                  "text-[13px] font-normal tracking-tight text-neutral-900",
+                  "placeholder:text-neutral-400",
+                )}
+                placeholder="Search..."
+              />
+            </div>
+
+            <ComboboxList className="overflow-y-auto grow outline-none">
+              {matches.map((item) => (
+                <SelectItem
+                  key={item.title}
+                  render={<ComboboxItem />}
+                  value={item.value}
+                  className={cx(
+                    "px-4 py-2.5",
+                    "border-b border-neutral-100",
+                    "flex items-center gap-2 shrink-0 outline-none",
+                    "data-[active-item]:bg-neutral-100 cursor-default group",
+                  )}
+                >
+                  <UiFormCheck />
+                  <span className="text-[13px] text-neutral-800 tracking-tight truncate">
+                    {item.title}
+                  </span>
+                </SelectItem>
+              ))}
+            </ComboboxList>
+          </SelectPopover>
+        </SelectProvider>
+      </ComboboxProvider>
+    );
+  },
+);

@@ -12,9 +12,23 @@ import {
   UserRoundIcon,
   UsersRoundIcon,
 } from "lucide-react";
-import { CSSProperties, Fragment, useEffect, useMemo, useState } from "react";
+import {
+  CSSProperties,
+  Fragment,
+  startTransition,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { jwtDecode } from "jwt-decode";
-import { authContext, AuthContext, useAuthContext } from "./auth-context";
+import { matchSorter } from "match-sorter";
+import {
+  authContext,
+  AuthContext,
+  useAuthContext,
+  useGlobalOverlaysContext,
+} from "./contexts";
 import {
   QueryClient,
   QueryClientProvider,
@@ -35,6 +49,8 @@ import {
 import { CreateVirtualKeyDialog } from "./create-virtual-key-dialog";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { usePagination } from "./pagination";
+import { DeleteVirtualKeyDialog } from "./delete-virtual-key-dialog";
+import { GlobalOverlaysProvider } from "./global-overlays";
 
 function getCookie(name: string) {
   const cookieValue = document.cookie
@@ -135,9 +151,13 @@ function ExpiresCell(props: {
 }) {
   const virtualKey = props.cellContext.row.original;
 
-  return virtualKey.expires ? (
-    <span className="text-[14px] text-neutral-800">{virtualKey.expires}</span>
-  ) : null;
+  return (
+    <span className="text-[14px] text-neutral-800">
+      {virtualKey.expires
+        ? new Date(virtualKey.expires).toLocaleDateString()
+        : "Never"}
+    </span>
+  );
 }
 
 function SpendCell(props: { cellContext: CellContext<KeyResponse, unknown> }) {
@@ -151,11 +171,11 @@ function SpendCell(props: { cellContext: CellContext<KeyResponse, unknown> }) {
 function BudgetCell(props: { cellContext: CellContext<KeyResponse, unknown> }) {
   const virtualKey = props.cellContext.row.original;
 
-  return virtualKey.max_budget ? (
+  return (
     <span className="text-[14px] text-neutral-800">
-      {virtualKey.max_budget}
+      {virtualKey.max_budget ? virtualKey.max_budget : "Unlimited"}
     </span>
-  ) : null;
+  );
 }
 
 function BudgetResetCell(props: {
@@ -163,11 +183,13 @@ function BudgetResetCell(props: {
 }) {
   const virtualKey = props.cellContext.row.original;
 
-  return virtualKey.budget_reset_at ? (
+  return (
     <span className="text-[14px] text-neutral-800">
-      {virtualKey.budget_reset_at}
+      {virtualKey.budget_reset_at
+        ? new Date(virtualKey.budget_reset_at).toLocaleDateString()
+        : "Never"}
     </span>
-  ) : null;
+  );
 }
 
 function CreatedAtCell(props: {
@@ -193,25 +215,23 @@ function LastUsedCell(props: {
   ) : null;
 }
 
-function ActionsCell(_props: {
+function ActionsCell(props: {
   cellContext: CellContext<KeyResponse, unknown>;
 }) {
-  // const virtualKey = props.cellContext.row.original;
+  const virtualKey = props.cellContext.row.original;
+  const overlays = useGlobalOverlaysContext();
 
   return (
     <div className="flex items-center gap-2">
-      <button className="inline-flex items-center gap-1 h-[24px] px-2 rounded bg-neutral-100">
+      <button
+        className="inline-flex items-center gap-1 h-[24px] px-2 rounded bg-neutral-100"
+        onClick={() => overlays.deleteVirtualKey({ virtualKey })}
+      >
         <Trash2Icon className="size-3.5 text-neutral-600" />
-        {/* <span className="text-[12px] text-neutral-800 tracking-tight">
-          Delete
-        </span> */}
       </button>
 
       <button className="inline-flex items-center gap-1 h-[24px] px-2 rounded bg-neutral-100">
         <SettingsIcon className="size-3.5 text-neutral-600" />
-        {/* <span className="text-[12px] text-neutral-800 tracking-tight">
-          Edit
-        </span> */}
       </button>
     </div>
   );
@@ -275,9 +295,10 @@ const columns: ColumnDef<KeyResponse>[] = [
 
 function Content() {
   const authCtx = useAuthContext();
+  const [searchTerm, setSearchTerm] = useState("");
 
   const keysQuery = useQuery<KeyResponse[]>({
-    queryKey: ["keys"],
+    queryKey: ["keys", "token"],
     initialData: () => [],
     queryFn: () =>
       keyListCall(authCtx.key, null, null, null, null, null, 1, 100).then(
@@ -285,15 +306,33 @@ function Content() {
       ),
   });
 
+  const [scrollContainer, setScrollContainer] = useState<HTMLDivElement | null>(
+    null,
+  );
+
   const allKeys = keysQuery.data;
+  const filteredKeys = useMemo(() => {
+    const processedSearchTerm = searchTerm.trim();
+    if (!processedSearchTerm) return allKeys;
+
+    return matchSorter(allKeys, processedSearchTerm, {
+      keys: [
+        "key_alias",
+        { key: "token", threshold: matchSorter.rankings.CONTAINS },
+        { key: "key_name", threshold: matchSorter.rankings.CONTAINS },
+      ],
+      sorter: (rankedItems) => rankedItems,
+    });
+  }, [allKeys, searchTerm]);
+
   const paginationState = usePagination({
-    total: allKeys.length,
-    pageSize: 30,
+    total: filteredKeys.length,
+    scrollContainer,
   });
   const { start, end } = paginationState;
   const data = useMemo(() => {
-    return allKeys.slice(start - 1, end);
-  }, [allKeys, start, end]);
+    return filteredKeys.slice(start - 1, end);
+  }, [filteredKeys, start, end]);
 
   const table = useReactTable({
     columns,
@@ -376,6 +415,11 @@ function Content() {
                     "placeholder:text-neutral-400",
                   )}
                   placeholder="Search key name, key alias, key id"
+                  onChange={(event) => {
+                    startTransition(() => {
+                      setSearchTerm(event.target.value);
+                    });
+                  }}
                 />
               </div>
 
@@ -405,7 +449,7 @@ function Content() {
                     "h-[34px] bg-white px-2.5 rounded-md",
                     "flex items-center gap-1",
                     "ring-[0.7px] ring-black/[0.08]",
-                    "shadow-md shadow-black/[0.05]",
+                    // "shadow-md shadow-black/[0.05]",
                     "text-[11px] font-medium tracking-tight",
                   )}
                 >
@@ -418,15 +462,17 @@ function Content() {
                     <span className="text-neutral-400">User:</span>
                   </div>
 
-                  <span className="text-blue-600 bg-blue-50 px-1 py-0.5 rounded">
+                  <span className="text-neutral-800">All Users</span>
+
+                  {/* <span className="text-blue-600 bg-blue-50 px-1 py-0.5 rounded">
                     Mike Carson
-                  </span>
+                  </span> */}
                 </div>
               </div>
 
-              <span className="text-[12px] text-neutral-900 tracking-tight pr-2">
+              {/* <span className="text-[12px] text-neutral-900 tracking-tight pr-2">
                 Reset filters
-              </span>
+              </span> */}
             </div>
 
             <div className="flex items-center gap-2">
@@ -467,6 +513,7 @@ function Content() {
               "ring-[0.7px] ring-black/[0.08]",
               "rounded overflow-x-auto overflow-y-auto min-h-0 relative w-full isolate",
             )}
+            ref={setScrollContainer}
           >
             <table
               style={{ width: `max(100%, ${table.getCenterTotalSize()}px)` }}
@@ -623,7 +670,9 @@ export default function VirtualKeysPage() {
   return (
     <QueryClientProvider client={queryClient}>
       <authContext.Provider value={authContextValue}>
-        <Content />
+        <GlobalOverlaysProvider>
+          <Content />
+        </GlobalOverlaysProvider>
       </authContext.Provider>
     </QueryClientProvider>
   );

@@ -49,7 +49,7 @@ export function usePagination({
     if (resolvedPage >= pages) return;
 
     setPage((currentPage) => Math.min(currentPage + 1, pages));
-    props.scrollContainer?.scrollTo({ top: 0 });
+    props.scrollContainer?.scrollTo({ top: 0, left: 0 });
   }, [props.scrollContainer, resolvedPage, pages]);
 
   const state = useMemo(() => {

@@ -15,7 +15,7 @@ import {
 } from "./forms";
 import { UiDialog } from "./ui-dialog";
 import { Controller, SubmitHandler, useForm } from "react-hook-form";
-import { AuthContext, useAuthContext } from "./auth-context";
+import { AuthContext, useAuthContext } from "./contexts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Fragment, useState } from "react";
 import { keyCreateCall } from "@/components/networking";
@@ -98,10 +98,10 @@ function CreateVirtualKeyForm() {
   const owner = form.watch("owner");
 
   const createVirtualKeyMutation = useMutation({
-    mutationFn: async (payload: CreateVirtualKeyPayload) => {
-      return await keyCreateCall(authCtx.key, authCtx.user_id, payload);
+    mutationFn: (payload: CreateVirtualKeyPayload) => {
+      return keyCreateCall(authCtx.key, authCtx.user_id, payload);
     },
-    onSuccess(data) {
+    onSuccess(data: { key: string }) {
       queryClient.invalidateQueries({ queryKey: ["keys"] });
       setCopyApiKeyDialogUiState({ type: "visible", apiKey: data.key });
       copyApiKeyDialogStore.show();
@@ -221,10 +221,12 @@ function CreateVirtualKeyForm() {
               <UiFormContent>
                 <UiFormTextInput
                   {...form.register("key_alias", {
-                    required: "Key name cannot be empty",
                     validate(value) {
                       return (
-                        value.trim().length > 0 || "Key name cannot be empty"
+                        value.trim().length > 0 ||
+                        (owner === "service_account"
+                          ? "Service Account ID cannot be empty"
+                          : "Key name cannot be empty")
                       );
                     },
                   })}
@@ -317,6 +319,7 @@ function CreateVirtualKeyForm() {
                           value={field.value}
                           setValue={field.onChange}
                           models={models}
+                          ref={field.ref}
                         />
                       )}
                     />

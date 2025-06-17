@@ -1,5 +1,5 @@
 import { cx } from "@/lib/cva.config";
-import { Dialog, DialogProps, DialogProvider } from "@ariakit/react";
+import { Dialog, DialogProps } from "@ariakit/react";
 
 type UiDialogProps = DialogProps;
 

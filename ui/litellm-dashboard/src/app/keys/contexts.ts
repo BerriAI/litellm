@@ -1,4 +1,5 @@
 import { createContext, useContext } from "react";
+import { DeleteVirtualKeyDialogProps } from "./delete-virtual-key-dialog";
 
 export type AuthContext = {
   auth_header_name: string;
@@ -20,6 +21,26 @@ export function useAuthContext() {
     throw new Error(
       "useAuthContext must be used with <authContext.Provider />",
     );
+
+  return context;
+}
+
+export type GlobalOverlaysContext = {
+  deleteVirtualKeyDialogProps: DeleteVirtualKeyDialogProps | null;
+  deleteVirtualKey: (props: DeleteVirtualKeyDialogProps) => void;
+};
+
+export const globalOverlaysContext = createContext<
+  GlobalOverlaysContext | undefined
+>(undefined);
+
+export function useGlobalOverlaysContext() {
+  const context = useContext(globalOverlaysContext);
+  if (context === undefined) {
+    throw new Error(
+      "useGlobalOverlaysContext must be used with <globalOverlaysContext.Provider />",
+    );
+  }
 
   return context;
 }

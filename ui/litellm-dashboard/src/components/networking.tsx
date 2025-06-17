@@ -554,9 +554,7 @@ export const keyCreateCall = async (
       throw new Error(errorData);
     }
 
-    const data = await response.json() as {
-      key: string
-    };
+    const data = await response.json();
     console.log("API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -2833,7 +2831,12 @@ export const keyListCall = async (
       throw new Error("Network response was not ok");
     }
 
-    const data = await response.json() as { keys: KeyResponse[] };
+    const data = await response.json() as { 
+      keys: KeyResponse[];
+      total_count: number,
+      current_page: number;
+      total_pages: number;
+    };
     console.log("/team/list API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key

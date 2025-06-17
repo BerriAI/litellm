@@ -22,9 +22,11 @@
     "antd": "^5.13.2",
     "cva": "^1.0.0-beta.3",
     "fs": "^0.0.1-security",
+    "immer": "^10.1.1",
     "jsonwebtoken": "^9.0.2",
     "jwt-decode": "^4.0.0",
     "lucide-react": "^0.513.0",
+    "match-sorter": "^8.0.3",
     "moment": "^2.30.1",
     "next": "^14.2.30",
     "openai": "^4.93.0",
@@ -36,6 +38,7 @@
     "react-markdown": "^9.0.1",
     "react-syntax-highlighter": "^15.6.1",
     "tailwind-merge": "^3.2.0",
+    "use-immer": "^0.11.0",
     "uuid": "^11.1.0"
   },
   "devDependencies": {
