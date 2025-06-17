@@ -147,6 +147,13 @@ export default function ModelInfoView({
       let updatedModelInfo;
       try {
         updatedModelInfo = values.model_info ? JSON.parse(values.model_info) : modelData.model_info;
+        // Update access_groups from the form
+        if (values.model_access_group) {
+          updatedModelInfo = {
+            ...updatedModelInfo,
+            access_groups: values.model_access_group
+          };
+        }
       } catch (e) {
         message.error("Invalid JSON in Model Info");
         return;
@@ -365,6 +372,7 @@ export default function ModelInfoView({
                     (localModelData.litellm_params.output_cost_per_token * 1_000_000) : localModelData.model_info?.output_cost_per_token * 1_000_000 || null,
                   cache_control: localModelData.litellm_params?.cache_control_injection_points ? true : false,
                   cache_control_injection_points: localModelData.litellm_params?.cache_control_injection_points || [],
+                  model_access_group: Array.isArray(localModelData.model_info?.access_groups) ? localModelData.model_info.access_groups : [],
                 }}
                 layout="vertical"
                 onValuesChange={() => setIsDirty(true)}
@@ -526,6 +534,41 @@ export default function ModelInfoView({
                         </div>
                       )}
                     </div>
+
+                    <div>
+                      <Text className="font-medium">Model Access Groups</Text>
+                      {isEditing ? (
+                        <Form.Item name="model_access_group" className="mb-0">
+                          <Select
+                            mode="tags"
+                            showSearch
+                            placeholder="Select existing groups or type to create new ones"
+                            optionFilterProp="children"
+                            tokenSeparators={[',']}
+                            maxTagCount="responsive"
+                            allowClear
+                            style={{ width: '100%' }}
+                          />
+                        </Form.Item>
+                      ) : (
+                        <div className="mt-1 p-2 bg-gray-50 rounded">
+                          {localModelData.model_info?.access_groups ? (
+                            Array.isArray(localModelData.model_info.access_groups) ? (
+                              localModelData.model_info.access_groups.length > 0 ? (
+                                <div className="flex flex-wrap gap-1">
+                                  {localModelData.model_info.access_groups.map((group: string, index: number) => (
+                                    <span key={index} className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                      {group}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : "No groups assigned"
+                            ) : localModelData.model_info.access_groups
+                          ) : "Not Set"}
+                        </div>
+                      )}
+                    </div>
+
 
                     {/* Cache Control Section */}
                     {isEditing ? (
