@@ -214,7 +214,9 @@ def get_known_models_from_wildcard(
 
     suffix_appended_wildcard_models = []
     for model in wildcard_models:
-        suffix_appended_wildcard_models.append(f"{wildcard_provider_prefix}/{model}")
+        if not model.startswith(wildcard_provider_prefix):
+            model = f"{wildcard_provider_prefix}/{model}"
+        suffix_appended_wildcard_models.append(model)
     return suffix_appended_wildcard_models or []
 
 
