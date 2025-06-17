@@ -494,7 +494,9 @@ class LiteLLMProxyRequestSetup:
             if user_agent is not None:
                 user_agent_part: Optional[str] = None
                 if "/" in user_agent:
-                    user_agent_part = user_agent.split("/")[0]  # extract "claude-cli"
+                    user_agent_part = user_agent.split("/")[
+                        0
+                    ]  # extract "claude-cli" - enables spend tracking acrosss versions
                 if user_agent_part is not None:
                     tags.append(user_agent_part)
                 tags.append(user_agent)  # append full user-agent
