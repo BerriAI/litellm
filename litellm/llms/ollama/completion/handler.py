@@ -4,7 +4,7 @@ Ollama /chat/completion calls handled in llm_http_handler.py
 [TODO]: migrate embeddings to a base handler as well.
 """
 
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List
 import litellm
 from litellm.types.utils import EmbeddingResponse
 
