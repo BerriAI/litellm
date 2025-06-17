@@ -265,8 +265,8 @@ async def get_generic_sso_response(
     )  # Comma-separated list of headers to add to the request - e.g. Authorization=Bearer <token>, Content-Type=application/json, etc.
     additional_generic_sso_headers_dict = {}
     if additional_generic_sso_headers is not None:
-        additional_generic_sso_headers = additional_generic_sso_headers.split(",")
-        for header in additional_generic_sso_headers:
+        additional_generic_sso_headers_split = additional_generic_sso_headers.split(",")
+        for header in additional_generic_sso_headers_split:
             header = header.strip()
             if header:
                 key, value = header.split("=")
