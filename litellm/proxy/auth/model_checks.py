@@ -203,22 +203,19 @@ def get_known_models_from_wildcard(
     )
     if wildcard_models is None:
         return []
-    if wildcard_suffix == "*":
-        suffix_appended_wildcard_models = []
-        for model in wildcard_models:
-            suffix_appended_wildcard_models.append(
-                f"{wildcard_provider_prefix}/{model}"
-            )
-        return suffix_appended_wildcard_models or []
-    else:
+    if wildcard_suffix != "*":
         model_prefix = wildcard_suffix.replace("*", "")
         filtered_wildcard_models = [
             wc_model
             for wc_model in wildcard_models
-            if wc_model.split("/")[1].startswith(model_prefix)
+            if wc_model.startswith(model_prefix)
         ]
+        wildcard_models = filtered_wildcard_models
 
-        return filtered_wildcard_models
+    suffix_appended_wildcard_models = []
+    for model in wildcard_models:
+        suffix_appended_wildcard_models.append(f"{wildcard_provider_prefix}/{model}")
+    return suffix_appended_wildcard_models or []
 
 
 def _get_wildcard_models(
