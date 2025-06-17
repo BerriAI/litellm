@@ -488,6 +488,8 @@ class ModelResponseIterator:
         self.json_mode = json_mode
         # Track accumulated usage to merge chunks intelligently
         self.accumulated_usage: Optional[Dict[str, Any]] = None
+        # Track accumulated reasoning content for final usage calculation
+        self.accumulated_reasoning_content: Optional[str] = None
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -520,6 +522,7 @@ class ModelResponseIterator:
         - Preserve cache tokens from complete chunks
         - Use latest output tokens (final completion count)
         - Use latest input tokens if provided
+        - Use accumulated reasoning content for reasoning token calculation
         """
         # Convert to dict for easier handling
         new_usage_dict = new_usage_chunk
@@ -569,9 +572,10 @@ class ModelResponseIterator:
             if field in new_usage_dict:
                 self.accumulated_usage[field] = new_usage_dict[field]
         
-        # Create Usage object from accumulated data
+        # Create Usage object from accumulated data with reasoning content
         usage_result = AnthropicConfig().calculate_usage(
-            usage_object=self.accumulated_usage, reasoning_content=None
+            usage_object=self.accumulated_usage, 
+            reasoning_content=self.accumulated_reasoning_content
         )
         
         return usage_result
@@ -723,6 +727,11 @@ class ModelResponseIterator:
                     reasoning_content = self._handle_reasoning_content(
                         thinking_blocks=thinking_blocks
                     )
+                    # Accumulate reasoning content for final usage calculation
+                    if reasoning_content:
+                        if self.accumulated_reasoning_content is None:
+                            self.accumulated_reasoning_content = ""
+                        self.accumulated_reasoning_content += reasoning_content
             elif type_chunk == "content_block_start":
                 """
                 event: content_block_start
