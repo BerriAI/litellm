@@ -7718,9 +7718,9 @@
         "supports_web_search": true
     },
     "gemini/gemini-2.5-flash-lite-preview-06-17": {
-        "max_tokens": 8192,
+        "max_tokens": 65535,
         "max_input_tokens": 1048576,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 65535,
         "max_images_per_prompt": 3000,
         "max_videos_per_prompt": 10,
         "max_video_length": 1,
@@ -7750,9 +7750,9 @@
         "supports_web_search": true
     },
     "gemini/gemini-2.5-flash": {
-        "max_tokens": 8192,
+        "max_tokens": 65535,
         "max_input_tokens": 1048576,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 65535,
         "max_images_per_prompt": 3000,
         "max_videos_per_prompt": 10,
         "input_cost_per_audio_token": 3e-07,
@@ -7781,9 +7781,9 @@
         "supports_web_search": true
     },
     "gemini/gemini-2.5-pro": {
-        "max_tokens": 8192,
+        "max_tokens": 65535,
         "max_input_tokens": 1048576,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 65535,
         "max_images_per_prompt": 3000,
         "max_videos_per_prompt": 10,
         "input_cost_per_audio_token": 7.5e-08,
