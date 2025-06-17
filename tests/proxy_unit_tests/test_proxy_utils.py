@@ -1050,19 +1050,38 @@ def test_update_config_fields_default_internal_user_params(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "proxy_model_list,provider",
+    "proxy_model_list,model_list,provider",
     [
-        (["openai/*"], "openai"),
-        (["bedrock/*"], "bedrock"),
-        (["anthropic/*"], "anthropic"),
-        (["cohere/*"], "cohere"),
+        (
+            ["openai/*"],
+            [{"model_name": "openai/*", "litellm_params": {"model": "openai/*"}}],
+            "openai",
+        ),
+        (
+            ["bedrock/*"],
+            [{"model_name": "bedrock/*", "litellm_params": {"model": "bedrock/*"}}],
+            "bedrock",
+        ),
+        (
+            ["anthropic/*"],
+            [{"model_name": "anthropic/*", "litellm_params": {"model": "anthropic/*"}}],
+            "anthropic",
+        ),
+        (
+            ["cohere/*"],
+            [{"model_name": "cohere/*", "litellm_params": {"model": "cohere/*"}}],
+            "cohere",
+        ),
     ],
 )
-def test_get_complete_model_list(proxy_model_list, provider):
+def test_get_complete_model_list(proxy_model_list, model_list, provider):
     """
     Test that get_complete_model_list correctly expands model groups like 'openai/*' into individual models with provider prefixes
     """
     from litellm.proxy.auth.model_checks import get_complete_model_list
+    from litellm import Router
+
+    llm_router = Router(model_list=model_list)
 
     complete_list = get_complete_model_list(
         proxy_model_list=proxy_model_list,
@@ -1070,6 +1089,7 @@ def test_get_complete_model_list(proxy_model_list, provider):
         team_models=[],
         user_model=None,
         infer_model_from_keys=False,
+        llm_router=llm_router,
     )
 
     # Check that we got a non-empty list back
