@@ -990,11 +990,54 @@ class CustomStreamWrapper:
                     ]
 
                 if anthropic_response_obj["usage"] is not None:
-                    setattr(
-                        model_response,
-                        "usage",
-                        litellm.Usage(**anthropic_response_obj["usage"]),
-                    )
+                    # Check if this is an anthropic response and use proper usage calculation
+                    if self.custom_llm_provider == "anthropic":
+                        try:
+                            # Import anthropic transformation to use calculate_usage method
+                            from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+                            anthropic_config = AnthropicConfig()
+                            
+                            # Convert usage object to dict if needed
+                            usage_dict = anthropic_response_obj["usage"]
+                            if not isinstance(usage_dict, dict):
+                                # Try different conversion methods for various object types
+                                if hasattr(usage_dict, "model_dump"):
+                                    # Pydantic v2 model
+                                    usage_dict = usage_dict.model_dump()
+                                elif hasattr(usage_dict, "dict"):
+                                    # Pydantic v1 model
+                                    usage_dict = usage_dict.dict()
+                                elif hasattr(usage_dict, "__dict__"):
+                                    # Regular Python object
+                                    usage_dict = vars(usage_dict)
+                                else:
+                                    # Fallback: try to convert to dict or use as-is if it's dict-like
+                                    try:
+                                        usage_dict = dict(usage_dict) if usage_dict else {}
+                                    except (TypeError, ValueError):
+                                        # If conversion fails, log and use fallback
+                                        print_verbose(f"Failed to convert usage object to dict, using fallback: {type(usage_dict)}")
+                                        raise Exception("Usage conversion failed")
+                            
+                            usage_obj = anthropic_config.calculate_usage(
+                                usage_object=usage_dict,
+                                reasoning_content=None  # reasoning_content is handled separately in streaming
+                            )
+                            setattr(model_response, "usage", usage_obj)
+                        except Exception as e:
+                            # Fallback to original behavior if import or conversion fails
+                            print_verbose(f"Anthropic usage calculation failed: {str(e)}, using fallback")
+                            setattr(
+                                model_response,
+                                "usage",
+                                litellm.Usage(**anthropic_response_obj["usage"]),
+                            )
+                    else:
+                        setattr(
+                            model_response,
+                            "usage",
+                            litellm.Usage(**anthropic_response_obj["usage"]),
+                        )
 
                 if (
                     "tool_use" in anthropic_response_obj
