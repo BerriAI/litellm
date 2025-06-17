@@ -4571,21 +4571,6 @@
         "source": "https://x.ai/api#pricing",
         "supports_web_search": true
     },
-    "xai/grok-3-mini-fast-latest": {
-        "max_tokens": 131072,
-        "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
-        "input_cost_per_token": 6e-07,
-        "output_cost_per_token": 4e-06,
-        "litellm_provider": "xai",
-        "mode": "chat",
-        "supports_function_calling": true,
-        "supports_tool_choice": true,
-        "supports_reasoning": true,
-        "supports_response_schema": false,
-        "source": "https://x.ai/api#pricing",
-        "supports_web_search": true
-    },
     "xai/grok-3-mini-beta": {
         "max_tokens": 131072,
         "max_input_tokens": 131072,
@@ -7730,6 +7715,100 @@
         ],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash",
         "supports_tool_choice": true,
+        "supports_web_search": true
+    },
+    "gemini/gemini-2.5-flash-lite-preview-06-17": {
+        "max_tokens": 8192,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 8192,
+        "max_images_per_prompt": 3000,
+        "max_videos_per_prompt": 10,
+        "max_video_length": 1,
+        "input_cost_per_audio_token": 7.5e-08,
+        "input_cost_per_token": 7.5e-08,
+        "output_cost_per_token": 3e-07,
+        "litellm_provider": "gemini",
+        "mode": "chat",
+        "rpm": 60000,
+        "tpm": 10000000,
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_response_schema": true,
+        "supports_audio_output": false,
+        "supports_tool_choice": true,
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.5-flash-lite",
+        "supports_web_search": true
+    },
+    "gemini/gemini-2.5-flash": {
+        "max_tokens": 8192,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 8192,
+        "max_images_per_prompt": 3000,
+        "max_videos_per_prompt": 10,
+        "input_cost_per_audio_token": 7.5e-08,
+        "input_cost_per_token": 7.5e-08,
+        "output_cost_per_token": 3e-07,
+        "litellm_provider": "gemini",
+        "mode": "chat",
+        "rpm": 60000,
+        "tpm": 10000000,
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_response_schema": true,
+        "supports_audio_output": false,
+        "supports_tool_choice": true,
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.5-flash",
+        "supports_web_search": true
+    },
+    "gemini/gemini-2.5-pro": {
+        "max_tokens": 8192,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 8192,
+        "max_images_per_prompt": 3000,
+        "max_videos_per_prompt": 10,
+        "input_cost_per_audio_token": 7.5e-08,
+        "input_cost_per_token": 7.5e-08,
+        "output_cost_per_token": 3e-07,
+        "litellm_provider": "gemini",
+        "mode": "chat",
+        "rpm": 60000,
+        "tpm": 10000000,
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_response_schema": true,
+        "supports_audio_output": false,
+        "supports_tool_choice": true,
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.5-pro",
         "supports_web_search": true
     },
     "gemini/gemma-3-27b-it": {
