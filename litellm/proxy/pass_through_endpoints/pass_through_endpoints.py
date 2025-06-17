@@ -1014,6 +1014,7 @@ async def initialize_pass_through_endpoints(pass_through_endpoints: list):
             continue
 
         # Add exact path route
+        verbose_proxy_logger.debug("Initializing pass through endpoint: %s", _path)
         InitPassThroughEndpointHelpers.add_exact_path_route(
             app=app,
             path=_path,
