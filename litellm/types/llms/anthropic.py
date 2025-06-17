@@ -7,7 +7,7 @@ from .openai import ChatCompletionCachedContent, ChatCompletionThinkingBlock
 
 
 class AnthropicMessagesToolChoice(TypedDict, total=False):
-    type: Required[Literal["auto", "any", "tool"]]
+    type: Required[Literal["auto", "any", "tool", "none"]]
     name: str
     disable_parallel_tool_use: bool  # default is false
 
@@ -70,6 +70,18 @@ AllAnthropicToolsValues = Union[
     AnthropicWebSearchTool,
     AnthropicCodeExecutionTool,
 ]
+
+
+class AnthropicMcpServerToolConfiguration(TypedDict, total=False):
+    allowed_tools: Optional[List[str]]
+
+
+class AnthropicMcpServerTool(TypedDict, total=False):
+    type: Required[Literal["url"]]
+    url: Required[str]
+    name: Required[str]
+    tool_configuration: AnthropicMcpServerToolConfiguration
+    authorization_token: str
 
 
 class AnthropicMessagesTextParam(TypedDict, total=False):
@@ -216,6 +228,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     tools: Optional[List[Union[AllAnthropicToolsValues, Dict]]]
     top_k: Optional[int]
     top_p: Optional[float]
+    mcp_servers: Optional[List[AnthropicMcpServerTool]]
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):

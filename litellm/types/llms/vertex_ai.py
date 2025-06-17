@@ -336,6 +336,15 @@ class LogprobsResult(TypedDict, total=False):
     chosenCandidates: List[LogprobsCandidate]
 
 
+class UrlMetadata(TypedDict, total=False):
+    retrievedUrl: str
+    urlRetrievalStatus: str
+
+
+class UrlContextMetadata(TypedDict, total=False):
+    urlMetadata: List[UrlMetadata]
+
+
 class Candidates(TypedDict, total=False):
     index: int
     content: HttpxContentType
@@ -355,6 +364,7 @@ class Candidates(TypedDict, total=False):
     groundingMetadata: GroundingMetadata
     finishMessage: str
     logprobsResult: LogprobsResult
+    urlContextMetadata: UrlContextMetadata
 
 
 class PromptFeedback(TypedDict):
@@ -367,6 +377,7 @@ class GenerateContentResponseBody(TypedDict, total=False):
     candidates: List[Candidates]
     promptFeedback: PromptFeedback
     usageMetadata: Required[UsageMetadata]
+    responseId: str
 
 
 class FineTuneHyperparameters(TypedDict, total=False):

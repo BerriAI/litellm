@@ -51,7 +51,10 @@ from litellm.proxy.auth.auth_utils import (
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
 from litellm.proxy.auth.oauth2_check import check_oauth2_token
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (
+    _read_request_body,
+    _safe_get_request_headers,
+)
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
@@ -517,7 +520,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         team_object.rpm_limit if team_object is not None else None
                     ),
                     team_models=team_object.models if team_object is not None else [],
-                    user_role=LitellmUserRoles.INTERNAL_USER,
+                    user_role=(
+                        LitellmUserRoles(user_object.user_role)
+                        if user_object is not None and user_object.user_role is not None
+                        else LitellmUserRoles.INTERNAL_USER
+                    ),
                     user_id=user_id,
                     org_id=org_id,
                     parent_otel_span=parent_otel_span,
@@ -587,7 +594,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         _end_user_object = None
         end_user_params = {}
 
-        end_user_id = get_end_user_id_from_request_body(request_data)
+        end_user_id = get_end_user_id_from_request_body(
+            request_data, _safe_get_request_headers(request)
+        )
         if end_user_id:
             try:
                 end_user_params["end_user_id"] = end_user_id
@@ -1140,7 +1149,9 @@ async def user_api_key_auth(
         custom_litellm_key_header=custom_litellm_key_header,
     )
 
-    end_user_id = get_end_user_id_from_request_body(request_data)
+    end_user_id = get_end_user_id_from_request_body(
+        request_data, _safe_get_request_headers(request)
+    )
     if end_user_id is not None:
         user_api_key_auth_obj.end_user_id = end_user_id
 

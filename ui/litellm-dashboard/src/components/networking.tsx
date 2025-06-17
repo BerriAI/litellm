@@ -36,8 +36,8 @@ const updateServerRootPath = (receivedServerRootPath: string) => {
   serverRootPath = receivedServerRootPath;
 };
 
-export const getProxyBaseUrl = () => {
-  return proxyBaseUrl;
+export const getProxyBaseUrl = (): string => {
+  return proxyBaseUrl ? proxyBaseUrl : window.location.origin;  
 };
 
 const HTTP_REQUEST = {
@@ -1921,7 +1921,8 @@ export const modelAvailableCall = async (
   userRole: String,
   return_wildcard_routes: boolean = false,
   teamID: String | null = null,
-  include_model_access_groups: boolean = false
+  include_model_access_groups: boolean = false,
+  only_model_access_groups: boolean = false
 ) => {
   /**
    * Get all the models user has access to
@@ -1930,11 +1931,12 @@ export const modelAvailableCall = async (
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/models` : `/models`;
     const params = new URLSearchParams();
+    params.append('include_model_access_groups', 'True');
     if (return_wildcard_routes === true) {
       params.append('return_wildcard_routes', 'True');
     }
-    if (include_model_access_groups === true) {
-      params.append('include_model_access_groups', 'True');
+    if (only_model_access_groups === true) {
+      params.append('only_model_access_groups', 'True');
     }
     if (teamID) {
       params.append('team_id', teamID.toString());
@@ -4578,6 +4580,33 @@ export const createMCPServer = async (
   }
 };
 
+export const updateMCPServer = async (
+  accessToken: string,
+  formValues: Record<string, any>
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
+    const response = await fetch(url, {
+      method: "PUT",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(formValues),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to update MCP server:", error);
+    throw error;
+  }
+};
+
 export const deleteMCPServer = async (
   accessToken: String,
   serverId: String
@@ -4609,8 +4638,8 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
   try {
     // Construct base URL
     let url = proxyBaseUrl 
-      ? `${proxyBaseUrl}/mcp/tools/list?server_id=${serverId}`
-      : `/mcp/tools/list?server_id=${serverId}`;
+      ? `${proxyBaseUrl}/mcp-rest/tools/list?server_id=${serverId}`
+      : `/mcp-rest/tools/list?server_id=${serverId}`;
 
     console.log("Fetching MCP tools from:", url);
     
@@ -4642,8 +4671,8 @@ export const callMCPTool = async (accessToken: string, toolName: string, toolArg
   try {
     // Construct base URL
     let url = proxyBaseUrl 
-      ? `${proxyBaseUrl}/mcp/tools/call`
-      : `/mcp/tools/call`;
+      ? `${proxyBaseUrl}/mcp-rest/tools/call`
+      : `/mcp-rest/tools/call`;
 
     console.log("Calling MCP tool:", toolName, "with arguments:", toolArguments);
     
@@ -5465,6 +5494,39 @@ export const uiAuditLogsCall = async (
     return data;
   } catch (error) {
     console.error("Failed to fetch audit logs:", error);
+    throw error;
+  }
+};
+
+export const getRemainingUsers = async (accessToken: string): Promise<{
+  total_users: number;
+  total_users_used: number;
+  total_users_remaining: number;
+} | null> => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/available_users` : `/user/available_users`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      // if 404 - return None
+      if (response.status === 404) {
+        return null;
+      }
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch remaining users:", error);
     throw error;
   }
 };

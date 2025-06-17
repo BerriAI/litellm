@@ -46,6 +46,7 @@ export type LogEntry = {
   proxy_server_request?: string | any[] | Record<string, any>;
   session_id?: string;
   status?: string;
+  duration?: number;
   onKeyHashClick?: (keyHash: string) => void;
   onSessionClick?: (sessionId: string) => void;
 };
@@ -158,6 +159,15 @@ export const columns: ColumnDef<LogEntry>[] = [
     accessorKey: "spend",
     cell: (info: any) => (
       <span>${Number(info.getValue() || 0).toFixed(6)}</span>
+    ),
+  },
+  {
+    header: "Duration",
+    accessorKey: "duration",
+    cell: (info: any) => (
+      <Tooltip title={String(info.getValue() || "-")}>
+        <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
+      </Tooltip>
     ),
   },
   {
@@ -400,16 +410,9 @@ export type AuditLogEntry = {
 
 
 const getActionBadge = (action: string) => {
-  const actionColors = {
-    created: "blue",
-    updated: "slate",
-    deleted: "red",
-    rotated: "amber",
-  } as const;
-
   return (
     <Badge 
-      color={actionColors[action as keyof typeof actionColors] || "gray"} 
+      color="gray"
       className="flex items-center gap-1"
     >
       <span className="whitespace-nowrap text-xs">{action}</span>
@@ -438,27 +441,62 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
             aria-label={localExpanded ? "Collapse row" : "Expand row"}
             className="w-6 h-6 flex items-center justify-center focus:outline-none"
           >
-            {localExpanded ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            <svg
+              className={`w-4 h-4 transform transition-transform ${
+                localExpanded ? 'rotate-90' : ''
+              }`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M9 5l7 7-7 7"
+              />
+            </svg>
           </button>
         ) : (
-          <span className="w-6 h-6 flex items-center justify-center text-gray-300">●</span>
+          <span className="w-6 h-6 flex items-center justify-center">●</span>
         );
       };
       return <ExpanderCell />;
     },
   },
   {
-    header: "Created At",
-    accessorKey: "before_value.created_at",
-    cell: (info: any) => {
-      const createdAt = info.row.original.before_value?.created_at;
-      return createdAt ? <TimeCell utcTime={createdAt} /> : "-";
-    },
-  },
-  {
-    header: "Updated At",
+    header: "Timestamp",
     accessorKey: "updated_at",
     cell: (info: any) => <TimeCell utcTime={info.getValue()} />,
+  },
+  {
+    header: "Table Name",
+    accessorKey: "table_name",
+    cell: (info: any) => {
+      const tableName = info.getValue();
+      let displayValue = tableName;
+      switch (tableName) {
+        case "LiteLLM_VerificationToken":
+          displayValue = "Keys";
+          break;
+        case "LiteLLM_TeamTable":
+          displayValue = "Teams";
+          break;
+        case "LiteLLM_OrganizationTable":
+          displayValue = "Organizations";
+          break;
+        case "LiteLLM_UserTable":
+          displayValue = "Users";
+          break;
+        case "LiteLLM_ProxyModelTable":
+          displayValue = "Models";
+          break;
+        default:
+          displayValue = tableName;
+      }
+      return <span>{displayValue}</span>;
+    },
   },
   {
     header: "Action",
@@ -483,31 +521,6 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
           )}
         </div>
       );
-    },
-  },
-  {
-    header: "Table Name",
-    accessorKey: "table_name",
-    cell: (info: any) => {
-      const tableName = info.getValue();
-      let displayValue = tableName;
-      switch (tableName) {
-        case "LiteLLM_VerificationToken":
-          displayValue = "Keys";
-          break;
-        case "LiteLLM_TeamTable":
-          displayValue = "Teams";
-          break;
-        case "LiteLLM_OrganizationTable":
-          displayValue = "Organizations";
-          break;
-        case "LiteLLM_UserTable":
-          displayValue = "Users";
-          break;
-        default:
-          displayValue = tableName;
-      }
-      return <span>{displayValue}</span>;
     },
   },
   {

@@ -660,6 +660,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                     userID={userID}
                     userRole={userRole}
                     teams={null}
+                    premiumUser={premiumUser}
                   />
                 </Card>
               </Col>
