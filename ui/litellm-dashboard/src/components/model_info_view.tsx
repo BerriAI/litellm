@@ -36,6 +36,7 @@ interface ModelInfoViewProps {
   setEditModalVisible: (visible: boolean) => void;
   setSelectedModel: (model: any) => void;
   onModelUpdate?: (updatedModel: any) => void;
+  modelAccessGroups: string[] | null;
 }
 
 export default function ModelInfoView({ 
@@ -48,7 +49,8 @@ export default function ModelInfoView({
   editModel,
   setEditModalVisible,
   setSelectedModel,
-  onModelUpdate
+  onModelUpdate,
+  modelAccessGroups
 }: ModelInfoViewProps) {
   const [form] = Form.useForm();
   const [localModelData, setLocalModelData] = useState<any>(null);
@@ -548,6 +550,10 @@ export default function ModelInfoView({
                             maxTagCount="responsive"
                             allowClear
                             style={{ width: '100%' }}
+                            options={modelAccessGroups?.map((group) => ({
+                              value: group,
+                              label: group
+                            }))}
                           />
                         </Form.Item>
                       ) : (
