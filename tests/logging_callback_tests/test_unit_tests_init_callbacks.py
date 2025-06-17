@@ -100,7 +100,7 @@ callback_class_str_to_classType = {
     "smtp_email": SMTPEmailLogger,
     "deepeval": DeepEvalLogger,
     "s3_v2": S3Logger,
-    "langfuse_otel": LangfuseOtelLogger,
+    "langfuse_otel": OpenTelemetry,
 }
 
 expected_env_vars = {

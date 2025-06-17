@@ -1,3 +1,7 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import Image from '@theme/IdealImage';
+
 # Custom API Server (Custom Format)
 
 Call your custom torch-serve / internal LLM APIs via LiteLLM

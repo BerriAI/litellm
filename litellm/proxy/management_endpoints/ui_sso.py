@@ -260,9 +260,29 @@ async def get_generic_sso_response(
         scope=generic_scope,
     )
     verbose_proxy_logger.debug("calling generic_sso.verify_and_process")
-    result = await generic_sso.verify_and_process(
-        request, params={"include_client_id": generic_include_client_id}
-    )
+    additional_generic_sso_headers = os.getenv(
+        "GENERIC_SSO_HEADERS", None
+    )  # Comma-separated list of headers to add to the request - e.g. Authorization=Bearer <token>, Content-Type=application/json, etc.
+    additional_generic_sso_headers_dict = {}
+    if additional_generic_sso_headers is not None:
+        additional_generic_sso_headers_split = additional_generic_sso_headers.split(",")
+        for header in additional_generic_sso_headers_split:
+            header = header.strip()
+            if header:
+                key, value = header.split("=")
+                additional_generic_sso_headers_dict[key] = value
+
+    try:
+        result = await generic_sso.verify_and_process(
+            request,
+            params={"include_client_id": generic_include_client_id},
+            headers=additional_generic_sso_headers_dict,
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            f"Error verifying and processing generic SSO: {e}. Passed in headers: {additional_generic_sso_headers_dict}"
+        )
+        raise e
     verbose_proxy_logger.debug("generic result: %s", result)
     return result or {}
 

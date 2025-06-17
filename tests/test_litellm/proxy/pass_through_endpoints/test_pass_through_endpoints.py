@@ -19,6 +19,9 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
     pass_through_request,
 )
+from litellm.proxy.pass_through_endpoints.success_handler import (
+    PassThroughEndpointLogging,
+)
 
 
 # Test is_multipart
@@ -178,3 +181,90 @@ async def test_pass_through_request_failure_handler():
                     call_args["original_exception"], TypeError
                 )  # Now expecting TypeError
                 assert "traceback_str" in call_args
+
+
+def test_is_langfuse_route():
+    """
+    Test that the is_langfuse_route method correctly identifies Langfuse routes
+    """
+    handler = PassThroughEndpointLogging()
+
+    # Test positive cases
+    assert (
+        handler.is_langfuse_route("http://localhost:4000/langfuse/api/public/traces")
+        == True
+    )
+    assert (
+        handler.is_langfuse_route(
+            "https://proxy.example.com/langfuse/api/public/sessions"
+        )
+        == True
+    )
+    assert handler.is_langfuse_route("/langfuse/api/public/ingestion") == True
+    assert handler.is_langfuse_route("http://localhost:4000/langfuse/") == True
+
+    # Test negative cases
+    assert (
+        handler.is_langfuse_route("https://api.openai.com/v1/chat/completions") == False
+    )
+    assert (
+        handler.is_langfuse_route("http://localhost:4000/anthropic/v1/messages")
+        == False
+    )
+    assert handler.is_langfuse_route("https://example.com/other") == False
+    assert handler.is_langfuse_route("") == False
+
+
+@pytest.mark.asyncio
+async def test_langfuse_passthrough_no_logging():
+    """
+    Test that langfuse pass-through requests skip logging by returning early
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        PassthroughStandardLoggingPayload,
+    )
+
+    handler = PassThroughEndpointLogging()
+
+    # Mock the logging object
+    mock_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+    mock_logging_obj.model_call_details = {}
+
+    # Mock httpx response for langfuse request
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.text = '{"status": "success"}'
+
+    # Create langfuse URL
+    langfuse_url = "http://localhost:4000/langfuse/api/public/traces"
+
+    passthrough_logging_payload = PassthroughStandardLoggingPayload(
+        url=langfuse_url,
+        request_body={"test": "data"},
+        request_method="POST",
+    )
+
+    # Call the success handler with langfuse route
+    result = await handler.pass_through_async_success_handler(
+        httpx_response=mock_response,
+        response_body={"status": "success"},
+        logging_obj=mock_logging_obj,
+        url_route=langfuse_url,
+        result="",
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        cache_hit=False,
+        request_body={"test": "data"},
+        passthrough_logging_payload=passthrough_logging_payload,
+    )
+
+    # Should return None (early return) and not proceed with logging
+    assert result is None
+
+    # Verify that the passthrough_logging_payload was still set (this happens before the langfuse check)
+    assert (
+        mock_logging_obj.model_call_details["passthrough_logging_payload"]
+        == passthrough_logging_payload
+    )
