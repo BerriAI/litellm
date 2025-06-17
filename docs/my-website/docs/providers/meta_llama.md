@@ -45,7 +45,7 @@ os.environ["LLAMA_API_KEY"] = ""  # your Meta Llama API key
 messages = [{"content": "Hello, how are you?", "role": "user"}]
 
 # Meta Llama call
-response = completion(model="meta_llama/Llama-3.3-70B-Instruct", messages=messages)
+response = completion(model="meta_llama/Llama-4-Maverick-17B-128E-Instruct-FP8", messages=messages)
 ```
 
 ### Streaming
@@ -61,7 +61,7 @@ messages = [{"content": "Hello, how are you?", "role": "user"}]
 
 # Meta Llama call with streaming
 response = completion(
-    model="meta_llama/Llama-3.3-70B-Instruct",
+    model="meta_llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
     messages=messages,
     stream=True
 )
@@ -209,7 +209,7 @@ client = OpenAI(
 
 # Non-streaming response
 response = client.chat.completions.create(
-    model="meta_llama/Llama-3.3-70B-Instruct",
+    model="meta_llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
     messages=[{"role": "user", "content": "Write a short poem about AI."}]
 )
 
@@ -227,7 +227,7 @@ client = OpenAI(
 
 # Streaming response
 response = client.chat.completions.create(
-    model="meta_llama/Llama-3.3-70B-Instruct",
+    model="meta_llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
     messages=[{"role": "user", "content": "Write a short poem about AI."}],
     stream=True
 )
