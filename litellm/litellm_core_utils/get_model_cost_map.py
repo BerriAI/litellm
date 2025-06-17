@@ -12,8 +12,15 @@ export LITELLM_PRICE_DIR=config
 import os
 import json
 import httpx
-import importlib.resources
 
+def load_local_backup() -> dict:
+    """
+    Load model cost data from the local backup JSON file.
+    The backup path is derived from the LITELLM_PRICE_DIR environment variable.
+    """
+    backup_path = os.path.join(os.getenv("LITELLM_PRICE_DIR", "litellm"), "model_prices_and_context_window_backup.json")
+    with open(backup_path, "r") as f:
+        return json.load(f)
 
 def get_model_cost_map(url: str) -> dict:
     """
@@ -22,14 +29,6 @@ def get_model_cost_map(url: str) -> dict:
     - The environment variable LITELLM_LOCAL_MODEL_COST_MAP is set to "True", or
     - The remote fetch fails
     """
-
-
-    def load_local_backup() -> dict:
-        """Load model cost data from the local backup JSON file."""
-        backup_path = os.path.join(os.getenv("LITELLM_PRICE_DIR", "litellm"), "model_prices_and_context_window_backup.json")
-        with open(backup_path, "r") as f:
-            return json.load(f)
-
     if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":
         return load_local_backup()
 
