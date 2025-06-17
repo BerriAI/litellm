@@ -511,9 +511,47 @@ class ModelResponseIterator:
         return False
 
     def _handle_usage(self, anthropic_usage_chunk: Union[dict, UsageDelta]) -> Usage:
-        return AnthropicConfig().calculate_usage(
-            usage_object=cast(dict, anthropic_usage_chunk), reasoning_content=None
+        # Convert usage object to dict if needed to preserve all fields
+        usage_dict = anthropic_usage_chunk
+        if not isinstance(usage_dict, dict):
+            if hasattr(usage_dict, "model_dump"):
+                usage_dict = usage_dict.model_dump()
+            elif hasattr(usage_dict, "dict"):
+                usage_dict = usage_dict.dict()
+            elif hasattr(usage_dict, "__dict__"):
+                usage_dict = vars(usage_dict)
+        
+        usage_result = AnthropicConfig().calculate_usage(
+            usage_object=usage_dict, reasoning_content=None
         )
+        
+        return usage_result
+
+    def _has_complete_usage(self, usage_chunk: Union[dict, UsageDelta]) -> bool:
+        """
+        Check if the usage chunk contains complete usage information.
+        
+        For Anthropic streaming, complete usage should include:
+        - Input information (input_tokens or cache_read_input_tokens)
+        - This indicates the chunk contains comprehensive usage data
+        
+        Partial usage chunks (e.g., only output_tokens) should not override
+        complete usage chunks to preserve cache token information.
+        """
+        if isinstance(usage_chunk, dict):
+            has_input_tokens = usage_chunk.get("input_tokens", 0) > 0
+            has_cache_read_tokens = usage_chunk.get("cache_read_input_tokens", 0) > 0
+            has_cache_creation_tokens = usage_chunk.get("cache_creation_input_tokens", 0) > 0
+            
+            # Complete usage should have some form of input processing information
+            return has_input_tokens or has_cache_read_tokens or has_cache_creation_tokens
+        else:
+            # For object-like usage chunks
+            has_input_tokens = getattr(usage_chunk, "input_tokens", 0) > 0
+            has_cache_read_tokens = getattr(usage_chunk, "cache_read_input_tokens", 0) > 0  
+            has_cache_creation_tokens = getattr(usage_chunk, "cache_creation_input_tokens", 0) > 0
+            
+            return has_input_tokens or has_cache_read_tokens or has_cache_creation_tokens
 
     def _content_block_delta_helper(
         self, chunk: dict
@@ -690,7 +728,13 @@ class ModelResponseIterator:
                     finish_reason=message_delta["delta"].get("stop_reason", "stop")
                     or "stop"
                 )
-                usage = self._handle_usage(anthropic_usage_chunk=message_delta["usage"])
+                
+                # Only attach usage if it contains both input and output tokens (complete usage)
+                # Anthropic sends partial usage chunks that should not override complete ones
+                usage_chunk = message_delta["usage"]
+                if self._has_complete_usage(usage_chunk):
+                    usage = self._handle_usage(anthropic_usage_chunk=usage_chunk)
+                
             elif type_chunk == "message_start":
                 """
                 Anthropic
@@ -713,9 +757,10 @@ class ModelResponseIterator:
                 """
                 message_start_block = MessageStartBlock(**chunk)  # type: ignore
                 if "usage" in message_start_block["message"]:
-                    usage = self._handle_usage(
-                        anthropic_usage_chunk=message_start_block["message"]["usage"]
-                    )
+                    usage_chunk = message_start_block["message"]["usage"]
+                    if self._has_complete_usage(usage_chunk):
+                        usage = self._handle_usage(anthropic_usage_chunk=usage_chunk)
+                        
             elif type_chunk == "error":
                 """
                 {"type":"error","error":{"details":null,"type":"api_error","message":"Internal server error"}      }

@@ -404,26 +404,6 @@ class ChunkProcessor:
         if usage_data["is_byok"] is not None:
             returned_usage.is_byok = usage_data["is_byok"]
 
-        # Set cache tokens
-        if usage_data["cache_creation_input_tokens"] is not None:
-            returned_usage._cache_creation_input_tokens = usage_data[
-                "cache_creation_input_tokens"
-            ]
-            setattr(
-                returned_usage,
-                "cache_creation_input_tokens",
-                usage_data["cache_creation_input_tokens"],
-            )  # for anthropic
-        if usage_data["cache_read_input_tokens"] is not None:
-            returned_usage._cache_read_input_tokens = usage_data[
-                "cache_read_input_tokens"
-            ]
-            setattr(
-                returned_usage,
-                "cache_read_input_tokens",
-                usage_data["cache_read_input_tokens"],
-            )  # for anthropic
-
         # Set token details
         if usage_data["completion_tokens_details"] is not None:
             returned_usage.completion_tokens_details = usage_data[
