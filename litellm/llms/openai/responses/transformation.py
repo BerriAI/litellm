@@ -38,6 +38,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             "store",
             "background",
             "stream",
+            "prompt",
             "temperature",
             "text",
             "tool_choice",
