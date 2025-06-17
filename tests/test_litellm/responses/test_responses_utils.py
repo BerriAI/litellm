@@ -25,7 +25,11 @@ class TestResponsesAPIRequestUtils:
         model = "gpt-4o"
         config = OpenAIResponsesAPIConfig()
         optional_params = ResponsesAPIOptionalRequestParams(
-            {"temperature": 0.7, "max_output_tokens": 100}
+            {
+                "temperature": 0.7,
+                "max_output_tokens": 100,
+                "prompt": {"id": "pmpt_123"},
+            }
         )
 
         # Execute
@@ -41,6 +45,8 @@ class TestResponsesAPIRequestUtils:
         assert result["temperature"] == 0.7
         assert "max_output_tokens" in result
         assert result["max_output_tokens"] == 100
+        assert "prompt" in result
+        assert result["prompt"] == {"id": "pmpt_123"}
 
     def test_get_optional_params_responses_api_unsupported_param(self):
         """Test that unsupported parameters raise an error"""
@@ -68,6 +74,7 @@ class TestResponsesAPIRequestUtils:
         params = {
             "temperature": 0.7,
             "max_output_tokens": 100,
+            "prompt": {"id": "pmpt_456"},
             "invalid_param": "value",
             "model": "gpt-4o",  # This is not in ResponsesAPIOptionalRequestParams
         }
@@ -84,6 +91,7 @@ class TestResponsesAPIRequestUtils:
         assert "model" not in result
         assert result["temperature"] == 0.7
         assert result["max_output_tokens"] == 100
+        assert result["prompt"] == {"id": "pmpt_456"}
 
     def test_decode_previous_response_id_to_original_previous_response_id(self):
         """Test decoding a LiteLLM encoded previous_response_id to the original previous_response_id"""
