@@ -41,6 +41,7 @@ import TagManagement from "@/components/tag_management";
 import VectorStoreManagement from "@/components/vector_store_management";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cx } from "@/lib/cva.config";
+import { VirtualKeysPage } from "@/components/virtual_keys_page/virtual-keys-page";
 
 function getCookie(name: string) {
   const cookieValue = document.cookie
@@ -83,8 +84,6 @@ interface ProxySettings {
   PROXY_BASE_URL: string;
   PROXY_LOGOUT_URL: string;
 }
-
-const queryClient = new QueryClient();
 
 function LoadingScreen() {
   return (
@@ -130,6 +129,8 @@ export default function CreateKeyPage() {
   const [page, setPage] = useState(() => {
     return searchParams.get("page") || "api-keys";
   });
+
+  const [queryClient] = useState(() => new QueryClient());
 
   // Custom setPage function that updates URL
   const updatePage = (newPage: string) => {
@@ -262,7 +263,7 @@ export default function CreateKeyPage() {
             createClicked={createClicked}
           />
         ) : (
-          <div className="flex flex-col min-h-screen">
+          <div className="flex flex-col h-full min-h-0">
             <Navbar
               userID={userID}
               userRole={userRole}
@@ -272,8 +273,8 @@ export default function CreateKeyPage() {
               proxySettings={proxySettings}
               accessToken={accessToken}
             />
-            <div className="flex flex-1 overflow-auto">
-              <div className="mt-8">
+            <div className="flex grow min-h-0">
+              <div>
                 <Sidebar
                   accessToken={accessToken}
                   setPage={updatePage}
@@ -439,7 +440,9 @@ export default function CreateKeyPage() {
                   teams={(teams as Team[]) ?? []}
                   premiumUser={premiumUser}
                 />
-              ) : page === "keys-v2" ? null : (
+              ) : page === "virtual-keys" ? (
+                <VirtualKeysPage />
+              ) : (
                 <Usage
                   userID={userID}
                   userRole={userRole}

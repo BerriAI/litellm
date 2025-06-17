@@ -77,7 +77,7 @@ const Navbar: React.FC<NavbarProps> = ({
 
 
   return (
-    <nav className="bg-white border-b border-gray-200 sticky top-0 z-10">
+    <nav className="bg-white border-b border-gray-200 shrink-0 z-10">
       <div className="w-full">
         <div className="flex items-center h-12 px-4">
           {/* Left side with correct logo positioning */}

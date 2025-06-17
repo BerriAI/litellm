@@ -29,11 +29,7 @@ import {
   useAuthContext,
   useGlobalOverlaysContext,
 } from "./contexts";
-import {
-  QueryClient,
-  QueryClientProvider,
-  useQuery,
-} from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { KeyResponse } from "@/components/key_team_helpers/key_list";
 import { keyListCall } from "@/components/networking";
 import { useDialogStore } from "@ariakit/react";
@@ -369,7 +365,7 @@ function Content() {
     <Fragment>
       <CreateVirtualKeyDialog store={createVirtualKeyDialogStore} />
 
-      <div className="p-8 h-full flex flex-col min-h-0">
+      <div className="p-8 h-full grow min-w-0 flex flex-col min-h-0">
         <div className="flex mb-8 shrink-0 flex-col gap-2">
           <div className="flex items-center gap-3">
             <div
@@ -660,11 +656,10 @@ function Content() {
   );
 }
 
-export default function VirtualKeysPage() {
+export function VirtualKeysPage() {
   const [authContextValue, setAuthContextValue] = useState<AuthContext | null>(
     null,
   );
-  const [queryClient] = useState(() => new QueryClient());
 
   // this is a temporary dirty hack and should not make it to prod
   useEffect(() => {
@@ -674,12 +669,10 @@ export default function VirtualKeysPage() {
 
   if (authContextValue === null) return null;
   return (
-    <QueryClientProvider client={queryClient}>
-      <authContext.Provider value={authContextValue}>
-        <GlobalOverlaysProvider>
-          <Content />
-        </GlobalOverlaysProvider>
-      </authContext.Provider>
-    </QueryClientProvider>
+    <authContext.Provider value={authContextValue}>
+      <GlobalOverlaysProvider>
+        <Content />
+      </GlobalOverlaysProvider>
+    </authContext.Provider>
   );
 }

@@ -1,10 +1,5 @@
 import { cx } from "@/lib/cva.config";
-import {
-  Button,
-  DialogStore,
-  useDialogContext,
-  useDialogStore,
-} from "@ariakit/react";
+import { Button, DialogStore, useDialogContext } from "@ariakit/react";
 import {
   UiFormCombobox,
   UiFormContent,
@@ -25,21 +20,16 @@ import {
   SubmitHandler,
   useForm,
 } from "react-hook-form";
-import {
-  AuthContext,
-  useAuthContext,
-  useGlobalOverlaysContext,
-} from "./contexts";
+import { useAuthContext, useGlobalOverlaysContext } from "./contexts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Fragment, useState } from "react";
-import { keyCreateCall, keyUpdateCall } from "@/components/networking";
+import { keyUpdateCall } from "@/components/networking";
 import { message } from "antd";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import { CopyApiKeyDialog } from "./copy-api-key-dialog";
 import { Record } from "openai/core.mjs";
-import { modelAvailableCall, teamListCall } from "../../components/networking";
-import { KeyResponse, Team } from "../../components/key_team_helpers/key_list";
+import { modelAvailableCall, teamListCall } from "../networking";
+import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { AiModel } from "../../types";
 import { updateExistingKeys } from "@/utils/dataUtils";
 import { Trash2Icon } from "lucide-react";

@@ -74,6 +74,7 @@ const Sidebar: React.FC<SidebarProps> = ({
       label: "Experimental", 
       icon: <ExperimentOutlined />,
       children: [
+        { key: "23", page: "virtual-keys", label: "Virtual Keys", icon: <KeyOutlined /> },
         { key: "9", page: "caching", label: "Caching", icon: <DatabaseOutlined />, roles: all_admin_roles },
         { key: "10", page: "budgets", label: "Budgets", icon: <BankOutlined />, roles: all_admin_roles },
         { key: "20", page: "transform-request", label: "API Playground", icon: <ApiOutlined />, roles: [...all_admin_roles, ...internalUserRoles] },
@@ -132,7 +133,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
 
   return (
-    <Layout style={{ minHeight: "100vh" }}>
+    <div className="h-full overflow-y-auto pt-8 pb-24">
       <Sider theme="light" width={220}>
         <Menu
           mode="inline"
@@ -172,7 +173,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           )
         }
       </Sider>
-    </Layout>
+    </div>
   );
 };
 

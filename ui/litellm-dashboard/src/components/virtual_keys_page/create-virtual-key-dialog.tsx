@@ -24,8 +24,8 @@ import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { CopyApiKeyDialog } from "./copy-api-key-dialog";
 import { Record } from "openai/core.mjs";
-import { modelAvailableCall, teamListCall } from "../../components/networking";
-import { Team } from "../../components/key_team_helpers/key_list";
+import { modelAvailableCall, teamListCall } from "../networking";
+import { Team } from "../key_team_helpers/key_list";
 import { AiModel } from "../../types";
 
 type CreateVirtualKeyFormData = {
