@@ -520,7 +520,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         team_object.rpm_limit if team_object is not None else None
                     ),
                     team_models=team_object.models if team_object is not None else [],
-                    user_role=LitellmUserRoles.INTERNAL_USER,
+                    user_role=(
+                        LitellmUserRoles(user_object.user_role)
+                        if user_object is not None and user_object.user_role is not None
+                        else LitellmUserRoles.INTERNAL_USER
+                    ),
                     user_id=user_id,
                     org_id=org_id,
                     parent_otel_span=parent_otel_span,
@@ -606,23 +610,23 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     proxy_logging_obj=proxy_logging_obj,
                 )
                 if _end_user_object is not None:
-                    end_user_params["allowed_model_region"] = (
-                        _end_user_object.allowed_model_region
-                    )
+                    end_user_params[
+                        "allowed_model_region"
+                    ] = _end_user_object.allowed_model_region
                     if _end_user_object.litellm_budget_table is not None:
                         budget_info = _end_user_object.litellm_budget_table
                         if budget_info.tpm_limit is not None:
-                            end_user_params["end_user_tpm_limit"] = (
-                                budget_info.tpm_limit
-                            )
+                            end_user_params[
+                                "end_user_tpm_limit"
+                            ] = budget_info.tpm_limit
                         if budget_info.rpm_limit is not None:
-                            end_user_params["end_user_rpm_limit"] = (
-                                budget_info.rpm_limit
-                            )
+                            end_user_params[
+                                "end_user_rpm_limit"
+                            ] = budget_info.rpm_limit
                         if budget_info.max_budget is not None:
-                            end_user_params["end_user_max_budget"] = (
-                                budget_info.max_budget
-                            )
+                            end_user_params[
+                                "end_user_max_budget"
+                            ] = budget_info.max_budget
             except Exception as e:
                 if isinstance(e, litellm.BudgetExceededError):
                     raise e
