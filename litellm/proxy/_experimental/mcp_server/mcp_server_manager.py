@@ -364,6 +364,11 @@ class MCPServerManager:
         """
         Generate a stable server ID based on server parameters using a hash function.
 
+        This is critical to ensure the server_id is stable across server restarts.
+        Some users store MCPs on the config.yaml and permission management is based on server_ids.
+
+        Eg a key might have mcp_servers = ["1234"], if the server_id changes across restarts, the key will no longer have access to the MCP.
+
         Args:
             server_name: Name of the server
             url: Server URL
