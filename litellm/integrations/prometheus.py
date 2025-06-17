@@ -1070,6 +1070,31 @@ class PrometheusLogger(CustomLogger):
 
             llm_provider = _litellm_params.get("custom_llm_provider", None)
 
+            # Create enum_values for the label factory (always create for use in different metrics)
+            enum_values = UserAPIKeyLabelValues(
+                litellm_model_name=litellm_model_name,
+                model_id=model_id,
+                api_base=api_base,
+                api_provider=llm_provider,
+                exception_status=(
+                    str(getattr(exception, "status_code", None)) if exception else None
+                ),
+                exception_class=(
+                    self._get_exception_class_name(exception) if exception else None
+                ),
+                requested_model=model_group,
+                hashed_api_key=standard_logging_payload["metadata"][
+                    "user_api_key_hash"
+                ],
+                api_key_alias=standard_logging_payload["metadata"][
+                    "user_api_key_alias"
+                ],
+                team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+                team_alias=standard_logging_payload["metadata"][
+                    "user_api_key_team_alias"
+                ],
+            )
+
             """
             log these labels
             ["litellm_model_name", "model_id", "api_base", "api_provider"]
@@ -1081,25 +1106,14 @@ class PrometheusLogger(CustomLogger):
                 api_provider=llm_provider or "",
             )
             if exception is not None:
-                self.litellm_deployment_failure_responses.labels(
-                    litellm_model_name=litellm_model_name,
-                    model_id=model_id,
-                    api_base=api_base,
-                    api_provider=llm_provider,
-                    exception_status=str(getattr(exception, "status_code", None)),
-                    exception_class=self._get_exception_class_name(exception),
-                    requested_model=model_group,
-                    hashed_api_key=standard_logging_payload["metadata"][
-                        "user_api_key_hash"
-                    ],
-                    api_key_alias=standard_logging_payload["metadata"][
-                        "user_api_key_alias"
-                    ],
-                    team=standard_logging_payload["metadata"]["user_api_key_team_id"],
-                    team_alias=standard_logging_payload["metadata"][
-                        "user_api_key_team_alias"
-                    ],
-                ).inc()
+
+                _labels = prometheus_label_factory(
+                    supported_enum_labels=self.get_labels_for_metric(
+                        metric_name="litellm_deployment_failure_responses"
+                    ),
+                    enum_values=enum_values,
+                )
+                self.litellm_deployment_failure_responses.labels(**_labels).inc()
 
                 # tag based tracking
                 if standard_logging_payload is not None and isinstance(
@@ -1122,23 +1136,13 @@ class PrometheusLogger(CustomLogger):
                             }
                         ).inc()
 
-            self.litellm_deployment_total_requests.labels(
-                litellm_model_name=litellm_model_name,
-                model_id=model_id,
-                api_base=api_base,
-                api_provider=llm_provider,
-                requested_model=model_group,
-                hashed_api_key=standard_logging_payload["metadata"][
-                    "user_api_key_hash"
-                ],
-                api_key_alias=standard_logging_payload["metadata"][
-                    "user_api_key_alias"
-                ],
-                team=standard_logging_payload["metadata"]["user_api_key_team_id"],
-                team_alias=standard_logging_payload["metadata"][
-                    "user_api_key_team_alias"
-                ],
-            ).inc()
+            _labels = prometheus_label_factory(
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_deployment_total_requests"
+                ),
+                enum_values=enum_values,
+            )
+            self.litellm_deployment_total_requests.labels(**_labels).inc()
 
             pass
         except Exception as e:
