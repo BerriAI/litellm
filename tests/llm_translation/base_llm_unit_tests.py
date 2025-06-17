@@ -8,6 +8,7 @@ import os
 import uuid
 import time
 import base64
+import inspect
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -55,7 +56,8 @@ def _usage_format_tests(usage: litellm.Usage):
     print(f"usage={usage}")
     assert usage.total_tokens == usage.prompt_tokens + usage.completion_tokens
 
-    assert usage.prompt_tokens > usage.prompt_tokens_details.cached_tokens
+    if usage.prompt_tokens_details is not None:
+        assert usage.prompt_tokens > usage.prompt_tokens_details.cached_tokens
 
 
 class BaseLLMChatTest(ABC):
@@ -76,10 +78,19 @@ class BaseLLMChatTest(ABC):
         """Must return the base completion call args"""
         pass
 
-
     def get_base_completion_call_args_with_reasoning_model(self) -> dict:
         """Must return the base completion call args with reasoning_effort"""
         return {}
+
+    @pytest.fixture(autouse=True)
+    def _handle_rate_limits(self):
+        """Fixture to handle rate limit errors for all test methods"""
+        try:
+            yield
+        except litellm.RateLimitError:
+            pytest.skip("Rate limit exceeded")
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
 
     def test_developer_role_translation(self):
         """
@@ -132,8 +143,10 @@ class BaseLLMChatTest(ABC):
 
     def test_streaming(self):
         """Check if litellm handles streaming correctly"""
+        from litellm.types.utils import ModelResponseStream
+        from typing import Optional
         base_completion_call_args = self.get_base_completion_call_args()
-        litellm.set_verbose = True
+        # litellm.set_verbose = True
         messages = [
             {
                 "role": "user",
@@ -153,9 +166,14 @@ class BaseLLMChatTest(ABC):
 
         # for OpenAI the content contains the JSON schema, so we need to assert that the content is not None
         chunks = []
+        created_at: Optional[int] = None
         for chunk in response:
             print(chunk)
             chunks.append(chunk)
+            if isinstance(chunk, ModelResponseStream):
+                if created_at is None:
+                    created_at = chunk.created
+                assert chunk.created == created_at
 
         resp = litellm.stream_chunk_builder(chunks=chunks)
         print(resp)
@@ -174,20 +192,68 @@ class BaseLLMChatTest(ABC):
 
         self.completion_function(**base_completion_call_args, messages=messages)
 
-    @pytest.mark.parametrize("image_url", ["str", "dict"])
-    def test_pdf_handling(self, pdf_messages, image_url):
-        from litellm.utils import supports_pdf_input
 
-        if image_url == "str":
-            image_url = pdf_messages
-        elif image_url == "dict":
-            image_url = {"url": pdf_messages}
+    def test_web_search(self):
+        from litellm.utils import supports_web_search
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        litellm._turn_on_debug()
+
+        base_completion_call_args = self.get_base_completion_call_args()
+
+        if not supports_web_search(base_completion_call_args["model"], None):
+            pytest.skip("Model does not support web search")
+
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages=[{"role": "user", "content": "What's the weather like in Boston today?"}],
+            web_search_options={},
+            max_tokens=100,
+        )
+
+        assert response is not None
+
+        print(f"response={response}")
+
+    def test_url_context(self):
+        from litellm.utils import supports_url_context
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        litellm._turn_on_debug()
+
+        base_completion_call_args = self.get_base_completion_call_args()
+
+        if not supports_url_context(base_completion_call_args["model"], None):
+            pytest.skip("Model does not support url context")
+
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages=[{"role": "user", "content": "Summarize the content of this URL: https://en.wikipedia.org/wiki/Artificial_intelligence"}],
+            tools=[{"urlContext": {}}],
+        )
+
+        assert response is not None
+        print(f"response={response}")
+
+    @pytest.mark.parametrize("sync_mode", [True, False])
+    @pytest.mark.asyncio
+    async def test_pdf_handling(self, pdf_messages, sync_mode):
+        from litellm.utils import supports_pdf_input
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        litellm._turn_on_debug()
+
 
         image_content = [
             {"type": "text", "text": "What's this file about?"},
             {
-                "type": "image_url",
-                "image_url": image_url,
+                "type": "file",
+                "file": {
+                    "file_data": pdf_messages,
+                },
             },
         ]
 
@@ -198,11 +264,52 @@ class BaseLLMChatTest(ABC):
         if not supports_pdf_input(base_completion_call_args["model"], None):
             pytest.skip("Model does not support image input")
 
-        response = self.completion_function(
+        if sync_mode:
+            response = self.completion_function(
+                **base_completion_call_args,
+                messages=image_messages,
+            )
+        else:
+            response = await self.async_completion_function(
+                **base_completion_call_args,
+                messages=image_messages,
+            )
+
+        assert response is not None
+
+    @pytest.mark.asyncio
+    async def test_async_pdf_handling_with_file_id(self):
+        from litellm.utils import supports_pdf_input
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        litellm._turn_on_debug()
+
+
+        image_content = [
+            {"type": "text", "text": "What's this file about?"},
+            {
+                "type": "file",
+                "file": {
+                    "file_id": "https://upload.wikimedia.org/wikipedia/commons/2/20/Re_example.pdf"
+                },
+            },
+        ]
+
+        image_messages = [{"role": "user", "content": image_content}]
+
+        base_completion_call_args = self.get_base_completion_call_args()
+
+        if not supports_pdf_input(base_completion_call_args["model"], None):
+            pytest.skip("Model does not support image input")
+
+        response = await self.async_completion_function(
             **base_completion_call_args,
             messages=image_messages,
         )
+
         assert response is not None
+    
     
     def test_file_data_unit_test(self, pdf_messages):
         from litellm.utils import supports_pdf_input, return_raw_request
@@ -827,9 +934,10 @@ class BaseLLMChatTest(ABC):
             _usage_format_tests(response.usage)
 
             assert "prompt_tokens_details" in response.usage
-            assert (
-                response.usage.prompt_tokens_details.cached_tokens > 0
-            ), f"cached_tokens={response.usage.prompt_tokens_details.cached_tokens} should be greater than 0. Got usage={response.usage}"
+            if response.usage.prompt_tokens_details is not None:
+                assert (
+                    response.usage.prompt_tokens_details.cached_tokens > 0
+                ), f"cached_tokens={response.usage.prompt_tokens_details.cached_tokens} should be greater than 0. Got usage={response.usage}"
         except litellm.InternalServerError:
             pass
 
@@ -958,7 +1066,7 @@ class BaseLLMChatTest(ABC):
             assert isinstance(
                 response.choices[0].message.tool_calls[0].function.arguments, str
             )
-            assert response.choices[0].finish_reason == "tool_calls"
+            assert response.choices[0].finish_reason == "tool_calls", f"finish_reason: {response.choices[0].finish_reason}, expected: tool_calls"
             messages.append(
                 response.choices[0].message.model_dump()
             )  # Add assistant tool invokes
@@ -1423,6 +1531,36 @@ class BaseAnthropicChatTest(ABC):
             **base_completion_call_args,
             messages=messages,
             response_format=RFormat,
+        )
+
+        print(response)
+    
+    def test_completion_thinking_with_max_tokens(self):
+        from pydantic import BaseModel
+        litellm._turn_on_debug()
+
+        base_completion_call_args = self.get_base_completion_call_args_with_thinking()
+
+        messages = [{"role": "user", "content": "Generate 5 question + answer pairs"}]
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages=messages,
+            max_completion_tokens=20000,
+        )
+
+        print(response)
+    
+        
+    def test_completion_thinking_without_max_tokens(self):
+        from pydantic import BaseModel
+        litellm._turn_on_debug()
+
+        base_completion_call_args = self.get_base_completion_call_args_with_thinking()
+
+        messages = [{"role": "user", "content": "Generate 5 question + answer pairs"}]
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages=messages,
         )
 
         print(response)

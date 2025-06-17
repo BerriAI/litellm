@@ -35,6 +35,8 @@ class PassThroughEndpointLogging:
             "generateContent",
             "streamGenerateContent",
             "predict",
+            "rawPredict",
+            "streamRawPredict",
         ]
 
         # Anthropic
@@ -45,6 +47,9 @@ class PassThroughEndpointLogging:
         self.assemblyai_passthrough_logging_handler = (
             AssemblyAIPassthroughLoggingHandler()
         )
+
+        # Langfuse
+        self.TRACKED_LANGFUSE_ROUTES = ["/langfuse/"]
 
     async def _handle_logging(
         self,
@@ -179,6 +184,9 @@ class PassThroughEndpointLogging:
                 **kwargs,
             )
             return
+        elif self.is_langfuse_route(url_route):
+            # Don't log langfuse pass-through requests
+            return
 
         if standard_logging_response_object is None:
             standard_logging_response_object = StandardPassThroughResponseObject(
@@ -218,4 +226,11 @@ class PassThroughEndpointLogging:
             return True
         elif "/transcript" in parsed_url.path:
             return True
+        return False
+
+    def is_langfuse_route(self, url_route: str):
+        parsed_url = urlparse(url_route)
+        for route in self.TRACKED_LANGFUSE_ROUTES:
+            if route in parsed_url.path:
+                return True
         return False

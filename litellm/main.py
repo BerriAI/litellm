@@ -59,6 +59,7 @@ from litellm.constants import (
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_for_health_check
+from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.health_check_utils import (
     _create_health_check_response,
     _filter_model_params,
@@ -85,7 +86,9 @@ from litellm.utils import (
     CustomStreamWrapper,
     ProviderConfigManager,
     Usage,
+    _get_model_info_helper,
     add_openai_metadata,
+    add_provider_specific_params_to_optional_params,
     async_mock_completion_streaming_obj,
     convert_to_model_response_object,
     create_pretrained_tokenizer,
@@ -93,11 +96,14 @@ from litellm.utils import (
     get_api_key,
     get_llm_provider,
     get_non_default_completion_params,
+    get_non_default_transcription_params,
     get_optional_params_embeddings,
     get_optional_params_image_gen,
     get_optional_params_transcription,
     get_secret,
+    get_standard_openai_params,
     mock_completion_streaming_obj,
+    pre_process_non_default_params,
     read_config_args,
     supports_httpx_timeout,
     token_counter,
@@ -124,7 +130,7 @@ from .litellm_core_utils.prompt_templates.factory import (
     stringify_json_tool_call_content,
 )
 from .litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
-from .llms import baseten, maritalk, ollama_chat
+from .llms import baseten
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
@@ -183,11 +189,10 @@ from .types.llms.openai import (
     ChatCompletionPredictionContentParam,
     ChatCompletionUserMessage,
     HttpxBinaryResponseContent,
-    ImageGenerationRequestQuality,
     OpenAIModerationResponse,
+    OpenAIWebSearchOptions,
 )
 from .types.utils import (
-    LITELLM_IMAGE_VARIATION_PROVIDERS,
     AdapterCompletionStreamWrapper,
     ChatCompletionMessageToolCall,
     CompletionTokensDetails,
@@ -203,7 +208,6 @@ encoding = tiktoken.get_encoding("cl100k_base")
 from litellm.utils import (
     Choices,
     EmbeddingResponse,
-    ImageResponse,
     Message,
     ModelResponse,
     TextChoices,
@@ -312,6 +316,7 @@ class AsyncCompletions:
         return response
 
 
+@tracer.wrap()
 @client
 async def acompletion(
     model: str,
@@ -353,6 +358,7 @@ async def acompletion(
     extra_headers: Optional[dict] = None,
     # Optional liteLLM function params
     thinking: Optional[AnthropicThinkingParam] = None,
+    web_search_options: Optional[OpenAIWebSearchOptions] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -429,7 +435,17 @@ async def acompletion(
             prompt_id=kwargs.get("prompt_id", None),
             prompt_variables=kwargs.get("prompt_variables", None),
             tools=tools,
+            prompt_label=kwargs.get("prompt_label", None),
         )
+        #########################################################
+        # if the chat completion logging hook removed all tools,
+        # set tools to None
+        # eg. in certain cases when users send vector stores as tools
+        # we don't want the tools to go to the upstream llm
+        # relevant issue: https://github.com/BerriAI/litellm/issues/11404
+        #########################################################
+        if tools is not None and len(tools) == 0:
+            tools = None
 
     #########################################################
     #########################################################
@@ -472,6 +488,7 @@ async def acompletion(
         "extra_headers": extra_headers,
         "acompletion": True,  # assuming this is a required parameter
         "thinking": thinking,
+        "web_search_options": web_search_options,
     }
     if custom_llm_provider is None:
         _, custom_llm_provider, _, _ = get_llm_provider(
@@ -805,6 +822,7 @@ def mock_completion(
         raise Exception("Mock completion response failed - {}".format(e))
 
 
+@tracer.wrap()
 @client
 def completion(  # type: ignore # noqa: PLR0915
     model: str,
@@ -835,6 +853,7 @@ def completion(  # type: ignore # noqa: PLR0915
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
     parallel_tool_calls: Optional[bool] = None,
+    web_search_options: Optional[OpenAIWebSearchOptions] = None,
     deployment_id=None,
     extra_headers: Optional[dict] = None,
     # soon to be deprecated params by OpenAI
@@ -1000,6 +1019,7 @@ def completion(  # type: ignore # noqa: PLR0915
             non_default_params=non_default_params,
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
+            prompt_label=kwargs.get("prompt_label", None),
         )
 
     try:
@@ -1135,41 +1155,53 @@ def completion(  # type: ignore # noqa: PLR0915
         if dynamic_api_key is not None:
             api_key = dynamic_api_key
         # check if user passed in any of the OpenAI optional params
-        optional_params = get_optional_params(
-            functions=functions,
-            function_call=function_call,
-            temperature=temperature,
-            top_p=top_p,
-            n=n,
-            stream=stream,
-            stream_options=stream_options,
-            stop=stop,
-            max_tokens=max_tokens,
-            max_completion_tokens=max_completion_tokens,
-            modalities=modalities,
-            prediction=prediction,
-            audio=audio,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logit_bias=logit_bias,
-            user=user,
+        optional_param_args = {
+            "functions": functions,
+            "function_call": function_call,
+            "temperature": temperature,
+            "top_p": top_p,
+            "n": n,
+            "stream": stream,
+            "stream_options": stream_options,
+            "stop": stop,
+            "max_tokens": max_tokens,
+            "max_completion_tokens": max_completion_tokens,
+            "modalities": modalities,
+            "prediction": prediction,
+            "audio": audio,
+            "presence_penalty": presence_penalty,
+            "frequency_penalty": frequency_penalty,
+            "logit_bias": logit_bias,
+            "user": user,
             # params to identify the model
+            "model": model,
+            "custom_llm_provider": custom_llm_provider,
+            "response_format": response_format,
+            "seed": seed,
+            "tools": tools,
+            "tool_choice": tool_choice,
+            "max_retries": max_retries,
+            "logprobs": logprobs,
+            "top_logprobs": top_logprobs,
+            "api_version": api_version,
+            "parallel_tool_calls": parallel_tool_calls,
+            "messages": messages,
+            "reasoning_effort": reasoning_effort,
+            "thinking": thinking,
+            "web_search_options": web_search_options,
+            "allowed_openai_params": kwargs.get("allowed_openai_params"),
+        }
+        optional_params = get_optional_params(
+            **optional_param_args, **non_default_params
+        )
+        processed_non_default_params = pre_process_non_default_params(
             model=model,
+            passed_params=optional_param_args,
+            special_params=non_default_params,
             custom_llm_provider=custom_llm_provider,
-            response_format=response_format,
-            seed=seed,
-            tools=tools,
-            tool_choice=tool_choice,
-            max_retries=max_retries,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            api_version=api_version,
-            parallel_tool_calls=parallel_tool_calls,
-            messages=messages,
-            reasoning_effort=reasoning_effort,
-            thinking=thinking,
-            allowed_openai_params=kwargs.get("allowed_openai_params"),
-            **non_default_params,
+            additional_drop_params=kwargs.get("additional_drop_params"),
+            remove_sensitive_keys=True,
+            add_provider_specific_params=True,
         )
 
         if litellm.add_function_to_prompt and optional_params.get(
@@ -1229,13 +1261,14 @@ def completion(  # type: ignore # noqa: PLR0915
             client_secret=kwargs.get("client_secret"),
             azure_username=kwargs.get("azure_username"),
             azure_password=kwargs.get("azure_password"),
+            azure_scope=kwargs.get("azure_scope"),
             max_retries=max_retries,
             timeout=timeout,
         )
-        logging.update_environment_variables(
+        cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
             user=user,
-            optional_params=optional_params,
+            optional_params=processed_non_default_params,  # [IMPORTANT] - using processed_non_default_params ensures consistent params logged to langfuse for finetuning / eval datasets.
             litellm_params=litellm_params,
             custom_llm_provider=custom_llm_provider,
         )
@@ -1254,6 +1287,36 @@ def completion(  # type: ignore # noqa: PLR0915
                 custom_llm_provider=custom_llm_provider,
                 mock_timeout=mock_timeout,
                 timeout=timeout,
+            )
+
+        ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
+        try:
+            model_info = _get_model_info_helper(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+        except Exception as e:
+            verbose_logger.debug("Error getting model info: {}".format(e))
+            model_info = {}
+
+        if model_info.get("mode") == "responses":
+            from litellm.completion_extras import responses_api_bridge
+
+            return responses_api_bridge.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                timeout=timeout,  # type: ignore
+                client=client,  # pass AsyncOpenAI, OpenAI client
+                custom_llm_provider=custom_llm_provider,
+                encoding=encoding,
+                stream=stream,
             )
 
         if custom_llm_provider == "azure":
@@ -1756,6 +1819,7 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "mistral"
             or custom_llm_provider == "openai"
             or custom_llm_provider == "together_ai"
+            or custom_llm_provider == "nebius"
             or custom_llm_provider in litellm.openai_compatible_providers
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base
@@ -2315,6 +2379,26 @@ def completion(  # type: ignore # noqa: PLR0915
                     original_response=response,
                     additional_args={"headers": headers},
                 )
+
+        elif custom_llm_provider == "datarobot":
+            response = base_llm_http_handler.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                timeout=timeout,  # type: ignore
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                encoding=encoding,
+                stream=stream,
+                provider_config=provider_config,
+            )
         elif custom_llm_provider == "openrouter":
             api_base = (
                 api_base
@@ -2937,23 +3021,24 @@ def completion(  # type: ignore # noqa: PLR0915
                 or os.environ.get("OLLAMA_API_KEY")
                 or litellm.api_key
             )
-            ## LOGGING
-            generator = ollama_chat.get_ollama_response(
-                api_base=api_base,
-                api_key=api_key,
+
+            response = base_llm_http_handler.completion(
                 model=model,
+                stream=stream,
                 messages=messages,
-                optional_params=optional_params,
-                logging_obj=logging,
                 acompletion=acompletion,
+                api_base=api_base,
                 model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                custom_llm_provider="ollama_chat",
+                timeout=timeout,
+                headers=headers,
                 encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
                 client=client,
             )
-            if acompletion is True or optional_params.get("stream", False) is True:
-                return generator
-
-            response = generator
 
         elif custom_llm_provider == "triton":
             api_base = litellm.api_base or api_base
@@ -3911,6 +3996,27 @@ def embedding(  # noqa: PLR0915
                 client=client,
                 aembedding=aembedding,
             )
+        elif custom_llm_provider == "nebius":
+            api_key = api_key or litellm.api_key or get_secret_str("NEBIUS_API_KEY")
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("NEBIUS_API_BASE")
+                or "api.studio.nebius.ai/v1"
+            )
+
+            response = openai_chat_completions.embedding(
+                model=model,
+                input=input,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+            )
         elif custom_llm_provider == "voyage":
             response = base_llm_http_handler.embedding(
                 model=model,
@@ -4017,6 +4123,35 @@ def embedding(  # noqa: PLR0915
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
+            )
+        elif custom_llm_provider in litellm._custom_providers:
+            custom_handler: Optional[CustomLLM] = None
+            for item in litellm.custom_provider_map:
+                if item["provider"] == custom_llm_provider:
+                    custom_handler = item["custom_handler"]
+
+            if custom_handler is None:
+                raise LiteLLMUnknownProvider(
+                    model=model, custom_llm_provider=custom_llm_provider
+                )
+
+            handler_fn = (
+                custom_handler.embedding
+                if not aembedding
+                else custom_handler.aembedding
+            )
+
+            response = handler_fn(
+                model=model,
+                input=input,
+                logging_obj=logging,
+                api_base=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                optional_params=optional_params,
+                model_response=EmbeddingResponse(),
+                print_verbose=print_verbose,
+                litellm_params=litellm_params_dict,
             )
         else:
             raise LiteLLMUnknownProvider(
@@ -4573,516 +4708,6 @@ async def amoderation(
     )
 
 
-##### Image Generation #######################
-@client
-async def aimage_generation(*args, **kwargs) -> ImageResponse:
-    """
-    Asynchronously calls the `image_generation` function with the given arguments and keyword arguments.
-
-    Parameters:
-    - `args` (tuple): Positional arguments to be passed to the `image_generation` function.
-    - `kwargs` (dict): Keyword arguments to be passed to the `image_generation` function.
-
-    Returns:
-    - `response` (Any): The response returned by the `image_generation` function.
-    """
-    loop = asyncio.get_event_loop()
-    model = args[0] if len(args) > 0 else kwargs["model"]
-    ### PASS ARGS TO Image Generation ###
-    kwargs["aimg_generation"] = True
-    custom_llm_provider = None
-    try:
-        # Use a partial function to pass your keyword arguments
-        func = partial(image_generation, *args, **kwargs)
-
-        # Add the context to the function
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-
-        _, custom_llm_provider, _, _ = get_llm_provider(
-            model=model, api_base=kwargs.get("api_base", None)
-        )
-
-        # Await normally
-        init_response = await loop.run_in_executor(None, func_with_context)
-        if isinstance(init_response, dict) or isinstance(
-            init_response, ImageResponse
-        ):  ## CACHING SCENARIO
-            if isinstance(init_response, dict):
-                init_response = ImageResponse(**init_response)
-            response = init_response
-        elif asyncio.iscoroutine(init_response):
-            response = await init_response  # type: ignore
-        else:
-            # Call the synchronous function using run_in_executor
-            response = await loop.run_in_executor(None, func_with_context)
-        return response
-    except Exception as e:
-        custom_llm_provider = custom_llm_provider or "openai"
-        raise exception_type(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            original_exception=e,
-            completion_kwargs=args,
-            extra_kwargs=kwargs,
-        )
-
-
-@client
-def image_generation(  # noqa: PLR0915
-    prompt: str,
-    model: Optional[str] = None,
-    n: Optional[int] = None,
-    quality: Optional[Union[str, ImageGenerationRequestQuality]] = None,
-    response_format: Optional[str] = None,
-    size: Optional[str] = None,
-    style: Optional[str] = None,
-    user: Optional[str] = None,
-    timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
-    custom_llm_provider=None,
-    **kwargs,
-) -> ImageResponse:
-    """
-    Maps the https://api.openai.com/v1/images/generations endpoint.
-
-    Currently supports just Azure + OpenAI.
-    """
-    try:
-        args = locals()
-        aimg_generation = kwargs.get("aimg_generation", False)
-        litellm_call_id = kwargs.get("litellm_call_id", None)
-        logger_fn = kwargs.get("logger_fn", None)
-        mock_response: Optional[str] = kwargs.get("mock_response", None)  # type: ignore
-        proxy_server_request = kwargs.get("proxy_server_request", None)
-        azure_ad_token_provider = kwargs.get("azure_ad_token_provider", None)
-        model_info = kwargs.get("model_info", None)
-        metadata = kwargs.get("metadata", {})
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        client = kwargs.get("client", None)
-        extra_headers = kwargs.get("extra_headers", None)
-        headers: dict = kwargs.get("headers", None) or {}
-        base_model = kwargs.get("base_model", None)
-        if extra_headers is not None:
-            headers.update(extra_headers)
-        model_response: ImageResponse = litellm.utils.ImageResponse()
-        dynamic_api_key: Optional[str] = None
-        if model is not None or custom_llm_provider is not None:
-            model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
-                model=model,  # type: ignore
-                custom_llm_provider=custom_llm_provider,
-                api_base=api_base,
-            )
-        else:
-            model = "dall-e-2"
-            custom_llm_provider = "openai"  # default to dall-e-2 on openai
-        model_response._hidden_params["model"] = model
-        openai_params = [
-            "user",
-            "request_timeout",
-            "api_base",
-            "api_version",
-            "api_key",
-            "deployment_id",
-            "organization",
-            "base_url",
-            "default_headers",
-            "timeout",
-            "max_retries",
-            "n",
-            "quality",
-            "size",
-            "style",
-        ]
-        litellm_params = all_litellm_params
-        default_params = openai_params + litellm_params
-        non_default_params = {
-            k: v for k, v in kwargs.items() if k not in default_params
-        }  # model-specific params - pass them straight to the model/provider
-
-        image_generation_config: Optional[BaseImageGenerationConfig] = None
-        if (
-            custom_llm_provider is not None
-            and custom_llm_provider in LlmProviders._member_map_.values()
-        ):
-            image_generation_config = (
-                ProviderConfigManager.get_provider_image_generation_config(
-                    model=base_model or model,
-                    provider=LlmProviders(custom_llm_provider),
-                )
-            )
-
-        optional_params = get_optional_params_image_gen(
-            model=base_model or model,
-            n=n,
-            quality=quality,
-            response_format=response_format,
-            size=size,
-            style=style,
-            user=user,
-            custom_llm_provider=custom_llm_provider,
-            provider_config=image_generation_config,
-            **non_default_params,
-        )
-
-        litellm_params_dict = get_litellm_params(**kwargs)
-
-        logging: Logging = litellm_logging_obj
-        logging.update_environment_variables(
-            model=model,
-            user=user,
-            optional_params=optional_params,
-            litellm_params={
-                "timeout": timeout,
-                "azure": False,
-                "litellm_call_id": litellm_call_id,
-                "logger_fn": logger_fn,
-                "proxy_server_request": proxy_server_request,
-                "model_info": model_info,
-                "metadata": metadata,
-                "preset_cache_key": None,
-                "stream_response": {},
-            },
-            custom_llm_provider=custom_llm_provider,
-        )
-        if "custom_llm_provider" not in logging.model_call_details:
-            logging.model_call_details["custom_llm_provider"] = custom_llm_provider
-        if mock_response is not None:
-            return mock_image_generation(model=model, mock_response=mock_response)
-
-        if custom_llm_provider == "azure":
-            # azure configs
-            api_type = get_secret_str("AZURE_API_TYPE") or "azure"
-
-            api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
-
-            api_version = (
-                api_version
-                or litellm.api_version
-                or get_secret_str("AZURE_API_VERSION")
-            )
-
-            api_key = (
-                api_key
-                or litellm.api_key
-                or litellm.azure_key
-                or get_secret_str("AZURE_OPENAI_API_KEY")
-                or get_secret_str("AZURE_API_KEY")
-            )
-
-            azure_ad_token = optional_params.pop(
-                "azure_ad_token", None
-            ) or get_secret_str("AZURE_AD_TOKEN")
-
-            default_headers = {
-                "Content-Type": "application/json;",
-                "api-key": api_key,
-            }
-            for k, v in default_headers.items():
-                if k not in headers:
-                    headers[k] = v
-
-            model_response = azure_chat_completions.image_generation(
-                model=model,
-                prompt=prompt,
-                timeout=timeout,
-                api_key=api_key,
-                api_base=api_base,
-                azure_ad_token=azure_ad_token,
-                azure_ad_token_provider=azure_ad_token_provider,
-                logging_obj=litellm_logging_obj,
-                optional_params=optional_params,
-                model_response=model_response,
-                api_version=api_version,
-                aimg_generation=aimg_generation,
-                client=client,
-                headers=headers,
-                litellm_params=litellm_params_dict,
-            )
-        elif (
-            custom_llm_provider == "openai"
-            or custom_llm_provider in litellm.openai_compatible_providers
-        ):
-            model_response = openai_chat_completions.image_generation(
-                model=model,
-                prompt=prompt,
-                timeout=timeout,
-                api_key=api_key or dynamic_api_key,
-                api_base=api_base,
-                logging_obj=litellm_logging_obj,
-                optional_params=optional_params,
-                model_response=model_response,
-                aimg_generation=aimg_generation,
-                client=client,
-            )
-        elif custom_llm_provider == "bedrock":
-            if model is None:
-                raise Exception("Model needs to be set for bedrock")
-            model_response = bedrock_image_generation.image_generation(  # type: ignore
-                model=model,
-                prompt=prompt,
-                timeout=timeout,
-                logging_obj=litellm_logging_obj,
-                optional_params=optional_params,
-                model_response=model_response,
-                aimg_generation=aimg_generation,
-                client=client,
-            )
-        elif custom_llm_provider == "vertex_ai":
-            vertex_ai_project = (
-                optional_params.pop("vertex_project", None)
-                or optional_params.pop("vertex_ai_project", None)
-                or litellm.vertex_project
-                or get_secret_str("VERTEXAI_PROJECT")
-            )
-            vertex_ai_location = (
-                optional_params.pop("vertex_location", None)
-                or optional_params.pop("vertex_ai_location", None)
-                or litellm.vertex_location
-                or get_secret_str("VERTEXAI_LOCATION")
-            )
-            vertex_credentials = (
-                optional_params.pop("vertex_credentials", None)
-                or optional_params.pop("vertex_ai_credentials", None)
-                or get_secret_str("VERTEXAI_CREDENTIALS")
-            )
-
-            api_base = (
-                api_base
-                or litellm.api_base
-                or get_secret_str("VERTEXAI_API_BASE")
-                or get_secret_str("VERTEX_API_BASE")
-            )
-
-            model_response = vertex_image_generation.image_generation(
-                model=model,
-                prompt=prompt,
-                timeout=timeout,
-                logging_obj=litellm_logging_obj,
-                optional_params=optional_params,
-                model_response=model_response,
-                vertex_project=vertex_ai_project,
-                vertex_location=vertex_ai_location,
-                vertex_credentials=vertex_credentials,
-                aimg_generation=aimg_generation,
-                api_base=api_base,
-                client=client,
-            )
-        elif (
-            custom_llm_provider in litellm._custom_providers
-        ):  # Assume custom LLM provider
-            # Get the Custom Handler
-            custom_handler: Optional[CustomLLM] = None
-            for item in litellm.custom_provider_map:
-                if item["provider"] == custom_llm_provider:
-                    custom_handler = item["custom_handler"]
-
-            if custom_handler is None:
-                raise LiteLLMUnknownProvider(
-                    model=model, custom_llm_provider=custom_llm_provider
-                )
-
-            ## ROUTE LLM CALL ##
-            if aimg_generation is True:
-                async_custom_client: Optional[AsyncHTTPHandler] = None
-                if client is not None and isinstance(client, AsyncHTTPHandler):
-                    async_custom_client = client
-
-                ## CALL FUNCTION
-                model_response = custom_handler.aimage_generation(  # type: ignore
-                    model=model,
-                    prompt=prompt,
-                    api_key=api_key,
-                    api_base=api_base,
-                    model_response=model_response,
-                    optional_params=optional_params,
-                    logging_obj=litellm_logging_obj,
-                    timeout=timeout,
-                    client=async_custom_client,
-                )
-            else:
-                custom_client: Optional[HTTPHandler] = None
-                if client is not None and isinstance(client, HTTPHandler):
-                    custom_client = client
-
-                ## CALL FUNCTION
-                model_response = custom_handler.image_generation(
-                    model=model,
-                    prompt=prompt,
-                    api_key=api_key,
-                    api_base=api_base,
-                    model_response=model_response,
-                    optional_params=optional_params,
-                    logging_obj=litellm_logging_obj,
-                    timeout=timeout,
-                    client=custom_client,
-                )
-
-        return model_response
-    except Exception as e:
-        ## Map to OpenAI Exception
-        raise exception_type(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            original_exception=e,
-            completion_kwargs=locals(),
-            extra_kwargs=kwargs,
-        )
-
-
-@client
-async def aimage_variation(*args, **kwargs) -> ImageResponse:
-    """
-    Asynchronously calls the `image_variation` function with the given arguments and keyword arguments.
-
-    Parameters:
-    - `args` (tuple): Positional arguments to be passed to the `image_variation` function.
-    - `kwargs` (dict): Keyword arguments to be passed to the `image_variation` function.
-
-    Returns:
-    - `response` (Any): The response returned by the `image_variation` function.
-    """
-    loop = asyncio.get_event_loop()
-    model = kwargs.get("model", None)
-    custom_llm_provider = kwargs.get("custom_llm_provider", None)
-    ### PASS ARGS TO Image Generation ###
-    kwargs["async_call"] = True
-    try:
-        # Use a partial function to pass your keyword arguments
-        func = partial(image_variation, *args, **kwargs)
-
-        # Add the context to the function
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-
-        if custom_llm_provider is None and model is not None:
-            _, custom_llm_provider, _, _ = get_llm_provider(
-                model=model, api_base=kwargs.get("api_base", None)
-            )
-
-        # Await normally
-        init_response = await loop.run_in_executor(None, func_with_context)
-        if isinstance(init_response, dict) or isinstance(
-            init_response, ImageResponse
-        ):  ## CACHING SCENARIO
-            if isinstance(init_response, dict):
-                init_response = ImageResponse(**init_response)
-            response = init_response
-        elif asyncio.iscoroutine(init_response):
-            response = await init_response  # type: ignore
-        else:
-            # Call the synchronous function using run_in_executor
-            response = await loop.run_in_executor(None, func_with_context)
-        return response
-    except Exception as e:
-        custom_llm_provider = custom_llm_provider or "openai"
-        raise exception_type(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            original_exception=e,
-            completion_kwargs=args,
-            extra_kwargs=kwargs,
-        )
-
-
-@client
-def image_variation(
-    image: FileTypes,
-    model: str = "dall-e-2",  # set to dall-e-2 by default - like OpenAI.
-    n: int = 1,
-    response_format: Literal["url", "b64_json"] = "url",
-    size: Optional[str] = None,
-    user: Optional[str] = None,
-    **kwargs,
-) -> ImageResponse:
-    # get non-default params
-    client = kwargs.get("client", None)
-    # get logging object
-    litellm_logging_obj = cast(LiteLLMLoggingObj, kwargs.get("litellm_logging_obj"))
-
-    # get the litellm params
-    litellm_params = get_litellm_params(**kwargs)
-    # get the custom llm provider
-    model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
-        model=model,
-        custom_llm_provider=litellm_params.get("custom_llm_provider", None),
-        api_base=litellm_params.get("api_base", None),
-        api_key=litellm_params.get("api_key", None),
-    )
-
-    # route to the correct provider w/ the params
-    try:
-        llm_provider = LlmProviders(custom_llm_provider)
-        image_variation_provider = LITELLM_IMAGE_VARIATION_PROVIDERS(llm_provider)
-    except ValueError:
-        raise ValueError(
-            f"Invalid image variation provider: {custom_llm_provider}. Supported providers are: {LITELLM_IMAGE_VARIATION_PROVIDERS}"
-        )
-    model_response = ImageResponse()
-
-    response: Optional[ImageResponse] = None
-
-    provider_config = ProviderConfigManager.get_provider_model_info(
-        model=model or "",  # openai defaults to dall-e-2
-        provider=llm_provider,
-    )
-
-    if provider_config is None:
-        raise ValueError(
-            f"image variation provider has no known model info config - required for getting api keys, etc.: {custom_llm_provider}. Supported providers are: {LITELLM_IMAGE_VARIATION_PROVIDERS}"
-        )
-
-    api_key = provider_config.get_api_key(litellm_params.get("api_key", None))
-    api_base = provider_config.get_api_base(litellm_params.get("api_base", None))
-
-    if image_variation_provider == LITELLM_IMAGE_VARIATION_PROVIDERS.OPENAI:
-        if api_key is None:
-            raise ValueError("API key is required for OpenAI image variations")
-        if api_base is None:
-            raise ValueError("API base is required for OpenAI image variations")
-
-        response = openai_image_variations.image_variations(
-            model_response=model_response,
-            api_key=api_key,
-            api_base=api_base,
-            model=model,
-            image=image,
-            timeout=litellm_params.get("timeout", None),
-            custom_llm_provider=custom_llm_provider,
-            logging_obj=litellm_logging_obj,
-            optional_params={},
-            litellm_params=litellm_params,
-        )
-    elif image_variation_provider == LITELLM_IMAGE_VARIATION_PROVIDERS.TOPAZ:
-        if api_key is None:
-            raise ValueError("API key is required for Topaz image variations")
-        if api_base is None:
-            raise ValueError("API base is required for Topaz image variations")
-
-        response = base_llm_aiohttp_handler.image_variations(
-            model_response=model_response,
-            api_key=api_key,
-            api_base=api_base,
-            model=model,
-            image=image,
-            timeout=litellm_params.get("timeout", None),
-            custom_llm_provider=custom_llm_provider,
-            logging_obj=litellm_logging_obj,
-            optional_params={},
-            litellm_params=litellm_params,
-            client=client,
-        )
-
-    # return the response
-    if response is None:
-        raise ValueError(
-            f"Invalid image variation provider: {custom_llm_provider}. Supported providers are: {LITELLM_IMAGE_VARIATION_PROVIDERS}"
-        )
-    return response
-
-
 ##### Transcription #######################
 
 
@@ -5173,8 +4798,8 @@ def transcription(
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
     extra_headers = kwargs.get("extra_headers", None)
     kwargs.pop("tags", [])
+    non_default_params = get_non_default_transcription_params(kwargs)
 
-    drop_params = kwargs.get("drop_params", None)
     client: Optional[
         Union[
             openai.AsyncOpenAI,
@@ -5207,7 +4832,7 @@ def transcription(
         timestamp_granularities=timestamp_granularities,
         temperature=temperature,
         custom_llm_provider=custom_llm_provider,
-        drop_params=drop_params,
+        **non_default_params,
     )
     litellm_params_dict = get_litellm_params(**kwargs)
 

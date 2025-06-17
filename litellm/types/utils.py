@@ -33,6 +33,7 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 import litellm
+from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
 from .guardrails import GuardrailEventHooks
@@ -44,6 +45,7 @@ from .llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
     FileSearchTool,
+    FineTuningJob,
     OpenAIChatCompletionChunk,
     OpenAIFileObject,
     OpenAIRealtimeStreamList,
@@ -111,6 +113,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_tool_choice: Optional[bool]
     supports_assistant_prefill: Optional[bool]
     supports_prompt_caching: Optional[bool]
+    supports_computer_use: Optional[bool]
     supports_audio_input: Optional[bool]
     supports_embedding_image_input: Optional[bool]
     supports_audio_output: Optional[bool]
@@ -119,6 +122,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_parallel_function_calling: Optional[bool]
     supports_web_search: Optional[bool]
     supports_reasoning: Optional[bool]
+    supports_url_context: Optional[bool]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -216,6 +220,8 @@ class CallTypes(Enum):
     text_completion = "text_completion"
     image_generation = "image_generation"
     aimage_generation = "aimage_generation"
+    image_edit = "image_edit"
+    aimage_edit = "aimage_edit"
     moderation = "moderation"
     amoderation = "amoderation"
     atranscription = "atranscription"
@@ -269,6 +275,7 @@ class CallTypes(Enum):
     retrieve_fine_tuning_job = "retrieve_fine_tuning_job"
     responses = "responses"
     aresponses = "aresponses"
+    alist_input_items = "alist_input_items"
 
 
 CallTypesLiteral = Literal[
@@ -280,6 +287,8 @@ CallTypesLiteral = Literal[
     "text_completion",
     "image_generation",
     "aimage_generation",
+    "image_edit",
+    "aimage_edit",
     "moderation",
     "amoderation",
     "atranscription",
@@ -441,11 +450,28 @@ class ChatCompletionDeltaToolCall(OpenAIObject):
     type: Optional[str] = None
     index: int
 
+    def __contains__(self, key):
+        # Define custom behavior for the 'in' operator
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
+
+    def __setitem__(self, key, value):
+        # Allow dictionary-style assignment of attributes
+        setattr(self, key, value)
+
 
 class HiddenParams(OpenAIObject):
     original_response: Optional[Union[str, Any]] = None
     model_id: Optional[str] = None  # used in Router for individual deployments
     api_base: Optional[str] = None  # returns api base used for making completion call
+    _response_ms: Optional[float] = None
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
@@ -467,6 +493,12 @@ class HiddenParams(OpenAIObject):
         except Exception:
             # if using pydantic v1
             return self.dict()
+
+    def model_dump(self, **kwargs):
+        # Override model_dump to include private attributes
+        data = super().model_dump(**kwargs)
+        data["_response_ms"] = self._response_ms
+        return data
 
 
 class ChatCompletionMessageToolCall(OpenAIObject):
@@ -633,20 +665,24 @@ class Message(OpenAIObject):
         if audio is None:
             # delete audio from self
             # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
-            del self.audio
+            if hasattr(self, "audio"):
+                del self.audio
 
         if annotations is None:
             # ensure default response matches OpenAI spec
             # Some OpenAI compatible APIs raise an error if annotations are passed in
-            del self.annotations
+            if hasattr(self, "annotations"):
+                del self.annotations
 
         if reasoning_content is None:
             # ensure default response matches OpenAI spec
-            del self.reasoning_content
+            if hasattr(self, "reasoning_content"):
+                del self.reasoning_content
 
         if thinking_blocks is None:
             # ensure default response matches OpenAI spec
-            del self.thinking_blocks
+            if hasattr(self, "thinking_blocks"):
+                del self.thinking_blocks
 
         add_provider_specific_fields(self, provider_specific_fields)
 
@@ -757,6 +793,13 @@ class Delta(OpenAIObject):
 
 
 class Choices(OpenAIObject):
+    finish_reason: str
+    index: int
+    message: Message
+    logprobs: Optional[Union[ChoiceLogprobs, Any]] = None
+
+    provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
+
     def __init__(
         self,
         finish_reason=None,
@@ -764,30 +807,42 @@ class Choices(OpenAIObject):
         message: Optional[Union[Message, dict]] = None,
         logprobs: Optional[Union[ChoiceLogprobs, dict, Any]] = None,
         enhancements=None,
+        provider_specific_fields: Optional[Dict[str, Any]] = None,
         **params,
     ):
-        super(Choices, self).__init__(**params)
         if finish_reason is not None:
-            self.finish_reason = map_finish_reason(
-                finish_reason
-            )  # set finish_reason for all responses
+            params["finish_reason"] = map_finish_reason(finish_reason)
         else:
-            self.finish_reason = "stop"
-        self.index = index
+            params["finish_reason"] = "stop"
+        if index is not None:
+            params["index"] = index
+        else:
+            params["index"] = 0
         if message is None:
-            self.message = Message()
+            params["message"] = Message()
         else:
             if isinstance(message, Message):
-                self.message = message
+                params["message"] = message
             elif isinstance(message, dict):
-                self.message = Message(**message)
+                params["message"] = Message(**message)
         if logprobs is not None:
             if isinstance(logprobs, dict):
-                self.logprobs = ChoiceLogprobs(**logprobs)
+                params["logprobs"] = ChoiceLogprobs(**logprobs)
             else:
-                self.logprobs = logprobs
+                params["logprobs"] = logprobs
+        else:
+            params["logprobs"] = None
+        super(Choices, self).__init__(**params)
+
         if enhancements is not None:
             self.enhancements = enhancements
+
+        self.provider_specific_fields = provider_specific_fields
+
+        if self.logprobs is None:
+            del self.logprobs
+        if self.provider_specific_fields is None:
+            del self.provider_specific_fields
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -822,6 +877,9 @@ class PromptTokensDetailsWrapper(
     image_tokens: Optional[int] = None
     """Image tokens sent to the model."""
 
+    web_search_requests: Optional[int] = None
+    """Number of web search requests made by the tool call. Used for Anthropic to calculate web search cost."""
+
     character_count: Optional[int] = None
     """Character count sent to the model. Used for Vertex AI multimodal embeddings."""
 
@@ -839,6 +897,12 @@ class PromptTokensDetailsWrapper(
             del self.image_count
         if self.video_length_seconds is None:
             del self.video_length_seconds
+        if self.web_search_requests is None:
+            del self.web_search_requests
+
+
+class ServerToolUse(BaseModel):
+    web_search_requests: Optional[int]
 
 
 class Usage(CompletionUsage):
@@ -848,6 +912,8 @@ class Usage(CompletionUsage):
     _cache_read_input_tokens: int = PrivateAttr(
         0
     )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
+
+    server_tool_use: Optional[ServerToolUse] = None
 
     def __init__(
         self,
@@ -859,6 +925,7 @@ class Usage(CompletionUsage):
         completion_tokens_details: Optional[
             Union[CompletionTokensDetailsWrapper, dict]
         ] = None,
+        server_tool_use: Optional[ServerToolUse] = None,
         **params,
     ):
         # handle reasoning_tokens
@@ -915,6 +982,11 @@ class Usage(CompletionUsage):
             completion_tokens_details=_completion_tokens_details or None,
             prompt_tokens_details=_prompt_tokens_details or None,
         )
+
+        if server_tool_use is not None:
+            self.server_tool_use = server_tool_use
+        else:  # maintain openai compatibility in usage object if possible
+            del self.server_tool_use
 
         ## ANTHROPIC MAPPING ##
         if "cache_creation_input_tokens" in params and isinstance(
@@ -1519,20 +1591,50 @@ class ImageObject(OpenAIImage):
             return self.dict()
 
 
+class ImageUsageInputTokensDetails(BaseLiteLLMOpenAIResponseObject):
+    image_tokens: int
+    """The number of image tokens in the input prompt."""
+
+    text_tokens: int
+    """The number of text tokens in the input prompt."""
+
+
+class ImageUsage(BaseLiteLLMOpenAIResponseObject):
+    input_tokens: int
+    """The number of tokens (images and text) in the input prompt."""
+
+    input_tokens_details: ImageUsageInputTokensDetails
+    """The input tokens detailed information for the image generation."""
+
+    output_tokens: int
+    """The number of image tokens in the output image."""
+
+    total_tokens: int
+    """The total number of tokens (images and text) used for the image generation."""
+
+
 from openai.types.images_response import ImagesResponse as OpenAIImageResponse
 
 
-class ImageResponse(OpenAIImageResponse):
+class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = {}
-    usage: Usage
+
+    usage: Optional[ImageUsage] = None  # type: ignore
+    """
+    Users might use litellm with older python versions, we don't want this to break for them. 
+    Happens when their OpenAIImageResponse has the old OpenAI usage class.
+    """
+
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
 
     def __init__(
         self,
         created: Optional[int] = None,
         data: Optional[List[ImageObject]] = None,
         response_ms=None,
-        usage: Optional[Usage] = None,
+        usage: Optional[ImageUsage] = None,
         hidden_params: Optional[dict] = None,
+        **kwargs,
     ):
         if response_ms:
             _response_ms = response_ms
@@ -1554,9 +1656,14 @@ class ImageResponse(OpenAIImageResponse):
                 _data.append(ImageObject(**d))
             elif isinstance(d, BaseModel):
                 _data.append(ImageObject(**d.model_dump()))
-        _usage = usage or Usage(
-            prompt_tokens=0,
-            completion_tokens=0,
+
+        _usage = usage or ImageUsage(
+            input_tokens=0,
+            input_tokens_details=ImageUsageInputTokensDetails(
+                image_tokens=0,
+                text_tokens=0,
+            ),
+            output_tokens=0,
             total_tokens=0,
         )
         super().__init__(created=created, data=_data, usage=_usage)  # type: ignore
@@ -1691,6 +1798,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_user_email: Optional[str]
     user_api_key_team_alias: Optional[str]
     user_api_key_end_user_id: Optional[str]
+    user_api_key_request_route: Optional[str]
 
 
 class StandardLoggingMCPToolCall(TypedDict, total=False):
@@ -1849,8 +1957,24 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
 class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_name: Optional[str]
     guardrail_mode: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]]
-    guardrail_response: Optional[Union[dict, str]]
+    guardrail_request: Optional[dict]
+    guardrail_response: Optional[Union[dict, str, List[dict]]]
     guardrail_status: Literal["success", "failure"]
+    start_time: Optional[float]
+    end_time: Optional[float]
+    duration: Optional[float]
+    """
+    Duration of the guardrail in seconds
+    """
+
+    masked_entity_count: Optional[Dict[str, int]]
+    """
+    Count of masked entities
+    {
+        "CREDIT_CARD": 2,
+        "PHONE": 1
+    }
+    """
 
 
 StandardLoggingPayloadStatus = Literal["success", "failure"]
@@ -1967,6 +2091,7 @@ all_litellm_params = [
     "mock_response",
     "mock_timeout",
     "disable_add_transform_inline_image_block",
+    "litellm_proxy_rate_limit_response",
     "api_key",
     "api_version",
     "prompt_id",
@@ -2028,6 +2153,7 @@ all_litellm_params = [
     "client_id",
     "azure_username",
     "azure_password",
+    "azure_scope",
     "client_secret",
     "user_continue_message",
     "configurable_clientside_auth_params",
@@ -2045,6 +2171,7 @@ all_litellm_params = [
     "allowed_openai_params",
     "litellm_session_id",
     "use_litellm_proxy",
+    "prompt_label",
 ] + list(StandardCallbackDynamicParams.__annotations__.keys())
 
 
@@ -2104,6 +2231,7 @@ class LlmProviders(str, Enum):
     HUGGINGFACE = "huggingface"
     TOGETHER_AI = "together_ai"
     OPENROUTER = "openrouter"
+    DATAROBOT = "datarobot"
     VERTEX_AI = "vertex_ai"
     VERTEX_AI_BETA = "vertex_ai_beta"
     GEMINI = "gemini"
@@ -2139,6 +2267,7 @@ class LlmProviders(str, Enum):
     XINFERENCE = "xinference"
     FIREWORKS_AI = "fireworks_ai"
     FRIENDLIAI = "friendliai"
+    FEATHERLESS_AI = "featherless_ai"
     WATSONX = "watsonx"
     WATSONX_TEXT = "watsonx_text"
     TRITON = "triton"
@@ -2152,6 +2281,7 @@ class LlmProviders(str, Enum):
     LLAMAFILE = "llamafile"
     LM_STUDIO = "lm_studio"
     GALADRIEL = "galadriel"
+    NEBIUS = "nebius"
     INFINITY = "infinity"
     DEEPGRAM = "deepgram"
     NOVITA = "novita"
@@ -2216,6 +2346,19 @@ class ProviderSpecificHeader(TypedDict):
 class SelectTokenizerResponse(TypedDict):
     type: Literal["openai_tokenizer", "huggingface_tokenizer"]
     tokenizer: Any
+
+
+class LiteLLMFineTuningJob(FineTuningJob):
+    _hidden_params: dict = {}
+    seed: Optional[int] = None  # type: ignore
+
+    def __init__(self, **kwargs):
+        if "error" in kwargs and kwargs["error"] is not None:
+            # check if error is all None - if so, set error to None
+            if all(value is None for value in kwargs["error"].values()):
+                kwargs["error"] = None
+        super().__init__(**kwargs)
+        self._hidden_params = kwargs.get("_hidden_params", {})
 
 
 class LiteLLMBatch(Batch):
@@ -2322,9 +2465,16 @@ class SpecialEnums(Enum):
 
     LITELLM_MANAGED_BATCH_COMPLETE_STR = "litellm_proxy;model_id:{};llm_batch_id:{}"
 
+    LITELLM_MANAGED_GENERIC_RESPONSE_COMPLETE_STR = "litellm_proxy;model_id:{};generic_response_id:{}"  # generic implementation of 'managed batches' - used for finetuning and any future work.
+
 
 LLMResponseTypes = Union[
-    ModelResponse, EmbeddingResponse, ImageResponse, OpenAIFileObject, LiteLLMBatch
+    ModelResponse,
+    EmbeddingResponse,
+    ImageResponse,
+    OpenAIFileObject,
+    LiteLLMBatch,
+    LiteLLMFineTuningJob,
 ]
 
 

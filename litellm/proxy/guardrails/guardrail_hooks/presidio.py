@@ -11,41 +11,47 @@
 import asyncio
 import json
 import uuid
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+from datetime import datetime
+from typing import (
+    Any,
+    AsyncGenerator,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import aiohttp
-from pydantic import BaseModel
 
 import litellm  # noqa: E401
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BlockedPiiEntityError
-from litellm.integrations.custom_guardrail import (
-    CustomGuardrail,
-    log_guardrail_information,
-)
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.guardrails import GuardrailEventHooks, PiiAction, PiiEntityType
+from litellm.types.guardrails import (
+    GuardrailEventHooks,
+    LitellmParams,
+    PiiAction,
+    PiiEntityType,
+    PresidioPerRequestConfig,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.presidio import (
     PresidioAnalyzeRequest,
     PresidioAnalyzeResponseItem,
 )
+from litellm.types.utils import CallTypes as LitellmCallTypes
 from litellm.utils import (
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
+    ModelResponseStream,
     StreamingChoices,
 )
-
-
-class PresidioPerRequestConfig(BaseModel):
-    """
-    presdio params that can be controlled per request, api key
-    """
-
-    language: Optional[str] = None
-    entities: Optional[List[PiiEntityType]] = None
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
@@ -63,6 +69,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         presidio_ad_hoc_recognizers: Optional[str] = None,
         logging_only: Optional[bool] = None,
         pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]] = None,
+        presidio_language: Optional[str] = None,
         **kwargs,
     ):
         if logging_only is True:
@@ -77,6 +84,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self.pii_entities_config: Dict[PiiEntityType, PiiAction] = (
             pii_entities_config or {}
         )
+        self.presidio_language = presidio_language or "en"
         if mock_testing is True:  # for testing purposes only
             return
 
@@ -155,7 +163,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         analyze_payload: PresidioAnalyzeRequest = PresidioAnalyzeRequest(
             text=text,
-            language="en",
+            language=self.presidio_language,
         )
         ##################################################################
         ###### Check if user has configured any params for this guardrail
@@ -222,7 +230,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             raise e
 
     async def anonymize_text(
-        self, text: str, analyze_results: Any, output_parse_pii: bool
+        self,
+        text: str,
+        analyze_results: Any,
+        output_parse_pii: bool,
+        masked_entity_count: Dict[str, int],
     ) -> str:
         """
         Send analysis results to the Presidio anonymizer endpoint to get redacted text
@@ -260,6 +272,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             ]  # get text it'll replace
 
                         new_text = new_text[:start] + replacement + new_text[end:]
+                        entity_type = item.get("entity_type", None)
+                        if entity_type is not None:
+                            masked_entity_count[entity_type] = (
+                                masked_entity_count.get(entity_type, 0) + 1
+                            )
                     return redacted_text["text"]
                 else:
                     raise Exception(f"Invalid anonymizer response: {redacted_text}")
@@ -304,6 +321,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         Calls Presidio Analyze + Anonymize endpoints for PII Analysis + Masking
         """
+        start_time = datetime.now()
+        analyze_results: Optional[Union[List[PresidioAnalyzeResponseItem], Dict]] = None
+        status: Literal["success", "failure"] = "success"
+        masked_entity_count: Dict[str, int] = {}
+        exception_str: str = ""
         try:
             if self.mock_redacted_text is not None:
                 redacted_text = self.mock_redacted_text
@@ -328,13 +350,33 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     text=text,
                     analyze_results=analyze_results,
                     output_parse_pii=output_parse_pii,
+                    masked_entity_count=masked_entity_count,
                 )
-
             return redacted_text["text"]
         except Exception as e:
+            status = "failure"
+            exception_str = str(e)
             raise e
+        finally:
+            ####################################################
+            # Create Guardrail Trace for logging on Langfuse, Datadog, etc.
+            ####################################################
+            guardrail_json_response: Union[Exception, str, dict, List[dict]] = {}
+            if status == "success":
+                if isinstance(analyze_results, List):
+                    guardrail_json_response = [dict(item) for item in analyze_results]
+            else:
+                guardrail_json_response = exception_str
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response=guardrail_json_response,
+                request_data=request_data,
+                guardrail_status=status,
+                start_time=start_time.timestamp(),
+                end_time=datetime.now().timestamp(),
+                duration=(datetime.now() - start_time).total_seconds(),
+                masked_entity_count=masked_entity_count,
+            )
 
-    @log_guardrail_information
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -357,8 +399,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             content_safety = data.get("content_safety", None)
             verbose_proxy_logger.debug("content_safety: %s", content_safety)
             presidio_config = self.get_presidio_settings_from_request_data(data)
-
-            if call_type == "completion":  # /chat/completions requests
+            if call_type in [
+                LitellmCallTypes.completion.value,
+                LitellmCallTypes.acompletion.value,
+            ]:
                 messages = data["messages"]
                 tasks = []
 
@@ -388,11 +432,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     f"Presidio PII Masking: Redacted pii message: {data['messages']}"
                 )
                 data["messages"] = messages
+            else:
+                verbose_proxy_logger.debug(
+                    f"Not running async_pre_call_hook for call_type={call_type}"
+                )
             return data
         except Exception as e:
             raise e
 
-    @log_guardrail_information
     def logging_hook(
         self, kwargs: dict, result: Any, call_type: str
     ) -> Tuple[dict, Any]:
@@ -425,7 +472,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # No running event loop, we can safely run in this thread
             return run_in_new_loop()
 
-    @log_guardrail_information
     async def async_logging_hook(
         self, kwargs: dict, result: Any, call_type: str
     ) -> Tuple[dict, Any]:
@@ -474,7 +520,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         return kwargs, result
 
-    @log_guardrail_information
     async def async_post_call_success_hook(  # type: ignore
         self,
         data: dict,
@@ -504,6 +549,87 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     ].message.content.replace(key, value)
         return response
 
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_data: dict,
+    ) -> AsyncGenerator[ModelResponseStream, None]:
+        """
+        Process streaming response chunks to unmask PII tokens when needed.
+
+        If PII processing is enabled, this collects all chunks, applies PII unmasking,
+        and returns a reconstructed stream. Otherwise, it passes through the original stream.
+        """
+        # If PII unmasking not needed, just pass through the original stream
+        if not (self.output_parse_pii and self.pii_tokens):
+            async for chunk in response:
+                yield chunk
+            return
+
+        # Import here to avoid circular imports
+        from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
+        from litellm.types.utils import Choices, Message
+
+        try:
+            # Collect all chunks to process them together
+            collected_content = ""
+            last_chunk = None
+
+            async for chunk in response:
+                last_chunk = chunk
+
+                # Extract content safely with proper attribute checks
+                if (
+                    hasattr(chunk, "choices")
+                    and chunk.choices
+                    and hasattr(chunk.choices[0], "delta")
+                    and hasattr(chunk.choices[0].delta, "content")
+                    and isinstance(chunk.choices[0].delta.content, str)
+                ):
+                    collected_content += chunk.choices[0].delta.content
+
+            # No need to proceed if we didn't capture a valid chunk
+            if not last_chunk:
+                async for chunk in response:
+                    yield chunk
+                return
+
+            # Apply PII unmasking to the complete content
+            for token, original_text in self.pii_tokens.items():
+                collected_content = collected_content.replace(token, original_text)
+
+            # Reconstruct the response with unmasked content
+            mock_response = MockResponseIterator(
+                model_response=ModelResponse(
+                    id=last_chunk.id,
+                    object=last_chunk.object,
+                    created=last_chunk.created,
+                    model=last_chunk.model,
+                    choices=[
+                        Choices(
+                            message=Message(
+                                role="assistant",
+                                content=collected_content,
+                            ),
+                            index=0,
+                            finish_reason="stop",
+                        )
+                    ],
+                ),
+                json_mode=False,
+            )
+
+            # Return the reconstructed stream
+            async for chunk in mock_response:
+                yield chunk
+
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error in PII streaming processing: {str(e)}")
+            # Fallback to original stream on error
+            async for chunk in response:
+                yield chunk
+
     def get_presidio_settings_from_request_data(
         self, data: dict
     ) -> Optional[PresidioPerRequestConfig]:
@@ -525,3 +651,29 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 print(print_statement)  # noqa
         except Exception:
             pass
+
+    async def apply_guardrail(
+        self,
+        text: str,
+        language: Optional[str] = None,
+        entities: Optional[List[PiiEntityType]] = None,
+    ) -> str:
+        """
+        UI will call this function to check:
+            1. If the connection to the guardrail is working
+            2. When Testing the guardrail with some text, this function will be called with the input text and returns a text after applying the guardrail
+        """
+        text = await self.check_pii(
+            text=text,
+            output_parse_pii=self.output_parse_pii,
+            presidio_config=None,
+            request_data={},
+        )
+        return text
+
+    def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
+        """
+        Update the guardrails litellm params in memory
+        """
+        if litellm_params.pii_entities_config:
+            self.pii_entities_config = litellm_params.pii_entities_config

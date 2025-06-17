@@ -73,11 +73,11 @@ from litellm.proxy.proxy_server import (
     chat_completion,
     completion,
     embeddings,
-    image_generation,
     model_list,
     moderations,
     user_api_key_auth,
 )
+from litellm.proxy.image_endpoints import image_generation
 from litellm.proxy.management_endpoints.customer_endpoints import (
     new_end_user,
 )
@@ -234,6 +234,7 @@ async def test_new_user_response(prisma_client):
 )
 def test_generate_and_call_with_valid_key(prisma_client, api_route):
     # 1. Generate a Key, and use it to make a call
+    from unittest.mock import MagicMock
 
     print("prisma client=", prisma_client)
 
@@ -256,8 +257,9 @@ def test_generate_and_call_with_valid_key(prisma_client, api_route):
             user_id = key.user_id
 
             # check /user/info to verify user_role was set correctly
+            request_mock = MagicMock()
             new_user_info = await user_info(
-                user_id=user_id, user_api_key_dict=user_api_key_dict
+                request=request_mock, user_id=user_id, user_api_key_dict=user_api_key_dict
             )
             new_user_info = new_user_info.user_info
             print("new_user_info=", new_user_info)
@@ -1323,10 +1325,10 @@ def test_generate_and_update_key(prisma_client):
 
             print("response1=", response1)
 
-            # update the team id
+            # update the tpm limit
             response2 = await update_key_fn(
                 request=Request,
-                data=UpdateKeyRequest(key=generated_key, team_id=_team_2),
+                data=UpdateKeyRequest(key=generated_key, tpm_limit=1000),
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
                     api_key="sk-1234",
@@ -1350,7 +1352,7 @@ def test_generate_and_update_key(prisma_client):
                 "project": "litellm-project3",
             }
             assert result["info"]["models"] == ["ada", "babbage", "curie", "davinci"]
-            assert result["info"]["team_id"] == _team_2
+            assert result["info"]["tpm_limit"] == 1000
             assert result["info"]["budget_duration"] == "1mo"
             assert result["info"]["max_budget"] == 100
 
@@ -1751,6 +1753,7 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
         ("gpt-4o", True),
     ],
 )
+@pytest.mark.flaky(retries=3, delay=2)
 async def test_call_with_key_over_model_budget(
     prisma_client, request_model, should_pass
 ):

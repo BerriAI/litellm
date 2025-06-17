@@ -280,6 +280,10 @@ class ProxyLogging:
         self.db_spend_update_writer = DBSpendUpdateWriter()
         self.proxy_hook_mapping: Dict[str, CustomLogger] = {}
 
+        # Guard flags to prevent duplicate background tasks
+        self.daily_report_started: bool = False
+        self.hanging_requests_check_started: bool = False
+
     def startup_event(
         self,
         llm_router: Optional[Router],
@@ -301,12 +305,25 @@ class ProxyLogging:
         if (
             self.slack_alerting_instance is not None
             and "daily_reports" in self.slack_alerting_instance.alert_types
+            and not self.daily_report_started
         ):
             asyncio.create_task(
                 self.slack_alerting_instance._run_scheduled_daily_report(
                     llm_router=llm_router
                 )
             )  # RUN DAILY REPORT (if scheduled)
+            self.daily_report_started = True
+
+        if (
+            self.slack_alerting_instance is not None
+            and AlertType.llm_requests_hanging
+            in self.slack_alerting_instance.alert_types
+            and not self.hanging_requests_check_started
+        ):
+            asyncio.create_task(
+                self.slack_alerting_instance.hanging_request_check.check_for_hanging_requests()
+            )  # RUN HANGING REQUEST CHECK (if user wants to alert on hanging requests)
+            self.hanging_requests_check_started = True
 
     def update_values(
         self,
@@ -778,6 +795,7 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth,
         error_type: Optional[ProxyErrorTypes] = None,
         route: Optional[str] = None,
+        traceback_str: Optional[str] = None,
     ):
         """
         Allows users to raise custom exceptions/log when a call fails, without having to deal with parsing Request body.
@@ -786,6 +804,14 @@ class ProxyLogging:
         1. /chat/completions
         2. /embeddings
         3. /image/generation
+
+        Args:
+            - request_data: dict - The request data.
+            - original_exception: Exception - The original exception.
+            - user_api_key_dict: UserAPIKeyAuth - The user api key dict.
+            - error_type: Optional[ProxyErrorTypes] - The error type.
+            - route: Optional[str] - The route.
+            - traceback_str: Optional[str] - The traceback string, sometimes upstream endpoints might need to send the upstream traceback. In which case we use this
         """
 
         ### ALERTING ###
@@ -840,6 +866,7 @@ class ProxyLogging:
                             request_data=request_data,
                             user_api_key_dict=user_api_key_dict,
                             original_exception=original_exception,
+                            traceback_str=traceback_str,
                         )
                     )
             except Exception as e:
@@ -1410,6 +1437,8 @@ class PrismaClient:
                 "key",
                 "config",
                 "spend",
+                "enduser",
+                "budget",
                 "team",
                 "user_notification",
                 "combined_view",
@@ -1424,6 +1453,7 @@ class PrismaClient:
         ] = None,  # pagination, number of rows to getch when find_all==True
         parent_otel_span: Optional[Span] = None,
         proxy_logging_obj: Optional[ProxyLogging] = None,
+        budget_id_list: Optional[List[str]] = None,
     ):
         args_passed_in = locals()
         start_time = time.time()
@@ -1534,10 +1564,12 @@ class PrismaClient:
                 if query_type == "find_unique":
                     if key_val is None:
                         key_val = {"user_id": user_id}
+
                     response = await self.db.litellm_usertable.find_unique(  # type: ignore
                         where=key_val,  # type: ignore
                         include={"organization_memberships": True},
                     )
+
                 elif query_type == "find_all" and key_val is not None:
                     response = await self.db.litellm_usertable.find_many(
                         where=key_val  # type: ignore
@@ -1601,6 +1633,29 @@ class PrismaClient:
                 else:
                     response = await self.db.litellm_spendlogs.find_many(  # type: ignore
                         order={"startTime": "desc"},
+                    )
+                    return response
+            elif table_name == "budget" and reset_at is not None:
+                if query_type == "find_all":
+                    response = await self.db.litellm_budgettable.find_many(
+                        where={  # type:ignore
+                            "OR": [
+                                {
+                                    "AND": [
+                                        {"budget_reset_at": None},
+                                        {"NOT": {"budget_duration": None}},
+                                    ]
+                                },
+                                {"budget_reset_at": {"lt": reset_at}},
+                            ]
+                        }
+                    )
+                    return response
+
+            elif table_name == "enduser" and budget_id_list is not None:
+                if query_type == "find_all":
+                    response = await self.db.litellm_endusertable.find_many(
+                        where={"budget_id": {"in": budget_id_list}}
                     )
                     return response
             elif table_name == "team":
@@ -1916,7 +1971,9 @@ class PrismaClient:
         user_id: Optional[str] = None,
         team_id: Optional[str] = None,
         query_type: Literal["update", "update_many"] = "update",
-        table_name: Optional[Literal["user", "key", "config", "spend", "team"]] = None,
+        table_name: Optional[
+            Literal["user", "key", "config", "spend", "team", "enduser", "budget"]
+        ] = None,
         update_key_values: Optional[dict] = None,
         update_key_values_custom_query: Optional[dict] = None,
     ):
@@ -2082,6 +2139,68 @@ class PrismaClient:
                 await batcher.commit()
                 verbose_proxy_logger.info(
                     "\033[91m" + "DB User Table Batch update succeeded" + "\033[0m"
+                )
+            elif (
+                table_name is not None
+                and table_name == "enduser"
+                and query_type == "update_many"
+                and data_list is not None
+                and isinstance(data_list, list)
+            ):
+                """
+                Batch write update queries
+                """
+                batcher = self.db.batch_()
+                for enduser in data_list:
+                    try:
+                        data_json = self.jsonify_object(
+                            data=enduser.model_dump(exclude_none=True)
+                        )
+                    except Exception:
+                        data_json = self.jsonify_object(data=enduser.dict())
+                    batcher.litellm_endusertable.upsert(
+                        where={"user_id": enduser.user_id},  # type: ignore
+                        data={
+                            "create": {**data_json},  # type: ignore
+                            "update": {
+                                **data_json  # type: ignore
+                            },  # just update end-user-specified values, if it already exists
+                        },
+                    )
+                await batcher.commit()
+                verbose_proxy_logger.info(
+                    "\033[91m" + "DB End User Table Batch update succeeded" + "\033[0m"
+                )
+            elif (
+                table_name is not None
+                and table_name == "budget"
+                and query_type == "update_many"
+                and data_list is not None
+                and isinstance(data_list, list)
+            ):
+                """
+                Batch write update queries
+                """
+                batcher = self.db.batch_()
+                for budget in data_list:
+                    try:
+                        data_json = self.jsonify_object(
+                            data=budget.model_dump(exclude_none=True)
+                        )
+                    except Exception:
+                        data_json = self.jsonify_object(data=budget.dict())
+                    batcher.litellm_budgettable.upsert(
+                        where={"budget_id": budget.budget_id},  # type: ignore
+                        data={
+                            "create": {**data_json},  # type: ignore
+                            "update": {
+                                **data_json  # type: ignore
+                            },  # just update end-user-specified values, if it already exists
+                        },
+                    )
+                await batcher.commit()
+                verbose_proxy_logger.info(
+                    "\033[91m" + "DB Budget Table Batch update succeeded" + "\033[0m"
                 )
             elif (
                 table_name is not None
@@ -2788,6 +2907,8 @@ def handle_exception_on_proxy(e: Exception) -> ProxyException:
     """
     from fastapi import status
 
+    verbose_proxy_logger.exception(f"Exception: {e}")
+
     if isinstance(e, HTTPException):
         return ProxyException(
             message=getattr(e, "detail", f"error({str(e)})"),
@@ -2818,3 +2939,64 @@ def _premium_user_check():
                 "error": f"This feature is only available for LiteLLM Enterprise users. {CommonProxyErrors.not_premium_user.value}"
             },
         )
+
+
+def is_known_model(model: Optional[str], llm_router: Optional[Router]) -> bool:
+    """
+    Returns True if the model is in the llm_router model names
+    """
+    if model is None or llm_router is None:
+        return False
+    model_names = llm_router.get_model_names()
+
+    is_in_list = False
+    if model in model_names:
+        is_in_list = True
+
+    return is_in_list
+
+
+def join_paths(base_path: str, route: str) -> str:
+    # Remove trailing/leading slashes
+    base_path = base_path.rstrip("/")
+    route = route.lstrip("/")
+
+    # Join with a single slash
+    return f"{base_path}/{route}"
+
+
+def get_custom_url(request_base_url: str, route: Optional[str] = None) -> str:
+    """
+    Use proxy base url, if set.
+
+    Else, use request base url.
+    """
+    from httpx import URL
+
+    proxy_base_url = os.getenv("PROXY_BASE_URL")
+    server_root_path = os.getenv("SERVER_ROOT_PATH") or ""
+    if route is not None:
+        server_root_path = join_paths(base_path=server_root_path, route=route)
+    if proxy_base_url:
+        ui_link = str(URL(proxy_base_url).join(server_root_path))
+    else:
+        ui_link = str(URL(request_base_url).join(server_root_path))
+
+    return ui_link
+
+
+def get_proxy_base_url() -> Optional[str]:
+    """
+    Get the proxy base url from the environment variables.
+    """
+    return os.getenv("PROXY_BASE_URL")
+
+
+def get_server_root_path() -> str:
+    """
+    Get the server root path from the environment variables.
+
+    - If SERVER_ROOT_PATH is set, return it.
+    - Otherwise, default to "/".
+    """
+    return os.getenv("SERVER_ROOT_PATH", "/")

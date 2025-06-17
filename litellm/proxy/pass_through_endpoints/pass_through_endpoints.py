@@ -1,11 +1,12 @@
 import ast
 import asyncio
 import json
+import traceback
 import uuid
 from base64 import b64encode
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Union
-from urllib.parse import parse_qs, urlencode, urlparse
+from typing import List, Optional, Tuple, Union
+from urllib.parse import urlencode, urlparse
 
 import httpx
 from fastapi import (
@@ -22,10 +23,12 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.passthrough import BasePassthroughUtils
 from litellm.proxy._types import (
     ConfigFieldInfo,
     ConfigFieldUpdate,
@@ -276,27 +279,7 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
         )
 
 
-class HttpPassThroughEndpointHelpers:
-    @staticmethod
-    def forward_headers_from_request(
-        request: Request,
-        headers: dict,
-        forward_headers: Optional[bool] = False,
-    ):
-        """
-        Helper to forward headers from original request
-        """
-        if forward_headers is True:
-            request_headers = dict(request.headers)
-
-            # Header We Should NOT forward
-            request_headers.pop("content-length", None)
-            request_headers.pop("host", None)
-
-            # Combine request headers with custom headers
-            headers = {**request_headers, **headers}
-        return headers
-
+class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
     @staticmethod
     def get_response_headers(
         headers: httpx.Headers,
@@ -320,26 +303,16 @@ class HttpPassThroughEndpointHelpers:
     @staticmethod
     def get_endpoint_type(url: str) -> EndpointType:
         parsed_url = urlparse(url)
-        if ("generateContent") in url or ("streamGenerateContent") in url:
+        if (
+            ("generateContent") in url
+            or ("streamGenerateContent") in url
+            or ("rawPredict") in url
+            or ("streamRawPredict") in url
+        ):
             return EndpointType.VERTEX_AI
         elif parsed_url.hostname == "api.anthropic.com":
             return EndpointType.ANTHROPIC
         return EndpointType.GENERIC
-
-    @staticmethod
-    def get_merged_query_parameters(
-        existing_url: httpx.URL, request_query_params: Dict[str, Union[str, list]]
-    ) -> Dict[str, Union[str, List[str]]]:
-        # Get the existing query params from the target URL
-        existing_query_string = existing_url.query.decode("utf-8")
-        existing_query_params = parse_qs(existing_query_string)
-
-        # parse_qs returns a dict where each value is a list, so let's flatten it
-        updated_existing_query_params = {
-            k: v[0] if len(v) == 1 else v for k, v in existing_query_params.items()
-        }
-        # Merge the query params, giving priority to the existing ones
-        return {**request_query_params, **updated_existing_query_params}
 
     @staticmethod
     async def _make_non_streaming_http_request(
@@ -440,10 +413,10 @@ class HttpPassThroughEndpointHelpers:
 
         for field_name, field_value in form_data.items():
             if isinstance(field_value, (StarletteUploadFile, UploadFile)):
-                files[field_name] = (
-                    await HttpPassThroughEndpointHelpers._build_request_files_from_upload_file(
-                        upload_file=field_value
-                    )
+                files[
+                    field_name
+                ] = await HttpPassThroughEndpointHelpers._build_request_files_from_upload_file(
+                    upload_file=field_value
                 )
             else:
                 form_data_dict[field_name] = field_value
@@ -458,6 +431,54 @@ class HttpPassThroughEndpointHelpers:
         )
         return response
 
+    @staticmethod
+    def _init_kwargs_for_pass_through_endpoint(
+        request: Request,
+        user_api_key_dict: UserAPIKeyAuth,
+        passthrough_logging_payload: PassthroughStandardLoggingPayload,
+        logging_obj: LiteLLMLoggingObj,
+        _parsed_body: Optional[dict] = None,
+        litellm_call_id: Optional[str] = None,
+    ) -> dict:
+        _parsed_body = _parsed_body or {}
+        _litellm_metadata: Optional[dict] = _parsed_body.pop("litellm_metadata", None)
+        _metadata = dict(
+            StandardLoggingUserAPIKeyMetadata(
+                user_api_key_hash=user_api_key_dict.api_key,
+                user_api_key_alias=user_api_key_dict.key_alias,
+                user_api_key_user_email=user_api_key_dict.user_email,
+                user_api_key_user_id=user_api_key_dict.user_id,
+                user_api_key_team_id=user_api_key_dict.team_id,
+                user_api_key_org_id=user_api_key_dict.org_id,
+                user_api_key_team_alias=user_api_key_dict.team_alias,
+                user_api_key_end_user_id=user_api_key_dict.end_user_id,
+                user_api_key_request_route=user_api_key_dict.request_route,
+            )
+        )
+        _metadata["user_api_key"] = user_api_key_dict.api_key
+        if _litellm_metadata:
+            _metadata.update(_litellm_metadata)
+
+        _metadata = _update_metadata_with_tags_in_header(
+            request=request,
+            metadata=_metadata,
+        )
+
+        kwargs = {
+            "litellm_params": {
+                "metadata": _metadata,
+            },
+            "call_type": "pass_through_endpoint",
+            "litellm_call_id": litellm_call_id,
+            "passthrough_logging_payload": passthrough_logging_payload,
+        }
+
+        logging_obj.model_call_details[
+            "passthrough_logging_payload"
+        ] = passthrough_logging_payload
+
+        return kwargs
+
 
 async def pass_through_request(  # noqa: PLR0915
     request: Request,
@@ -470,16 +491,31 @@ async def pass_through_request(  # noqa: PLR0915
     query_params: Optional[dict] = None,
     stream: Optional[bool] = None,
 ):
+    """
+    Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    #########################################################
+    # Initialize variables
+    #########################################################
     litellm_call_id = str(uuid.uuid4())
     url: Optional[httpx.URL] = None
-    try:
-        from litellm.litellm_core_utils.litellm_logging import Logging
-        from litellm.proxy.proxy_server import proxy_logging_obj
 
+    # parsed request body
+    _parsed_body: Optional[dict] = None
+    # kwargs for pass through endpoint, contains metadata, litellm_params, call_type, litellm_call_id, passthrough_logging_payload
+    kwargs: Optional[dict] = None
+
+    #########################################################
+    try:
         url = httpx.URL(target)
         headers = custom_headers
         headers = HttpPassThroughEndpointHelpers.forward_headers_from_request(
-            request=request, headers=headers, forward_headers=forward_headers
+            request_headers=dict(request.headers),
+            headers=headers,
+            forward_headers=forward_headers,
         )
 
         if merge_query_params:
@@ -497,7 +533,6 @@ async def pass_through_request(  # noqa: PLR0915
             str(url)
         )
 
-        _parsed_body = None
         if custom_body:
             _parsed_body = custom_body
         else:
@@ -536,7 +571,7 @@ async def pass_through_request(  # noqa: PLR0915
             request_body=_parsed_body,
             request_method=getattr(request, "method", None),
         )
-        kwargs = _init_kwargs_for_pass_through_endpoint(
+        kwargs = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
             user_api_key_dict=user_api_key_dict,
             _parsed_body=_parsed_body,
             passthrough_logging_payload=passthrough_logging_payload,
@@ -724,6 +759,27 @@ async def pass_through_request(  # noqa: PLR0915
                 str(e)
             )
         )
+
+        #########################################################
+        # Monitoring: Trigger post_call_failure_hook
+        # for pass through endpoint failure
+        #########################################################
+        request_payload: dict = _parsed_body or {}
+        # add user_api_key_dict, litellm_call_id, passthrough_logging_payloa for logging
+        if kwargs:
+            for key, value in kwargs.items():
+                request_payload[key] = value
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=request_payload,
+            traceback_str=traceback.format_exc(
+                limit=MAXIMUM_TRACEBACK_LINES_TO_LOG,
+            ),
+        )
+
+        #########################################################
+
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
@@ -741,53 +797,6 @@ async def pass_through_request(  # noqa: PLR0915
                 code=getattr(e, "status_code", 500),
                 headers=custom_headers,
             )
-
-
-def _init_kwargs_for_pass_through_endpoint(
-    request: Request,
-    user_api_key_dict: UserAPIKeyAuth,
-    passthrough_logging_payload: PassthroughStandardLoggingPayload,
-    logging_obj: LiteLLMLoggingObj,
-    _parsed_body: Optional[dict] = None,
-    litellm_call_id: Optional[str] = None,
-) -> dict:
-    _parsed_body = _parsed_body or {}
-    _litellm_metadata: Optional[dict] = _parsed_body.pop("litellm_metadata", None)
-    _metadata = dict(
-        StandardLoggingUserAPIKeyMetadata(
-            user_api_key_hash=user_api_key_dict.api_key,
-            user_api_key_alias=user_api_key_dict.key_alias,
-            user_api_key_user_email=user_api_key_dict.user_email,
-            user_api_key_user_id=user_api_key_dict.user_id,
-            user_api_key_team_id=user_api_key_dict.team_id,
-            user_api_key_org_id=user_api_key_dict.org_id,
-            user_api_key_team_alias=user_api_key_dict.team_alias,
-            user_api_key_end_user_id=user_api_key_dict.end_user_id,
-        )
-    )
-    _metadata["user_api_key"] = user_api_key_dict.api_key
-    if _litellm_metadata:
-        _metadata.update(_litellm_metadata)
-
-    _metadata = _update_metadata_with_tags_in_header(
-        request=request,
-        metadata=_metadata,
-    )
-
-    kwargs = {
-        "litellm_params": {
-            "metadata": _metadata,
-        },
-        "call_type": "pass_through_endpoint",
-        "litellm_call_id": litellm_call_id,
-        "passthrough_logging_payload": passthrough_logging_payload,
-    }
-
-    logging_obj.model_call_details["passthrough_logging_payload"] = (
-        passthrough_logging_payload
-    )
-
-    return kwargs
 
 
 def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> dict:

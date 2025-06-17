@@ -1,10 +1,22 @@
 model_list:
-  - model_name: openai/gpt-4o
+  - model_name: gemini/*
     litellm_params:
-      model: openai/gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
-
+      model: gemini/*
+      api_key: os.environ/GEMINI_API_KEY
+  - model_name: "anthropic/*"
+    litellm_params:
+      model: "anthropic/*"
+      api_key: os.environ/ANTHROPIC_API_KEY
 
 litellm_settings:
-    callbacks: ["smtp_email"]
-  
+  callbacks: ["prometheus"]
+  prometheus_metrics_config:
+    # High-cardinality metrics with minimal labels
+    - group: "proxy_metrics"
+      metrics:
+        - "litellm_proxy_total_requests_metric"
+        - "litellm_proxy_failed_requests_metric"
+      include_labels:
+        - "hashed_api_key"
+        - "requested_model"
+        - "model_group"

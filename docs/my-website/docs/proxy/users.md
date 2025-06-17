@@ -194,7 +194,9 @@ Apply a budget across all calls an internal user (key owner) can make on the pro
 
 :::info
 
-For most use-cases, we recommend setting team-member budgets
+For keys, with a 'team_id' set, the team budget is used instead of the user's personal budget.
+
+To apply a budget to a user within a team, use team member budgets.
 
 :::
 

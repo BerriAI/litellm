@@ -17,6 +17,7 @@ from litellm.types.utils import (
     ModelResponse,
     SearchContextCostPerQuery,
     StandardBuiltInToolsParams,
+    Usage,
 )
 
 
@@ -31,6 +32,7 @@ class StandardBuiltInToolCostTracking:
     def get_cost_for_built_in_tools(
         model: str,
         response_object: Any,
+        usage: Optional[Usage] = None,
         custom_llm_provider: Optional[str] = None,
         standard_built_in_tools_params: Optional[StandardBuiltInToolsParams] = None,
     ) -> float:
@@ -41,22 +43,41 @@ class StandardBuiltInToolCostTracking:
         - Web Search
 
         """
+        from litellm.llms import get_cost_for_web_search_request
+
         standard_built_in_tools_params = standard_built_in_tools_params or {}
         #########################################################
         # Web Search
         #########################################################
         if StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
-            response_object=response_object
+            response_object=response_object,
+            usage=usage,
         ):
             model_info = StandardBuiltInToolCostTracking._safe_get_model_info(
                 model=model, custom_llm_provider=custom_llm_provider
             )
-            return StandardBuiltInToolCostTracking.get_cost_for_web_search(
-                web_search_options=standard_built_in_tools_params.get(
-                    "web_search_options", None
-                ),
-                model_info=model_info,
-            )
+            result: Optional[float] = None
+            if custom_llm_provider is None and model_info is not None:
+                custom_llm_provider = model_info["litellm_provider"]
+            if (
+                model_info is not None
+                and usage is not None
+                and custom_llm_provider is not None
+            ):
+                result = get_cost_for_web_search_request(
+                    custom_llm_provider=custom_llm_provider,
+                    usage=usage,
+                    model_info=model_info,
+                )
+            if result is None:
+                return StandardBuiltInToolCostTracking.get_cost_for_web_search(
+                    web_search_options=standard_built_in_tools_params.get(
+                        "web_search_options", None
+                    ),
+                    model_info=model_info,
+                )
+            else:
+                return result
 
         #########################################################
         # File Search
@@ -72,7 +93,7 @@ class StandardBuiltInToolCostTracking:
 
     @staticmethod
     def response_object_includes_web_search_call(
-        response_object: Any,
+        response_object: Any, usage: Optional[Usage] = None
     ) -> bool:
         """
         Check if the response object includes a web search call.
@@ -81,6 +102,8 @@ class StandardBuiltInToolCostTracking:
         - Chat Completion Response (ModelResponse)
         - ResponsesAPIResponse (streaming + non-streaming)
         """
+        from litellm.types.utils import PromptTokensDetailsWrapper
+
         if isinstance(response_object, ModelResponse):
             # chat completions only include url_citation annotations when a web search call is made
             return StandardBuiltInToolCostTracking.response_includes_annotation_type(
@@ -91,6 +114,22 @@ class StandardBuiltInToolCostTracking:
             return StandardBuiltInToolCostTracking.response_includes_output_type(
                 response_object=response_object, output_type="web_search_call"
             )
+        elif usage is not None:
+            if (
+                hasattr(usage, "server_tool_use")
+                and usage.server_tool_use is not None
+                and usage.server_tool_use.web_search_requests is not None
+            ):
+                return True
+            elif (
+                hasattr(usage, "prompt_tokens_details")
+                and usage.prompt_tokens_details is not None
+                and isinstance(usage.prompt_tokens_details, PromptTokensDetailsWrapper)
+                and hasattr(usage.prompt_tokens_details, "web_search_requests")
+                and usage.prompt_tokens_details.web_search_requests is not None
+            ):
+                return True
+
         return False
 
     @staticmethod
