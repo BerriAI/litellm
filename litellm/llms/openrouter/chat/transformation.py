@@ -14,7 +14,8 @@ from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.openrouter import OpenRouterErrorMessage
-from litellm.types.utils import ModelResponse, ModelResponseStream
+from litellm.types.utils import Delta, ModelResponse, ModelResponseStream, Usage
+from litellm.utils import StreamingChoices
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import OpenRouterException
@@ -37,12 +38,16 @@ class OpenrouterConfig(OpenAIGPTConfig):
         transforms = non_default_params.pop("transforms", None)
         models = non_default_params.pop("models", None)
         route = non_default_params.pop("route", None)
+        stream_options = non_default_params.pop("stream_options", {})
         if transforms is not None:
             extra_body["transforms"] = transforms
         if models is not None:
             extra_body["models"] = models
         if route is not None:
             extra_body["route"] = route
+        if stream_options is not None and stream_options.get("include_usage"):
+            extra_body["usage"] = {"include": True}
+
         mapped_openai_params[
             "extra_body"
         ] = extra_body  # openai client supports `extra_body` param
@@ -112,18 +117,48 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
                     headers=error_message["metadata"].get("headers", {}),
                 )
 
-            new_choices = []
-            for choice in chunk["choices"]:
-                choice["delta"]["reasoning_content"] = choice["delta"].get("reasoning")
-                new_choices.append(choice)
-            return ModelResponseStream(
+            finish_reason = None
+            delta = Delta()
+            logprobs = None
+            if "choices" in chunk and len(chunk["choices"]) > 0:
+                choice = chunk["choices"][0]
+                if "delta" in choice and choice["delta"] is not None:
+                    choice["delta"]["reasoning_content"] = choice["delta"].get(
+                        "reasoning"
+                    )
+                    delta = Delta(**choice["delta"])
+
+                if "finish_reason" in choice:
+                    finish_reason = choice["finish_reason"]
+
+                if "logprobs" in choice:
+                    logprobs = choice["logprobs"]
+
+            new_choices = [
+                StreamingChoices(
+                    finish_reason=finish_reason,
+                    delta=delta,
+                    logprobs=logprobs,
+                    index=0,
+                )
+            ]
+
+            model_response = ModelResponseStream(
                 id=chunk["id"],
                 object="chat.completion.chunk",
                 created=chunk["created"],
-                usage=chunk.get("usage"),
                 model=chunk["model"],
                 choices=new_choices,
             )
+
+            if "usage" in chunk and chunk["usage"] is not None:
+                usage_from_chunk = chunk["usage"]
+                try:
+                    final_usage = Usage(**usage_from_chunk)
+                except Exception:
+                    final_usage = Usage.parse_obj(usage_from_chunk)
+                model_response.usage = final_usage
+            return model_response
         except KeyError as e:
             raise OpenRouterException(
                 message=f"KeyError: {e}, Got unexpected response from OpenRouter: {chunk}",
