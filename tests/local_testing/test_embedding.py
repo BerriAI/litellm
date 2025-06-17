@@ -316,16 +316,22 @@ def test_openai_azure_embedding():
 
 
 @pytest.mark.skipif(
-    os.environ.get("CIRCLE_OIDC_TOKEN") is None,
-    reason="Cannot run without being in CircleCI Runner",
+    os.environ.get("CIRCLE_OIDC_TOKEN") is None
+    or os.environ.get("AZURE_TENANT_ID") is None
+    or os.environ.get("AZURE_CLIENT_ID") is None,
+    reason="Cannot run without being in CircleCI Runner and having AZURE_TENANT_ID and AZURE_CLIENT_ID set",
 )
 def test_openai_azure_embedding_with_oidc_and_cf():
-    # TODO: Switch to our own Azure account, currently using ai.moda's account
-    os.environ["AZURE_TENANT_ID"] = "17c0a27a-1246-4aa1-a3b6-d294e80e783c"
-    os.environ["AZURE_CLIENT_ID"] = "4faf5422-b2bd-45e8-a6d7-46543a38acd0"
+    # Verify required environment variables are present
+    azure_tenant_id = os.environ.get("AZURE_TENANT_ID")
+    azure_client_id = os.environ.get("AZURE_CLIENT_ID")
+    
+    if not azure_tenant_id or not azure_client_id:
+        pytest.skip("AZURE_TENANT_ID and AZURE_CLIENT_ID environment variables must be set")
 
-    old_key = os.environ["AZURE_API_KEY"]
-    os.environ.pop("AZURE_API_KEY", None)
+    old_key = os.environ.get("AZURE_API_KEY")
+    if old_key:
+        os.environ.pop("AZURE_API_KEY", None)
 
     try:
         response = embedding(
@@ -340,7 +346,8 @@ def test_openai_azure_embedding_with_oidc_and_cf():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
     finally:
-        os.environ["AZURE_API_KEY"] = old_key
+        if old_key:
+            os.environ["AZURE_API_KEY"] = old_key
 
 
 from openai.types.embedding import Embedding
