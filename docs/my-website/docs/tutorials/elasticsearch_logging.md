@@ -16,7 +16,7 @@ docker run -d \
   -p 9200:9200 \
   -e "discovery.type=single-node" \
   -e "xpack.security.enabled=false" \
-  docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+  docker.elastic.co/elasticsearch/elasticsearch:8.18.2
 ```
 
 ### 2. Set up OpenTelemetry Collector
@@ -38,8 +38,8 @@ processors:
     send_batch_size: 1024
 
 exporters:
-  logging:
-    loglevel: debug
+  debug:
+    verbosity: detailed
   otlphttp/elastic:
     endpoint: "http://localhost:9200"
     headers: 
@@ -49,13 +49,13 @@ service:
   pipelines:
     metrics:
       receivers: [otlp]
-      exporters: [logging, otlphttp/elastic]
+      exporters: [debug, otlphttp/elastic]
     traces:
       receivers: [otlp]
-      exporters: [logging, otlphttp/elastic]
+      exporters: [debug, otlphttp/elastic]
     logs: 
       receivers: [otlp]
-      exporters: [logging, otlphttp/elastic]
+      exporters: [debug, otlphttp/elastic]
 ```
 
 Start the OpenTelemetry collector:
@@ -187,7 +187,7 @@ exporters:
 version: '3.8'
 services:
   elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.18.2
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
