@@ -1,18 +1,11 @@
-from typing import Dict, List, Optional
+from typing import List, Optional
 
-import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.llms.vertex_ai import (
-    ContentType,
-    PartType,
-    PrebuiltVoiceConfig,
-    SpeechConfig,
-    VoiceConfig,
-)
+from litellm.types.llms.vertex_ai import ContentType, PartType
 from litellm.utils import supports_reasoning
 
 from ...vertex_ai.gemini.transformation import _gemini_convert_messages_with_history

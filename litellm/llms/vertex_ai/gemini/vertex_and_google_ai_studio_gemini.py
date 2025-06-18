@@ -531,7 +531,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return cast(dict, speech_config)
 
-    def map_openai_params(
+    def map_openai_params(  # noqa: PLR0915
         self,
         non_default_params: Dict,
         optional_params: Dict,
