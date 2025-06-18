@@ -1854,10 +1854,18 @@ async def view_spend_logs(  # noqa: PLR0915
         default=None,
         description="Time till which to view key spend",
     ),
+    summarize: bool = fastapi.Query(
+        default=True,
+        description="When start_date and end_date are provided, summarize=true returns aggregated data by date (legacy behavior), summarize=false returns filtered individual logs",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     View all spend logs, if request_id is provided, only logs for that request_id will be returned
+
+    When start_date and end_date are provided:
+    - summarize=true (default): Returns aggregated spend data grouped by date (maintains backward compatibility)
+    - summarize=false: Returns filtered individual log entries within the date range
 
     Example Request for all logs
     ```
@@ -1880,6 +1888,12 @@ async def view_spend_logs(  # noqa: PLR0915
     Example Request for specific user_id
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs?user_id=ishaan@berri.ai" \
+-H "Authorization: Bearer sk-1234"
+    ```
+
+    Example Request for date range with individual logs (unsummarized)
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/logs?start_date=2024-01-01&end_date=2024-01-02&summarize=false" \
 -H "Authorization: Bearer sk-1234"
     ```
     """
@@ -1922,6 +1936,18 @@ async def view_spend_logs(  # noqa: PLR0915
             elif user_id is not None and isinstance(user_id, str):
                 filter_query["user"] = user_id  # type: ignore
 
+            # Check if user wants unsummarized data
+            if not summarize:
+                # Return filtered individual log entries (similar to UI endpoint)
+                data = await prisma_client.db.litellm_spendlogs.find_many(
+                    where=filter_query,  # type: ignore
+                    order={
+                        "startTime": "desc",
+                    },
+                )
+                return data
+
+            # Legacy behavior: return summarized data (when summarize=true)
             # SQL query
             response = await prisma_client.db.litellm_spendlogs.group_by(
                 by=["api_key", "user", "model", "startTime"],

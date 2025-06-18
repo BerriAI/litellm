@@ -334,7 +334,8 @@ class BaseAWSLLM:
             try:
                 import boto3
 
-                session = boto3.Session()
+                with tracer.trace("boto3.Session()"):
+                    session = boto3.Session()
                 configured_region = session.region_name
                 if configured_region:
                     aws_region_name = configured_region
