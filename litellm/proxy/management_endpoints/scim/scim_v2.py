@@ -46,6 +46,49 @@ from litellm.proxy.utils import _premium_user_check, handle_exception_on_proxy
 from litellm.types.proxy.management_endpoints.scim_v2 import *
 
 
+class UserProvisionerHelpers:
+    """Helper methods for user provisioning operations."""
+    
+    @staticmethod
+    async def handle_existing_user_by_email(
+        prisma_client,
+        new_user_request: NewUserRequest
+    ) -> Optional[SCIMUser]:
+        """
+        Check if a user with the given email already exists and update them if found.
+        
+        Args:
+            prisma_client: Database client
+            new_user_request: New user request data
+            
+        Returns:
+            SCIMUser if user was updated, None if no existing user found
+        """
+        if not new_user_request.user_email:
+            return None
+            
+        existing_user = await prisma_client.db.litellm_usertable.find_first(
+            where={"user_email": new_user_request.user_email}
+        )
+        
+        if not existing_user:
+            return None
+            
+        # Update the user
+        updated_user = await prisma_client.db.litellm_usertable.update(
+            where={"user_id": existing_user.user_id},
+            data={
+                "user_id": new_user_request.user_id,
+                "user_email": new_user_request.user_email,
+                "user_alias": new_user_request.user_alias,
+                "teams": new_user_request.teams,
+                "metadata": safe_dumps(new_user_request.metadata),
+            },
+        )
+        
+        return await ScimTransformations.transform_litellm_user_to_scim_user(updated_user)
+
+
 class ScimUserData(TypedDict):
     """Typed structure for extracted SCIM user data."""
     user_email: Optional[str]
@@ -320,16 +363,26 @@ async def create_user(
         # Create user in database
         user_id = user.userName or str(uuid.uuid4())
         metadata = _build_scim_metadata(user_data["given_name"], user_data["family_name"])
+        new_user_request = NewUserRequest(
+            user_id=user_id,
+            user_email=user_data["user_email"],
+            user_alias=user_data["user_alias"],
+            teams=user_data["teams"],
+            metadata=metadata,
+            auto_create_key=False,
+        )
+
+        # Check if user with email already exists and update if found
+        existing_user_scim = await UserProvisionerHelpers.handle_existing_user_by_email(
+            prisma_client=prisma_client,
+            new_user_request=new_user_request
+        )
         
+        if existing_user_scim:
+            return existing_user_scim
+
         created_user = await new_user(
-            data=NewUserRequest(
-                user_id=user_id,
-                user_email=user_data["user_email"],
-                user_alias=user_data["user_alias"],
-                teams=user_data["teams"],
-                metadata=metadata,
-                auto_create_key=False,
-            ),
+            data=new_user_request,
         )
         
         scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(
@@ -1011,7 +1064,8 @@ async def patch_group(
         # Handle user-team relationship changes using existing helper
         members_to_add = final_members - current_members
         members_to_remove = current_members - final_members
-
+        verbose_proxy_logger.debug(f"members_to_add: {members_to_add}")
+        verbose_proxy_logger.debug(f"members_to_remove: {members_to_remove}")
         # Use existing helper functions for team membership changes
         for member_id in members_to_add:
             await patch_team_membership(
