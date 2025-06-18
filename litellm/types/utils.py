@@ -1126,7 +1126,6 @@ class ModelResponseBase(OpenAIObject):
 class ModelResponseStream(ModelResponseBase):
     choices: List[StreamingChoices]
     provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
-    usage: Optional[Usage] = Field(default=None)
 
     def __init__(
         self,
@@ -1138,6 +1137,7 @@ class ModelResponseStream(ModelResponseBase):
         provider_specific_fields: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
+        usage: Optional[Usage] = None
         if choices is not None and isinstance(choices, list):
             new_choices = []
             for choice in choices:
@@ -1167,7 +1167,12 @@ class ModelResponseStream(ModelResponseBase):
             and kwargs["usage"] is not None
             and isinstance(kwargs["usage"], dict)
         ):
-            kwargs["usage"] = Usage(**kwargs["usage"])
+            # remove usage from kwargs
+            usage = kwargs["usage"]
+            if isinstance(usage, dict):
+                usage = Usage(**usage)
+            elif isinstance(usage, Usage):
+                usage = usage
 
         kwargs["id"] = id
         kwargs["created"] = created
@@ -1175,6 +1180,9 @@ class ModelResponseStream(ModelResponseBase):
         kwargs["provider_specific_fields"] = provider_specific_fields
 
         super().__init__(**kwargs)
+
+        if usage is not None:
+            self.usage = usage
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
