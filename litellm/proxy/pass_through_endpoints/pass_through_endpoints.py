@@ -5,7 +5,7 @@ import traceback
 import uuid
 from base64 import b64encode
 from datetime import datetime
-from typing import List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 from urllib.parse import urlencode, urlparse
 
 import httpx
@@ -984,14 +984,29 @@ class InitPassThroughEndpointHelpers:
         )
 
 
-async def initialize_pass_through_endpoints(pass_through_endpoints: list):
+async def initialize_pass_through_endpoints(
+    pass_through_endpoints: Union[List[Dict], List[PassThroughGenericEndpoint]],
+):
+    """
+    Initialize a list of pass-through endpoints by adding them to the FastAPI app routes
+
+    Args:
+        pass_through_endpoints: List of pass-through endpoints to initialize
+
+    Returns:
+        None
+    """
     verbose_proxy_logger.debug("initializing pass through endpoints")
     from litellm.proxy._types import CommonProxyErrors, LiteLLMRoutes
     from litellm.proxy.proxy_server import app, premium_user
 
     for endpoint in pass_through_endpoints:
+        if isinstance(endpoint, PassThroughGenericEndpoint):
+            endpoint = endpoint.model_dump()
         _target = endpoint.get("target", None)
-        _path = endpoint.get("path", None)
+        _path: Optional[str] = endpoint.get("path", None)
+        if _path is None:
+            raise ValueError("Path is required for pass-through endpoint")
         _custom_headers = endpoint.get("headers", None)
         _custom_headers = await set_env_variables_in_header(
             custom_headers=_custom_headers
