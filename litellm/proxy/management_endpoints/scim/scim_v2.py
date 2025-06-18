@@ -32,11 +32,9 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
-from litellm.proxy.management_endpoints.scim.scim_errors import ScimUserAlreadyExists
 from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
-from litellm.proxy.management_endpoints.scim.utils import _extract_error_message
 from litellm.proxy.management_endpoints.team_endpoints import (
     new_team,
     team_member_add,
