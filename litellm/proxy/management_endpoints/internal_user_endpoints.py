@@ -299,7 +299,21 @@ async def new_user(
                             str(e)
                         )
                     )
+                elif (
+                    isinstance(e, ProxyException)
+                    and e.type == ProxyErrorTypes.team_member_already_in_team
+                ):
+                    verbose_proxy_logger.debug(
+                        "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
+                            str(e)
+                        )
+                    )
                 else:
+                    verbose_proxy_logger.exception(
+                        "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): Exception occured - {}".format(
+                            str(e)
+                        )
+                    )
                     raise e
 
         user_id = cast(Optional[str], response.get("user_id", None))
