@@ -114,6 +114,7 @@ import AddModelTab from "./add_model/add_model_tab";
 import { ModelDataTable } from "./model_dashboard/table";
 import { columns } from "./model_dashboard/columns";
 import HealthCheckComponent from "./model_dashboard/HealthCheckComponent";
+import PassThroughSettings from "./pass_through_settings";
 import { all_admin_roles } from "@/utils/roles";
 import { Table as TableInstance } from '@tanstack/react-table';
 
@@ -1094,6 +1095,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               {all_admin_roles.includes(userRole) ? <Tab>All Models</Tab> : <Tab>Your Models</Tab>}
               <Tab>Add Model</Tab>
               {all_admin_roles.includes(userRole) && <Tab>LLM Credentials</Tab>}
+              {all_admin_roles.includes(userRole) && <Tab>Pass-Through Endpoints</Tab>}
               {all_admin_roles.includes(userRole) && <Tab>
                 Health Status
               </Tab>}
@@ -1262,6 +1264,14 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             </TabPanel>
             <TabPanel>
               <CredentialsPanel accessToken={accessToken} uploadProps={uploadProps} credentialList={credentialsList} fetchCredentials={fetchCredentials} />
+            </TabPanel>
+            <TabPanel>
+              <PassThroughSettings
+                accessToken={accessToken}
+                userRole={userRole}
+                userID={userID}
+                modelData={modelData}
+              />
             </TabPanel>
             <TabPanel>
               <HealthCheckComponent

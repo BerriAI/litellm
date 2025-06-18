@@ -77,7 +77,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
   return (
     <div>
       <Button 
-        className="mx-auto mb-4" 
+        className="mx-auto mb-4 mt-4" 
         onClick={() => setIsModalVisible(true)}
       >
         + Add Pass-Through Endpoint
