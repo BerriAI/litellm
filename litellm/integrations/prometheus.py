@@ -1106,7 +1106,6 @@ class PrometheusLogger(CustomLogger):
                 api_provider=llm_provider or "",
             )
             if exception is not None:
-
                 _labels = prometheus_label_factory(
                     supported_enum_labels=self.get_labels_for_metric(
                         metric_name="litellm_deployment_failure_responses"
