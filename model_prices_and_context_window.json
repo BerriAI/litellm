@@ -6761,7 +6761,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
         "supports_web_search": true
     },
-    "gemini-2.5-flash": {
+    "gemini/gemini-2.5-flash": {
         "max_tokens": 65535,
         "max_input_tokens": 1048576,
         "max_output_tokens": 65535,
@@ -6775,7 +6775,7 @@
         "input_cost_per_token": 3e-07,
         "output_cost_per_token": 2.5e-06,
         "output_cost_per_reasoning_token": 2.5e-06,
-        "litellm_provider": "vertex_ai-language-models",
+        "litellm_provider": "gemini",
         "mode": "chat",
         "supports_reasoning": true,
         "supports_system_messages": true,
