@@ -17,7 +17,6 @@ from fastapi import (
     Request,
     Response,
 )
-from prisma.types import HttpConfig
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
