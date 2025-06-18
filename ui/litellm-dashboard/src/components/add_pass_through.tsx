@@ -19,7 +19,7 @@ import {
   message,
   Tooltip,
 } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { InfoCircleOutlined, ApiOutlined } from "@ant-design/icons";
 import { keyCreateCall, slackBudgetAlertsHealthCheck, modelAvailableCall } from "./networking";
 import { list } from "postcss";
 import KeyValueInput from "./key_value_input";
@@ -85,6 +85,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
       <Modal
         title={
           <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
+            <ApiOutlined className="text-xl text-blue-500" />
             <h2 className="text-xl font-semibold text-gray-900">Add Pass-Through Endpoint</h2>
           </div>
         }
