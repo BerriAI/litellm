@@ -7,8 +7,8 @@ This is a Proxy
 """
 
 import asyncio
+import hashlib
 import json
-import uuid
 from typing import Any, Dict, List, Optional, cast
 
 from mcp import ClientSession
@@ -82,13 +82,22 @@ class MCPServerManager:
             mcp_info = MCPInfo(**_mcp_info)
             mcp_info["server_name"] = server_name
             mcp_info["description"] = server_config.get("description", None)
-            server_id = str(uuid.uuid4())
+
+            # Generate stable server ID based on parameters
+            server_id = self._generate_stable_server_id(
+                server_name=server_name,
+                url=server_config["url"],
+                transport=server_config.get("transport", MCPTransport.http),
+                spec_version=server_config.get("spec_version", MCPSpecVersion.mar_2025),
+                auth_type=server_config.get("auth_type", None),
+            )
+
             new_server = MCPServer(
                 server_id=server_id,
                 name=server_name,
                 url=server_config["url"],
                 # TODO: utility fn the default values
-                transport=server_config.get("transport", MCPTransport.sse),
+                transport=server_config.get("transport", MCPTransport.http),
                 spec_version=server_config.get("spec_version", MCPSpecVersion.mar_2025),
                 auth_type=server_config.get("auth_type", None),
                 mcp_info=mcp_info,
@@ -342,6 +351,44 @@ class MCPServerManager:
             if server.server_id == server_id:
                 return server
         return None
+
+    def _generate_stable_server_id(
+        self,
+        server_name: str,
+        url: str,
+        transport: str,
+        spec_version: str,
+        auth_type: Optional[str] = None,
+    ) -> str:
+        """
+        Generate a stable server ID based on server parameters using a hash function.
+
+        This is critical to ensure the server_id is stable across server restarts.
+        Some users store MCPs on the config.yaml and permission management is based on server_ids.
+
+        Eg a key might have mcp_servers = ["1234"], if the server_id changes across restarts, the key will no longer have access to the MCP.
+
+        Args:
+            server_name: Name of the server
+            url: Server URL
+            transport: Transport type (sse, http, etc.)
+            spec_version: MCP spec version
+            auth_type: Authentication type (optional)
+
+        Returns:
+            A deterministic server ID string
+        """
+        # Create a string from all the identifying parameters
+        params_string = (
+            f"{server_name}|{url}|{transport}|{spec_version}|{auth_type or ''}"
+        )
+
+        # Generate SHA-256 hash
+        hash_object = hashlib.sha256(params_string.encode("utf-8"))
+        hash_hex = hash_object.hexdigest()
+
+        # Take first 32 characters and format as UUID-like string
+        return hash_hex[:32]
 
 
 global_mcp_server_manager: MCPServerManager = MCPServerManager()

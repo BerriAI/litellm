@@ -36,15 +36,15 @@ The production version will be released on Wednesday.
 docker run
 -e STORE_MODEL_IN_DB=True
 -p 4000:4000
-ghcr.io/berriai/litellm:main-v1.72.6.rc
+ghcr.io/berriai/litellm:main-v1.72.6.post1-nightly
 ```
 </TabItem>
 
 <TabItem value="pip" label="Pip">
 
-:::info
-This version is not out yet. 
-:::
+``` showLineNumbers title="pip install litellm"
+pip install litellm==1.72.6.post1
+```
 
 </TabItem>
 </Tabs>
