@@ -499,3 +499,23 @@ model LiteLLM_GuardrailsTable {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 }
+
+model LiteLLM_HealthCheckTable {
+  health_check_id String @id @default(uuid())
+  model_name String
+  model_id String?
+  status String
+  healthy_count Int @default(0)
+  unhealthy_count Int @default(0)
+  error_message String?
+  response_time_ms Float?
+  details Json?
+  checked_by String?
+  checked_at DateTime @default(now())
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([model_name])
+  @@index([checked_at])
+  @@index([status])
+}
