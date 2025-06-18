@@ -106,7 +106,7 @@ curl --location 'https://api.openai.com/v1/responses' \
             "server_url": "<your-litellm-proxy-base-url>/mcp",
             "require_approval": "never",
             "headers": {
-                "x-litellm-api-key": "YOUR_LITELLM_API_KEY"
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
             }
         }
     ],
@@ -136,7 +136,7 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
             "server_url": "<your-litellm-proxy-base-url>/mcp",
             "require_approval": "never",
             "headers": {
-                "x-litellm-api-key": "YOUR_LITELLM_API_KEY"
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
             }
         }
     ],
@@ -165,7 +165,7 @@ Use tools directly from Cursor IDE with LiteLLM MCP:
     "LiteLLM": {
       "url": "<your-litellm-proxy-base-url>/mcp",
       "headers": {
-        "x-litellm-api-key": "$LITELLM_API_KEY"
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY"
       }
     }
   }
@@ -187,7 +187,7 @@ Connect to LiteLLM MCP using HTTP transport. Compatible with any MCP client that
 
 **Headers:**
 ```text showLineNumbers
-x-litellm-api-key: YOUR_LITELLM_API_KEY
+x-litellm-api-key: Bearer YOUR_LITELLM_API_KEY
 ```
 
 This URL can be used with any MCP client that supports HTTP transport. Refer to your client documentation to determine the appropriate transport method.
@@ -226,7 +226,7 @@ server_url = "<your-litellm-proxy-base-url>/mcp"
 transport = StreamableHttpTransport(
     server_url,
     headers={
-        "x-litellm-api-key": "YOUR_LITELLM_API_KEY"
+        "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
     }
 )
 
