@@ -314,41 +314,14 @@ class BaseAzureLLM(BaseOpenAILLM):
         )
         return openai_client
 
-    def initialize_azure_sdk_client(
-        self,
-        litellm_params: dict,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        model_name: Optional[str],
-        api_version: Optional[str],
-        is_async: bool,
-    ) -> dict:
+    def _get_azure_token_provider(self, api_key, litellm_params, tenant_id, client_id, client_secret, scope, azure_username, azure_password):
         azure_ad_token_provider = litellm_params.get("azure_ad_token_provider")
-        # If we have api_key, then we have higher priority
-        azure_ad_token = litellm_params.get("azure_ad_token")
-        tenant_id = litellm_params.get("tenant_id", os.getenv("AZURE_TENANT_ID"))
-        client_id = litellm_params.get("client_id", os.getenv("AZURE_CLIENT_ID"))
-        client_secret = litellm_params.get(
-            "client_secret", os.getenv("AZURE_CLIENT_SECRET")
-        )
-        azure_username = litellm_params.get(
-            "azure_username", os.getenv("AZURE_USERNAME")
-        )
-        azure_password = litellm_params.get(
-            "azure_password", os.getenv("AZURE_PASSWORD")
-        )
-        scope = litellm_params.get(
-            "azure_scope", os.getenv("AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"))
-        max_retries = litellm_params.get("max_retries")
-        timeout = litellm_params.get("timeout")
         if (
             not api_key
             and azure_ad_token_provider is None
             and tenant_id and client_id and client_secret
         ):
-            verbose_logger.debug(
-                "Using Azure AD Token Provider from Entra ID for Azure Auth"
-            )
+            verbose_logger.debug("Using Azure AD Token Provider from Entra ID for Azure Auth")
             azure_ad_token_provider = get_azure_ad_token_from_entra_id(
                 tenant_id=tenant_id,
                 client_id=client_id,
@@ -363,6 +336,52 @@ class BaseAzureLLM(BaseOpenAILLM):
                 client_id=client_id,
                 scope=scope,
             )
+        return azure_ad_token_provider
+
+    def _maybe_refresh_token_provider(self, api_key, azure_ad_token_provider, litellm_params, scope):
+        if (
+            not api_key
+            and azure_ad_token_provider is None
+            and litellm.enable_azure_ad_token_refresh is True
+        ):
+            verbose_logger.debug("Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth")
+            try:
+                original_azure_scope = os.environ.get("AZURE_SCOPE")
+                if scope and scope != os.environ.get("AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"):
+                    os.environ["AZURE_SCOPE"] = scope
+                azure_ad_token_provider = get_azure_ad_token_provider()
+                if original_azure_scope is not None:
+                    os.environ["AZURE_SCOPE"] = original_azure_scope
+                elif "AZURE_SCOPE" in os.environ and scope:
+                    del os.environ["AZURE_SCOPE"]
+            except ValueError:
+                verbose_logger.debug("Azure AD Token Provider could not be used.")
+                if original_azure_scope is not None:
+                    os.environ["AZURE_SCOPE"] = original_azure_scope
+                elif "AZURE_SCOPE" in os.environ and scope:
+                    del os.environ["AZURE_SCOPE"]
+        return azure_ad_token_provider
+
+    def initialize_azure_sdk_client(
+        self,
+        litellm_params: dict,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        model_name: Optional[str],
+        api_version: Optional[str],
+        is_async: bool,
+    ) -> dict:
+        tenant_id = litellm_params.get("tenant_id", os.getenv("AZURE_TENANT_ID"))
+        client_id = litellm_params.get("client_id", os.getenv("AZURE_CLIENT_ID"))
+        client_secret = litellm_params.get("client_secret", os.getenv("AZURE_CLIENT_SECRET"))
+        azure_username = litellm_params.get("azure_username", os.getenv("AZURE_USERNAME"))
+        azure_password = litellm_params.get("azure_password", os.getenv("AZURE_PASSWORD"))
+        scope = litellm_params.get("azure_scope", os.getenv("AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"))
+        max_retries = litellm_params.get("max_retries")
+        timeout = litellm_params.get("timeout")
+        azure_ad_token = litellm_params.get("azure_ad_token")
+
+        azure_ad_token_provider = self._get_azure_token_provider(api_key, litellm_params, tenant_id, client_id, client_secret, scope, azure_username, azure_password)
 
         if azure_ad_token is not None and azure_ad_token.startswith("oidc/"):
             verbose_logger.debug("Using Azure OIDC Token for Azure Auth")
@@ -372,46 +391,17 @@ class BaseAzureLLM(BaseOpenAILLM):
                 azure_tenant_id=tenant_id,
                 scope=scope,
             )
-        elif (
-            not api_key
-            and azure_ad_token_provider is None
-            and litellm.enable_azure_ad_token_refresh is True
-        ):
-            verbose_logger.debug(
-                "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
-            )
-            try:
-                # Temporarily set the environment variable if user provided azure_scope
-                original_azure_scope = os.environ.get("AZURE_SCOPE")
-                if scope and scope != os.environ.get("AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"):
-                    os.environ["AZURE_SCOPE"] = scope
-                
-                azure_ad_token_provider = get_azure_ad_token_provider()
-                
-                # Restore original environment variable
-                if original_azure_scope is not None:
-                    os.environ["AZURE_SCOPE"] = original_azure_scope
-                elif "AZURE_SCOPE" in os.environ and scope:
-                    del os.environ["AZURE_SCOPE"]
-            except ValueError:
-                verbose_logger.debug("Azure AD Token Provider could not be used.")
-                # Ensure environment is restored even on error
-                if original_azure_scope is not None:
-                    os.environ["AZURE_SCOPE"] = original_azure_scope
-                elif "AZURE_SCOPE" in os.environ and scope:
-                    del os.environ["AZURE_SCOPE"]
+        else:
+            azure_ad_token_provider = self._maybe_refresh_token_provider(api_key, azure_ad_token_provider, litellm_params, scope)
+
         if api_version is None:
-            api_version = os.getenv(
-                "AZURE_API_VERSION", litellm.AZURE_DEFAULT_API_VERSION
-            )
+            api_version = os.getenv("AZURE_API_VERSION", litellm.AZURE_DEFAULT_API_VERSION)
 
         _api_key = api_key
         if _api_key is not None and isinstance(_api_key, str):
-            # only show first 5 chars of api_key
             _api_key = _api_key[:8] + "*" * 15
-        verbose_logger.debug(
-            f"Initializing Azure OpenAI Client for {model_name}, Api Base: {str(api_base)}, Api Key:{_api_key}"
-        )
+        verbose_logger.debug(f"Initializing Azure OpenAI Client for {model_name}, Api Base: {str(api_base)}, Api Key:{_api_key}")
+
         azure_client_params = {
             "api_key": api_key,
             "azure_endpoint": api_base,
@@ -419,26 +409,15 @@ class BaseAzureLLM(BaseOpenAILLM):
             "azure_ad_token": azure_ad_token,
             "azure_ad_token_provider": azure_ad_token_provider,
         }
-        # init http client + SSL Verification settings
-        if is_async is True:
-            azure_client_params["http_client"] = self._get_async_http_client()
-        else:
-            azure_client_params["http_client"] = self._get_sync_http_client()
-
+        azure_client_params["http_client"] = self._get_async_http_client() if is_async else self._get_sync_http_client()
         if max_retries is not None:
             azure_client_params["max_retries"] = max_retries
         if timeout is not None:
             azure_client_params["timeout"] = timeout
-
         if azure_ad_token_provider is not None:
             azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
-        # this decides if we should set azure_endpoint or base_url on Azure OpenAI Client
-        # required to support GPT-4 vision enhancements, since base_url needs to be set on Azure OpenAI Client
 
-        azure_client_params = select_azure_base_url_or_endpoint(
-            azure_client_params=azure_client_params
-        )
-
+        azure_client_params = select_azure_base_url_or_endpoint(azure_client_params=azure_client_params)
         return azure_client_params
 
     def _init_azure_client_for_cloudflare_ai_gateway(
