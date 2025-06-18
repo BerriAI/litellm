@@ -387,6 +387,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
     
     // Refresh health statuses from database to get the saved check data including timestamps
     try {
+      if (!accessToken) return;
       const latestHealthChecks = await latestHealthChecksCall(accessToken);
       
       if (latestHealthChecks.latest_health_checks) {
