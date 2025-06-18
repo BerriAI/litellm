@@ -47,7 +47,7 @@ async def test_build_request_files_from_upload_file():
     file_content = b"test content"
     file = BytesIO(file_content)
     # Create SpooledTemporaryFile with content type headers
-    headers = {"content-type": "text/plain"}
+    headers = Headers({"content-type": "text/plain"})
     upload_file = UploadFile(file=file, filename="test.txt", headers=headers)
     upload_file.read = AsyncMock(return_value=file_content)
 
@@ -82,7 +82,7 @@ async def test_make_multipart_http_request():
     file_content = b"test file content"
     file = BytesIO(file_content)
     # Create SpooledTemporaryFile with content type headers
-    headers = {"content-type": "text/plain"}
+    headers = Headers({"content-type": "text/plain"})
     upload_file = UploadFile(file=file, filename="test.txt", headers=headers)
     upload_file.read = AsyncMock(return_value=file_content)
 
@@ -268,3 +268,226 @@ async def test_langfuse_passthrough_no_logging():
         mock_logging_obj.model_call_details["passthrough_logging_payload"]
         == passthrough_logging_payload
     )
+
+
+def test_construct_target_url_with_subpath():
+    """
+    Test that construct_target_url_with_subpath correctly constructs target URLs
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        HttpPassThroughEndpointHelpers,
+    )
+
+    # Test with include_subpath=False
+    result = HttpPassThroughEndpointHelpers.construct_target_url_with_subpath(
+        base_target="http://example.com", subpath="api/v1", include_subpath=False
+    )
+    assert result == "http://example.com"
+
+    # Test with include_subpath=True and no subpath
+    result = HttpPassThroughEndpointHelpers.construct_target_url_with_subpath(
+        base_target="http://example.com", subpath="", include_subpath=True
+    )
+    assert result == "http://example.com"
+
+    # Test with include_subpath=True and subpath
+    result = HttpPassThroughEndpointHelpers.construct_target_url_with_subpath(
+        base_target="http://example.com", subpath="api/v1", include_subpath=True
+    )
+    assert result == "http://example.com/api/v1"
+
+    # Test with base_target already ending with /
+    result = HttpPassThroughEndpointHelpers.construct_target_url_with_subpath(
+        base_target="http://example.com/", subpath="api/v1", include_subpath=True
+    )
+    assert result == "http://example.com/api/v1"
+
+    # Test with subpath starting with /
+    result = HttpPassThroughEndpointHelpers.construct_target_url_with_subpath(
+        base_target="http://example.com", subpath="/api/v1", include_subpath=True
+    )
+    assert result == "http://example.com/api/v1"
+
+    # Test with both conditions
+    result = HttpPassThroughEndpointHelpers.construct_target_url_with_subpath(
+        base_target="http://example.com/", subpath="/api/v1", include_subpath=True
+    )
+    assert result == "http://example.com/api/v1"
+
+
+def test_add_exact_path_route():
+    """
+    Test that add_exact_path_route correctly adds exact path routes
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+    )
+
+    # Mock FastAPI app
+    mock_app = MagicMock()
+
+    # Test data
+    path = "/test/path"
+    target = "http://example.com"
+    custom_headers = {"x-custom": "header"}
+    forward_headers = True
+    merge_query_params = False
+    dependencies = []
+
+    # Call the function
+    InitPassThroughEndpointHelpers.add_exact_path_route(
+        app=mock_app,
+        path=path,
+        target=target,
+        custom_headers=custom_headers,
+        forward_headers=forward_headers,
+        merge_query_params=merge_query_params,
+        dependencies=dependencies,
+    )
+
+    # Verify add_api_route was called with correct parameters
+    mock_app.add_api_route.assert_called_once()
+    call_args = mock_app.add_api_route.call_args[1]
+
+    assert call_args["path"] == path
+    assert call_args["methods"] == ["GET", "POST", "PUT", "DELETE", "PATCH"]
+    assert call_args["dependencies"] == dependencies
+    assert callable(call_args["endpoint"])
+
+
+def test_add_subpath_route():
+    """
+    Test that add_subpath_route correctly adds wildcard routes for sub-paths
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+    )
+
+    # Mock FastAPI app
+    mock_app = MagicMock()
+
+    # Test data
+    path = "/test/path"
+    target = "http://example.com"
+    custom_headers = {"x-custom": "header"}
+    forward_headers = True
+    merge_query_params = False
+    dependencies = []
+
+    # Call the function
+    InitPassThroughEndpointHelpers.add_subpath_route(
+        app=mock_app,
+        path=path,
+        target=target,
+        custom_headers=custom_headers,
+        forward_headers=forward_headers,
+        merge_query_params=merge_query_params,
+        dependencies=dependencies,
+    )
+
+    # Verify add_api_route was called with correct parameters
+    mock_app.add_api_route.assert_called_once()
+    call_args = mock_app.add_api_route.call_args[1]
+
+    # Should have wildcard path
+    expected_wildcard_path = f"{path}/{{subpath:path}}"
+    assert call_args["path"] == expected_wildcard_path
+    assert call_args["methods"] == ["GET", "POST", "PUT", "DELETE", "PATCH"]
+    assert call_args["dependencies"] == dependencies
+    assert callable(call_args["endpoint"])
+
+
+@pytest.mark.asyncio
+async def test_initialize_pass_through_endpoints_with_include_subpath():
+    """
+    Test that initialize_pass_through_endpoints adds wildcard routes when include_subpath is True
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        initialize_pass_through_endpoints,
+    )
+
+    # Mock the app and dependencies
+    with patch("litellm.proxy.proxy_server.app") as mock_app:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.premium_user",
+            True,
+        ):
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.set_env_variables_in_header"
+            ) as mock_set_env:
+                mock_set_env.return_value = {}
+
+                # Test endpoint with include_subpath=True
+                endpoints = [
+                    {
+                        "path": "/test/endpoint",
+                        "target": "http://example.com",
+                        "include_subpath": True,
+                    }
+                ]
+
+                await initialize_pass_through_endpoints(endpoints)
+
+                # Should be called twice - once for exact path, once for wildcard
+                assert mock_app.add_api_route.call_count == 2
+
+                # Get all calls
+                calls = mock_app.add_api_route.call_args_list
+
+                # First call should be exact path
+                exact_path_call = calls[0][1]
+                assert exact_path_call["path"] == "/test/endpoint"
+
+                # Second call should be wildcard path
+                wildcard_call = calls[1][1]
+                assert wildcard_call["path"] == "/test/endpoint/{subpath:path}"
+
+                # Both should have the same methods
+                for call in calls:
+                    assert call[1]["methods"] == [
+                        "GET",
+                        "POST",
+                        "PUT",
+                        "DELETE",
+                        "PATCH",
+                    ]
+
+
+@pytest.mark.asyncio
+async def test_initialize_pass_through_endpoints_without_include_subpath():
+    """
+    Test that initialize_pass_through_endpoints only adds exact route when include_subpath is False
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        initialize_pass_through_endpoints,
+    )
+
+    # Mock the app and dependencies
+    with patch("litellm.proxy.proxy_server.app") as mock_app:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.premium_user",
+            True,
+        ):
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.set_env_variables_in_header"
+            ) as mock_set_env:
+                mock_set_env.return_value = {}
+
+                # Test endpoint with include_subpath=False (default)
+                endpoints = [
+                    {
+                        "path": "/test/endpoint",
+                        "target": "http://example.com",
+                        "include_subpath": False,
+                    }
+                ]
+
+                await initialize_pass_through_endpoints(endpoints)
+
+                # Should be called only once for exact path
+                assert mock_app.add_api_route.call_count == 1
+
+                # Get the call
+                call = mock_app.add_api_route.call_args[1]
+                assert call["path"] == "/test/endpoint"
+                assert call["methods"] == ["GET", "POST", "PUT", "DELETE", "PATCH"]
