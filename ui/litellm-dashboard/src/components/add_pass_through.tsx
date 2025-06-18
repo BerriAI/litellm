@@ -55,7 +55,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
         "path": formValues["path"],
         "target": formValues["target"],
         "include_subpath": formValues["include_subpath"] || false,
-        "input_cost_per_request": formValues["input_cost_per_request"] || 0
+        "cost_per_request": formValues["cost_per_request"] || 0
       }
       
       await createPassThroughEndpoint(accessToken, formValues);
@@ -185,7 +185,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                     </Tooltip>
                   </span>
                 }
-                name="input_cost_per_request"
+                name="cost_per_request"
               >
                 <InputNumber 
                   min={0} 
