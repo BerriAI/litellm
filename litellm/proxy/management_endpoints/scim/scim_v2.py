@@ -5,7 +5,7 @@ This is an enterprise feature and requires a premium license.
 """
 
 import uuid
-from typing import Any, Dict, List, Optional, Set, TypedDict
+from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict
 
 from fastapi import (
     APIRouter,
@@ -583,7 +583,7 @@ def _handle_generic_metadata(path: str, op_type: str, value: Any, metadata: Dict
 def _apply_patch_ops(
     existing_user: LiteLLM_UserTable,
     patch_ops: SCIMPatchOp,
-) -> tuple[Dict[str, Any], Set[str]]:
+) -> Tuple[Dict[str, Any], Set[str]]:
     """Apply patch operations and return update data and final team set."""
     update_data: Dict[str, Any] = {}
     metadata = existing_user.metadata or {}
