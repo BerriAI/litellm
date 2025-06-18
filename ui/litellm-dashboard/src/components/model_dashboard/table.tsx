@@ -92,7 +92,7 @@ export function ModelDataTable<TData, TValue>({
     <div className="rounded-lg custom-border relative">
       <div className="overflow-x-auto">
         <div className="relative min-w-full">
-          <Table className="[&_td]:py-0.5 [&_th]:py-1 w-full">
+          <Table className="[&_td]:py-2 [&_th]:py-2 w-full">
             <TableHead>
               {tableInstance.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id}>
