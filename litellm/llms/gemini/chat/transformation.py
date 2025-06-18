@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any, Union
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -6,7 +6,15 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.llms.vertex_ai import ContentType, PartType, SpeechConfig, VoiceConfig, PrebuiltVoiceConfig
+from litellm.types.llms.vertex_ai import (
+    ContentType,
+    PartType,
+    SpeechConfig,
+    VoiceConfig,
+    PrebuiltVoiceConfig,
+    Tools,
+    Schema,
+)
 from litellm.utils import supports_reasoning
 
 from ...vertex_ai.gemini.transformation import _gemini_convert_messages_with_history
@@ -95,6 +103,78 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         if self.is_model_gemini_audio_model(model):
             supported_params.append("audio")
         return supported_params
+
+    def _filter_gemini_unsupported_formats(self, schema: Union[Schema, Dict[Any, Any]]) -> Dict[Any, Any]:
+        """
+        Filter out format values that are not supported by Gemini API.
+
+        Args:
+            schema: The schema dictionary or Schema object to filter
+
+        Returns:
+            The filtered schema dictionary
+        """
+        if not isinstance(schema, dict):
+            if hasattr(schema, "to_dict"):  # Check if schema has a `to_dict` method
+                schema = schema.to_dict()
+            else:
+                # If schema is neither a dict nor has a `to_dict` method, return empty dict
+                return {}
+
+        # Recursively process the schema
+        filtered_schema: Dict[Any, Any] = {}
+        for key, value in schema.items():
+            if key == "format" and isinstance(value, str):
+                # Only keep 'enum' and 'date-time' formats for Gemini API
+                if value in ["enum", "date-time"]:
+                    filtered_schema[key] = value
+                # Skip other format values like 'email', 'uri', etc.
+            elif key == "properties" and isinstance(value, dict):
+                # Recursively filter properties
+                filtered_schema[key] = {
+                    prop_key: self._filter_gemini_unsupported_formats(prop_value)
+                    if isinstance(prop_value, dict)
+                    else prop_value
+                    for prop_key, prop_value in value.items()
+                }
+            elif key == "items" and isinstance(value, dict):
+                # Recursively filter array items
+                filtered_schema[key] = self._filter_gemini_unsupported_formats(value)
+            elif key == "anyOf" and isinstance(value, list):
+                # Recursively filter anyOf items
+                filtered_schema[key] = [
+                    self._filter_gemini_unsupported_formats(item)
+                    if isinstance(item, dict)
+                    else item
+                    for item in value
+                ]
+            else:
+                filtered_schema[key] = value
+
+        return filtered_schema
+
+    def _map_function(self, value: List[dict]) -> List[Tools]:
+        """
+        Override the parent _map_function to apply Gemini-specific format filtering.
+
+        This method calls the parent implementation and then filters out
+        unsupported format values from the schema.
+        """
+        # First call the parent implementation to get the standard transformation
+        tools = super()._map_function(value)
+
+        # Then apply Gemini-specific format filtering
+        for tool in tools:
+            if "function_declarations" in tool:
+                for func_declaration in tool["function_declarations"]:
+                    if "parameters" in func_declaration:
+                        parameters = func_declaration["parameters"]
+                        if isinstance(parameters, dict):
+                            func_declaration[
+                                "parameters"
+                            ] = self._filter_gemini_unsupported_formats(parameters)
+
+        return tools
 
     def map_openai_params(
         self,
