@@ -344,6 +344,8 @@ class BaseAzureLLM(BaseOpenAILLM):
             "azure_scope",
             os.getenv("AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"),
         )
+        if scope is None:
+            scope = "https://cognitiveservices.azure.com/.default"
         max_retries = litellm_params.get("max_retries")
         timeout = litellm_params.get("timeout")
         if (
@@ -393,7 +395,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
             )
             try:
-                azure_ad_token_provider = get_azure_ad_token_provider()
+                azure_ad_token_provider = get_azure_ad_token_provider(azure_scope=scope)
             except ValueError:
                 verbose_logger.debug("Azure AD Token Provider could not be used.")
         if api_version is None:
