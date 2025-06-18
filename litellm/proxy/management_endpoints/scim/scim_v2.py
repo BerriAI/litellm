@@ -209,7 +209,7 @@ async def _extract_group_member_ids(group: SCIMGroup) -> List[str]:
 async def _get_team_members_display(member_ids: List[str]) -> List[SCIMMember]:
     """Get SCIMMember objects with display names for a list of member IDs."""
     prisma_client = await _get_prisma_client_or_raise_exception()
-    members = []
+    members: List[SCIMMember] = []
     
     for member_id in member_ids:
         user = await prisma_client.db.litellm_usertable.find_unique(
@@ -745,7 +745,7 @@ async def get_groups(
         for team in teams:
             # Get team members with display names
             members = await _get_team_members_display(team.members or [])
-
+            verbose_proxy_logger.debug(f"SCIM GET GROUPS members: {members}")
             team_alias = getattr(team, "team_alias", team.team_id)
             team_created_at = team.created_at.isoformat() if team.created_at else None
             team_updated_at = team.updated_at.isoformat() if team.updated_at else None
@@ -763,6 +763,7 @@ async def get_groups(
             )
             scim_groups.append(scim_group)
 
+        verbose_proxy_logger.debug(f"SCIM GET GROUPS response: {scim_groups}")
         return SCIMListResponse(
             totalResults=total_count,
             startIndex=startIndex,
@@ -792,6 +793,7 @@ async def get_group(
         scim_group = await ScimTransformations.transform_litellm_team_to_scim_group(
             team
         )
+        verbose_proxy_logger.debug(f"SCIM GET GROUP response: {scim_group}")
         return scim_group
 
     except Exception as e:
