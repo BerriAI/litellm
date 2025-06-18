@@ -14,12 +14,12 @@ repos:
         types: [python]
         files: (litellm/|litellm_proxy_extras/|enterprise/).*\.py
         exclude: ^litellm/__init__.py$
-    -   id: black
-        name: black
-        entry: poetry run black
-        language: system
-        types: [python]
-        files: (litellm/|litellm_proxy_extras/|enterprise/).*\.py
+    # -   id: black
+    #     name: black
+    #     entry: poetry run black
+    #     language: system
+    #     types: [python]
+    #     files: (litellm/|litellm_proxy_extras/|enterprise/).*\.py
 -   repo: https://github.com/pycqa/flake8
     rev: 7.0.0  # The version of flake8 to use
     hooks:
