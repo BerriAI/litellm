@@ -549,8 +549,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["stream"] = value
             elif param == "n":
                 optional_params["candidate_count"] = value
-            elif param == "audio":
-                optional_params["audio"] = self._map_audio_params(value)
+            elif param == "audio" and isinstance(value, dict):
+                optional_params["speechConfig"] = self._map_audio_params(value)
             elif param == "stop":
                 if isinstance(value, str):
                     optional_params["stop_sequences"] = [value]
@@ -617,7 +617,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
 
         # if audio param is set, ensure responseModalities is set to AUDIO
-        audio_param = optional_params.get("audio")
+        audio_param = optional_params.get("speechConfig")
         if audio_param is not None:
             if "responseModalities" not in optional_params:
                 optional_params["responseModalities"] = ["AUDIO"]
