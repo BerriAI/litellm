@@ -520,9 +520,22 @@ async def pass_through_request(  # noqa: PLR0915
     merge_query_params: Optional[bool] = False,
     query_params: Optional[dict] = None,
     stream: Optional[bool] = None,
+    cost_per_request: Optional[float] = None,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
+
+    Args:
+        request: The incoming request
+        target: The target URL
+        custom_headers: The custom headers
+        user_api_key_dict: The user API key dictionary
+        custom_body: The custom body
+        forward_headers: Whether to forward headers
+        merge_query_params: Whether to merge query params
+        query_params: The query params
+        stream: Whether to stream the response
+        cost_per_request: Optional field - cost per request to the target endpoint
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.proxy_server import proxy_logging_obj
@@ -600,6 +613,7 @@ async def pass_through_request(  # noqa: PLR0915
             url=str(url),
             request_body=_parsed_body,
             request_method=getattr(request, "method", None),
+            cost_per_request=cost_per_request,
         )
         kwargs = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
             user_api_key_dict=user_api_key_dict,
@@ -908,6 +922,7 @@ def create_pass_through_route(
                 query_params=query_params,
                 stream=stream,
                 custom_body=custom_body,
+                cost_per_request=cost_per_request,
             )
 
     return endpoint_func
