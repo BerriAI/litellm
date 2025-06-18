@@ -311,14 +311,17 @@ def test_initialize_with_ad_token_provider(setup_mocks, monkeypatch):
 
 
 def test_initialize_with_enable_token_refresh(setup_mocks, monkeypatch):
-    litellm._turn_on_debug()
-    # Enable token refresh
+    # Enable token refresh and ensure no other auth methods are available
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
     monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
     monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
-    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    monkeypatch.delenv("AZURE_USERNAME", raising=False)
+    monkeypatch.delenv("AZURE_PASSWORD", raising=False)
+    monkeypatch.delenv("AZURE_SCOPE", raising=False)
+
+    # Enable token refresh in mock
     setup_mocks["litellm"].enable_azure_ad_token_refresh = True
 
-    # Test with token refresh enabled
     result = BaseAzureLLM().initialize_azure_sdk_client(
         litellm_params={},
         api_key=None,
@@ -333,6 +336,37 @@ def test_initialize_with_enable_token_refresh(setup_mocks, monkeypatch):
 
     # Verify expected result
     assert "azure_ad_token_provider" in result
+
+
+def test_initialize_with_enable_token_refresh_custom_scope(setup_mocks, monkeypatch):
+    # Enable token refresh and ensure no other auth methods are available
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_USERNAME", raising=False)
+    monkeypatch.delenv("AZURE_PASSWORD", raising=False)
+    monkeypatch.delenv("AZURE_SCOPE", raising=False)
+
+    # Enable token refresh in mock
+    setup_mocks["litellm"].enable_azure_ad_token_refresh = True
+
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={"azure_scope": "https://custom.scope/.default"},
+        api_key=None,
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4.1",
+        api_version=None,
+        is_async=False,
+    )
+
+    # Verify that get_azure_ad_token_provider was called (without parameters, since it uses env var)
+    setup_mocks["token_provider"].assert_called_once_with()
+
+    # Verify expected result
+    assert "azure_ad_token_provider" in result
+
+
+
 
 
 def test_initialize_with_token_refresh_error(setup_mocks, monkeypatch):

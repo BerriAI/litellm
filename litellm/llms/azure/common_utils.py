@@ -381,9 +381,25 @@ class BaseAzureLLM(BaseOpenAILLM):
                 "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
             )
             try:
+                # Temporarily set the environment variable if user provided azure_scope
+                original_azure_scope = os.environ.get("AZURE_SCOPE")
+                if scope and scope != os.environ.get("AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"):
+                    os.environ["AZURE_SCOPE"] = scope
+                
                 azure_ad_token_provider = get_azure_ad_token_provider()
+                
+                # Restore original environment variable
+                if original_azure_scope is not None:
+                    os.environ["AZURE_SCOPE"] = original_azure_scope
+                elif "AZURE_SCOPE" in os.environ and scope:
+                    del os.environ["AZURE_SCOPE"]
             except ValueError:
                 verbose_logger.debug("Azure AD Token Provider could not be used.")
+                # Ensure environment is restored even on error
+                if original_azure_scope is not None:
+                    os.environ["AZURE_SCOPE"] = original_azure_scope
+                elif "AZURE_SCOPE" in os.environ and scope:
+                    del os.environ["AZURE_SCOPE"]
         if api_version is None:
             api_version = os.getenv(
                 "AZURE_API_VERSION", litellm.AZURE_DEFAULT_API_VERSION
