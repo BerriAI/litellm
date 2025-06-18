@@ -7,3 +7,8 @@ model_list:
     litellm_params:
       model: "anthropic/*"
       api_key: os.environ/ANTHROPIC_API_KEY
+
+mcp_servers:
+  deepwiki_mcp:
+    url: "https://mcp.deepwiki.com/mcp"
+    transport: "http"

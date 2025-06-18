@@ -29,6 +29,7 @@ export default function Onboarding() {
   const searchParams = useSearchParams()!;
   const token = getCookie('token');
   const inviteID = searchParams.get("invitation_id");
+  const action = searchParams.get("action");
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [defaultUserEmail, setDefaultUserEmail] = useState<string>("");
   const [userEmail, setUserEmail] = useState<string>("");
@@ -117,27 +118,29 @@ export default function Onboarding() {
     <div className="mx-auto w-full max-w-md mt-10">
       <Card>
         <Title className="text-sm mb-5 text-center">🚅 LiteLLM</Title>
-        <Title className="text-xl">Sign up</Title>
-        <Text>Claim your user account to login to Admin UI.</Text>
+        <Title className="text-xl">{action === "reset_password" ? "Reset Password" : "Sign up"}</Title>
+        <Text>{action === "reset_password" ? "Reset your password to access Admin UI." : "Claim your user account to login to Admin UI."}</Text>
 
-        <Callout
-          className="mt-4"
-          title="SSO"
-          icon={RiCheckboxCircleLine}
-          color="sky"
-        >
-          <Grid numItems={2} className="flex justify-between items-center">
-            <Col>SSO is under the Enterprise Tier.</Col>
+        {action !== "reset_password" && (
+          <Callout
+            className="mt-4"
+            title="SSO"
+            icon={RiCheckboxCircleLine}
+            color="sky"
+          >
+            <Grid numItems={2} className="flex justify-between items-center">
+              <Col>SSO is under the Enterprise Tier.</Col>
 
-            <Col>
-              <Button variant="primary" className="mb-2">
-                <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
-                  Get Free Trial
-                </a>
-              </Button>
-            </Col>
-          </Grid>
-        </Callout>
+              <Col>
+                <Button variant="primary" className="mb-2">
+                  <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
+                    Get Free Trial
+                  </a>
+                </Button>
+              </Col>
+            </Grid>
+          </Callout>
+        )}
 
         <Form
           className="mt-10 mb-5 mx-auto"
@@ -161,14 +164,14 @@ export default function Onboarding() {
               rules={[
                 { required: true, message: "password required to sign up" },
               ]}
-              help="Create a password for your account"
+              help={action === "reset_password" ? "Enter your new password" : "Create a password for your account"}
             >
               <TextInput placeholder="" type="password" className="max-w-md" />
             </Form.Item>
           </>
 
           <div className="mt-10">
-            <Button2 htmlType="submit">Sign Up</Button2>
+            <Button2 htmlType="submit">{action === "reset_password" ? "Reset Password" : "Sign Up"}</Button2>
           </div>
         </Form>
       </Card>

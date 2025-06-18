@@ -11,7 +11,8 @@ sys.path.insert(
 
 import time
 
-from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging, set_callbacks
+from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.litellm_core_utils.litellm_logging import set_callbacks
 
 
 @pytest.fixture
@@ -60,6 +61,8 @@ def test_sentry_sample_rate():
         else:
             if "SENTRY_API_SAMPLE_RATE" in os.environ:
                 del os.environ["SENTRY_API_SAMPLE_RATE"]
+
+
 def test_use_custom_pricing_for_model():
     from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 
@@ -68,3 +71,78 @@ def test_use_custom_pricing_for_model():
         "input_cost_per_pixel": 10,
     }
     assert use_custom_pricing_for_model(litellm_params) == True
+
+
+def test_logging_prevent_double_logging(logging_obj):
+    """
+    When using a bridge, log only once from the underlying bridge call.
+    This is to avoid double logging.
+    """
+    logging_obj.stream = False
+    logging_obj.has_run_logging(event_type="sync_success")
+    assert logging_obj.should_run_logging(event_type="sync_success") == False
+    assert logging_obj.should_run_logging(event_type="sync_failure") == True
+    assert logging_obj.should_run_logging(event_type="async_success") == True
+    assert logging_obj.should_run_logging(event_type="async_failure") == True
+
+
+@pytest.mark.asyncio
+async def test_logging_result_for_bridge_calls(logging_obj):
+    """
+    When using a bridge, log only once from the underlying bridge call.
+    This is to avoid double logging.
+    """
+    import asyncio
+
+    import litellm
+
+    with patch.object(
+        litellm.litellm_core_utils.litellm_logging,
+        "get_standard_logging_object_payload",
+    ) as mock_should_run_logging:
+        await litellm.anthropic_messages(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Hey"}],
+            model="openai/codex-mini-latest",
+            mock_response="Hello, world!",
+        )
+        await asyncio.sleep(1)
+        assert mock_should_run_logging.call_count == 2  # called twice per call
+
+
+@pytest.mark.asyncio
+async def test_logging_non_streaming_request():
+    import asyncio
+
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class MockPrometheusLogger(CustomLogger):
+        pass
+
+    import litellm
+
+    mock_logging_obj = MockPrometheusLogger()
+
+    litellm.callbacks = [mock_logging_obj]
+
+    with patch.object(
+        mock_logging_obj,
+        "async_log_success_event",
+    ) as mock_async_log_success_event:
+        await litellm.acompletion(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Hey"}],
+            model="openai/codex-mini-latest",
+            mock_response="Hello, world!",
+        )
+        await asyncio.sleep(1)
+        mock_async_log_success_event.assert_called_once()
+        assert mock_async_log_success_event.call_count == 1
+        print(
+            "mock_async_log_success_event.call_args.kwargs",
+            mock_async_log_success_event.call_args.kwargs,
+        )
+        standard_logging_object = mock_async_log_success_event.call_args.kwargs[
+            "kwargs"
+        ]["standard_logging_object"]
+        assert standard_logging_object["stream"] is not True

@@ -197,6 +197,7 @@ migrationJob:
   disableSchemaUpdate: false # Skip schema migrations for specific environments. When True, the job will exit with code 0.
   annotations: {}
   ttlSecondsAfterFinished: 120
+  extraContainers: []
 
 # Additional environment variables to be added to the deployment as a map of key-value pairs
 envVars: {

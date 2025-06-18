@@ -59,7 +59,7 @@ docker run \
     -e AZURE_API_KEY=d6*********** \
     -e AZURE_API_BASE=https://openai-***********/ \
     -p 4000:4000 \
-    ghcr.io/berriai/litellm:main-latest \
+    ghcr.io/berriai/litellm:main-stable \
     --config /app/config.yaml --detailed_debug
 ```
 
@@ -89,12 +89,12 @@ See all supported CLI args [here](https://docs.litellm.ai/docs/proxy/cli):
 
 Here's how you can run the docker image and pass your config to `litellm`
 ```shell
-docker run ghcr.io/berriai/litellm:main-latest --config your_config.yaml
+docker run ghcr.io/berriai/litellm:main-stable --config your_config.yaml
 ```
 
 Here's how you can run the docker image and start litellm on port 8002 with `num_workers=8`
 ```shell
-docker run ghcr.io/berriai/litellm:main-latest --port 8002 --num_workers 8
+docker run ghcr.io/berriai/litellm:main-stable --port 8002 --num_workers 8
 ```
 
 
@@ -102,7 +102,7 @@ docker run ghcr.io/berriai/litellm:main-latest --port 8002 --num_workers 8
 
 ```shell
 # Use the provided base image
-FROM ghcr.io/berriai/litellm:main-latest
+FROM ghcr.io/berriai/litellm:main-stable
 
 # Set the working directory to /app
 WORKDIR /app
@@ -236,7 +236,7 @@ spec:
     spec:
       containers:
       - name: litellm
-        image: ghcr.io/berriai/litellm:main-latest # it is recommended to fix a version generally
+        image: ghcr.io/berriai/litellm:main-stable # it is recommended to fix a version generally
         ports:
         - containerPort: 4000
         volumeMounts:
@@ -253,7 +253,7 @@ spec:
 ```
 
 :::info
-To avoid issues with predictability, difficulties in rollback, and inconsistent environments, use versioning or SHA digests (for example, `litellm:main-v1.30.3` or `litellm@sha256:12345abcdef...`) instead of `litellm:main-latest`.
+To avoid issues with predictability, difficulties in rollback, and inconsistent environments, use versioning or SHA digests (for example, `litellm:main-v1.30.3` or `litellm@sha256:12345abcdef...`) instead of `litellm:main-stable`.
 :::
 
 
@@ -331,7 +331,7 @@ Requirements:
 We maintain a [separate Dockerfile](https://github.com/BerriAI/litellm/pkgs/container/litellm-database) for reducing build time when running LiteLLM proxy with a connected Postgres Database 
 
 ```shell
-docker pull ghcr.io/berriai/litellm-database:main-latest
+docker pull ghcr.io/berriai/litellm-database:main-stable
 ```
 
 ```shell
@@ -342,7 +342,7 @@ docker run \
     -e AZURE_API_KEY=d6*********** \
     -e AZURE_API_BASE=https://openai-***********/ \
     -p 4000:4000 \
-    ghcr.io/berriai/litellm-database:main-latest \
+    ghcr.io/berriai/litellm-database:main-stable \
     --config /app/config.yaml --detailed_debug
 ```
 
@@ -370,7 +370,7 @@ spec:
     spec:
       containers:
         - name: litellm-container
-          image: ghcr.io/berriai/litellm:main-latest
+          image: ghcr.io/berriai/litellm:main-stable
           imagePullPolicy: Always
           env:
             - name: AZURE_API_KEY
@@ -565,7 +565,7 @@ router_settings:
 Start docker container with config
 
 ```shell
-docker run ghcr.io/berriai/litellm:main-latest --config your_config.yaml
+docker run ghcr.io/berriai/litellm:main-stable --config your_config.yaml
 ```
 
 ### Deploy with Database + Redis
@@ -600,7 +600,7 @@ Start `litellm-database`docker container with config
 docker run --name litellm-proxy \
 -e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
 -p 4000:4000 \
-ghcr.io/berriai/litellm-database:main-latest --config your_config.yaml
+ghcr.io/berriai/litellm-database:main-stable --config your_config.yaml
 ```
 
 ###  (Non Root) - without Internet Connection
@@ -629,7 +629,7 @@ Use this, If you need to set ssl certificates for your on prem litellm proxy
 Pass `ssl_keyfile_path` (Path to the SSL keyfile) and `ssl_certfile_path` (Path to the SSL certfile) when starting litellm proxy 
 
 ```shell
-docker run ghcr.io/berriai/litellm:main-latest \
+docker run ghcr.io/berriai/litellm:main-stable \
     --ssl_keyfile_path ssl_test/keyfile.key \
     --ssl_certfile_path ssl_test/certfile.crt
 ```
@@ -644,7 +644,7 @@ Step 1. Build your custom docker image with hypercorn
 
 ```shell
 # Use the provided base image
-FROM ghcr.io/berriai/litellm:main-latest
+FROM ghcr.io/berriai/litellm:main-stable
 
 # Set the working directory to /app
 WORKDIR /app
@@ -683,7 +683,29 @@ docker run \
     --run_hypercorn
 ```
 
-### 4. config.yaml file on s3, GCS Bucket Object/url
+### 4. Keepalive Timeout
+
+Defaults to 5 seconds. Between requests, connections must receive new data within this period or be disconnected.
+
+
+Usage Example:
+In this example, we set the keepalive timeout to 75 seconds.
+
+```shell showLineNumbers title="docker run"
+docker run ghcr.io/berriai/litellm:main-stable \
+    --keepalive_timeout 75
+```
+
+Or set via environment variable:
+In this example, we set the keepalive timeout to 75 seconds.
+
+```shell showLineNumbers title="Environment Variable"
+export KEEPALIVE_TIMEOUT=75
+docker run ghcr.io/berriai/litellm:main-stable
+```
+
+
+### 5. config.yaml file on s3, GCS Bucket Object/url
 
 Use this if you cannot mount a config file on your deployment service (example - AWS Fargate, Railway etc)
 
@@ -708,7 +730,7 @@ docker run --name litellm-proxy \
    -e LITELLM_CONFIG_BUCKET_OBJECT_KEY="<object_key>> \
    -e LITELLM_CONFIG_BUCKET_TYPE="gcs" \
    -p 4000:4000 \
-   ghcr.io/berriai/litellm-database:main-latest --detailed_debug
+   ghcr.io/berriai/litellm-database:main-stable --detailed_debug
 ```
 
 </TabItem>
@@ -729,7 +751,7 @@ docker run --name litellm-proxy \
    -e LITELLM_CONFIG_BUCKET_NAME=<bucket_name> \
    -e LITELLM_CONFIG_BUCKET_OBJECT_KEY="<object_key>> \
    -p 4000:4000 \
-   ghcr.io/berriai/litellm-database:main-latest
+   ghcr.io/berriai/litellm-database:main-stable
 ```
 </TabItem>
 </Tabs>
@@ -822,7 +844,7 @@ Run the following command, replacing `<database_url>` with the value you copied 
 docker run --name litellm-proxy \
    -e DATABASE_URL=<database_url> \
    -p 4000:4000 \
-   ghcr.io/berriai/litellm-database:main-latest
+   ghcr.io/berriai/litellm-database:main-stable
 ```
 
 #### 4. Access the Application:
@@ -901,7 +923,7 @@ services:
       context: .
       args:
         target: runtime
-    image: ghcr.io/berriai/litellm:main-latest
+    image: ghcr.io/berriai/litellm:main-stable
     ports:
       - "4000:4000" # Map the container port to the host, change the host port if necessary
     volumes:

@@ -32,9 +32,11 @@ from fastapi import Request
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     _update_metadata_with_tags_in_header,
-    HttpPassThroughEndpointHelpers
+    HttpPassThroughEndpointHelpers,
 )
-from litellm.types.passthrough_endpoints.pass_through_endpoints import PassthroughStandardLoggingPayload
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    PassthroughStandardLoggingPayload,
+)
 
 
 @pytest.fixture
@@ -141,6 +143,7 @@ def test_init_kwargs_for_pass_through_endpoint_basic(
         "user_api_key_org_id": None,
         "user_api_key_team_alias": None,
         "user_api_key_end_user_id": "test-user",
+        "user_api_key_request_route": None,
     }
 
     assert result["litellm_params"]["metadata"] == expected_metadata

@@ -3,26 +3,27 @@ LiteLLM MCP Server Routes
 """
 
 import asyncio
-from typing import Any, Dict, List, Optional, Union
+import contextlib
+from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
-from anyio import BrokenResourceError
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
-from pydantic import ConfigDict, ValidationError
+from fastapi import FastAPI, HTTPException
+from pydantic import ConfigDict
+from starlette.types import Receive, Scope, Send
 
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_TOOL_NAME_PREFIX
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+    UserAPIKeyAuthMCP,
+)
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.utils import StandardLoggingMCPToolCall
 from litellm.utils import client
 
-router = APIRouter(
-    prefix="/mcp",
-    tags=["mcp"],
-)
+LITELLM_MCP_SERVER_NAME = "litellm-mcp-server"
+LITELLM_MCP_SERVER_VERSION = "1.0.0"
+LITELLM_MCP_SERVER_DESCRIPTION = "MCP Server for LiteLLM"
 
 # Check if MCP is available
 # "mcp" requires python 3.10 or higher, but several litellm users use python 3.8
@@ -36,29 +37,34 @@ except ImportError as e:
     MCP_AVAILABLE = False
 
 
-# Routes
-@router.get(
-    "/enabled",
-    description="Returns if the MCP server is enabled",
-)
-def get_mcp_server_enabled() -> Dict[str, bool]:
-    """
-    Returns if the MCP server is enabled
-    """
-    return {"enabled": MCP_AVAILABLE}
-
+# Global variables to track initialization
+_SESSION_MANAGERS_INITIALIZED = False
+_SESSION_MANAGER_TASK = None
 
 if MCP_AVAILABLE:
-    from mcp.server import NotificationOptions, Server
-    from mcp.server.models import InitializationOptions
+    from mcp.server import Server
+
+    # Import auth context variables and middleware
+    from mcp.server.auth.middleware.auth_context import (
+        AuthContextMiddleware,
+        auth_context_var,
+    )
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     from mcp.types import EmbeddedResource as MCPEmbeddedResource
     from mcp.types import ImageContent as MCPImageContent
     from mcp.types import TextContent as MCPTextContent
     from mcp.types import Tool as MCPTool
 
-    from .mcp_server_manager import global_mcp_server_manager
-    from .sse_transport import SseServerTransport
-    from .tool_registry import global_mcp_tool_registry
+    from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
+        LiteLLMAuthenticatedUser,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._experimental.mcp_server.sse_transport import SseServerTransport
+    from litellm.proxy._experimental.mcp_server.tool_registry import (
+        global_mcp_tool_registry,
+    )
 
     ######################################################
     ############ MCP Tools List REST API Response Object #
@@ -76,40 +82,95 @@ if MCP_AVAILABLE:
     ########################################################
     ############ Initialize the MCP Server #################
     ########################################################
-    server: Server = Server("litellm-mcp-server")
+    server: Server = Server(
+        name=LITELLM_MCP_SERVER_NAME,
+        version=LITELLM_MCP_SERVER_VERSION,
+    )
     sse: SseServerTransport = SseServerTransport("/mcp/sse/messages")
+
+    # Create session managers
+    session_manager = StreamableHTTPSessionManager(
+        app=server,
+        event_store=None,
+        json_response=True,  # Use JSON responses instead of SSE by default
+        stateless=True,
+    )
+
+    # Create SSE session manager
+    sse_session_manager = StreamableHTTPSessionManager(
+        app=server,
+        event_store=None,
+        json_response=False,  # Use SSE responses for this endpoint
+        stateless=True,
+    )
+
+    async def initialize_session_managers():
+        """Initialize the session managers. Can be called from main app lifespan."""
+        global _SESSION_MANAGERS_INITIALIZED, _SESSION_MANAGER_TASK
+
+        if _SESSION_MANAGERS_INITIALIZED:
+            return
+
+        verbose_logger.info("Initializing MCP session managers...")
+
+        # Create a task to run the session managers
+        async def run_session_managers():
+            async with session_manager.run():
+                async with sse_session_manager.run():
+                    verbose_logger.info(
+                        "MCP Server started with StreamableHTTP and SSE session managers!"
+                    )
+                    try:
+                        # Keep running until cancelled
+                        while True:
+                            await asyncio.sleep(1)
+                    except asyncio.CancelledError:
+                        verbose_logger.info("MCP session managers shutting down...")
+                        raise
+
+        _SESSION_MANAGER_TASK = asyncio.create_task(run_session_managers())
+        _SESSION_MANAGERS_INITIALIZED = True
+        verbose_logger.info("MCP session managers initialization completed!")
+
+    async def shutdown_session_managers():
+        """Shutdown the session managers."""
+        global _SESSION_MANAGERS_INITIALIZED, _SESSION_MANAGER_TASK
+
+        if _SESSION_MANAGER_TASK and not _SESSION_MANAGER_TASK.done():
+            verbose_logger.info("Shutting down MCP session managers...")
+            _SESSION_MANAGER_TASK.cancel()
+            try:
+                await _SESSION_MANAGER_TASK
+            except asyncio.CancelledError:
+                pass
+
+        _SESSION_MANAGERS_INITIALIZED = False
+        _SESSION_MANAGER_TASK = None
+
+    @contextlib.asynccontextmanager
+    async def lifespan(app) -> AsyncIterator[None]:
+        """Application lifespan context manager."""
+        await initialize_session_managers()
+        try:
+            yield
+        finally:
+            await shutdown_session_managers()
 
     ########################################################
     ############### MCP Server Routes #######################
     ########################################################
+
     @server.list_tools()
     async def list_tools() -> list[MCPTool]:
         """
         List all available tools
         """
-        return await _list_mcp_tools()
-
-    async def _list_mcp_tools() -> List[MCPTool]:
-        """
-        List all available tools
-        """
-        tools = []
-        for tool in global_mcp_tool_registry.list_tools():
-            tools.append(
-                MCPTool(
-                    name=tool.name,
-                    description=tool.description,
-                    inputSchema=tool.input_schema,
-                )
-            )
+        # Get user authentication from context variable
+        user_api_key_auth = get_auth_context()
         verbose_logger.debug(
-            "GLOBAL MCP TOOLS: %s", global_mcp_tool_registry.list_tools()
+            f"MCP list_tools - User API Key Auth from context: {user_api_key_auth}"
         )
-        sse_tools: List[MCPTool] = await global_mcp_server_manager.list_tools()
-        verbose_logger.debug("SSE TOOLS: %s", sse_tools)
-        if sse_tools is not None:
-            tools.extend(sse_tools)
-        return tools
+        return await _list_mcp_tools(user_api_key_auth)
 
     @server.call_tool()
     async def mcp_server_tool_call(
@@ -135,6 +196,46 @@ if MCP_AVAILABLE:
         )
         return response
 
+    ########################################################
+    ############ End of MCP Server Routes ##################
+    ########################################################
+
+    ########################################################
+    ############ Helper Functions ##########################
+    ########################################################
+
+    async def _list_mcp_tools(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ) -> List[MCPTool]:
+        """
+        List all available tools
+
+        Args:
+            user_api_key_auth: User authentication info for access control
+        """
+        tools = []
+        for tool in global_mcp_tool_registry.list_tools():
+            tools.append(
+                MCPTool(
+                    name=tool.name,
+                    description=tool.description,
+                    inputSchema=tool.input_schema,
+                )
+            )
+        verbose_logger.debug(
+            "GLOBAL MCP TOOLS: %s", global_mcp_tool_registry.list_tools()
+        )
+
+        tools_from_mcp_servers: List[MCPTool] = (
+            await global_mcp_server_manager.list_tools(
+                user_api_key_auth=user_api_key_auth,
+            )
+        )
+        verbose_logger.debug("TOOLS FROM MCP SERVERS: %s", tools_from_mcp_servers)
+        if tools_from_mcp_servers is not None:
+            tools.extend(tools_from_mcp_servers)
+        return tools
+
     @client
     async def call_mcp_tool(
         name: str, arguments: Optional[Dict[str, Any]] = None, **kwargs: Any
@@ -157,15 +258,15 @@ if MCP_AVAILABLE:
             "litellm_logging_obj", None
         )
         if litellm_logging_obj:
-            litellm_logging_obj.model_call_details[
-                "mcp_tool_call_metadata"
-            ] = standard_logging_mcp_tool_call
-            litellm_logging_obj.model_call_details[
-                "model"
-            ] = f"{MCP_TOOL_NAME_PREFIX}: {standard_logging_mcp_tool_call.get('name') or ''}"
-            litellm_logging_obj.model_call_details[
-                "custom_llm_provider"
-            ] = standard_logging_mcp_tool_call.get("mcp_server_name")
+            litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
+                standard_logging_mcp_tool_call
+            )
+            litellm_logging_obj.model_call_details["model"] = (
+                f"{MCP_TOOL_NAME_PREFIX}: {standard_logging_mcp_tool_call.get('name') or ''}"
+            )
+            litellm_logging_obj.model_call_details["custom_llm_provider"] = (
+                standard_logging_mcp_tool_call.get("mcp_server_name")
+            )
 
         # Try managed server tool first
         if name in global_mcp_server_manager.tool_name_to_mcp_server_name_mapping:
@@ -218,108 +319,92 @@ if MCP_AVAILABLE:
         except Exception as e:
             return [MCPTextContent(text=f"Error: {str(e)}", type="text")]
 
-    @router.get("/", response_class=StreamingResponse)
-    async def handle_sse(request: Request):
-        verbose_logger.info("new incoming SSE connection established")
-        async with sse.connect_sse(request) as streams:
-            try:
-                await server.run(streams[0], streams[1], options)
-            except BrokenResourceError:
-                pass
-            except asyncio.CancelledError:
-                pass
-            except ValidationError:
-                pass
-            except Exception:
-                raise
-        await request.close()
+    async def handle_streamable_http_mcp(
+        scope: Scope, receive: Receive, send: Send
+    ) -> None:
+        """Handle MCP requests through StreamableHTTP."""
+        try:
+            # Validate headers and log request info
+            user_api_key_auth: UserAPIKeyAuth = (
+                await UserAPIKeyAuthMCP.user_api_key_auth_mcp(scope)
+            )
+            # Set the auth context variable for easy access in MCP functions
+            set_auth_context(user_api_key_auth)
 
-    @router.post("/sse/messages")
-    async def handle_messages(request: Request):
-        verbose_logger.info("incoming SSE message received")
-        await sse.handle_post_message(request.scope, request.receive, request._send)
-        await request.close()
+            # Ensure session managers are initialized
+            if not _SESSION_MANAGERS_INITIALIZED:
+                await initialize_session_managers()
+                # Give it a moment to start up
+                await asyncio.sleep(0.1)
 
-    ########################################################
-    ############ MCP Server REST API Routes #################
-    ########################################################
-    @router.get("/tools/list", dependencies=[Depends(user_api_key_auth)])
-    async def list_tool_rest_api(
-        server_id: Optional[str] = Query(
-            None, description="The server id to list tools for"
-        ),
-        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    ) -> List[ListMCPToolsRestAPIResponseObject]:
-        """
-        List all available tools with information about the server they belong to.
+            await session_manager.handle_request(scope, receive, send)
+        except Exception as e:
+            verbose_logger.exception(f"Error handling MCP request: {e}")
+            raise e
 
-        Example response:
-        Tools:
-        [
-            {
-                "name": "create_zap",
-                "description": "Create a new zap",
-                "inputSchema": "tool_input_schema",
-                "mcp_info": {
-                    "server_name": "zapier",
-                    "logo_url": "https://www.zapier.com/logo.png",
-                }
-            },
-            {
-                "name": "fetch_data",
-                "description": "Fetch data from a URL",
-                "inputSchema": "tool_input_schema",
-                "mcp_info": {
-                    "server_name": "fetch",
-                    "logo_url": "https://www.fetch.com/logo.png",
-                }
-            }
-        ]
-        """
-        list_tools_result: List[ListMCPToolsRestAPIResponseObject] = []
-        for server in global_mcp_server_manager.get_registry().values():
-            if server_id and server.server_id != server_id:
-                continue
-            try:
-                tools = await global_mcp_server_manager._get_tools_from_server(server)
-                for tool in tools:
-                    list_tools_result.append(
-                        ListMCPToolsRestAPIResponseObject(
-                            name=tool.name,
-                            description=tool.description,
-                            inputSchema=tool.inputSchema,
-                            mcp_info=server.mcp_info,
-                        )
-                    )
-            except Exception as e:
-                verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
-                continue
-        return list_tools_result
+    async def handle_sse_mcp(scope: Scope, receive: Receive, send: Send) -> None:
+        """Handle MCP requests through SSE."""
+        try:
+            # Validate headers and log request info
+            user_api_key_auth: UserAPIKeyAuth = (
+                await UserAPIKeyAuthMCP.user_api_key_auth_mcp(scope)
+            )
+            # Set the auth context variable for easy access in MCP functions
+            set_auth_context(user_api_key_auth)
 
-    @router.post("/tools/call", dependencies=[Depends(user_api_key_auth)])
-    async def call_tool_rest_api(
-        request: Request,
-        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    ):
-        """
-        REST API to call a specific MCP tool with the provided arguments
-        """
-        from litellm.proxy.proxy_server import add_litellm_data_to_request, proxy_config
+            # Ensure session managers are initialized
+            if not _SESSION_MANAGERS_INITIALIZED:
+                await initialize_session_managers()
+                # Give it a moment to start up
+                await asyncio.sleep(0.1)
 
-        data = await request.json()
-        data = await add_litellm_data_to_request(
-            data=data,
-            request=request,
-            user_api_key_dict=user_api_key_dict,
-            proxy_config=proxy_config,
-        )
-        return await call_mcp_tool(**data)
+            await sse_session_manager.handle_request(scope, receive, send)
+        except Exception as e:
+            verbose_logger.exception(f"Error handling MCP request: {e}")
+            raise e
 
-    options = InitializationOptions(
-        server_name="litellm-mcp-server",
-        server_version="0.1.0",
-        capabilities=server.get_capabilities(
-            notification_options=NotificationOptions(),
-            experimental_capabilities={},
-        ),
+    app = FastAPI(
+        title=LITELLM_MCP_SERVER_NAME,
+        description=LITELLM_MCP_SERVER_DESCRIPTION,
+        version=LITELLM_MCP_SERVER_VERSION,
+        lifespan=lifespan,
     )
+
+    # Routes
+    @app.get(
+        "/enabled",
+        description="Returns if the MCP server is enabled",
+    )
+    def get_mcp_server_enabled() -> Dict[str, bool]:
+        """
+        Returns if the MCP server is enabled
+        """
+        return {"enabled": MCP_AVAILABLE}
+
+    # Mount the MCP handlers
+    app.mount("/", handle_streamable_http_mcp)
+    app.mount("/sse", handle_sse_mcp)
+    app.add_middleware(AuthContextMiddleware)
+
+    ########################################################
+    ############ Auth Context Functions ####################
+    ########################################################
+
+    def set_auth_context(user_api_key_auth: UserAPIKeyAuth) -> None:
+        """Set the UserAPIKeyAuth in the auth context variable."""
+        auth_user = LiteLLMAuthenticatedUser(user_api_key_auth)
+        auth_context_var.set(auth_user)
+
+    def get_auth_context() -> Optional[UserAPIKeyAuth]:
+        """Get the UserAPIKeyAuth from the auth context variable."""
+        auth_user = auth_context_var.get()
+        if auth_user and isinstance(auth_user, LiteLLMAuthenticatedUser):
+            return auth_user.user_api_key_auth
+        return None
+
+    ########################################################
+    ############ End of Auth Context Functions #############
+    ########################################################
+
+else:
+    app = FastAPI()

@@ -686,9 +686,9 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     allowed_cache_controls: Optional[list] = []
     config: Optional[dict] = {}
     permissions: Optional[dict] = {}
-    model_max_budget: Optional[
-        dict
-    ] = {}  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
+    model_max_budget: Optional[dict] = (
+        {}
+    )  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
 
     model_config = ConfigDict(protected_namespaces=())
     model_rpm_limit: Optional[dict] = None
@@ -911,6 +911,7 @@ class NewUserRequest(GenerateRequestBase):
     )
     send_invite_email: Optional[bool] = None
     sso_user_id: Optional[str] = None
+    organizations: Optional[List[str]] = None
 
 
 class NewUserResponse(GenerateKeyResponse):
@@ -1026,12 +1027,12 @@ class NewCustomerRequest(BudgetNewRequest):
     blocked: bool = False  # allow/disallow requests for this end-user
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
     spend: Optional[float] = None
-    allowed_model_region: Optional[
-        AllowedModelRegion
-    ] = None  # require all user requests to use models in this specific region
-    default_model: Optional[
-        str
-    ] = None  # if no equivalent model in allowed region - default all requests to this model
+    allowed_model_region: Optional[AllowedModelRegion] = (
+        None  # require all user requests to use models in this specific region
+    )
+    default_model: Optional[str] = (
+        None  # if no equivalent model in allowed region - default all requests to this model
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -1053,12 +1054,12 @@ class UpdateCustomerRequest(LiteLLMPydanticObjectBase):
     blocked: bool = False  # allow/disallow requests for this end-user
     max_budget: Optional[float] = None
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
-    allowed_model_region: Optional[
-        AllowedModelRegion
-    ] = None  # require all user requests to use models in this specific region
-    default_model: Optional[
-        str
-    ] = None  # if no equivalent model in allowed region - default all requests to this model
+    allowed_model_region: Optional[AllowedModelRegion] = (
+        None  # require all user requests to use models in this specific region
+    )
+    default_model: Optional[str] = (
+        None  # if no equivalent model in allowed region - default all requests to this model
+    )
 
 
 class DeleteCustomerRequest(LiteLLMPydanticObjectBase):
@@ -1196,9 +1197,9 @@ class BlockKeyRequest(LiteLLMPydanticObjectBase):
 
 class AddTeamCallback(LiteLLMPydanticObjectBase):
     callback_name: str
-    callback_type: Optional[
-        Literal["success", "failure", "success_and_failure"]
-    ] = "success_and_failure"
+    callback_type: Optional[Literal["success", "failure", "success_and_failure"]] = (
+        "success_and_failure"
+    )
     callback_vars: Dict[str, str]
 
     @model_validator(mode="before")
@@ -1334,7 +1335,6 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
     model_max_budget: Optional[dict] = None
     budget_duration: Optional[str] = None
-    budget_reset_at: Optional[datetime] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1342,7 +1342,7 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
 class LiteLLM_BudgetTableFull(LiteLLM_BudgetTable):
     """Represents all params for a LiteLLM_BudgetTable record"""
 
-    budget_id: str
+    budget_reset_at: Optional[datetime] = None
     created_at: datetime
 
 
@@ -1449,7 +1449,16 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         description="The URL to which requests for this path should be forwarded."
     )
     headers: dict = Field(
-        description="Key-value pairs of headers to be forwarded with the request. You can set any key value pair here and it will be forwarded to your target endpoint"
+        default={},
+        description="Key-value pairs of headers to be forwarded with the request. You can set any key value pair here and it will be forwarded to your target endpoint",
+    )
+    include_subpath: bool = Field(
+        default=False,
+        description="If True, requests to subpaths of the path will be forwarded to the target endpoint. For example, if the path is /bria and include_subpath is True, requests to /bria/v1/text-to-image/base/2.3 will be forwarded to the target endpoint.",
+    )
+    input_cost_per_request: float = Field(
+        default=0.0,
+        description="The USD cost per request to the target endpoint. This is used to calculate the cost of the request to the target endpoint.",
     )
 
 
@@ -1484,9 +1493,9 @@ class ConfigList(LiteLLMPydanticObjectBase):
     stored_in_db: Optional[bool]
     field_default_value: Any
     premium_field: bool = False
-    nested_fields: Optional[
-        List[FieldDetail]
-    ] = None  # For nested dictionary or Pydantic fields
+    nested_fields: Optional[List[FieldDetail]] = (
+        None  # For nested dictionary or Pydantic fields
+    )
 
 
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
@@ -1756,9 +1765,9 @@ class LiteLLM_OrganizationMembershipTable(LiteLLMPydanticObjectBase):
     budget_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
-    user: Optional[
-        Any
-    ] = None  # You might want to replace 'Any' with a more specific type if available
+    user: Optional[Any] = (
+        None  # You might want to replace 'Any' with a more specific type if available
+    )
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
 
     model_config = ConfigDict(protected_namespaces=())
@@ -2317,7 +2326,7 @@ class CommonProxyErrors(str, enum.Enum):
     )
     no_llm_router = "No models configured on proxy"
     not_allowed_access = "Admin-only endpoint. Not allowed to access this."
-    not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. Get a 7 day trial key here: https://www.litellm.ai/#trial. \nPricing: https://www.litellm.ai/#pricing"
+    not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. Get a 7 day trial key here: https://www.litellm.ai/enterprise#trial. \nPricing: https://www.litellm.ai/#pricing"
     max_parallel_request_limit_reached = (
         "Crossed TPM / RPM / Max Parallel Request Limit"
     )
@@ -2423,6 +2432,11 @@ class ProxyErrorTypes(str, enum.Enum):
     Organization does not have access to the vector store
     """
 
+    team_member_already_in_team = "team_member_already_in_team"
+    """
+    Team member is already in team
+    """
+
     @classmethod
     def get_model_access_error_type_for_object(
         cls, object_type: Literal["key", "user", "team", "org"]
@@ -2519,7 +2533,10 @@ class OrgMemberAddRequest(LiteLLMPydanticObjectBase):
         member_data = data.get("member")
         if isinstance(member_data, list):
             # If member is a list of dictionaries, convert each dictionary to a Member object
-            members = [OrgMember(**item) for item in member_data]
+            if all(isinstance(item, dict) for item in member_data):
+                members = [OrgMember(**item) for item in member_data]
+            else:
+                members = [item for item in member_data]
             # Replace member_data with the list of Member objects
             data["member"] = members
         elif isinstance(member_data, dict):
@@ -2596,9 +2613,9 @@ class TeamModelDeleteRequest(BaseModel):
 # Organization Member Requests
 class OrganizationMemberAddRequest(OrgMemberAddRequest):
     organization_id: str
-    max_budget_in_organization: Optional[
-        float
-    ] = None  # Users max budget within the organization
+    max_budget_in_organization: Optional[float] = (
+        None  # Users max budget within the organization
+    )
 
 
 class OrganizationMemberDeleteRequest(MemberDeleteRequest):
@@ -2789,9 +2806,9 @@ class ProviderBudgetResponse(LiteLLMPydanticObjectBase):
     Maps provider names to their budget configs.
     """
 
-    providers: Dict[
-        str, ProviderBudgetResponseObject
-    ] = {}  # Dictionary mapping provider names to their budget configurations
+    providers: Dict[str, ProviderBudgetResponseObject] = (
+        {}
+    )  # Dictionary mapping provider names to their budget configurations
 
 
 class ProxyStateVariables(TypedDict):
@@ -2919,9 +2936,9 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     enforce_rbac: bool = False
     roles_jwt_field: Optional[str] = None  # v2 on role mappings
     role_mappings: Optional[List[RoleMapping]] = None
-    object_id_jwt_field: Optional[
-        str
-    ] = None  # can be either user / team, inferred from the role mapping
+    object_id_jwt_field: Optional[str] = (
+        None  # can be either user / team, inferred from the role mapping
+    )
     scope_mappings: Optional[List[ScopeMapping]] = None
     enforce_scope_based_access: bool = False
     enforce_team_based_model_access: bool = False
@@ -3080,3 +3097,10 @@ class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
     model_object_id: str
     file_purpose: Literal["batch", "fine-tune"]
     file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob]
+
+
+class EnterpriseLicenseData(TypedDict, total=False):
+    expiration_date: str
+    user_id: str
+    allowed_features: List[str]
+    max_users: int
