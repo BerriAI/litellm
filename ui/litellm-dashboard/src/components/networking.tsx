@@ -5632,3 +5632,74 @@ export const getRemainingUsers = async (accessToken: string): Promise<{
     throw error;
   }
 };
+
+export const updatePassThroughEndpoint = async (
+  accessToken: string,
+  endpointPath: string,
+  formValues: Record<string, any>
+) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/config/pass_through_endpoint/${encodeURIComponent(endpointPath)}`
+      : `/config/pass_through_endpoint/${encodeURIComponent(endpointPath)}`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(formValues),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    message.success("Pass through endpoint updated successfully");
+    return data;
+  } catch (error) {
+    console.error("Failed to update pass through endpoint:", error);
+    throw error;
+  }
+};
+
+export const getPassThroughEndpointInfo = async (
+  accessToken: string,
+  endpointPath: string
+) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/config/pass_through_endpoint?endpoint_id=${encodeURIComponent(endpointPath)}`
+      : `/config/pass_through_endpoint?endpoint_id=${encodeURIComponent(endpointPath)}`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    const endpoints = data["endpoints"];
+    
+    if (!endpoints || endpoints.length === 0) {
+      throw new Error("Pass through endpoint not found");
+    }
+    
+    return endpoints[0]; // Return the first (and should be only) endpoint
+  } catch (error) {
+    console.error("Failed to get pass through endpoint info:", error);
+    throw error;
+  }
+};
