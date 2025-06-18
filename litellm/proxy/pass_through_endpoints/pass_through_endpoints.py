@@ -1139,11 +1139,88 @@ async def get_pass_through_endpoints(
     "/config/pass_through_endpoint/{endpoint_id}",
     dependencies=[Depends(user_api_key_auth)],
 )
-async def update_pass_through_endpoints(request: Request, endpoint_id: str):
+async def update_pass_through_endpoints(
+    endpoint_id: str,
+    data: PassThroughGenericEndpoint,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Update a pass-through endpoint
     """
-    pass
+    from litellm.proxy.proxy_server import (
+        get_config_general_settings,
+        update_config_general_settings,
+    )
+
+    ## Get existing pass-through endpoint field value
+    try:
+        response: ConfigFieldInfo = await get_config_general_settings(
+            field_name="pass_through_endpoints", user_api_key_dict=user_api_key_dict
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "No pass-through endpoints found"},
+        )
+
+    pass_through_endpoint_data: Optional[List] = response.field_value
+    if pass_through_endpoint_data is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "No pass-through endpoints found"},
+        )
+
+    # Find and update the endpoint
+    updated_endpoint: Optional[PassThroughGenericEndpoint] = None
+    endpoint_found = False
+    
+    for idx, endpoint in enumerate(pass_through_endpoint_data):
+        _endpoint: Optional[PassThroughGenericEndpoint] = None
+        if isinstance(endpoint, dict):
+            _endpoint = PassThroughGenericEndpoint(**endpoint)
+        elif isinstance(endpoint, PassThroughGenericEndpoint):
+            _endpoint = endpoint
+
+        if _endpoint is not None and _endpoint.path == endpoint_id:
+            endpoint_found = True
+            # Get the update data as dict, excluding None values for partial updates
+            update_data = data.model_dump(exclude_none=True)
+            
+            # Start with existing endpoint data
+            endpoint_dict = _endpoint.model_dump()
+            
+            # Update with new data (only non-None values)
+            endpoint_dict.update(update_data)
+            
+            # Ensure the path stays the same (can't change the endpoint_id)
+            endpoint_dict["path"] = endpoint_id
+            
+            # Create updated endpoint object
+            updated_endpoint = PassThroughGenericEndpoint(**endpoint_dict)
+            
+            # Update the list
+            pass_through_endpoint_data[idx] = endpoint_dict
+            break
+
+    if not endpoint_found:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": f"Endpoint with path '{endpoint_id}' not found"
+            },
+        )
+
+    ## Update db
+    updated_data = ConfigFieldUpdate(
+        field_name="pass_through_endpoints",
+        field_value=pass_through_endpoint_data,
+        config_type="general_settings",
+    )
+    await update_config_general_settings(
+        data=updated_data, user_api_key_dict=user_api_key_dict
+    )
+
+    return PassThroughEndpointResponse(endpoints=[updated_endpoint] if updated_endpoint else [])
 
 
 @router.post(
