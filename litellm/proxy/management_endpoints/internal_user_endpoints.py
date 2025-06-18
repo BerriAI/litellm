@@ -55,7 +55,7 @@ router = APIRouter()
 def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> dict:
     if "user_id" in data_json and data_json["user_id"] is None:
         data_json["user_id"] = str(uuid.uuid4())
-    data_json.pop("teams", None)  # handled separately
+
     auto_create_key = data_json.pop("auto_create_key", True)
 
     if auto_create_key is False:
@@ -93,6 +93,7 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
         ):
             data_json["budget_duration"] = litellm.internal_user_budget_duration
 
+    data_json.pop("teams", None)  # handled separately
     return data_json
 
 
@@ -164,6 +165,7 @@ async def _add_user_to_team(
     user_id: str,
     team_id: str,
     user_api_key_dict: UserAPIKeyAuth,
+    user_email: Optional[str] = None,
     max_budget_in_team: Optional[float] = None,
     user_role: Literal["user", "admin"] = "user",
 ):
@@ -176,6 +178,7 @@ async def _add_user_to_team(
                 member=Member(
                     user_id=user_id,
                     role=user_role,
+                    user_email=user_email,
                 ),
                 max_budget_in_team=max_budget_in_team,
             ),
@@ -205,6 +208,30 @@ async def _add_user_to_team(
             )
         else:
             raise e
+
+
+def check_if_default_team_set() -> Optional[Union[List[str], List[NewUserRequestTeam]]]:
+    if litellm.default_internal_user_params is None:
+        return None
+    teams = litellm.default_internal_user_params.get("teams")
+    if teams is not None:
+        if all(isinstance(team, str) for team in teams):
+            return teams
+        elif all(isinstance(team, dict) for team in teams):
+            return [
+                NewUserRequestTeam(
+                    team_id=team.get("team_id"),
+                    max_budget_in_team=team.get("max_budget_in_team"),
+                    user_role=team.get("user_role", "user"),
+                )
+                for team in teams
+            ]
+        else:
+            verbose_proxy_logger.error(
+                "Invalid team type in default internal user params: %s",
+                teams,
+            )
+    return None
 
 
 @router.post(
@@ -302,6 +329,8 @@ async def new_user(
         data_json = data.json()  # type: ignore
         data_json = _update_internal_new_user_params(data_json, data)
         teams = data.teams
+        if teams is None:
+            teams = check_if_default_team_set()
         organization_ids = cast(
             Optional[List[str]], data_json.pop("organizations", None)
         )
@@ -316,6 +345,7 @@ async def new_user(
                 user_id=cast(str, response.get("user_id")),
                 team_id=_team_id,
                 user_api_key_dict=user_api_key_dict,
+                user_email=data.user_email,
                 max_budget_in_team=None,
                 user_role="user",
             )
@@ -337,6 +367,7 @@ async def new_user(
                     _add_user_to_team(
                         user_id=cast(str, response.get("user_id")),
                         team_id=team_id,
+                        user_email=data.user_email,
                         user_api_key_dict=user_api_key_dict,
                         max_budget_in_team=max_budget_in_team,
                         user_role=user_role,
