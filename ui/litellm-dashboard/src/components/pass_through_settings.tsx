@@ -1,15 +1,6 @@
 import React, { useState, useEffect } from "react";
 import {
-  Card,
-  Title,
-  Subtitle,
-  Table,
-  TableHead,
-  TableRow,
   Badge,
-  TableHeaderCell,
-  TableCell,
-  TableBody,
   Metric,
   Text,
   Grid,
@@ -22,14 +13,8 @@ import {
   AccordionBody,
   AccordionHeader,
   AccordionList,
-} from "@tremor/react";
-import {
-  TabPanel,
-  TabPanels,
-  TabGroup,
-  TabList,
-  Tab,
   Icon,
+  Title,
 } from "@tremor/react";
 import {
   getCallbacksCall,
@@ -65,13 +50,16 @@ import AddFallbacks from "./add_fallbacks";
 import AddPassThroughEndpoint from "./add_pass_through";
 import openai from "openai";
 import Paragraph from "antd/es/skeleton/Paragraph";
+import { DataTable } from "./view_logs/table";
+import { ColumnDef } from "@tanstack/react-table";
+import { Eye, EyeOff } from "lucide-react";
+
 interface GeneralSettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
   modelData: any;
 }
-
 
 interface routingStrategyArgs {
   ttl?: number;
@@ -90,10 +78,34 @@ export interface passThroughItem {
   path: string
   target: string
   headers: object
+  include_subpath?: boolean
+  input_cost_per_request?: number
 }
 
-
-
+// Password field component for headers
+const PasswordField: React.FC<{ value: object }> = ({ value }) => {
+  const [showPassword, setShowPassword] = useState(false);
+  const headerString = JSON.stringify(value);
+  
+  return (
+    <div className="flex items-center space-x-2">
+      <span className="font-mono text-xs">
+        {showPassword ? headerString : "••••••••"}
+      </span>
+      <button
+        onClick={() => setShowPassword(!showPassword)}
+        className="p-1 hover:bg-gray-100 rounded"
+        type="button"
+      >
+        {showPassword ? (
+          <EyeOff className="w-4 h-4 text-gray-500" />
+        ) : (
+          <Eye className="w-4 h-4 text-gray-500" />
+        )}
+      </button>
+    </div>
+  );
+};
 
 const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
   accessToken,
@@ -104,6 +116,7 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
   const [generalSettings, setGeneralSettings] = useState<passThroughItem[]>(
     []
   );
+
   useEffect(() => {
     if (!accessToken || !userRole || !userID) {
       return;
@@ -114,7 +127,6 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
     });
   }, [accessToken, userRole, userID]);
 
-
   const handleResetField = (fieldName: string, idx: number) => {
     if (!accessToken) {
       return;
@@ -122,72 +134,84 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
 
     try {
       deletePassThroughEndpointsCall(accessToken, fieldName);
-      // update value in state
-
+      
       const updatedSettings = generalSettings.filter((setting) => setting.path !== fieldName);
       setGeneralSettings(updatedSettings);
 
       message.success("Endpoint deleted successfully.");
-
     } catch (error) {
       // do something
     }
   };
 
+  // Define columns for the DataTable
+  const columns: ColumnDef<passThroughItem>[] = [
+    {
+      header: "Path",
+      accessorKey: "path",
+      cell: (info: any) => (
+        <Text className="font-mono">{info.getValue()}</Text>
+      ),
+    },
+    {
+      header: "Target",
+      accessorKey: "target",
+      cell: (info: any) => (
+        <Text>{info.getValue()}</Text>
+      ),
+    },
+    {
+      header: "Headers",
+      accessorKey: "headers",
+      cell: (info: any) => (
+        <PasswordField value={info.getValue() || {}} />
+      ),
+    },
+    {
+      header: "Action",
+      id: "actions",
+      cell: ({ row }) => (
+        <Icon
+          icon={TrashIcon}
+          color="red"
+          className="cursor-pointer"
+          onClick={() => handleResetField(row.original.path, row.index)}
+        >
+          Delete
+        </Icon>
+      ),
+    },
+  ];
 
   if (!accessToken) {
     return null;
   }
 
-
-
   return (
-    <div className="w-full mx-4">
-      <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
-        <Card>
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableHeaderCell>Path</TableHeaderCell>
-                <TableHeaderCell>Target</TableHeaderCell>
-                <TableHeaderCell>Headers</TableHeaderCell>
-                <TableHeaderCell>Action</TableHeaderCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-            {generalSettings.map((value, index) => (
-                    <TableRow key={index}>
-                      <TableCell>
-                        <Text>{value.path}</Text>
-                      </TableCell>
-                      <TableCell>
-                        {
-                          value.target
-                        }
-                      </TableCell>
-                      <TableCell>
-                        {
-                          JSON.stringify(value.headers)
-                        }
-                      </TableCell>
-                      <TableCell>
-                        <Icon
-                          icon={TrashIcon}
-                          color="red"
-                          onClick={() =>
-                            handleResetField(value.path, index)
-                          }
-                        >
-                          Reset
-                        </Icon>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-            </TableBody>
-          </Table>
-          <AddPassThroughEndpoint accessToken={accessToken} setPassThroughItems={setGeneralSettings} passThroughItems={generalSettings}/>
-        </Card>
-      </TabGroup>
+    <div className="w-full h-[75vh] p-6">
+      <div className="mb-2 mt-4">
+        <div>
+          <Title>Pass Through Endpoints</Title>
+          <Text className="text-tremor-content">
+            Configure and manage your pass-through endpoints
+          </Text>
+        </div>
+      </div>
+      
+      <AddPassThroughEndpoint 
+        accessToken={accessToken} 
+        setPassThroughItems={setGeneralSettings} 
+        passThroughItems={generalSettings}
+      />
+      
+      <DataTable
+        data={generalSettings}
+        columns={columns}
+        renderSubComponent={() => <div></div>}
+        getRowCanExpand={() => false}
+        isLoading={false}
+        noDataMessage="No pass-through endpoints configured"
+      />
     </div>
   );
 };
