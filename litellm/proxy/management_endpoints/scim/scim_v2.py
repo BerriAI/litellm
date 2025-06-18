@@ -385,6 +385,11 @@ async def update_user(
             "metadata": metadata,
         }
 
+        # Serialize metadata to JSON string for Prisma to avoid GraphQL parsing issues
+        if "metadata" in update_data and isinstance(update_data["metadata"], dict):
+            from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+            update_data["metadata"] = safe_dumps(update_data["metadata"])
+
         updated_user = await prisma_client.db.litellm_usertable.update(
             where={"user_id": user_id},
             data=update_data,
@@ -623,6 +628,11 @@ async def patch_user(
         )
 
         update_data["teams"] = list(final_team_set)
+
+        # Serialize metadata to JSON string for Prisma to avoid GraphQL parsing issues
+        if "metadata" in update_data and isinstance(update_data["metadata"], dict):
+            from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+            update_data["metadata"] = safe_dumps(update_data["metadata"])
 
         updated_user = await prisma_client.db.litellm_usertable.update(
             where={"user_id": user_id},
