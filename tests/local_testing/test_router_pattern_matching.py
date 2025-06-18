@@ -225,7 +225,6 @@ def test_router_pattern_match_e2e():
     )
 
     with patch.object(client, "post", new=MagicMock()) as mock_post:
-
         router.completion(
             model="llmengine/my-custom-model",
             messages=[{"role": "user", "content": "Hello, how are you?"}],

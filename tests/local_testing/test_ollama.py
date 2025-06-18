@@ -39,7 +39,9 @@ def test_get_ollama_params():
         }
         print("Converted params", converted_params)
         for key in expected_params.keys():
-            assert expected_params[key] == converted_params[key], f"{converted_params} != {expected_params}"
+            assert (
+                expected_params[key] == converted_params[key]
+            ), f"{converted_params} != {expected_params}"
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -282,18 +284,22 @@ async def test_async_ollama_ssl_verify(stream):
     # check session ssl
     print("litellm_created_session ssl=", litellm_created_session.connector._ssl)
 
-    
     # create aiohttp transport with ssl_verify=False
     import aiohttp
-    aiohttp_session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(verify_ssl=False))
+
+    aiohttp_session = aiohttp.ClientSession(
+        connector=aiohttp.TCPConnector(verify_ssl=False)
+    )
     print("aiohttp_session ssl=", aiohttp_session.connector._ssl)
 
     assert litellm_created_session.connector._ssl is False
     assert litellm_created_session.connector._ssl == aiohttp_session.connector._ssl
 
+
 @pytest.mark.skip(reason="local only test")
 def test_ollama_streaming_with_chunk_builder():
     from litellm.main import stream_chunk_builder
+
     tools = [
         {
             "type": "function",

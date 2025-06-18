@@ -936,7 +936,6 @@ from test_key_generate_prisma import prisma_client
 )
 @pytest.mark.asyncio
 async def test_create_user_default_budget(prisma_client, user_role):
-
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     setattr(litellm, "max_internal_user_budget", 10)
@@ -1019,7 +1018,6 @@ async def test_create_team_member_add(prisma_client, new_member_method):
         "litellm.proxy.auth.auth_checks._get_team_object_from_user_api_key_cache",
         new=AsyncMock(return_value=team_obj),
     ) as mock_team_obj:
-
         mock_client = AsyncMock(
             return_value=LiteLLM_UserTable(
                 user_id="1234", max_budget=100, user_email="1234"
@@ -1262,7 +1260,6 @@ async def test_user_info_team_list(prisma_client):
         "litellm.proxy.management_endpoints.team_endpoints.list_team",
         new_callable=AsyncMock,
     ) as mock_client:
-
         prisma_client.get_data = AsyncMock(
             return_value=LiteLLM_UserTable(
                 user_role="proxy_admin",
@@ -2207,7 +2204,9 @@ async def test_run_background_health_check_reflects_llm_model_list(monkeypatch):
 
     monkeypatch.setattr(proxy_server, "health_check_interval", 1)
     monkeypatch.setattr(proxy_server, "health_check_details", None)
-    monkeypatch.setattr(proxy_server, "llm_model_list", copy.deepcopy(test_model_list_1))
+    monkeypatch.setattr(
+        proxy_server, "llm_model_list", copy.deepcopy(test_model_list_1)
+    )
     monkeypatch.setattr(proxy_server, "perform_health_check", fake_perform_health_check)
     monkeypatch.setattr(proxy_server, "health_check_results", {})
 
@@ -2221,7 +2220,9 @@ async def test_run_background_health_check_reflects_llm_model_list(monkeypatch):
     except asyncio.CancelledError:
         pass
 
-    monkeypatch.setattr(proxy_server, "llm_model_list", copy.deepcopy(test_model_list_2))
+    monkeypatch.setattr(
+        proxy_server, "llm_model_list", copy.deepcopy(test_model_list_2)
+    )
 
     try:
         await proxy_server._run_background_health_check()

@@ -20,7 +20,6 @@ from litellm.proxy._types import UserAPIKeyAuth
 
 @pytest.mark.asyncio
 class TestUserAPIKeyAuthMCP:
-
     @pytest.mark.parametrize(
         "user_api_key_auth,object_permission_id,prisma_client_available,db_result,expected_result",
         [

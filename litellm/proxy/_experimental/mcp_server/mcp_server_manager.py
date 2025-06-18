@@ -207,9 +207,9 @@ class MCPServerManager:
 
                     # Update tool to server mapping
                     for tool in tools_result.tools:
-                        self.tool_name_to_mcp_server_name_mapping[tool.name] = (
-                            server.name
-                        )
+                        self.tool_name_to_mcp_server_name_mapping[
+                            tool.name
+                        ] = server.name
 
                     return tools_result.tools
         elif server.transport == MCPTransport.http:
@@ -237,9 +237,9 @@ class MCPServerManager:
 
                     # Update tool to server mapping
                     for tool in tools_result.tools:
-                        self.tool_name_to_mcp_server_name_mapping[tool.name] = (
-                            server.name
-                        )
+                        self.tool_name_to_mcp_server_name_mapping[
+                            tool.name
+                        ] = server.name
 
                     return tools_result.tools
         else:

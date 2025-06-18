@@ -92,9 +92,9 @@ class ModelParamHelper:
         streaming_params: Set[str] = set(
             getattr(CompletionCreateParamsStreaming, "__annotations__", {}).keys()
         )
-        litellm_provider_specific_params: Set[str] = (
-            ModelParamHelper.get_litellm_provider_specific_params_for_chat_params()
-        )
+        litellm_provider_specific_params: Set[
+            str
+        ] = ModelParamHelper.get_litellm_provider_specific_params_for_chat_params()
         all_chat_completion_kwargs: Set[str] = non_streaming_params.union(
             streaming_params
         ).union(litellm_provider_specific_params)

@@ -256,7 +256,6 @@ def test_anthropic_tool_streaming():
     for chunk in anthropic_chunk_list:
         parsed_chunk = response_iter.chunk_parser(chunk)
         if tool_use := parsed_chunk.get("tool_use"):
-
             # We only increment when a new block starts
             if tool_use.get("id") is not None:
                 correct_tool_index += 1

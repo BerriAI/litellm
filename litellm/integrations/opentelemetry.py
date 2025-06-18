@@ -579,7 +579,9 @@ class OpenTelemetry(CustomLogger):
                 )
                 return
             elif self.callback_name == "langfuse_otel":
-                from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
+                from litellm.integrations.langfuse.langfuse_otel import (
+                    LangfuseOtelLogger,
+                )
 
                 LangfuseOtelLogger.set_langfuse_otel_attributes(
                     span, kwargs, response_obj

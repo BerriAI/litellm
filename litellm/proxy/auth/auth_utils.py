@@ -499,7 +499,9 @@ def _has_user_setup_sso():
     return sso_setup
 
 
-def get_end_user_id_from_request_body(request_body: dict, request_headers: Optional[dict] = None) -> Optional[str]:
+def get_end_user_id_from_request_body(
+    request_body: dict, request_headers: Optional[dict] = None
+) -> Optional[str]:
     # Import general_settings here to avoid potential circular import issues at module level
     # and to ensure it's fetched at runtime.
     from litellm.proxy.proxy_server import general_settings
@@ -508,10 +510,10 @@ def get_end_user_id_from_request_body(request_body: dict, request_headers: Optio
     # User query: "system not respecting user_header_name property"
     # This implies the key in general_settings is 'user_header_name'.
     if request_headers is not None:
-        user_id_header_config_key = "user_header_name" 
-        
-        custom_header_name_to_check = general_settings.get(user_id_header_config_key) 
-        
+        user_id_header_config_key = "user_header_name"
+
+        custom_header_name_to_check = general_settings.get(user_id_header_config_key)
+
         if custom_header_name_to_check and isinstance(custom_header_name_to_check, str):
             user_id_from_header = request_headers.get(custom_header_name_to_check)
             if user_id_from_header is not None and user_id_from_header.strip():
@@ -530,12 +532,12 @@ def get_end_user_id_from_request_body(request_body: dict, request_headers: Optio
             return str(user_from_litellm_metadata)
 
     # Check 4: 'metadata.user_id' in request_body (another common pattern)
-    metadata_dict = request_body.get("metadata") 
-    if isinstance(metadata_dict, dict): 
+    metadata_dict = request_body.get("metadata")
+    if isinstance(metadata_dict, dict):
         user_id_from_metadata_field = metadata_dict.get("user_id")
         if user_id_from_metadata_field is not None:
             return str(user_id_from_metadata_field)
-    
+
     return None
 
 

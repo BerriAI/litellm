@@ -45,9 +45,7 @@ class DataRobotConfig(OpenAILikeChatConfig):
         return api_base  # type: ignore
 
     def _get_openai_compatible_provider_info(
-        self,
-        api_base: Optional[str],
-        api_key: Optional[str]
+        self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
         """Attempts to ensure that the API base and key are set, preferring user-provided values,
         before falling back to secret manager values (``DATAROBOT_ENDPOINT`` and ``DATAROBOT_API_TOKEN``

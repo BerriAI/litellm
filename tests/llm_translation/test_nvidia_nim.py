@@ -163,7 +163,7 @@ def test_chat_completion_nvidia_nim_with_tools():
             )
         except Exception as e:
             print(e)
-        
+
         # Add assertions to check the request
         mock_client.assert_called_once()
         request_body = mock_client.call_args.kwargs

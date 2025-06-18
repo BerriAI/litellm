@@ -20,6 +20,7 @@ from litellm.types.llms.openai import (
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from base_responses_api import BaseResponsesAPITest, validate_responses_api_response
 
+
 class TestOpenAIResponsesAPITest(BaseResponsesAPITest):
     def get_base_completion_call_args(self):
         return {
@@ -582,8 +583,6 @@ async def test_openai_responses_litellm_router_no_metadata():
         request_body = mock_post.call_args.kwargs["json"]
         print("Request body:", json.dumps(request_body, indent=4))
 
-
-
         # Assert metadata is not in the request
         assert (
             "metadata" not in request_body
@@ -981,6 +980,7 @@ def test_basic_computer_use_preview_tool_call():
         "user": None,
         "metadata": {},
     }
+
     class MockResponse:
         def __init__(self, json_data, status_code):
             self._json_data = json_data
@@ -1000,21 +1000,23 @@ def test_basic_computer_use_preview_tool_call():
         # Call the responses API with computer_use_preview tool
         response = litellm.responses(
             model="openai/computer-use-preview",
-            tools=[{
-                "type": "computer_use_preview",
-                "display_width": 1024,
-                "display_height": 768,
-                "environment": "linux"  # other possible values: "mac", "windows", "ubuntu"
-            }],
+            tools=[
+                {
+                    "type": "computer_use_preview",
+                    "display_width": 1024,
+                    "display_height": 768,
+                    "environment": "linux",  # other possible values: "mac", "windows", "ubuntu"
+                }
+            ],
             input="Check the latest OpenAI news on bing.com.",
             reasoning={"summary": "concise"},
-            truncation="auto"
+            truncation="auto",
         )
 
         # Verify the request was made correctly
         mock_post.assert_called_once()
         request_body = mock_post.call_args.kwargs["json"]
-        
+
         # Validate the request structure
         assert request_body["model"] == "computer-use-preview"
         assert len(request_body["tools"]) == 1
@@ -1022,15 +1024,14 @@ def test_basic_computer_use_preview_tool_call():
         assert request_body["tools"][0]["display_width"] == 1024
         assert request_body["tools"][0]["display_height"] == 768
         assert request_body["tools"][0]["environment"] == "linux"
-        
+
         # Check that reasoning was passed correctly
         assert request_body["reasoning"]["summary"] == "concise"
         assert request_body["truncation"] == "auto"
-        
+
         # Validate the input format
         assert isinstance(request_body["input"], str)
         assert request_body["input"] == "Check the latest OpenAI news on bing.com."
-        
 
 
 def test_mcp_tools_with_responses_api():
@@ -1040,18 +1041,14 @@ def test_mcp_tools_with_responses_api():
             "type": "mcp",
             "server_label": "deepwiki",
             "server_url": "https://mcp.deepwiki.com/mcp",
-            "allowed_tools": ["ask_question"]
+            "allowed_tools": ["ask_question"],
         }
     ]
     MODEL = "openai/gpt-4.1"
     USER_QUERY = "What transport protocols does the 2025-03-26 version of the MCP spec (modelcontextprotocol/modelcontextprotocol) support?"
     #########################################################
-    # Step 1: OpenAI will use MCP LIST, and return a list of MCP calls for our approval 
-    response = litellm.responses(
-        model=MODEL,
-        tools=MCP_TOOLS,
-        input=USER_QUERY
-    )
+    # Step 1: OpenAI will use MCP LIST, and return a list of MCP calls for our approval
+    response = litellm.responses(model=MODEL, tools=MCP_TOOLS, input=USER_QUERY)
     print(response)
 
     response = cast(ResponsesAPIResponse, response)
@@ -1070,11 +1067,9 @@ def test_mcp_tools_with_responses_api():
             {
                 "type": "mcp_approval_response",
                 "approve": True,
-                "approval_request_id": mcp_approval_id
+                "approval_request_id": mcp_approval_id,
             }
         ],
         previous_response_id=response.id,
     )
     print(response_with_mcp_call)
-
-

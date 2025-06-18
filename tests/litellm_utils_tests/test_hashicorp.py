@@ -180,7 +180,7 @@ def test_hashicorp_secret_manager_tls_cert_auth(monkeypatch):
             }
         }
         mock_response.raise_for_status.return_value = None
-        
+
         # Configure the mock client's post method
         mock_client_instance = MagicMock()
         mock_client_instance.post.return_value = mock_response
@@ -192,16 +192,16 @@ def test_hashicorp_secret_manager_tls_cert_auth(monkeypatch):
         test_manager.tls_key_path = "key.pem"
         test_manager.vault_cert_role = "test-role"
         test_manager.vault_namespace = "test-namespace"
-        
+
         # Test the TLS auth method
         token = test_manager._auth_via_tls_cert()
 
         # Verify the token
         assert token == "test-client-token-12345"
-        
+
         # Verify Client was created with correct cert tuple
         mock_client.assert_called_once_with(cert=("cert.pem", "key.pem"))
-        
+
         # Verify post was called with correct parameters
         mock_client_instance.post.assert_called_once_with(
             f"{test_manager.vault_addr}/v1/auth/cert/login",
@@ -210,4 +210,6 @@ def test_hashicorp_secret_manager_tls_cert_auth(monkeypatch):
         )
 
         # Verify the token was cached
-        assert test_manager.cache.get_cache("hcp_vault_token") == "test-client-token-12345"
+        assert (
+            test_manager.cache.get_cache("hcp_vault_token") == "test-client-token-12345"
+        )

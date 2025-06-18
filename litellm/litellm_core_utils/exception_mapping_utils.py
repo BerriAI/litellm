@@ -28,21 +28,21 @@ class ExceptionCheckers:
     """
     Helper class for checking various error conditions in exception strings.
     """
-    
+
     @staticmethod
     def is_error_str_rate_limit(error_str: str) -> bool:
         """
         Check if an error string indicates a rate limit error.
-        
+
         Args:
             error_str: The error string to check
-            
+
         Returns:
             True if the error indicates a rate limit, False otherwise
         """
         if not isinstance(error_str, str):
             return False
-            
+
         return "429" in error_str or "rate limit" in error_str.lower()
 
 

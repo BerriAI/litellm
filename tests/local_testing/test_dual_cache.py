@@ -77,7 +77,6 @@ async def test_dual_cache_local_only(is_async):
     with patch.object(redis_cache, redis_set_method) as mock_redis_set, patch.object(
         redis_cache, redis_get_method
     ) as mock_redis_get:
-
         # Set value with local_only=True
         if is_async:
             await dual_cache.async_set_cache(test_key, test_value, local_only=True)

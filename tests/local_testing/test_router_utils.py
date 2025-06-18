@@ -127,7 +127,6 @@ def test_update_kwargs_before_fallbacks_unit_test():
 )
 @pytest.mark.asyncio
 async def test_update_kwargs_before_fallbacks(call_type):
-
     router = Router(
         model_list=[
             {
@@ -455,7 +454,15 @@ def test_router_get_deployment_credentials():
 
 def test_router_get_deployment_model_info():
     router = Router(
-        model_list=[{"model_name": "gemini/*", "litellm_params": {"model": "gemini/*"}, "model_info": {"id": "1"}}]
+        model_list=[
+            {
+                "model_name": "gemini/*",
+                "litellm_params": {"model": "gemini/*"},
+                "model_info": {"id": "1"},
+            }
+        ]
     )
-    model_info = router.get_deployment_model_info(model_id="1", model_name="gemini/gemini-1.5-flash")
+    model_info = router.get_deployment_model_info(
+        model_id="1", model_name="gemini/gemini-1.5-flash"
+    )
     assert model_info is not None

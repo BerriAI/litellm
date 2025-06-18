@@ -304,7 +304,7 @@ class TestProxyInitializationHelpers:
                 keepalive_timeout=30,
             )
             mock_uvicorn_run.assert_called_once()
-            
+
             # Check that the uvicorn.run was called with the timeout_keep_alive parameter
             call_args = mock_uvicorn_run.call_args
             assert call_args[1]["timeout_keep_alive"] == 30

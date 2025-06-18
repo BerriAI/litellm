@@ -182,7 +182,9 @@ async def list_organization(session, i):
 
         # Assert that budget info is returned for each organization
         for org in response_json:
-            assert "litellm_budget_table" in org, "Missing budget info in organization response"
+            assert (
+                "litellm_budget_table" in org
+            ), "Missing budget info in organization response"
             # Optionally also check that it's not null
             assert org["litellm_budget_table"] is not None, "Budget info is None"
 

@@ -61,7 +61,9 @@ def request(
             key, value = h.split(":", 1)
             headers[key.strip()] = value.strip()
         except ValueError:
-            raise click.BadParameter(f"Invalid header format: {h}. Expected format: 'key:value'")
+            raise click.BadParameter(
+                f"Invalid header format: {h}. Expected format: 'key:value'"
+            )
 
     # Parse JSON data if provided
     json_data = None

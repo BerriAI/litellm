@@ -3154,7 +3154,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             )
 
             langfuse_otel_config = LangfuseOtelLogger.get_langfuse_otel_config()
-            
+
             # The endpoint and headers are now set as environment variables by get_langfuse_otel_config()
             otel_config = OpenTelemetryConfig(
                 exporter=langfuse_otel_config.protocol,

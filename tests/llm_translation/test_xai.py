@@ -111,6 +111,7 @@ def test_xai_chat_config_map_openai_params():
     # Assert unsupported parameter is not in the result
     assert "unsupported_param" not in result
 
+
 def test_xai_check_for_stop_in_supported_params():
     supported_params = XAIChatConfig().get_supported_openai_params(
         model="xai/grok-3-mini"
@@ -156,7 +157,7 @@ def test_xai_message_name_filtering():
         {
             "role": "system",
             "content": "*I press the green button*",
-            "name": "example_user"
+            "name": "example_user",
         },
         {"role": "user", "content": "Hello", "name": "John"},
         {"role": "assistant", "content": "Hello", "name": "Jane"},
@@ -175,12 +176,14 @@ class TestXAIReasoningEffort(BaseReasoningLLMTests):
             "model": "xai/grok-3-mini-beta",
             "messages": [{"role": "user", "content": "Hello"}],
         }
-    
+
+
 class TestXAIChat(BaseLLMChatTest):
     def get_base_completion_call_args(self):
         return {
             "model": "xai/grok-3-mini-beta",
         }
+
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass

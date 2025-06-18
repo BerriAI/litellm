@@ -6,7 +6,13 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.llms.vertex_ai import ContentType, PartType, SpeechConfig, VoiceConfig, PrebuiltVoiceConfig
+from litellm.types.llms.vertex_ai import (
+    ContentType,
+    PartType,
+    SpeechConfig,
+    VoiceConfig,
+    PrebuiltVoiceConfig,
+)
 from litellm.utils import supports_reasoning
 
 from ...vertex_ai.gemini.transformation import _gemini_convert_messages_with_history

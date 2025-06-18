@@ -45,7 +45,7 @@ class SSOConfig(LiteLLMPydanticObjectBase):
         default=None,
         description="Google OAuth Client Secret for SSO authentication",
     )
-    
+
     # Microsoft SSO
     microsoft_client_id: Optional[str] = Field(
         default=None,
@@ -59,7 +59,7 @@ class SSOConfig(LiteLLMPydanticObjectBase):
         default=None,
         description="Microsoft Azure Tenant ID for SSO authentication",
     )
-    
+
     # Generic/Okta SSO
     generic_client_id: Optional[str] = Field(
         default=None,
@@ -81,7 +81,7 @@ class SSOConfig(LiteLLMPydanticObjectBase):
         default=None,
         description="User info endpoint URL for generic OAuth provider",
     )
-    
+
     # Common settings
     proxy_base_url: Optional[str] = Field(
         default=None,

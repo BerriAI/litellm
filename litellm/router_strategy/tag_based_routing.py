@@ -100,7 +100,11 @@ async def get_deployments_for_tag(
                     f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={model} and tags={request_tags}"
                 )
 
-            return new_healthy_deployments if len(new_healthy_deployments) > 0 else default_deployments
+            return (
+                new_healthy_deployments
+                if len(new_healthy_deployments) > 0
+                else default_deployments
+            )
 
     # for Untagged requests use default deployments if set
     _default_deployments_with_tags = []

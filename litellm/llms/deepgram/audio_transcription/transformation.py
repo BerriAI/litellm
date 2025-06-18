@@ -127,9 +127,9 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
             # Add additional metadata matching OpenAI format
             response["task"] = "transcribe"
-            response["language"] = (
-                "english"  # Deepgram auto-detects but doesn't return language
-            )
+            response[
+                "language"
+            ] = "english"  # Deepgram auto-detects but doesn't return language
             response["duration"] = response_json["metadata"]["duration"]
 
             # Transform words to match OpenAI format

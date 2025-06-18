@@ -23,8 +23,15 @@ def keys():
 @click.option("--organization-id", type=str, help="Filter keys by organization ID")
 @click.option("--key-hash", type=str, help="Filter by specific key hash")
 @click.option("--key-alias", type=str, help="Filter by key alias")
-@click.option("--return-full-object", is_flag=True, default=True, help="Return the full key object")
-@click.option("--include-team-keys", is_flag=True, help="Include team keys in the response")
+@click.option(
+    "--return-full-object",
+    is_flag=True,
+    default=True,
+    help="Return the full key object",
+)
+@click.option(
+    "--include-team-keys", is_flag=True, help="Include team keys in the response"
+)
 @click.option(
     "--format",
     "output_format",
@@ -64,7 +71,9 @@ def list(
     if output_format == "json":
         rich.print_json(data=response)
     else:
-        rich.print(f"Showing {len(response.get('keys', []))} keys out of {response.get('total_count', 0)}")
+        rich.print(
+            f"Showing {len(response.get('keys', []))} keys out of {response.get('total_count', 0)}"
+        )
         table = Table(title="API Keys")
         table.add_column("Key Hash", style="cyan")
         table.add_column("Alias", style="green")
@@ -86,12 +95,18 @@ def list(
 @click.option("--models", type=str, help="Comma-separated list of allowed models")
 @click.option("--aliases", type=str, help="JSON string of model alias mappings")
 @click.option("--spend", type=float, help="Maximum spend limit for this key")
-@click.option("--duration", type=str, help="Duration for which the key is valid (e.g. '24h', '7d')")
+@click.option(
+    "--duration",
+    type=str,
+    help="Duration for which the key is valid (e.g. '24h', '7d')",
+)
 @click.option("--key-alias", type=str, help="Alias/name for the key")
 @click.option("--team-id", type=str, help="Team ID to associate the key with")
 @click.option("--user-id", type=str, help="User ID to associate the key with")
 @click.option("--budget-id", type=str, help="Budget ID to associate the key with")
-@click.option("--config", type=str, help="JSON string of additional configuration parameters")
+@click.option(
+    "--config", type=str, help="JSON string of additional configuration parameters"
+)
 @click.pass_context
 def generate(
     ctx: click.Context,
@@ -138,7 +153,9 @@ def generate(
 
 @keys.command()
 @click.option("--keys", type=str, help="Comma-separated list of API keys to delete")
-@click.option("--key-aliases", type=str, help="Comma-separated list of key aliases to delete")
+@click.option(
+    "--key-aliases", type=str, help="Comma-separated list of key aliases to delete"
+)
 @click.pass_context
 def delete(ctx: click.Context, keys: Optional[str], key_aliases: Optional[str]):
     """Delete API keys by key or alias"""

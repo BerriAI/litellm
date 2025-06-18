@@ -864,6 +864,7 @@ def test_vertex_ai_embedding_completion_cost(caplog):
 
 #     assert False
 
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_completion_cost_hidden_params(sync_mode):
@@ -949,7 +950,9 @@ def test_vertex_ai_mistral_predict_cost(usage):
     assert predictive_cost > 0
 
 
-@pytest.mark.parametrize("model", ["openai/tts-1", "azure/tts-1", "openai/gpt-4o-mini-tts"])
+@pytest.mark.parametrize(
+    "model", ["openai/tts-1", "azure/tts-1", "openai/gpt-4o-mini-tts"]
+)
 def test_completion_cost_tts(model):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -1294,7 +1297,10 @@ def test_get_model_params_fireworks_ai(model, base_model):
 
 @pytest.mark.parametrize(
     "model",
-    ["fireworks_ai/llama-v3p1-405b-instruct", "fireworks_ai/llama4-maverick-instruct-basic"],
+    [
+        "fireworks_ai/llama-v3p1-405b-instruct",
+        "fireworks_ai/llama4-maverick-instruct-basic",
+    ],
 )
 def test_completion_cost_fireworks_ai(model):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -2931,6 +2937,7 @@ def test_cost_calculator_with_custom_pricing():
 @pytest.mark.asyncio
 async def test_cost_calculator_with_custom_pricing_router(model_item, custom_pricing):
     from litellm import Router
+
     if custom_pricing == "litellm_params":
         model_item["litellm_params"]["input_cost_per_token"] = 0.0000008
         model_item["litellm_params"]["output_cost_per_token"] = 0.0000032
@@ -2964,7 +2971,6 @@ def test_json_valid_model_cost_map():
 
 
 def test_batch_cost_calculator():
-
     args = {
         "completion_response": {
             "choices": [

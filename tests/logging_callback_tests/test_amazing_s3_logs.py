@@ -74,14 +74,12 @@ async def test_basic_s3_logging(sync_mode, streaming):
         s3.delete_object(Bucket="load-testing-oct", Key=key)
 
 
-
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "streaming", [(True)]
-)
+@pytest.mark.parametrize("streaming", [(True)])
 async def test_basic_s3_v2_logging(streaming):
     from blockbuster import BlockBuster
     from litellm.integrations.s3_v2 import S3Logger
+
     s3_v2_logger = S3Logger(s3_flush_interval=1)
     litellm.callbacks = [s3_v2_logger]
     blockbuster = BlockBuster()
@@ -119,7 +117,7 @@ async def test_basic_s3_v2_logging(streaming):
 
     print(f"all_s3_keys: {all_s3_keys}")
 
-    #assert that atlest one key has response.id in it
+    # assert that atlest one key has response.id in it
     assert any(response_id in key for key in all_s3_keys)
     s3 = boto3.client("s3")
     # delete all objects

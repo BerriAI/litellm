@@ -3,7 +3,6 @@ import anthropic
 
 
 class TestAnthropicPassthroughBasic(BaseAnthropicMessagesTest):
-
     def get_client(self):
         return anthropic.Anthropic(
             base_url="http://0.0.0.0:4000/anthropic",

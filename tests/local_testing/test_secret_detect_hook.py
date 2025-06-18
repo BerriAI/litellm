@@ -230,7 +230,6 @@ async def test_basic_secret_detection_embeddings_list():
 
 
 class testLogger(CustomLogger):
-
     def __init__(self):
         self.logged_message = None
 

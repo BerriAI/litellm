@@ -452,7 +452,7 @@ def test_litellm_gateway_from_sdk_with_response_cost_in_additional_headers():
 
 
 def test_litellm_gateway_from_sdk_with_thinking_param():
-    try: 
+    try:
         response = litellm.completion(
             model="litellm_proxy/anthropic.claude-3-7-sonnet-20250219-v1:0",
             messages=[{"role": "user", "content": "Hello world"}],
@@ -464,4 +464,3 @@ def test_litellm_gateway_from_sdk_with_thinking_param():
         pytest.fail("Expected an error to be raised")
     except Exception as e:
         assert "Connection error." in str(e)
-    

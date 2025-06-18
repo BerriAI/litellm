@@ -361,7 +361,6 @@ class TestVertexAIPassThroughHandler:
                 custom_headers={"Authorization": f"Bearer {test_token}"},
             )
 
-
     @pytest.mark.parametrize(
         "initial_endpoint",
         [

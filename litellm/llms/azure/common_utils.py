@@ -338,13 +338,17 @@ class BaseAzureLLM(BaseOpenAILLM):
             "azure_password", os.getenv("AZURE_PASSWORD")
         )
         scope = litellm_params.get(
-            "azure_scope", os.getenv("AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"))
+            "azure_scope",
+            os.getenv("AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"),
+        )
         max_retries = litellm_params.get("max_retries")
         timeout = litellm_params.get("timeout")
         if (
             not api_key
             and azure_ad_token_provider is None
-            and tenant_id and client_id and client_secret
+            and tenant_id
+            and client_id
+            and client_secret
         ):
             verbose_logger.debug(
                 "Using Azure AD Token Provider from Entra ID for Azure Auth"
@@ -355,7 +359,12 @@ class BaseAzureLLM(BaseOpenAILLM):
                 client_secret=client_secret,
                 scope=scope,
             )
-        if azure_ad_token_provider is None and azure_username and azure_password and client_id:
+        if (
+            azure_ad_token_provider is None
+            and azure_username
+            and azure_password
+            and client_id
+        ):
             verbose_logger.debug("Using Azure Username and Password for Azure Auth")
             azure_ad_token_provider = get_azure_ad_token_from_username_password(
                 azure_username=azure_username,
@@ -442,8 +451,10 @@ class BaseAzureLLM(BaseOpenAILLM):
         ## build base url - assume api base includes resource name
         tenant_id = litellm_params.get("tenant_id", os.getenv("AZURE_TENANT_ID"))
         client_id = litellm_params.get("client_id", os.getenv("AZURE_CLIENT_ID"))
-        scope = litellm_params.get("azure_scope", os.getenv(
-            "AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"))
+        scope = litellm_params.get(
+            "azure_scope",
+            os.getenv("AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"),
+        )
         if client is None:
             if not api_base.endswith("/"):
                 api_base += "/"

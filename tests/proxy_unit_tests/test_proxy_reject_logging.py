@@ -49,7 +49,6 @@ from litellm.router import Router
 
 
 class testLogger(CustomLogger):
-
     def __init__(self):
         self.reaches_sync_failure_event = False
         self.reaches_async_failure_event = False

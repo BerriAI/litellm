@@ -163,7 +163,6 @@ def test_document_inlining_example(disable_add_transform_inline_image_block):
     ],
 )
 def test_transform_inline(content, model, expected_url):
-
     result = litellm.FireworksAIConfig()._add_transform_inline_image_block(
         content=content, model=model, disable_add_transform_inline_image_block=False
     )
@@ -233,7 +232,5 @@ def test_global_disable_flag_with_transform_messages_helper(monkeypatch):
         json_data = json.loads(mock_post.call_args.kwargs["data"])
         assert (
             "#transform=inline"
-            not in json_data["messages"][0]["content"][1]["image_url"][
-                "url"
-            ]
+            not in json_data["messages"][0]["content"][1]["image_url"]["url"]
         )

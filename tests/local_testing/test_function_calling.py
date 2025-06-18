@@ -798,5 +798,3 @@ async def test_watsonx_tool_choice(sync_mode):
                 pytest.skip("Skipping test due to timeout")
             else:
                 raise e
-
-

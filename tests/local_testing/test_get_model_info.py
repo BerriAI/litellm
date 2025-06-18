@@ -6,7 +6,6 @@ import traceback
 import json
 
 
-
 from typing import List, Dict, Any
 
 sys.path.insert(
@@ -113,8 +112,6 @@ def test_get_model_info_ollama_chat():
         print(mock_client.call_args.kwargs)
 
         assert mock_client.call_args.kwargs["json"]["name"] == "unknown-model"
-
-
 
 
 def test_get_model_info_bedrock_region():
@@ -301,7 +298,7 @@ def test_get_model_info_custom_model_router():
                 },
                 "model_info": {
                     "id": "c20d603e-1166-4e0f-aa65-ed9c476ad4ca",
-                }
+                },
             }
         ]
     )

@@ -43,7 +43,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 @pytest.fixture(autouse=True)
 def reset_mock_cache():
     from litellm.utils import _model_cache
+
     _model_cache.flush_cache()
+
+
 # Test 1: Check trimming of normal message
 def test_basic_trimming():
     litellm._turn_on_debug()
@@ -445,6 +448,7 @@ def test_function_to_dict():
 
 # test_function_to_dict()
 
+
 @pytest.mark.parametrize(
     "model, expected_bool",
     [
@@ -648,9 +652,9 @@ def test_redact_msgs_from_logs_with_dynamic_params():
     standard_callback_dynamic_params = StandardCallbackDynamicParams(
         turn_off_message_logging=False
     )
-    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
-        standard_callback_dynamic_params
-    )
+    litellm_logging_obj.model_call_details[
+        "standard_callback_dynamic_params"
+    ] = standard_callback_dynamic_params
     _redacted_response_obj = redact_message_input_output_from_logging(
         result=response_obj,
         model_call_details=litellm_logging_obj.model_call_details,
@@ -662,9 +666,9 @@ def test_redact_msgs_from_logs_with_dynamic_params():
     standard_callback_dynamic_params = StandardCallbackDynamicParams(
         turn_off_message_logging=True
     )
-    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
-        standard_callback_dynamic_params
-    )
+    litellm_logging_obj.model_call_details[
+        "standard_callback_dynamic_params"
+    ] = standard_callback_dynamic_params
     _redacted_response_obj = redact_message_input_output_from_logging(
         result=response_obj,
         model_call_details=litellm_logging_obj.model_call_details,
@@ -675,9 +679,9 @@ def test_redact_msgs_from_logs_with_dynamic_params():
     # Test Case 3: standard_callback_dynamic_params does not override litellm.turn_off_message_logging
     # since litellm.turn_off_message_logging is True redaction should occur
     standard_callback_dynamic_params = StandardCallbackDynamicParams()
-    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
-        standard_callback_dynamic_params
-    )
+    litellm_logging_obj.model_call_details[
+        "standard_callback_dynamic_params"
+    ] = standard_callback_dynamic_params
     _redacted_response_obj = redact_message_input_output_from_logging(
         result=response_obj,
         model_call_details=litellm_logging_obj.model_call_details,
@@ -1025,10 +1029,12 @@ def test_async_http_handler(mock_async_client):
     concurrent_limit = 2
 
     # Mock the transport creation to return a specific transport
-    with mock.patch.object(AsyncHTTPHandler, '_create_async_transport') as mock_create_transport:
+    with mock.patch.object(
+        AsyncHTTPHandler, "_create_async_transport"
+    ) as mock_create_transport:
         mock_transport = mock.MagicMock()
         mock_create_transport.return_value = mock_transport
-        
+
         AsyncHTTPHandler(timeout, event_hooks, concurrent_limit)
 
         mock_async_client.assert_called_with(
@@ -1588,7 +1594,6 @@ def test_add_custom_logger_callback_to_specific_event(monkeypatch):
 
 
 def test_add_custom_logger_callback_to_specific_event_e2e(monkeypatch):
-
     monkeypatch.setattr(litellm, "success_callback", [])
     monkeypatch.setattr(litellm, "failure_callback", [])
     monkeypatch.setattr(litellm, "callbacks", [])
@@ -2011,7 +2016,6 @@ from unittest.mock import Mock
     ],
 )
 def test_get_applied_guardrails(test_case):
-
     # Setup
     litellm.callbacks = test_case["callbacks"]
 
@@ -2105,13 +2109,12 @@ def test_get_provider_audio_transcription_config():
         ("us.anthropic.claude-3-7-sonnet-20250219-v1:0", True),
     ],
 )
-
 def test_claude_3_7_sonnet_supports_pdf_input(model, expected_bool):
     from litellm.utils import supports_pdf_input
-    
+
     assert supports_pdf_input(model) == expected_bool
 
-    
+
 def test_get_valid_models_from_provider():
     """
     Test that get_valid_models returns the correct models for a given provider
@@ -2131,7 +2134,6 @@ def test_get_valid_models_from_provider():
     assert "gpt-4o-mini" in valid_models
 
 
-
 def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):
     """
     Test that get_valid_models returns the correct models for a given provider
@@ -2140,11 +2142,12 @@ def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):
 
     monkeypatch.setenv("OPENAI_API_KEY", "123")
 
-    _model_cache.set_cached_model_info("openai", litellm_params=None, available_models=["gpt-4o-mini"])
+    _model_cache.set_cached_model_info(
+        "openai", litellm_params=None, available_models=["gpt-4o-mini"]
+    )
     monkeypatch.delenv("OPENAI_API_KEY")
 
     assert _model_cache.get_cached_model_info("openai") is None
-
 
 
 def test_get_valid_models_from_dynamic_api_key():
@@ -2156,12 +2159,18 @@ def test_get_valid_models_from_dynamic_api_key():
 
     creds = CredentialLiteLLMParams(api_key="123")
 
-    valid_models = get_valid_models(custom_llm_provider="anthropic", litellm_params=creds, check_provider_endpoint=True)
+    valid_models = get_valid_models(
+        custom_llm_provider="anthropic",
+        litellm_params=creds,
+        check_provider_endpoint=True,
+    )
     assert len(valid_models) == 0
 
     creds = CredentialLiteLLMParams(api_key=os.getenv("ANTHROPIC_API_KEY"))
-    valid_models = get_valid_models(custom_llm_provider="anthropic", litellm_params=creds, check_provider_endpoint=True)
+    valid_models = get_valid_models(
+        custom_llm_provider="anthropic",
+        litellm_params=creds,
+        check_provider_endpoint=True,
+    )
     assert len(valid_models) > 0
     assert "anthropic/claude-3-7-sonnet-20250219" in valid_models
-
-    

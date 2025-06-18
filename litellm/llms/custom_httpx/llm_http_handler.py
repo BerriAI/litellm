@@ -1108,18 +1108,21 @@ class BaseLLMHTTPHandler:
             )
 
         # Prepare the request
-        headers, complete_url, binary_data, json_data = (
-            self._prepare_audio_transcription_request(
-                model=model,
-                audio_file=audio_file,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                logging_obj=logging_obj,
-                api_key=api_key,
-                api_base=api_base,
-                headers=headers,
-                provider_config=provider_config,
-            )
+        (
+            headers,
+            complete_url,
+            binary_data,
+            json_data,
+        ) = self._prepare_audio_transcription_request(
+            model=model,
+            audio_file=audio_file,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            logging_obj=logging_obj,
+            api_key=api_key,
+            api_base=api_base,
+            headers=headers,
+            provider_config=provider_config,
         )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -1170,18 +1173,21 @@ class BaseLLMHTTPHandler:
             )
 
         # Prepare the request
-        headers, complete_url, binary_data, json_data = (
-            self._prepare_audio_transcription_request(
-                model=model,
-                audio_file=audio_file,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                logging_obj=logging_obj,
-                api_key=api_key,
-                api_base=api_base,
-                headers=headers,
-                provider_config=provider_config,
-            )
+        (
+            headers,
+            complete_url,
+            binary_data,
+            json_data,
+        ) = self._prepare_audio_transcription_request(
+            model=model,
+            audio_file=audio_file,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            logging_obj=logging_obj,
+            api_key=api_key,
+            api_base=api_base,
+            headers=headers,
+            provider_config=provider_config,
         )
 
         if client is None or not isinstance(client, AsyncHTTPHandler):

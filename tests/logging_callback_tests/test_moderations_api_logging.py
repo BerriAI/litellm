@@ -38,12 +38,9 @@ class TestCustomLogger(CustomLogger):
 
         pass
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("model", [
-    None,
-    "omni-moderation-latest"
-])
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", [None, "omni-moderation-latest"])
 async def test_moderations_api_logging(model):
     """
     When moderations API is called, it should log the event on standard_logging_payload
@@ -64,15 +61,21 @@ async def test_moderations_api_logging(model):
     assert custom_logger.standard_logging_payload is not None
 
     # validate the standard_logging_payload
-    standard_logging_payload: StandardLoggingPayload = custom_logger.standard_logging_payload
-    assert standard_logging_payload["call_type"] == litellm.utils.CallTypes.amoderation.value
+    standard_logging_payload: StandardLoggingPayload = (
+        custom_logger.standard_logging_payload
+    )
+    assert (
+        standard_logging_payload["call_type"]
+        == litellm.utils.CallTypes.amoderation.value
+    )
     assert standard_logging_payload["status"] == "success"
-    assert standard_logging_payload["custom_llm_provider"] == litellm.LlmProviders.OPENAI.value
-
+    assert (
+        standard_logging_payload["custom_llm_provider"]
+        == litellm.LlmProviders.OPENAI.value
+    )
 
     # assert the logged input == input
     assert standard_logging_payload["messages"][0]["content"] == input_content
 
-    # assert the logged response == response user received client side 
+    # assert the logged response == response user received client side
     assert dict(standard_logging_payload["response"]) == response.model_dump()
-

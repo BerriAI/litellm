@@ -11,7 +11,9 @@ if TYPE_CHECKING:
 
     from litellm.types.integrations.arize import Protocol as _Protocol
 
-    from litellm.integrations.opentelemetry import OpenTelemetryConfig as _OpenTelemetryConfig
+    from litellm.integrations.opentelemetry import (
+        OpenTelemetryConfig as _OpenTelemetryConfig,
+    )
 
     Protocol = _Protocol
     OpenTelemetryConfig = _OpenTelemetryConfig
@@ -54,7 +56,7 @@ class LangfuseOtelLogger:
         """
         public_key = os.environ.get("LANGFUSE_PUBLIC_KEY", None)
         secret_key = os.environ.get("LANGFUSE_SECRET_KEY", None)
-        
+
         if not public_key or not secret_key:
             raise ValueError(
                 "LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY must be set for Langfuse OpenTelemetry integration."
@@ -62,7 +64,7 @@ class LangfuseOtelLogger:
 
         # Determine endpoint - default to US cloud
         langfuse_host = os.environ.get("LANGFUSE_HOST", None)
-        
+
         if langfuse_host:
             # If LANGFUSE_HOST is provided, construct OTEL endpoint from it
             if not langfuse_host.startswith("http"):
@@ -84,6 +86,5 @@ class LangfuseOtelLogger:
         os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = otlp_auth_headers
 
         return LangfuseOtelConfig(
-            otlp_auth_headers=otlp_auth_headers,
-            protocol="otlp_http"
-        ) 
+            otlp_auth_headers=otlp_auth_headers, protocol="otlp_http"
+        )

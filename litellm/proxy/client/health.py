@@ -1,10 +1,12 @@
 from typing import Optional, Dict, Any
 from .http_client import HTTPClient
 
+
 class HealthManagementClient:
     """
     Client for interacting with the health endpoints of the LiteLLM proxy server.
     """
+
     def __init__(self, base_url: str, api_key: Optional[str] = None, timeout: int = 30):
         """
         Initialize the HealthManagementClient.
@@ -37,4 +39,4 @@ class HealthManagementClient:
             Optional[str]: The server version if available, otherwise None.
         """
         readiness = self.get_readiness()
-        return readiness.get("litellm_version") 
+        return readiness.get("litellm_version")
