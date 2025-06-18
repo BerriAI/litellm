@@ -214,6 +214,8 @@ async def create_user(
         # Transform and return SCIM user
         return await ScimTransformations.transform_litellm_user_to_scim_user(created_user)
         
+    except HTTPException:
+        raise  # Let HTTPExceptions (including ScimUserAlreadyExists) propagate directly
     except Exception as e:
         raise handle_exception_on_proxy(e)
 
