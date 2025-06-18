@@ -783,8 +783,38 @@ class CustomStreamWrapper:
                                     choice_json.pop(
                                         "finish_reason", None
                                     )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
-                                    print_verbose(f"choice_json: {choice_json}")
-                                    choices.append(StreamingChoices(**choice_json))
+                                    
+                                    # Filter out fields that are not compatible with StreamingChoices
+                                    # StreamingChoices expects: finish_reason, index, delta, logprobs, enhancements
+                                    # Regular Choices has: finish_reason, index, message, logprobs, provider_specific_fields
+                                    filtered_choice_json = {}
+                                    
+                                    # Keep compatible fields
+                                    for field in ['index', 'logprobs']:
+                                        if field in choice_json:
+                                            filtered_choice_json[field] = choice_json[field]
+                                    
+                                    # Handle delta vs message conversion
+                                    if 'delta' in choice_json:
+                                        filtered_choice_json['delta'] = choice_json['delta']
+                                    elif 'message' in choice_json:
+                                        # Convert message to delta format for streaming
+                                        message = choice_json['message']
+                                        if isinstance(message, dict):
+                                            # Convert message dict to delta dict
+                                            delta_dict = {}
+                                            if 'content' in message:
+                                                delta_dict['content'] = message['content']
+                                            if 'role' in message:
+                                                delta_dict['role'] = message['role']
+                                            if 'function_call' in message:
+                                                delta_dict['function_call'] = message['function_call']
+                                            if 'tool_calls' in message:
+                                                delta_dict['tool_calls'] = message['tool_calls']
+                                            filtered_choice_json['delta'] = delta_dict
+                                    
+                                    print_verbose(f"filtered_choice_json: {filtered_choice_json}")
+                                    choices.append(StreamingChoices(**filtered_choice_json))
                             except Exception:
                                 choices.append(StreamingChoices())
                         print_verbose(f"choices in streaming: {choices}")
