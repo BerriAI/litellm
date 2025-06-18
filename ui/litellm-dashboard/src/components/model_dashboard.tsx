@@ -78,6 +78,7 @@ import {
   Space,
   Row,
   Col,
+  Checkbox,
 } from "antd";
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
@@ -112,6 +113,7 @@ import ModelInfoView from "./model_info_view";
 import AddModelTab from "./add_model/add_model_tab";
 import { ModelDataTable } from "./model_dashboard/table";
 import { columns } from "./model_dashboard/columns";
+import HealthCheckComponent from "./model_dashboard/HealthCheckComponent";
 import { all_admin_roles } from "@/utils/roles";
 import { Table as TableInstance } from '@tanstack/react-table';
 
@@ -195,7 +197,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     []
   );
   const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI);
-  const [healthCheckResponse, setHealthCheckResponse] = useState<string>("");
+  const [healthCheckResponse, setHealthCheckResponse] = useState<any>(null);
+  const [isHealthCheckLoading, setIsHealthCheckLoading] = useState<boolean>(false);
   const [editModalVisible, setEditModalVisible] = useState<boolean>(false);
 
   const [selectedModel, setSelectedModel] = useState<any>(null);
@@ -262,6 +265,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const dropdownRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<TableInstance<any>>(null);
+
+
 
   const setProviderModelsFn = (provider: Providers) => {
     const _providerModels = getProviderModels(provider, modelMap);
@@ -524,7 +529,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           setProviderSettings(_providerSettings);
         }
 
-        
+
 
         // loop through modelDataResponse and get all`model_name` values
         let all_model_groups: Set<string> = new Set();
@@ -814,14 +819,19 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const runHealthCheck = async () => {
     try {
       message.info("Running health check...");
-      setHealthCheckResponse("");
+      setIsHealthCheckLoading(true);
+      setHealthCheckResponse(null);
       const response = await healthCheckCall(accessToken);
       setHealthCheckResponse(response);
     } catch (error) {
       console.error("Error running health check:", error);
       setHealthCheckResponse("Error running health check");
+    } finally {
+      setIsHealthCheckLoading(false);
     }
   };
+
+
 
   const FilterByContent = (
       <div >
@@ -1085,7 +1095,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               <Tab>Add Model</Tab>
               {all_admin_roles.includes(userRole) && <Tab>LLM Credentials</Tab>}
               {all_admin_roles.includes(userRole) && <Tab>
-                <pre>/health Models</pre>
+                Health Status
               </Tab>}
               {all_admin_roles.includes(userRole) && <Tab>Model Analytics</Tab>}
               {all_admin_roles.includes(userRole) && <Tab>Model Retry Settings</Tab>}
@@ -1254,17 +1264,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               <CredentialsPanel accessToken={accessToken} uploadProps={uploadProps} credentialList={credentialsList} fetchCredentials={fetchCredentials} />
             </TabPanel>
             <TabPanel>
-              <Card>
-                <Text>
-                  `/health` will run a very small request through your models
-                  configured on litellm
-                </Text>
-
-                <Button onClick={runHealthCheck}>Run `/health`</Button>
-                {healthCheckResponse && (
-                  <pre>{JSON.stringify(healthCheckResponse, null, 2)}</pre>
-                )}
-              </Card>
+              <HealthCheckComponent
+                accessToken={accessToken}
+                modelData={modelData}
+                all_models_on_proxy={all_models_on_proxy}
+                getDisplayModelName={getDisplayModelName}
+              />
             </TabPanel>
             <TabPanel>
               <Grid numItems={4} className="mt-2 mb-2">
@@ -1612,6 +1617,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           </TabPanels>
         </TabGroup>
       )}
+
     </div>  
   );
 };
