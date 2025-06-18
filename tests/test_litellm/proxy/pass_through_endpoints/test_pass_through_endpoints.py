@@ -406,51 +406,46 @@ async def test_initialize_pass_through_endpoints_with_include_subpath():
         initialize_pass_through_endpoints,
     )
 
-    # Mock the app and dependencies
-    with patch("litellm.proxy.proxy_server.app") as mock_app:
+    # Mock the helper functions directly
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.add_exact_path_route"
+    ) as mock_add_exact_route:
         with patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.premium_user",
-            True,
-        ):
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.add_subpath_route"
+        ) as mock_add_subpath_route:
             with patch(
-                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.set_env_variables_in_header"
-            ) as mock_set_env:
-                mock_set_env.return_value = {}
+                "litellm.proxy.proxy_server.premium_user",
+                True,
+            ):
+                with patch(
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.set_env_variables_in_header"
+                ) as mock_set_env:
+                    mock_set_env.return_value = {}
 
-                # Test endpoint with include_subpath=True
-                endpoints = [
-                    {
-                        "path": "/test/endpoint",
-                        "target": "http://example.com",
-                        "include_subpath": True,
-                    }
-                ]
-
-                await initialize_pass_through_endpoints(endpoints)
-
-                # Should be called twice - once for exact path, once for wildcard
-                assert mock_app.add_api_route.call_count == 2
-
-                # Get all calls
-                calls = mock_app.add_api_route.call_args_list
-
-                # First call should be exact path
-                exact_path_call = calls[0][1]
-                assert exact_path_call["path"] == "/test/endpoint"
-
-                # Second call should be wildcard path
-                wildcard_call = calls[1][1]
-                assert wildcard_call["path"] == "/test/endpoint/{subpath:path}"
-
-                # Both should have the same methods
-                for call in calls:
-                    assert call[1]["methods"] == [
-                        "GET",
-                        "POST",
-                        "PUT",
-                        "DELETE",
-                        "PATCH",
+                    # Test endpoint with include_subpath=True
+                    endpoints = [
+                        {
+                            "path": "/test/endpoint",
+                            "target": "http://example.com",
+                            "include_subpath": True,
+                        }
                     ]
+
+                    await initialize_pass_through_endpoints(endpoints)
+
+                    # Should be called once for exact path and once for subpath
+                    mock_add_exact_route.assert_called_once()
+                    mock_add_subpath_route.assert_called_once()
+
+                    # Verify exact path route call
+                    exact_call_args = mock_add_exact_route.call_args[1]
+                    assert exact_call_args["path"] == "/test/endpoint"
+                    assert exact_call_args["target"] == "http://example.com"
+
+                    # Verify subpath route call
+                    subpath_call_args = mock_add_subpath_route.call_args[1]
+                    assert subpath_call_args["path"] == "/test/endpoint"
+                    assert subpath_call_args["target"] == "http://example.com"
 
 
 @pytest.mark.asyncio
@@ -462,32 +457,38 @@ async def test_initialize_pass_through_endpoints_without_include_subpath():
         initialize_pass_through_endpoints,
     )
 
-    # Mock the app and dependencies
-    with patch("litellm.proxy.proxy_server.app") as mock_app:
+    # Mock the helper functions directly
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.add_exact_path_route"
+    ) as mock_add_exact_route:
         with patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.premium_user",
-            True,
-        ):
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.add_subpath_route"
+        ) as mock_add_subpath_route:
             with patch(
-                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.set_env_variables_in_header"
-            ) as mock_set_env:
-                mock_set_env.return_value = {}
+                "litellm.proxy.proxy_server.premium_user",
+                True,
+            ):
+                with patch(
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.set_env_variables_in_header"
+                ) as mock_set_env:
+                    mock_set_env.return_value = {}
 
-                # Test endpoint with include_subpath=False (default)
-                endpoints = [
-                    {
-                        "path": "/test/endpoint",
-                        "target": "http://example.com",
-                        "include_subpath": False,
-                    }
-                ]
+                    # Test endpoint with include_subpath=False (default)
+                    endpoints = [
+                        {
+                            "path": "/test/endpoint",
+                            "target": "http://example.com",
+                            "include_subpath": False,
+                        }
+                    ]
 
-                await initialize_pass_through_endpoints(endpoints)
+                    await initialize_pass_through_endpoints(endpoints)
 
-                # Should be called only once for exact path
-                assert mock_app.add_api_route.call_count == 1
+                    # Should be called only once for exact path
+                    mock_add_exact_route.assert_called_once()
+                    mock_add_subpath_route.assert_not_called()
 
-                # Get the call
-                call = mock_app.add_api_route.call_args[1]
-                assert call["path"] == "/test/endpoint"
-                assert call["methods"] == ["GET", "POST", "PUT", "DELETE", "PATCH"]
+                    # Verify exact path route call
+                    exact_call_args = mock_add_exact_route.call_args[1]
+                    assert exact_call_args["path"] == "/test/endpoint"
+                    assert exact_call_args["target"] == "http://example.com"
