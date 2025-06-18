@@ -55,11 +55,13 @@ router = APIRouter()
 def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> dict:
     if "user_id" in data_json and data_json["user_id"] is None:
         data_json["user_id"] = str(uuid.uuid4())
+    data_json.pop("teams", None)  # handled separately
     auto_create_key = data_json.pop("auto_create_key", True)
+
     if auto_create_key is False:
-        data_json[
-            "table_name"
-        ] = "user"  # only create a user, don't create key if 'auto_create_key' set to False
+        data_json["table_name"] = (
+            "user"  # only create a user, don't create key if 'auto_create_key' set to False
+        )
 
     if litellm.default_internal_user_params:
         for key, value in litellm.default_internal_user_params.items():
@@ -158,6 +160,53 @@ async def _add_user_to_organizations(
     await asyncio.gather(*tasks, return_exceptions=True)
 
 
+async def _add_user_to_team(
+    user_id: str,
+    team_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    max_budget_in_team: Optional[float] = None,
+    user_role: Literal["user", "admin"] = "user",
+):
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_add
+
+    try:
+        await team_member_add(
+            data=TeamMemberAddRequest(
+                team_id=team_id,
+                member=Member(
+                    user_id=user_id,
+                    role=user_role,
+                ),
+                max_budget_in_team=max_budget_in_team,
+            ),
+            user_api_key_dict=user_api_key_dict,
+        )
+    except HTTPException as e:
+        if e.status_code == 400 and (
+            "already exists" in str(e) or "doesn't exist" in str(e)
+        ):
+            verbose_proxy_logger.debug(
+                "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
+                    str(e)
+                )
+            )
+        else:
+            verbose_proxy_logger.debug(
+                "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): Exception occured - {}".format(
+                    str(e)
+                )
+            )
+    except Exception as e:
+        if "already exists" in str(e) or "doesn't exist" in str(e):
+            verbose_proxy_logger.debug(
+                "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
+                    str(e)
+                )
+            )
+        else:
+            raise e
+
+
 @router.post(
     "/user/new",
     tags=["Internal User management"],
@@ -252,6 +301,7 @@ async def new_user(
 
         data_json = data.json()  # type: ignore
         data_json = _update_internal_new_user_params(data_json, data)
+        teams = data.teams
         organization_ids = cast(
             Optional[List[str]], data_json.pop("organizations", None)
         )
@@ -260,47 +310,39 @@ async def new_user(
         # Admin UI Logic
         # Add User to Team and Organization
         # if team_id passed add this user to the team
-        if data_json.get("team_id", None) is not None:
-            from litellm.proxy.management_endpoints.team_endpoints import (
-                team_member_add,
+        _team_id = data_json.get("team_id", None)
+        if _team_id is not None:
+            await _add_user_to_team(
+                user_id=cast(str, response.get("user_id")),
+                team_id=_team_id,
+                user_api_key_dict=user_api_key_dict,
+                max_budget_in_team=None,
+                user_role="user",
             )
+        elif teams is not None:
+            tasks = []
+            for team in teams:
+                max_budget_in_team: Optional[float] = None
+                user_role: Literal["user", "admin"] = "user"
+                if isinstance(team, str):
+                    team_id = team
+                elif isinstance(team, NewUserRequestTeam):
+                    team_id = team.team_id
+                    max_budget_in_team = team.max_budget_in_team
+                    user_role = team.user_role
+                else:
+                    raise ValueError(f"Invalid team type: {type(team)}")
 
-            try:
-                await team_member_add(
-                    data=TeamMemberAddRequest(
-                        team_id=data_json.get("team_id", None),
-                        member=Member(
-                            user_id=data_json.get("user_id", None),
-                            role="user",
-                            user_email=data_json.get("user_email", None),
-                        ),
-                    ),
-                    user_api_key_dict=user_api_key_dict,
+                tasks.append(
+                    _add_user_to_team(
+                        user_id=cast(str, response.get("user_id")),
+                        team_id=team_id,
+                        user_api_key_dict=user_api_key_dict,
+                        max_budget_in_team=max_budget_in_team,
+                        user_role=user_role,
+                    )
                 )
-            except HTTPException as e:
-                if e.status_code == 400 and (
-                    "already exists" in str(e) or "doesn't exist" in str(e)
-                ):
-                    verbose_proxy_logger.debug(
-                        "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
-                            str(e)
-                        )
-                    )
-                else:
-                    verbose_proxy_logger.debug(
-                        "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): Exception occured - {}".format(
-                            str(e)
-                        )
-                    )
-            except Exception as e:
-                if "already exists" in str(e) or "doesn't exist" in str(e):
-                    verbose_proxy_logger.debug(
-                        "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
-                            str(e)
-                        )
-                    )
-                else:
-                    raise e
+            await asyncio.gather(*tasks, return_exceptions=True)
 
         user_id = cast(Optional[str], response.get("user_id", None))
 
@@ -676,9 +718,9 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest) -> di
         "budget_duration" not in non_default_values
     ):  # applies internal user limits, if user role updated
         if is_internal_user and litellm.internal_user_budget_duration is not None:
-            non_default_values[
-                "budget_duration"
-            ] = litellm.internal_user_budget_duration
+            non_default_values["budget_duration"] = (
+                litellm.internal_user_budget_duration
+            )
             from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
             non_default_values["budget_reset_at"] = get_budget_reset_time(
@@ -1322,13 +1364,13 @@ async def ui_view_users(
             }
 
         # Query users with pagination and filters
-        users: Optional[
-            List[BaseModel]
-        ] = await prisma_client.db.litellm_usertable.find_many(
-            where=where_conditions,
-            skip=skip,
-            take=page_size,
-            order={"created_at": "desc"},
+        users: Optional[List[BaseModel]] = (
+            await prisma_client.db.litellm_usertable.find_many(
+                where=where_conditions,
+                skip=skip,
+                take=page_size,
+                order={"created_at": "desc"},
+            )
         )
 
         if not users:
