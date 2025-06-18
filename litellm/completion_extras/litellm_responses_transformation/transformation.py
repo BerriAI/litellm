@@ -395,8 +395,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         verbose_logger.debug(f"Chat provider:   text -> {converted}")
                     elif original_type == "image_url":
                         # Map to responses API image format
-                        converted = self._convert_content_to_responses_format_image(
-                            cast(ChatCompletionImageObject, item), role
+                        converted = cast(
+                            dict,
+                            self._convert_content_to_responses_format_image(
+                                cast(ChatCompletionImageObject, item), role
+                            ),
                         )
                         result.append(converted)
                         verbose_logger.debug(
