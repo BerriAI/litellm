@@ -79,6 +79,7 @@ class CustomStreamWrapper:
         self.merge_reasoning_content_in_choices: bool = (
             litellm_params.merge_reasoning_content_in_choices or False
         )
+        self.only_tool_response: bool = litellm_params.only_tool_response or False
         self.sent_first_thinking_block = False
         self.sent_last_thinking_block = False
         self.thinking_content = ""
@@ -827,6 +828,7 @@ class CustomStreamWrapper:
                 self._optional_combine_thinking_block_in_choices(
                     model_response=model_response
                 )
+                self._optional_only_tool_response(model_response=model_response)
                 print_verbose(f"returning model_response: {model_response}")
                 return model_response
             else:
@@ -924,6 +926,14 @@ class CustomStreamWrapper:
 
             if hasattr(model_response.choices[0].delta, "reasoning_content"):
                 del model_response.choices[0].delta.reasoning_content
+        return
+
+    def _optional_only_tool_response(self, model_response: ModelResponseStream) -> None:
+        """
+        When true, only the tool response is returned.
+        """
+        if self.only_tool_response is True:
+            model_response.choices[0].delta.content = ""
         return
 
     def chunk_creator(self, chunk: Any):  # type: ignore  # noqa: PLR0915

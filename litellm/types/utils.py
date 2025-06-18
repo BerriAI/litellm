@@ -2084,6 +2084,7 @@ all_litellm_params = [
     "litellm_trace_id",
     "tags",
     "acompletion",
+    "only_tool_response",
     "aimg_generation",
     "atext_completion",
     "text_completion",

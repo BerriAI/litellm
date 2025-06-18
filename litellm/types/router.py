@@ -205,6 +205,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     merge_reasoning_content_in_choices: Optional[bool] = False
     model_info: Optional[Dict] = None
     mock_response: Optional[Union[str, ModelResponse, Exception, Any]] = None
+    only_tool_response: Optional[bool] = False
 
     def __init__(
         self,
@@ -250,6 +251,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         merge_reasoning_content_in_choices: Optional[bool] = False,
         model_info: Optional[Dict] = None,
         mock_response: Optional[Union[str, ModelResponse, Exception, Any]] = None,
+        only_tool_response: Optional[bool] = False,
         **params,
     ):
         args = locals()

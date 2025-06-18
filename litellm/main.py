@@ -1264,6 +1264,7 @@ def completion(  # type: ignore # noqa: PLR0915
             azure_scope=kwargs.get("azure_scope"),
             max_retries=max_retries,
             timeout=timeout,
+            only_tool_response=kwargs.get("only_tool_response", False),
         )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
