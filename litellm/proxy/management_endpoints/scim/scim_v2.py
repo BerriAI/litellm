@@ -314,7 +314,71 @@ def _extract_group_values(value: Any) -> List[str]:
     return group_values
 
 
-def _apply_patch_ops(  # noqa: PLR0915 -- allow complex logic
+def _handle_displayname_update(op_type: str, value: Any, update_data: Dict[str, Any]) -> None:
+    """Handle displayname updates."""
+    if op_type == "remove":
+        update_data["user_alias"] = None
+    else:
+        update_data["user_alias"] = str(value)
+
+
+def _handle_externalid_update(op_type: str, value: Any, update_data: Dict[str, Any]) -> None:
+    """Handle externalid updates."""
+    if op_type == "remove":
+        update_data["sso_user_id"] = None
+    else:
+        update_data["sso_user_id"] = str(value)
+
+
+def _handle_active_update(op_type: str, value: Any, metadata: Dict[str, Any]) -> None:
+    """Handle active status updates."""
+    if op_type == "remove":
+        metadata.pop("scim_active", None)
+    else:
+        bool_val = value
+        if isinstance(value, str):
+            bool_val = value.lower() == "true"
+        else:
+            bool_val = bool(value)
+        metadata["scim_active"] = bool_val
+
+
+def _handle_name_update(path: str, op_type: str, value: Any, scim_metadata: Dict[str, Any]) -> None:
+    """Handle name field updates (givenName, familyName)."""
+    if path == "name.givenname":
+        if op_type == "remove":
+            scim_metadata.pop("givenName", None)
+        else:
+            scim_metadata["givenName"] = str(value)
+    elif path == "name.familyname":
+        if op_type == "remove":
+            scim_metadata.pop("familyName", None)
+        else:
+            scim_metadata["familyName"] = str(value)
+
+
+def _handle_group_operations(op_type: str, value: Any, teams_set: Set[str]) -> Optional[Set[str]]:
+    """Handle group/team membership operations."""
+    group_values = _extract_group_values(value)
+    if op_type == "replace":
+        return set(group_values)
+    elif op_type == "add":
+        teams_set.update(group_values)
+    elif op_type == "remove":
+        for gid in group_values:
+            teams_set.discard(gid)
+    return None
+
+
+def _handle_generic_metadata(path: str, op_type: str, value: Any, metadata: Dict[str, Any]) -> None:
+    """Handle generic metadata operations for unknown paths."""
+    if op_type == "remove":
+        metadata.pop(path, None)
+    else:
+        metadata[path] = value
+
+
+def _apply_patch_ops(
     existing_user: LiteLLM_UserTable,
     patch_ops: SCIMPatchOp,
 ) -> tuple[Dict[str, Any], Set[str]]:
@@ -332,49 +396,19 @@ def _apply_patch_ops(  # noqa: PLR0915 -- allow complex logic
         op_type = op.op
 
         if path == "displayname":
-            if op_type == "remove":
-                update_data["user_alias"] = None
-            else:
-                update_data["user_alias"] = str(value)
-        elif path == "active":
-            if op_type == "remove":
-                metadata.pop("scim_active", None)
-            else:
-                bool_val = value
-                if isinstance(value, str):
-                    bool_val = value.lower() == "true"
-                else:
-                    bool_val = bool(value)
-                metadata["scim_active"] = bool_val
+            _handle_displayname_update(op_type, value, update_data)
         elif path == "externalid":
-            if op_type == "remove":
-                update_data["sso_user_id"] = None
-            else:
-                update_data["sso_user_id"] = str(value)
-        elif path == "name.givenname":
-            if op_type == "remove":
-                scim_metadata.pop("givenName", None)
-            else:
-                scim_metadata["givenName"] = str(value)
-        elif path == "name.familyname":
-            if op_type == "remove":
-                scim_metadata.pop("familyName", None)
-            else:
-                scim_metadata["familyName"] = str(value)
+            _handle_externalid_update(op_type, value, update_data)
+        elif path == "active":
+            _handle_active_update(op_type, value, metadata)
+        elif path in ("name.givenname", "name.familyname"):
+            _handle_name_update(path, op_type, value, scim_metadata)
         elif path.startswith("groups"):
-            group_values = _extract_group_values(value)
-            if op_type == "replace":
-                replace_team_set = set(group_values)
-            elif op_type == "add":
-                teams_set.update(group_values)
-            elif op_type == "remove":
-                for gid in group_values:
-                    teams_set.discard(gid)
+            new_replace_set = _handle_group_operations(op_type, value, teams_set)
+            if new_replace_set is not None:
+                replace_team_set = new_replace_set
         else:
-            if op_type == "remove":
-                metadata.pop(path, None)
-            else:
-                metadata[path] = value
+            _handle_generic_metadata(path, op_type, value, metadata)
 
     final_team_set = replace_team_set if replace_team_set is not None else teams_set
     metadata["scim_metadata"] = scim_metadata
