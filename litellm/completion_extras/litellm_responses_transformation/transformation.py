@@ -144,10 +144,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 responses_api_request["max_output_tokens"] = value
             elif key == "tools" and value is not None:
                 # Convert chat completion tools to responses API tools format
-                responses_api_request[
-                    "tools"
-                ] = self._convert_tools_to_responses_format(
-                    cast(List[Dict[str, Any]], value)
+                responses_api_request["tools"] = (
+                    self._convert_tools_to_responses_format(
+                        cast(List[Dict[str, Any]], value)
+                    )
                 )
             elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
                 responses_api_request[key] = value  # type: ignore
@@ -364,6 +364,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         role: str,
     ) -> List[Dict[str, Any]]:
         """Convert chat completion content to responses API format"""
+        from litellm.types.llms.openai import ChatCompletionImageObject
+
         verbose_logger.debug(
             f"Chat provider: Converting content to responses format - input type: {type(content)}"
         )
