@@ -90,6 +90,8 @@ export interface passThroughItem {
   path: string
   target: string
   headers: object
+  include_subpath?: boolean
+  input_cost_per_request?: number
 }
 
 
