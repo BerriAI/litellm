@@ -79,7 +79,7 @@ export interface passThroughItem {
   target: string
   headers: object
   include_subpath?: boolean
-  input_cost_per_request?: number
+  cost_per_request?: number
 }
 
 // Password field component for headers
