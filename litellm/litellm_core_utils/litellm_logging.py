@@ -3837,6 +3837,20 @@ class StandardLoggingPayloadSetup:
                         user_agent_tags.append(user_agent)
         return user_agent_tags
 
+    @staticmethod
+    def _get_request_tags(metadata: dict, proxy_server_request: dict) -> List[str]:
+        request_tags = (
+            metadata.get("tags", [])
+            if isinstance(metadata.get("tags", []), list)
+            else []
+        )
+        user_agent_tags = StandardLoggingPayloadSetup._get_user_agent_tags(
+            proxy_server_request
+        )
+        if user_agent_tags is not None:
+            request_tags.extend(user_agent_tags)
+        return request_tags
+
 
 def get_standard_logging_object_payload(
     kwargs: Optional[dict],
@@ -3907,16 +3921,9 @@ def get_standard_logging_object_payload(
         _model_id = metadata.get("model_info", {}).get("id", "")
         _model_group = metadata.get("model_group", "")
 
-        request_tags = (
-            metadata.get("tags", [])
-            if isinstance(metadata.get("tags", []), list)
-            else []
+        request_tags = StandardLoggingPayloadSetup._get_request_tags(
+            metadata=metadata, proxy_server_request=proxy_server_request
         )
-        user_agent_tags = StandardLoggingPayloadSetup._get_user_agent_tags(
-            proxy_server_request
-        )
-        if user_agent_tags is not None:
-            request_tags.extend(user_agent_tags)
 
         # cleanup timestamps
         (
