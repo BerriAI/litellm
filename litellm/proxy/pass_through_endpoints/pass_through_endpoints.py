@@ -1,5 +1,6 @@
 import ast
 import asyncio
+import copy
 import json
 import traceback
 import uuid
@@ -468,6 +469,11 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         kwargs = {
             "litellm_params": {
                 "metadata": _metadata,
+                "proxy_server_request": {
+                        "url": str(request.url),
+                        "method": request.method,
+                        "body": copy.copy(_parsed_body),  # use copy instead of deepcopy
+                    }
             },
             "call_type": "pass_through_endpoint",
             "litellm_call_id": litellm_call_id,
