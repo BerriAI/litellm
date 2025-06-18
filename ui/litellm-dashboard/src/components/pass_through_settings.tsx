@@ -192,18 +192,16 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
       header: "Actions",
       id: "actions",
       cell: ({ row }) => (
-        <div className="flex space-x-2">
-          <button
-            className="p-1 hover:bg-gray-100 rounded text-blue-600"
+        <div className="flex space-x-1">
+          <Icon
+            icon={PencilAltIcon}
+            size="sm"
             onClick={() => setSelectedEndpointPath(row.original.path)}
-            title="View Details"
-          >
-            <Eye className="w-4 h-4" />
-          </button>
+            title="Edit"
+          />
           <Icon
             icon={TrashIcon}
-            color="red"
-            className="cursor-pointer"
+            size="sm"
             onClick={() => handleResetField(row.original.path, row.index)}
             title="Delete"
           />
