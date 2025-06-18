@@ -12,6 +12,7 @@ import httpx
 from fastapi import (
     APIRouter,
     Depends,
+    FastAPI,
     HTTPException,
     Request,
     Response,
@@ -848,6 +849,7 @@ def create_pass_through_route(
     _merge_query_params: Optional[bool] = False,
     dependencies: Optional[List] = None,
     include_subpath: Optional[bool] = False,
+    cost_per_request: Optional[float] = None,
 ):
     # check if target is an adapter.py or a url
     import uuid
@@ -921,13 +923,14 @@ def _is_streaming_response(response: httpx.Response) -> bool:
 class InitPassThroughEndpointHelpers:
     @staticmethod
     def add_exact_path_route(
-        app,
+        app: FastAPI,
         path: str,
         target: str,
         custom_headers: Optional[dict],
         forward_headers: Optional[bool],
         merge_query_params: Optional[bool],
         dependencies: Optional[List],
+        cost_per_request: Optional[float],
     ):
         """Add exact path route for pass-through endpoint"""
         verbose_proxy_logger.debug(
@@ -936,15 +939,16 @@ class InitPassThroughEndpointHelpers:
             dependencies,
         )
 
-        app.add_api_route(  # type: ignore
+        app.add_api_route(
             path=path,
-            endpoint=create_pass_through_route(  # type: ignore
+            endpoint=create_pass_through_route(
                 path,
                 target,
                 custom_headers,
                 forward_headers,
                 merge_query_params,
                 dependencies,
+                cost_per_request=cost_per_request,
             ),
             methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
             dependencies=dependencies,
@@ -952,13 +956,14 @@ class InitPassThroughEndpointHelpers:
 
     @staticmethod
     def add_subpath_route(
-        app,
+        app: FastAPI,
         path: str,
         target: str,
         custom_headers: Optional[dict],
         forward_headers: Optional[bool],
         merge_query_params: Optional[bool],
         dependencies: Optional[List],
+        cost_per_request: Optional[float],
     ):
         """Add wildcard route for sub-paths"""
         wildcard_path = f"{path}/{{subpath:path}}"
@@ -968,9 +973,9 @@ class InitPassThroughEndpointHelpers:
             dependencies,
         )
 
-        app.add_api_route(  # type: ignore
+        app.add_api_route(
             path=wildcard_path,
-            endpoint=create_pass_through_route(  # type: ignore
+            endpoint=create_pass_through_route(
                 path,
                 target,
                 custom_headers,
@@ -978,6 +983,7 @@ class InitPassThroughEndpointHelpers:
                 merge_query_params,
                 dependencies,
                 include_subpath=True,
+                cost_per_request=cost_per_request,
             ),
             methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
             dependencies=dependencies,
@@ -1038,6 +1044,7 @@ async def initialize_pass_through_endpoints(
             forward_headers=_forward_headers,
             merge_query_params=_merge_query_params,
             dependencies=_dependencies,
+            cost_per_request=endpoint.get("cost_per_request", None),
         )
 
         # Add wildcard route for sub-paths
@@ -1050,6 +1057,7 @@ async def initialize_pass_through_endpoints(
                 forward_headers=_forward_headers,
                 merge_query_params=_merge_query_params,
                 dependencies=_dependencies,
+                cost_per_request=endpoint.get("cost_per_request", None),
             )
 
         verbose_proxy_logger.debug("Added new pass through endpoint: %s", _path)
