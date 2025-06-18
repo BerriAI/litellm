@@ -5,7 +5,7 @@ This is an enterprise feature and requires a premium license.
 """
 
 import uuid
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from fastapi import (
     APIRouter,
@@ -25,6 +25,8 @@ from litellm.proxy._types import (
     Member,
     NewTeamRequest,
     NewUserRequest,
+    TeamMemberAddRequest,
+    TeamMemberDeleteRequest,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -32,7 +34,11 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
-from litellm.proxy.management_endpoints.team_endpoints import new_team
+from litellm.proxy.management_endpoints.team_endpoints import (
+    new_team,
+    team_member_add,
+    team_member_delete,
+)
 from litellm.proxy.utils import _premium_user_check, handle_exception_on_proxy
 from litellm.types.proxy.management_endpoints.scim_v2 import *
 
@@ -291,6 +297,122 @@ async def delete_user(
         raise handle_exception_on_proxy(e)
 
 
+def _extract_group_values(value: Any) -> List[str]:
+    """Return group ids from a SCIM patch value."""
+    group_values: List[str] = []
+    if isinstance(value, list):
+        for v in value:
+            if isinstance(v, dict) and v.get("value"):
+                group_values.append(str(v.get("value")))
+            elif isinstance(v, str):
+                group_values.append(v)
+    elif isinstance(value, dict):
+        if value.get("value"):
+            group_values.append(str(value.get("value")))
+    elif isinstance(value, str):
+        group_values.append(value)
+    return group_values
+
+
+def _apply_patch_ops(  # noqa: PLR0915 -- allow complex logic
+    existing_user: LiteLLM_UserTable,
+    patch_ops: SCIMPatchOp,
+) -> tuple[Dict[str, Any], Set[str]]:
+    """Apply patch operations and return update data and final team set."""
+    update_data: Dict[str, Any] = {}
+    metadata = existing_user.metadata or {}
+    scim_metadata = metadata.get("scim_metadata", {})
+
+    teams_set: Set[str] = set(existing_user.teams or [])
+    replace_team_set: Optional[Set[str]] = None
+
+    for op in patch_ops.Operations:
+        path = (op.path or "").lower()
+        value = op.value
+        op_type = op.op
+
+        if path == "displayname":
+            if op_type == "remove":
+                update_data["user_alias"] = None
+            else:
+                update_data["user_alias"] = str(value)
+        elif path == "active":
+            if op_type == "remove":
+                metadata.pop("scim_active", None)
+            else:
+                bool_val = value
+                if isinstance(value, str):
+                    bool_val = value.lower() == "true"
+                else:
+                    bool_val = bool(value)
+                metadata["scim_active"] = bool_val
+        elif path == "externalid":
+            if op_type == "remove":
+                update_data["sso_user_id"] = None
+            else:
+                update_data["sso_user_id"] = str(value)
+        elif path == "name.givenname":
+            if op_type == "remove":
+                scim_metadata.pop("givenName", None)
+            else:
+                scim_metadata["givenName"] = str(value)
+        elif path == "name.familyname":
+            if op_type == "remove":
+                scim_metadata.pop("familyName", None)
+            else:
+                scim_metadata["familyName"] = str(value)
+        elif path.startswith("groups"):
+            group_values = _extract_group_values(value)
+            if op_type == "replace":
+                replace_team_set = set(group_values)
+            elif op_type == "add":
+                teams_set.update(group_values)
+            elif op_type == "remove":
+                for gid in group_values:
+                    teams_set.discard(gid)
+        else:
+            if op_type == "remove":
+                metadata.pop(path, None)
+            else:
+                metadata[path] = value
+
+    final_team_set = replace_team_set if replace_team_set is not None else teams_set
+    metadata["scim_metadata"] = scim_metadata
+    update_data["metadata"] = metadata
+    return update_data, final_team_set
+
+async def patch_team_membership(
+    user_id: str,
+    teams_ids_to_add_user_to: List[str],
+    teams_ids_to_remove_user_from: List[str],
+) -> bool:
+    """
+    Add or remove user from teams
+    """
+    for _team_id in teams_ids_to_add_user_to:
+            try:
+                await team_member_add(
+                    data=TeamMemberAddRequest(
+                        team_id=_team_id,
+                        member=Member(user_id=user_id, role="user"),
+                    ),
+                    user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+                )
+            except Exception as e:
+                verbose_proxy_logger.exception(f"Error adding user to team {_team_id}: {e}")
+
+    for _team_id in teams_ids_to_remove_user_from:
+        try:
+            await team_member_delete(
+                data=TeamMemberDeleteRequest(team_id=_team_id, user_id=user_id),
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+        except Exception as e:
+            verbose_proxy_logger.exception(f"Error removing user from team {_team_id}: {e}")
+    
+
+    return True
+
 @scim_router.patch(
     "/Users/{user_id}",
     response_model=SCIMUser,
@@ -322,7 +444,31 @@ async def patch_user(
                 status_code=404, detail={"error": f"User not found with ID: {user_id}"}
             )
 
-        return None
+        update_data, final_team_set = _apply_patch_ops(
+            existing_user=existing_user,
+            patch_ops=patch_ops,
+        )
+
+        existing_teams = set(existing_user.teams or [])
+        added_groups = final_team_set - existing_teams
+        removed_groups = existing_teams - final_team_set
+
+        await patch_team_membership(
+            user_id=user_id,
+            teams_ids_to_add_user_to=list(added_groups),
+            teams_ids_to_remove_user_from=list(removed_groups),
+        )
+
+        update_data["teams"] = list(final_team_set)
+
+        updated_user = await prisma_client.db.litellm_usertable.update(
+            where={"user_id": user_id},
+            data=update_data,
+        )
+
+        scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(updated_user)
+
+        return scim_user
 
     except Exception as e:
         raise handle_exception_on_proxy(e)
