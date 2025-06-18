@@ -38,7 +38,9 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
             "top_logprobs",
         ]
 
-        o_series_only_param = ["reasoning_effort"]
+        o_series_only_param = []
+        if model and model != "o1-mini":
+            o_series_only_param.append("reasoning_effort")
         all_openai_params.extend(o_series_only_param)
         return [
             param for param in all_openai_params if param not in non_supported_params
