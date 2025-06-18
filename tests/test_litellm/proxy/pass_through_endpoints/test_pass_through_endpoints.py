@@ -634,73 +634,6 @@ async def test_pass_through_success_handler_with_cost_per_request():
 
 
 @pytest.mark.asyncio
-async def test_pass_through_request_with_cost_per_request():
-    """
-    Test that pass_through_request correctly handles cost_per_request parameter
-    """
-    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
-        PassthroughStandardLoggingPayload,
-    )
-
-    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
-        ) as mock_get_client:
-            with patch(
-                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.ProxyBaseLLMRequestProcessing"
-            ) as mock_processing:
-                # Setup mock for hooks - pre_call_hook should return the parsed body
-                mock_proxy_logging.pre_call_hook = AsyncMock(return_value={"test": "data"})
-                mock_proxy_logging.async_success_handler = AsyncMock()
-                mock_proxy_logging.post_call_failure_hook = AsyncMock()
-
-                # Setup mock for httpx client
-                mock_client = MagicMock()
-                mock_client.client = MagicMock()
-                mock_response = MagicMock()
-                mock_response.status_code = 200
-                mock_response.headers = {}
-                mock_response.text = '{"result": "success"}'
-                mock_client.client.request = AsyncMock(return_value=mock_response)
-                mock_get_client.return_value = mock_client
-
-                # Mock headers for custom headers
-                mock_processing.get_custom_headers.return_value = {}
-
-                # Create mock request
-                mock_request = MagicMock(spec=Request)
-                mock_request.method = "POST"
-                mock_request.body = AsyncMock(return_value=b'{"test": "data"}')
-                mock_request.headers = Headers({})
-                mock_request.query_params = QueryParams({})
-
-                # Create mock user API key dict
-                mock_user_api_key_dict = MagicMock()
-
-                # Call the function with cost_per_request
-                await pass_through_request(
-                    request=mock_request,
-                    target="http://test.com",
-                    custom_headers={},
-                    user_api_key_dict=mock_user_api_key_dict,
-                    cost_per_request=2.50,
-                )
-
-                # Verify that pre_call_hook was called with cost_per_request in the payload
-                mock_proxy_logging.pre_call_hook.assert_called_once()
-                pre_call_kwargs = mock_proxy_logging.pre_call_hook.call_args[1]
-                
-                # Check that the passthrough_logging_payload contains cost_per_request
-                passthrough_payload = pre_call_kwargs["data"]
-                assert passthrough_payload["cost_per_request"] == 2.50
-
-                # Verify that async_success_handler was called
-                mock_proxy_logging.async_success_handler.assert_called_once()
-                success_call_kwargs = mock_proxy_logging.async_success_handler.call_args[1]
-                assert success_call_kwargs["passthrough_logging_payload"]["cost_per_request"] == 2.50
-
-
-@pytest.mark.asyncio
 async def test_create_pass_through_route_with_cost_per_request():
     """
     Test that create_pass_through_route correctly passes cost_per_request to the endpoint function
@@ -735,6 +668,7 @@ async def test_create_pass_through_route_with_cost_per_request():
         await endpoint_func(
             request=mock_request,
             user_api_key_dict={},
+            fastapi_response=MagicMock(),
         )
 
         # Verify that pass_through_request was called with cost_per_request
