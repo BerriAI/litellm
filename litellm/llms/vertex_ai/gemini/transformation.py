@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _get_image_mime_type_from_url,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
+    convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
     convert_to_gemini_tool_call_invoke,
     convert_to_gemini_tool_call_result,
@@ -45,6 +46,7 @@ from litellm.types.llms.vertex_ai import (
     ToolConfig,
     Tools,
 )
+from litellm.types.utils import GenericImageParsingChunk
 
 from ..common_utils import (
     _check_text_in_content,
@@ -154,10 +156,26 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             _parts.append(_part)
                         elif element["type"] == "input_audio":
                             audio_element = cast(ChatCompletionAudioObject, element)
-                            if audio_element["input_audio"].get("data") is not None:
+                            audio_data = audio_element["input_audio"].get("data")
+                            audio_format = audio_element["input_audio"].get("format")
+                            if audio_data is not None and audio_format is not None:
+                                audio_format_modified = (
+                                    "audio/" + audio_format
+                                    if audio_format.startswith("audio/") is False
+                                    else audio_format
+                                )  # Gemini expects audio/wav, audio/mp3, etc.
+                                openai_image_str = (
+                                    convert_generic_image_chunk_to_openai_image_obj(
+                                        image_chunk=GenericImageParsingChunk(
+                                            type="base64",
+                                            media_type=audio_format_modified,
+                                            data=audio_data,
+                                        )
+                                    )
+                                )
                                 _part = _process_gemini_image(
-                                    image_url=audio_element["input_audio"]["data"],
-                                    format=audio_element["input_audio"].get("format"),
+                                    image_url=openai_image_str,
+                                    format=audio_format_modified,
                                 )
                                 _parts.append(_part)
                         elif element["type"] == "file":

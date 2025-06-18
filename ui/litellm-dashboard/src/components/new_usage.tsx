@@ -33,13 +33,15 @@ interface NewUsagePageProps {
   userRole: string | null;
   userID: string | null;
   teams: Team[];
+  premiumUser: boolean;
 }
 
 const NewUsagePage: React.FC<NewUsagePageProps> = ({
   accessToken,
   userRole,
   userID,
-  teams
+  teams,
+  premiumUser
 }) => {
   const [userSpendData, setUserSpendData] = useState<{
     results: DailyData[];
@@ -255,9 +257,11 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 
   return (
     <div style={{ width: "100%" }} className="p-8">
+      {all_admin_roles.includes(userRole || "") ?
       <Text className="text-sm text-gray-500 mb-4">
-        This is the new usage dashboard. <br/> You may see empty data, as these use <a href="https://github.com/BerriAI/litellm/blob/6de348125208dd4be81ff0e5813753df2fbe9735/schema.prisma#L320" className="text-blue-500 hover:text-blue-700 ml-1">new aggregate tables</a> to allow UI to work at 1M+ spend logs. To access the old dashboard, go to Experimental {'>'} Old Usage.
+        Note: If you see key/model-level inconsistencies between Global View and Team Usage, it&apos;s because the Global View was missing spend when user_id = null, prior to v1.71.2. <a href="https://github.com/BerriAI/litellm/issues/10876" className="text-blue-500 hover:text-blue-700 ml-1">Learn more here</a>.
       </Text>
+      : null}
       <TabGroup>
         <TabList variant="solid" className="mt-1">
           {all_admin_roles.includes(userRole || "") ? <Tab>Global Usage</Tab> : <Tab>Your Usage</Tab>}
@@ -384,6 +388,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                           userID={userID}
                           userRole={userRole}
                           teams={null}
+                          premiumUser={premiumUser}
                         />
                       </Card>
                     </Col>
@@ -504,6 +509,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                 label: team.team_alias,
                 value: team.team_id
               })) || null}
+              premiumUser={premiumUser}
             />
           </TabPanel>
 
@@ -515,6 +521,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               userID={userID}
               userRole={userRole}
               entityList={allTags}
+              premiumUser={premiumUser}
             />
           </TabPanel>
 

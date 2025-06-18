@@ -200,9 +200,11 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     max_budget: Optional[float] = None
     budget_duration: Optional[str] = None
     use_in_pass_through: Optional[bool] = False
+    use_litellm_proxy: Optional[bool] = False
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: Optional[bool] = False
     model_info: Optional[Dict] = None
+    mock_response: Optional[Union[str, ModelResponse, Exception, Any]] = None
 
     def __init__(
         self,
@@ -242,9 +244,12 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         budget_duration: Optional[str] = None,
         # Pass through params
         use_in_pass_through: Optional[bool] = False,
+        # Dynamic param to force using litellm proxy
+        use_litellm_proxy: Optional[bool] = False,
         # This will merge the reasoning content in the choices
         merge_reasoning_content_in_choices: Optional[bool] = False,
         model_info: Optional[Dict] = None,
+        mock_response: Optional[Union[str, ModelResponse, Exception, Any]] = None,
         **params,
     ):
         args = locals()
@@ -312,6 +317,7 @@ class LiteLLM_Params(GenericLiteLLMParams):
         max_file_size_mb: Optional[float] = None,
         # will use deployment on pass-through endpoints if True
         use_in_pass_through: Optional[bool] = False,
+        use_litellm_proxy: Optional[bool] = False,
         **params,
     ):
         args = locals()
@@ -564,6 +570,7 @@ class ModelGroupInfo(BaseModel):
     supports_parallel_function_calling: bool = Field(default=False)
     supports_vision: bool = Field(default=False)
     supports_web_search: bool = Field(default=False)
+    supports_url_context: bool = Field(default=False)
     supports_reasoning: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
     supported_openai_params: Optional[List[str]] = Field(default=[])

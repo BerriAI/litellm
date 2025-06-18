@@ -15,6 +15,7 @@ from litellm.responses.litellm_completion_transformation.handler import (
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
+    PromptObject,
     Reasoning,
     ResponseIncludable,
     ResponseInputParam,
@@ -37,6 +38,58 @@ litellm_completion_transformation_handler = LiteLLMCompletionTransformationHandl
 #################################################
 
 
+def mock_responses_api_response(
+    mock_response: str = "In a peaceful grove beneath a silver moon, a unicorn named Lumina discovered a hidden pool that reflected the stars. As she dipped her horn into the water, the pool began to shimmer, revealing a pathway to a magical realm of endless night skies. Filled with wonder, Lumina whispered a wish for all who dream to find their own hidden magic, and as she glanced back, her hoofprints sparkled like stardust.",
+):
+    return ResponsesAPIResponse(
+        **{  # type: ignore
+            "id": "resp_67ccd2bed1ec8190b14f964abc0542670bb6a6b452d3795b",
+            "object": "response",
+            "created_at": 1741476542,
+            "status": "completed",
+            "error": None,
+            "incomplete_details": None,
+            "instructions": None,
+            "max_output_tokens": None,
+            "model": "gpt-4.1-2025-04-14",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_67ccd2bf17f0819081ff3bb2cf6508e60bb6a6b452d3795b",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": mock_response,
+                            "annotations": [],
+                        }
+                    ],
+                }
+            ],
+            "parallel_tool_calls": True,
+            "previous_response_id": None,
+            "reasoning": {"effort": None, "summary": None},
+            "store": True,
+            "temperature": 1.0,
+            "text": {"format": {"type": "text"}},
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": 1.0,
+            "truncation": "disabled",
+            "usage": {
+                "input_tokens": 36,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens": 87,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 123,
+            },
+            "user": None,
+            "metadata": {},
+        }
+    )
+
+
 @client
 async def aresponses(
     input: Union[str, ResponseInputParam],
@@ -44,11 +97,13 @@ async def aresponses(
     include: Optional[List[ResponseIncludable]] = None,
     instructions: Optional[str] = None,
     max_output_tokens: Optional[int] = None,
+    prompt: Optional[PromptObject] = None,
     metadata: Optional[Dict[str, Any]] = None,
     parallel_tool_calls: Optional[bool] = None,
     previous_response_id: Optional[str] = None,
     reasoning: Optional[Reasoning] = None,
     store: Optional[bool] = None,
+    background: Optional[bool] = None,
     stream: Optional[bool] = None,
     temperature: Optional[float] = None,
     text: Optional[ResponseTextConfigParam] = None,
@@ -88,11 +143,13 @@ async def aresponses(
             include=include,
             instructions=instructions,
             max_output_tokens=max_output_tokens,
+            prompt=prompt,
             metadata=metadata,
             parallel_tool_calls=parallel_tool_calls,
             previous_response_id=previous_response_id,
             reasoning=reasoning,
             store=store,
+            background=background,
             stream=stream,
             temperature=temperature,
             text=text,
@@ -143,11 +200,13 @@ def responses(
     include: Optional[List[ResponseIncludable]] = None,
     instructions: Optional[str] = None,
     max_output_tokens: Optional[int] = None,
+    prompt: Optional[PromptObject] = None,
     metadata: Optional[Dict[str, Any]] = None,
     parallel_tool_calls: Optional[bool] = None,
     previous_response_id: Optional[str] = None,
     reasoning: Optional[Reasoning] = None,
     store: Optional[bool] = None,
+    background: Optional[bool] = None,
     stream: Optional[bool] = None,
     temperature: Optional[float] = None,
     text: Optional[ResponseTextConfigParam] = None,
@@ -178,6 +237,15 @@ def responses(
 
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
+
+        ## MOCK RESPONSE LOGIC
+        if litellm_params.mock_response and isinstance(
+            litellm_params.mock_response, str
+        ):
+            return mock_responses_api_response(
+                mock_response=litellm_params.mock_response
+            )
+
         (
             model,
             custom_llm_provider,
@@ -435,6 +503,7 @@ def delete_responses(
             extra_kwargs=kwargs,
         )
 
+
 @client
 async def aget_responses(
     response_id: str,
@@ -450,13 +519,13 @@ async def aget_responses(
 ) -> ResponsesAPIResponse:
     """
     Async: Fetch a response by its ID.
-    
+
     GET /v1/responses/{response_id} endpoint in the responses API
-    
+
     Args:
         response_id: The ID of the response to fetch.
         custom_llm_provider: Optional provider name. If not specified, will be decoded from response_id.
-        
+
     Returns:
         The response object with complete information about the stored response.
     """
@@ -496,7 +565,7 @@ async def aget_responses(
         else:
             response = init_response
 
-         # Update the responses_api_response_id with the model_id
+        # Update the responses_api_response_id with the model_id
         if isinstance(response, ResponsesAPIResponse):
             response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
                 responses_api_response=response,
@@ -513,6 +582,7 @@ async def aget_responses(
             extra_kwargs=kwargs,
         )
 
+
 @client
 def get_responses(
     response_id: str,
@@ -528,13 +598,13 @@ def get_responses(
 ) -> Union[ResponsesAPIResponse, Coroutine[Any, Any, ResponsesAPIResponse]]:
     """
     Fetch a response by its ID.
-    
+
     GET /v1/responses/{response_id} endpoint in the responses API
-    
+
     Args:
         response_id: The ID of the response to fetch.
         custom_llm_provider: Optional provider name. If not specified, will be decoded from response_id.
-        
+
     Returns:
         The response object with complete information about the stored response.
     """
@@ -609,6 +679,152 @@ def get_responses(
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
                 custom_llm_provider=custom_llm_provider,
             )
+
+        return response
+    except Exception as e:
+        raise litellm.exception_type(
+            model=None,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
+
+
+@client
+async def alist_input_items(
+    response_id: str,
+    after: Optional[str] = None,
+    before: Optional[str] = None,
+    include: Optional[List[str]] = None,
+    limit: int = 20,
+    order: Literal["asc", "desc"] = "desc",
+    extra_headers: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> Dict:
+    """Async: List input items for a response"""
+    local_vars = locals()
+    try:
+        loop = asyncio.get_event_loop()
+        kwargs["alist_input_items"] = True
+
+        decoded_response_id = (
+            ResponsesAPIRequestUtils._decode_responses_api_response_id(
+                response_id=response_id
+            )
+        )
+        response_id = decoded_response_id.get("response_id") or response_id
+        custom_llm_provider = (
+            decoded_response_id.get("custom_llm_provider") or custom_llm_provider
+        )
+
+        func = partial(
+            list_input_items,
+            response_id=response_id,
+            after=after,
+            before=before,
+            include=include,
+            limit=limit,
+            order=order,
+            extra_headers=extra_headers,
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
+        )
+
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+        init_response = await loop.run_in_executor(None, func_with_context)
+
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+        return response
+    except Exception as e:
+        raise litellm.exception_type(
+            model=None,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
+
+
+@client
+def list_input_items(
+    response_id: str,
+    after: Optional[str] = None,
+    before: Optional[str] = None,
+    include: Optional[List[str]] = None,
+    limit: int = 20,
+    order: Literal["asc", "desc"] = "desc",
+    extra_headers: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> Union[Dict, Coroutine[Any, Any, Dict]]:
+    """List input items for a response"""
+    local_vars = locals()
+    try:
+        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        _is_async = kwargs.pop("alist_input_items", False) is True
+
+        litellm_params = GenericLiteLLMParams(**kwargs)
+
+        decoded_response_id = (
+            ResponsesAPIRequestUtils._decode_responses_api_response_id(
+                response_id=response_id
+            )
+        )
+        response_id = decoded_response_id.get("response_id") or response_id
+        custom_llm_provider = (
+            decoded_response_id.get("custom_llm_provider") or custom_llm_provider
+        )
+
+        if custom_llm_provider is None:
+            raise ValueError("custom_llm_provider is required but passed as None")
+
+        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+            ProviderConfigManager.get_provider_responses_api_config(
+                model=None,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
+        )
+
+        if responses_api_provider_config is None:
+            raise ValueError(
+                f"list_input_items is not supported for {custom_llm_provider}"
+            )
+
+        local_vars.update(kwargs)
+
+        litellm_logging_obj.update_environment_variables(
+            model=None,
+            optional_params={"response_id": response_id},
+            litellm_params={"litellm_call_id": litellm_call_id},
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        response = base_llm_http_handler.list_responses_input_items(
+            response_id=response_id,
+            custom_llm_provider=custom_llm_provider,
+            responses_api_provider_config=responses_api_provider_config,
+            litellm_params=litellm_params,
+            logging_obj=litellm_logging_obj,
+            after=after,
+            before=before,
+            include=include,
+            limit=limit,
+            order=order,
+            extra_headers=extra_headers,
+            timeout=timeout or request_timeout,
+            _is_async=_is_async,
+            client=kwargs.get("client"),
+        )
 
         return response
     except Exception as e:

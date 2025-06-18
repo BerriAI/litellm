@@ -422,7 +422,7 @@ def test_anthropic_tool_helper(cache_control_location):
     else:
         tool["cache_control"] = {"type": "ephemeral"}
 
-    tool = AnthropicConfig()._map_tool_helper(tool=tool)
+    tool, _ = AnthropicConfig()._map_tool_helper(tool=tool)
 
     assert tool["cache_control"] == {"type": "ephemeral"}
 
@@ -465,7 +465,7 @@ from litellm import completion
 
 class TestAnthropicCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
     def get_base_completion_call_args(self) -> dict:
-        return {"model": "anthropic/claude-3-5-sonnet-20240620"}
+        return {"model": "anthropic/claude-3-5-sonnet-latest"}
 
     def get_base_completion_call_args_with_thinking(self) -> dict:
         return {
@@ -481,14 +481,6 @@ class TestAnthropicCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
 
         result = convert_to_anthropic_tool_invoke([tool_call_no_arguments])
         print(result)
-
-    def test_multilingual_requests(self):
-        """
-        Anthropic API raises a 400 BadRequest error when the request contains invalid utf-8 sequences.
-
-        Todo: if litellm.modify_params is True ensure it's a valid utf-8 sequence
-        """
-        pass
 
     def test_tool_call_and_json_response_format(self):
         """
@@ -895,31 +887,35 @@ def test_anthropic_citations_api():
     """
     from litellm import completion
 
-    resp = completion(
-        model="claude-3-5-sonnet-20241022",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "document",
-                        "source": {
-                            "type": "text",
-                            "media_type": "text/plain",
-                            "data": "The grass is green. The sky is blue.",
+    try:
+        resp = completion(
+            model="claude-3-5-sonnet-20241022",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "text",
+                                "media_type": "text/plain",
+                                "data": "The grass is green. The sky is blue.",
+                            },
+                            "title": "My Document",
+                            "context": "This is a trustworthy document.",
+                            "citations": {"enabled": True},
                         },
-                        "title": "My Document",
-                        "context": "This is a trustworthy document.",
-                        "citations": {"enabled": True},
-                    },
-                    {
-                        "type": "text",
-                        "text": "What color is the grass and sky?",
-                    },
-                ],
-            }
-        ],
-    )
+                        {
+                            "type": "text",
+                            "text": "What color is the grass and sky?",
+                        },
+                    ],
+                }
+            ],
+        )
+
+    except litellm.InternalServerError:
+        pytest.skip("Anthropic overloaded")
 
     citations = resp.choices[0].message.provider_specific_fields["citations"]
 
@@ -997,7 +993,6 @@ def test_anthropic_thinking_output(model):
     assert resp.choices[0].message.thinking_blocks[0]["signature"] is not None
 
 
-
 @pytest.mark.parametrize(
     "model",
     [
@@ -1034,12 +1029,13 @@ def test_anthropic_thinking_output_stream(model):
                 print(chunk.choices[0].delta.thinking_blocks[0])
                 if chunk.choices[0].delta.thinking_blocks[0].get("signature"):
                     signature_block_exists = True
-                    assert chunk.choices[0].delta.thinking_blocks[0]["type"] == "thinking"
+                    assert (
+                        chunk.choices[0].delta.thinking_blocks[0]["type"] == "thinking"
+                    )
         assert reasoning_content_exists
         assert signature_block_exists
     except litellm.Timeout:
         pytest.skip("Model is timing out")
-
 
 
 def test_anthropic_custom_headers():
@@ -1118,7 +1114,6 @@ def test_anthropic_thinking_in_assistant_message(model):
     assert response is not None
 
 
-
 @pytest.mark.parametrize(
     "model",
     [
@@ -1153,3 +1148,197 @@ def test_anthropic_redacted_thinking_in_assistant_message(model):
     response = litellm.completion(**params)
 
     assert response is not None
+
+
+def test_just_system_message():
+    litellm._turn_on_debug()
+    litellm.modify_params = True
+    params = {
+        "model": "anthropic/claude-3-7-sonnet-20250219",
+        "messages": [{"role": "system", "content": "You are a helpful assistant."}],
+    }
+
+    response = litellm.completion(**params)
+
+    assert response is not None
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["anthropic/claude-3-sonnet-20240229", "anthropic/claude-3-opus-20240229"],
+)
+@pytest.mark.asyncio()
+async def test_anthropic_api_max_completion_tokens(model: str):
+    """
+    Tests that:
+    - max_completion_tokens is passed as max_tokens to anthropic models
+    """
+    litellm.set_verbose = True
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    mock_response = {
+        "content": [{"text": "Hi! My name is Claude.", "type": "text"}],
+        "id": "msg_013Zva2CMHLNnXjNJJKqJ2EF",
+        "model": "claude-3-5-sonnet-20240620",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "type": "message",
+        "usage": {"input_tokens": 2095, "output_tokens": 503},
+    }
+
+    client = HTTPHandler()
+
+    print("\n\nmock_response: ", mock_response)
+
+    with patch.object(client, "post") as mock_client:
+        try:
+            response = await litellm.acompletion(
+                model=model,
+                max_completion_tokens=10,
+                messages=[{"role": "user", "content": "Hello!"}],
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs["json"]
+
+        print("request_body: ", request_body)
+
+        assert request_body == {
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "Hello!"}]}
+            ],
+            "max_tokens": 10,
+            "model": model.split("/")[-1],
+        }
+
+
+@pytest.mark.parametrize(
+    "optional_params",
+    [
+        # {
+        #     "tools": [{
+        #         "type": "web_search_20250305",
+        #         "name": "web_search",
+        #         "max_uses": 5
+        #     }]
+        # },
+        {"web_search_options": {}}
+    ],
+)
+def test_anthropic_websearch(optional_params: dict):
+    litellm._turn_on_debug()
+    params = {
+        "model": "anthropic/claude-3-5-sonnet-latest",
+        "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
+        **optional_params,
+    }
+
+    try:
+        response = litellm.completion(**params)
+    except litellm.InternalServerError as e:
+        print(e)
+
+    assert response is not None
+
+    print(f"response: {response}\n")
+    assert response.usage.server_tool_use.web_search_requests == 1
+
+
+def test_anthropic_text_editor():
+    litellm._turn_on_debug()
+    params = {
+        "model": "anthropic/claude-3-5-sonnet-latest",
+        "messages": [
+            {
+                "role": "user",
+                "content": "There'''s a syntax error in my primes.py file. Can you help me fix it?",
+            }
+        ],
+        "tools": [{"type": "text_editor_20250124", "name": "str_replace_editor"}],
+    }
+
+    try:
+        response = litellm.completion(**params)
+    except litellm.InternalServerError as e:
+        print(e)
+
+    assert response is not None
+
+
+@pytest.mark.parametrize("spec", ["anthropic", "openai"])
+def test_anthropic_mcp_server_tool_use(spec: str):
+    litellm._turn_on_debug()
+
+    if spec == "anthropic":
+        tools = [
+            {
+                "type": "url",
+                "url": "https://mcp.deepwiki.com/mcp",
+                "name": "deepwiki-mcp",
+            }
+        ]
+    elif spec == "openai":
+        tools = [
+            {
+                "type": "mcp",
+                "server_label": "deepwiki",
+                "server_url": "https://mcp.deepwiki.com/mcp",
+                "require_approval": "never",
+            },
+        ]
+
+    params = {
+        "model": "anthropic/claude-sonnet-4-20250514",
+        "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
+        "tools": tools,
+    }
+
+    try:
+        response = litellm.completion(**params)
+    except litellm.InternalServerError as e:
+        print(e)
+
+    assert response is not None
+
+
+@pytest.mark.parametrize(
+    "model", ["openai/gpt-4.1", "anthropic/claude-sonnet-4-20250514"]
+)
+def test_anthropic_mcp_server_responses_api(model: str):
+    from litellm import responses
+
+    tools = [
+        {
+            "type": "mcp",
+            "server_label": "deepwiki",
+            "server_url": "https://mcp.deepwiki.com/mcp",
+            "require_approval": "never",
+        },
+    ]
+
+    response = litellm.responses(
+        model=model,
+        input="Who won the World Cup in 2022?",
+        max_output_tokens=100,
+        tools=tools,
+    )
+
+    assert response is not None
+
+
+def test_anthropic_prefix_prompt():
+    params = {
+        "model": "anthropic/claude-3-5-sonnet-latest",
+        "messages": [
+            {"role": "user", "content": "Who won the World Cup in 2022?"},
+            {"role": "assistant", "content": "Argentina", "prefix": True},
+        ],
+    }
+
+    response = litellm.completion(**params)
+    print(f"response: {response}")
+    assert response is not None
+    assert response.choices[0].message.content.startswith("Argentina")

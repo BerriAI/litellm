@@ -3890,6 +3890,9 @@ def test_text_completion_basic():
         # print(response.choices[0].text)
         response_str = response["choices"][0]["text"]
     except Exception as e:
+        if "502: Bad gateway" in str(e):
+            print("502: Bad gateway error occurred... passing")
+            return
         pytest.fail(f"Error occurred: {e}")
 
 
@@ -3972,7 +3975,7 @@ def test_text_completion_stream():
     try:
         for _ in range(2):  # check if closed client used
             response = text_completion(
-                model="huggingface/mistralai/Mistral-7B-Instruct-v0.3",
+                model="huggingface/sarvamai/sarvam-m",
                 prompt="good morning",
                 stream=True,
                 max_tokens=10,

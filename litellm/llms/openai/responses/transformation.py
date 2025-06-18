@@ -36,7 +36,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             "previous_response_id",
             "reasoning",
             "store",
+            "background",
             "stream",
+            "prompt",
             "temperature",
             "text",
             "tool_choice",
@@ -119,6 +121,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         api_base = (
             api_base
             or litellm.api_base
+            or get_secret_str("OPENAI_BASE_URL")
             or get_secret_str("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
@@ -250,7 +253,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 message=raw_response.text, status_code=raw_response.status_code
             )
         return DeleteResponseResult(**raw_response_json)
-    
+
     #########################################################
     ########## GET RESPONSE API TRANSFORMATION ###############
     #########################################################
@@ -270,7 +273,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         url = f"{api_base}/{response_id}"
         data: Dict = {}
         return url, data
-    
+
     def transform_get_response_api_response(
         self,
         raw_response: httpx.Response,
@@ -286,3 +289,44 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 message=raw_response.text, status_code=raw_response.status_code
             )
         return ResponsesAPIResponse(**raw_response_json)
+
+    #########################################################
+    ########## LIST INPUT ITEMS TRANSFORMATION #############
+    #########################################################
+    def transform_list_input_items_request(
+        self,
+        response_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+        after: Optional[str] = None,
+        before: Optional[str] = None,
+        include: Optional[List[str]] = None,
+        limit: int = 20,
+        order: Literal["asc", "desc"] = "desc",
+    ) -> Tuple[str, Dict]:
+        url = f"{api_base}/{response_id}/input_items"
+        params: Dict[str, Any] = {}
+        if after is not None:
+            params["after"] = after
+        if before is not None:
+            params["before"] = before
+        if include:
+            params["include"] = ",".join(include)
+        if limit is not None:
+            params["limit"] = limit
+        if order is not None:
+            params["order"] = order
+        return url, params
+
+    def transform_list_input_items_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> Dict:
+        try:
+            return raw_response.json()
+        except Exception:
+            raise OpenAIError(
+                message=raw_response.text, status_code=raw_response.status_code
+            )

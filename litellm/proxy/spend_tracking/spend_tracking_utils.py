@@ -4,19 +4,22 @@ import secrets
 from datetime import datetime
 from datetime import datetime as dt
 from datetime import timezone
-from typing import Any, List, Optional, cast
+from typing import Any, List, Literal, Optional, cast
 
 from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import (
+    StandardLoggingGuardrailInformation,
     StandardLoggingMCPToolCall,
     StandardLoggingModelInformation,
     StandardLoggingPayload,
+    StandardLoggingVectorStoreRequest,
 )
 from litellm.utils import get_end_user_id_for_cost_tracking
 
@@ -43,6 +46,10 @@ def _get_spend_logs_metadata(
     applied_guardrails: Optional[List[str]] = None,
     batch_models: Optional[List[str]] = None,
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall] = None,
+    vector_store_request_metadata: Optional[
+        List[StandardLoggingVectorStoreRequest]
+    ] = None,
+    guardrail_information: Optional[StandardLoggingGuardrailInformation] = None,
     usage_object: Optional[dict] = None,
     model_map_information: Optional[StandardLoggingModelInformation] = None,
 ) -> SpendLogsMetadata:
@@ -63,8 +70,10 @@ def _get_spend_logs_metadata(
             proxy_server_request=None,
             batch_models=None,
             mcp_tool_call_metadata=None,
+            vector_store_request_metadata=None,
             model_map_information=None,
             usage_object=None,
+            guardrail_information=None,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
@@ -82,6 +91,10 @@ def _get_spend_logs_metadata(
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
+    clean_metadata[
+        "vector_store_request_metadata"
+    ] = _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
+    clean_metadata["guardrail_information"] = guardrail_information
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
     return clean_metadata
@@ -226,6 +239,13 @@ def get_logging_payload(  # noqa: PLR0915
             if standard_logging_payload is not None
             else None
         ),
+        vector_store_request_metadata=(
+            standard_logging_payload["metadata"].get(
+                "vector_store_request_metadata", None
+            )
+            if standard_logging_payload is not None
+            else None
+        ),
         usage_object=(
             standard_logging_payload["metadata"].get("usage_object", None)
             if standard_logging_payload is not None
@@ -233,6 +253,11 @@ def get_logging_payload(  # noqa: PLR0915
         ),
         model_map_information=(
             standard_logging_payload["model_map_information"]
+            if standard_logging_payload is not None
+            else None
+        ),
+        guardrail_information=(
+            standard_logging_payload.get("guardrail_information", None)
             if standard_logging_payload is not None
             else None
         ),
@@ -293,6 +318,9 @@ def get_logging_payload(  # noqa: PLR0915
             session_id=_get_session_id_for_spend_log(
                 kwargs=kwargs,
                 standard_logging_payload=standard_logging_payload,
+            ),
+            status=_get_status_for_spend_log(
+                metadata=metadata,
             ),
         )
 
@@ -476,6 +504,30 @@ def _get_proxy_server_request_for_spend_logs_payload(
     return "{}"
 
 
+def _get_vector_store_request_for_spend_logs_payload(
+    vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]],
+) -> Optional[List[StandardLoggingVectorStoreRequest]]:
+    """
+    If user does not want to store prompts and responses, then remove the content from the vector store request metadata
+    """
+    if _should_store_prompts_and_responses_in_spend_logs():
+        return vector_store_request_metadata
+
+    # if user does not want to store prompts and responses, then remove the content from the vector store request metadata
+    if vector_store_request_metadata is None:
+        return None
+    for vector_store_request in vector_store_request_metadata:
+        vector_store_search_response = (
+            vector_store_request.get("vector_store_search_response", {}) or {}
+        )
+        response_data = vector_store_search_response.get("data", []) or []
+        for response_item in response_data:
+            for content_item in response_item.get("content", []) or []:
+                if "text" in content_item:
+                    content_item["text"] = REDACTED_BY_LITELM_STRING
+    return vector_store_request_metadata
+
+
 def _get_response_for_spend_logs_payload(
     payload: Optional[StandardLoggingPayload],
 ) -> str:
@@ -490,3 +542,17 @@ def _should_store_prompts_and_responses_in_spend_logs() -> bool:
     from litellm.proxy.proxy_server import general_settings
 
     return general_settings.get("store_prompts_in_spend_logs") is True
+
+
+def _get_status_for_spend_log(
+    metadata: dict,
+) -> Literal["success", "failure"]:
+    """
+    Get the status for the spend log.
+
+    It's only a failure if metadata.get("status") is "failure"
+    """
+    _status: Optional[str] = metadata.get("status", None)
+    if _status == "failure":
+        return "failure"
+    return "success"

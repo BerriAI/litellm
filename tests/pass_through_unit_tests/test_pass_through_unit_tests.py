@@ -31,10 +31,12 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 from fastapi import Request
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
-    _init_kwargs_for_pass_through_endpoint,
     _update_metadata_with_tags_in_header,
+    HttpPassThroughEndpointHelpers,
 )
-from litellm.types.passthrough_endpoints.pass_through_endpoints import PassthroughStandardLoggingPayload
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    PassthroughStandardLoggingPayload,
+)
 
 
 @pytest.fixture
@@ -110,7 +112,7 @@ def test_init_kwargs_for_pass_through_endpoint_basic(
         request_body={},
     )
 
-    result = _init_kwargs_for_pass_through_endpoint(
+    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
         request=request,
         user_api_key_dict=mock_user_api_key_dict,
         passthrough_logging_payload=passthrough_payload,
@@ -141,6 +143,7 @@ def test_init_kwargs_for_pass_through_endpoint_basic(
         "user_api_key_org_id": None,
         "user_api_key_team_alias": None,
         "user_api_key_end_user_id": "test-user",
+        "user_api_key_request_route": None,
     }
 
     assert result["litellm_params"]["metadata"] == expected_metadata
@@ -161,7 +164,7 @@ def test_init_kwargs_with_litellm_metadata(mock_request, mock_user_api_key_dict)
         request_body={},
     )
 
-    result = _init_kwargs_for_pass_through_endpoint(
+    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
         request=request,
         user_api_key_dict=mock_user_api_key_dict,
         passthrough_logging_payload=passthrough_payload,
@@ -196,7 +199,7 @@ def test_init_kwargs_with_tags_in_header(mock_request, mock_user_api_key_dict):
         request_body={},
     )
 
-    result = _init_kwargs_for_pass_through_endpoint(
+    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
         request=request,
         user_api_key_dict=mock_user_api_key_dict,
         passthrough_logging_payload=passthrough_payload,

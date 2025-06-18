@@ -101,10 +101,16 @@ def get_llm_provider(  # noqa: PLR0915
 
     Return model, custom_llm_provider, dynamic_api_key, api_base
     """
-
     try:
+        if litellm.LiteLLMProxyChatConfig._should_use_litellm_proxy_by_default(
+            litellm_params=litellm_params
+        ):
+            return litellm.LiteLLMProxyChatConfig.litellm_proxy_get_custom_llm_provider_info(
+                model=model, api_base=api_base, api_key=api_key
+            )
+
         ## IF LITELLM PARAMS GIVEN ##
-        if litellm_params is not None:
+        if litellm_params:
             assert (
                 custom_llm_provider is None and api_base is None and api_key is None
             ), "Either pass in litellm_params or the custom_llm_provider/api_base/api_key. Otherwise, these values will be overriden."
@@ -216,6 +222,15 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "api.galadriel.com/v1":
                         custom_llm_provider = "galadriel"
                         dynamic_api_key = get_secret_str("GALADRIEL_API_KEY")
+                    elif endpoint == "https://api.llama.com/compat/v1":
+                        custom_llm_provider = "meta_llama"
+                        dynamic_api_key = api_key or get_secret_str("LLAMA_API_KEY")
+                    elif endpoint == "https://api.featherless.ai/v1":
+                        custom_llm_provider = "featherless_ai"
+                        dynamic_api_key = get_secret_str("FEATHERLESS_AI_API_KEY")
+                    elif endpoint == litellm.NscaleConfig.API_BASE_URL:
+                        custom_llm_provider = "nscale"
+                        dynamic_api_key = litellm.NscaleConfig.get_api_key()
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(
@@ -445,6 +460,20 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or "https://api.sambanova.ai/v1"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("SAMBANOVA_API_KEY")
+    elif custom_llm_provider == "meta_llama":
+        api_base = (
+            api_base
+            or get_secret("LLAMA_API_BASE")
+            or "https://api.llama.com/compat/v1"
+        )  # type: ignore
+        dynamic_api_key = api_key or get_secret_str("LLAMA_API_KEY")
+    elif custom_llm_provider == "nebius":
+        api_base = (
+            api_base
+            or get_secret("NEBIUS_API_BASE")
+            or "https://api.studio.nebius.ai/v1"
+        )  # type: ignore
+        dynamic_api_key = api_key or get_secret_str("NEBIUS_API_KEY")
     elif (custom_llm_provider == "ai21_chat") or (
         custom_llm_provider == "ai21" and model in litellm.ai21_chat_models
     ):
@@ -475,6 +504,22 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.HostedVLLMChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+    elif custom_llm_provider == "llamafile":
+        # llamafile is OpenAI compatible.
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.LlamafileChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+    elif custom_llm_provider == "datarobot":
+        # DataRobot is OpenAI compatible.
+        (
+            api_base,
+            dynamic_api_key
+        ) = litellm.DataRobotConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
     elif custom_llm_provider == "lm_studio":
@@ -518,8 +563,12 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         )
         dynamic_api_key = api_key or get_secret_str("GITHUB_API_KEY")
     elif custom_llm_provider == "litellm_proxy":
-        api_base = api_base or get_secret_str("LITELLM_PROXY_API_BASE")
-        dynamic_api_key = api_key or get_secret_str("LITELLM_PROXY_API_KEY")
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.LiteLLMProxyChatConfig()._get_openai_compatible_provider_info(
+            api_base=api_base, api_key=api_key
+        )
 
     elif custom_llm_provider == "mistral":
         (
@@ -573,6 +622,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or "https://api.galadriel.com/v1"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("GALADRIEL_API_KEY")
+    elif custom_llm_provider == "novita":
+        api_base = (
+            api_base
+            or get_secret("NOVITA_API_BASE")
+            or "https://api.novita.ai/v3/openai"
+        )  # type: ignore
+        dynamic_api_key = api_key or get_secret_str("NOVITA_API_KEY")
     elif custom_llm_provider == "snowflake":
         api_base = (
             api_base
@@ -580,6 +636,20 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or f"https://{get_secret('SNOWFLAKE_ACCOUNT_ID')}.snowflakecomputing.com/api/v2/cortex/inference:complete"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("SNOWFLAKE_JWT")
+    elif custom_llm_provider == "featherless_ai":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.FeatherlessAIConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+    elif custom_llm_provider == "nscale":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.NscaleConfig()._get_openai_compatible_provider_info(
+            api_base=api_base, api_key=api_key
+        )
 
     if api_base is not None and not isinstance(api_base, str):
         raise Exception("api base needs to be a string. api_base={}".format(api_base))
