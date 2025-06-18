@@ -19,6 +19,7 @@ from fastapi import (
 )
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -925,7 +926,100 @@ async def patch_group(
     verbose_proxy_logger.debug("SCIM PATCH GROUP request: %s", patch_ops)
 
     try:
+        prisma_client = await _get_prisma_client_or_raise_exception()
         existing_team = await _check_team_exists(group_id)
-        return None
+
+        # Initialize update data
+        update_data: Dict[str, Any] = {}
+        
+        # Create a fresh copy of existing metadata to avoid Prisma issues
+        existing_metadata = existing_team.metadata or {}
+        metadata = dict(existing_metadata) if existing_metadata else {}
+        
+        # Track member changes
+        current_members = set(existing_team.members or [])
+        final_members = current_members.copy()
+        
+        # Process each patch operation
+        for op in patch_ops.Operations:
+            path = (op.path or "").lower()
+            value = op.value
+            op_type = op.op
+
+            if path == "displayname":
+                if op_type == "remove":
+                    update_data["team_alias"] = None
+                else:
+                    update_data["team_alias"] = str(value)
+            elif path == "externalid":
+                if op_type == "remove":
+                    metadata.pop("externalId", None)
+                else:
+                    metadata["externalId"] = str(value)
+            elif path.startswith("members"):
+                # Handle member operations
+                member_values = _extract_group_values(value)
+                # Validate that users exist
+                valid_members = []
+                for member_id in member_values:
+                    user = await prisma_client.db.litellm_usertable.find_unique(
+                        where={"user_id": member_id}
+                    )
+                    if user:
+                        valid_members.append(member_id)
+                
+                if op_type == "replace":
+                    final_members = set(valid_members)
+                elif op_type == "add":
+                    final_members.update(valid_members)
+                elif op_type == "remove":
+                    for member_id in valid_members:
+                        final_members.discard(member_id)
+            else:
+                # Handle other generic metadata
+                if op_type == "remove":
+                    metadata.pop(path, None)
+                else:
+                    metadata[path] = value
+
+        # Only include metadata in update if it has changed
+        if "metadata" in update_data and isinstance(update_data["metadata"], dict):
+            # ensure metadata gets stored as a json for a team 
+            update_data["metadata"] = safe_dumps(update_data["metadata"])
+        
+        # Update members list
+        update_data["members"] = list(final_members)
+
+        # Update team in database
+        updated_team = await prisma_client.db.litellm_teamtable.update(
+            where={"team_id": group_id},
+            data=update_data,
+        )
+
+        # Handle user-team relationship changes using existing helper
+        members_to_add = final_members - current_members
+        members_to_remove = current_members - final_members
+
+        # Use existing helper functions for team membership changes
+        for member_id in members_to_add:
+            await patch_team_membership(
+                user_id=member_id,
+                teams_ids_to_add_user_to=[group_id],
+                teams_ids_to_remove_user_from=[],
+            )
+
+        for member_id in members_to_remove:
+            await patch_team_membership(
+                user_id=member_id,
+                teams_ids_to_add_user_to=[],
+                teams_ids_to_remove_user_from=[group_id],
+            )
+
+        # Convert to SCIM format and return
+        scim_group = await ScimTransformations.transform_litellm_team_to_scim_group(
+            updated_team
+        )
+        return scim_group
+
     except Exception as e:
         raise handle_exception_on_proxy(e)
