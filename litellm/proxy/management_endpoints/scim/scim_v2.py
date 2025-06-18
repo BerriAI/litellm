@@ -17,6 +17,7 @@ from fastapi import (
     Request,
     Response,
 )
+from prisma.types import HttpConfig
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -32,9 +33,11 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+from litellm.proxy.management_endpoints.scim.scim_errors import ScimUserAlreadyExists
 from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
+from litellm.proxy.management_endpoints.scim.utils import _extract_error_message
 from litellm.proxy.management_endpoints.team_endpoints import (
     new_team,
     team_member_add,
@@ -285,7 +288,6 @@ async def get_user(
     except Exception as e:
         raise handle_exception_on_proxy(e)
 
-
 @scim_router.post(
     "/Users",
     response_model=SCIMUser,
@@ -335,7 +337,8 @@ async def create_user(
             user=created_user
         )
         return scim_user
-        
+    except HTTPException as e: # allow exceptions like SCIMUserAlreadyExists to be raised
+        raise e
     except Exception as e:
         raise handle_exception_on_proxy(e)
 
