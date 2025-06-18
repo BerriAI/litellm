@@ -29,8 +29,13 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+from litellm.proxy.management_endpoints.scim.scim_errors import ScimUserAlreadyExists
 from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
+)
+from litellm.proxy.management_endpoints.scim.utils import (
+    _check_user_exists,
+    _extract_error_message,
 )
 from litellm.proxy.management_endpoints.team_endpoints import new_team
 from litellm.proxy.utils import _premium_user_check, handle_exception_on_proxy
@@ -151,7 +156,6 @@ async def get_user(
     except Exception as e:
         raise handle_exception_on_proxy(e)
 
-
 @scim_router.post(
     "/Users",
     response_model=SCIMUser,
@@ -171,45 +175,45 @@ async def create_user(
 
     try:
         verbose_proxy_logger.debug("SCIM CREATE USER request: %s", user)
-        # Extract email from SCIM user
-        user_email = None
-        if user.emails and len(user.emails) > 0:
-            user_email = user.emails[0].value
-
-        # Check if user already exists
-        existing_user = None
-        if user.userName:
-            existing_user = await prisma_client.db.litellm_usertable.find_unique(
-                where={"user_id": user.userName}
-            )
-
-        if existing_user:
-            raise HTTPException(
-                status_code=409,
-                detail={"error": f"User already exists with username: {user.userName}"},
-            )
-
-        # Create user in database
+        
+        # Extract user data
+        user_email = user.emails[0].value if user.emails else None
         user_id = user.userName or str(uuid.uuid4())
-        created_user = await new_user(
-            data=NewUserRequest(
-                user_id=user_id,
-                user_email=user_email,
-                user_alias=user.name.givenName,
-                teams=[group.value for group in user.groups] if user.groups else None,
-                metadata={
-                    "scim_metadata": LiteLLM_UserScimMetadata(
-                        givenName=user.name.givenName,
-                        familyName=user.name.familyName,
-                    ).model_dump()
-                },
-                auto_create_key=False,
-            ),
-        )
-        scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(
-            user=created_user
-        )
-        return scim_user
+
+        # Check for duplicate username
+        if await _check_user_exists(prisma_client, user.userName):
+            raise ScimUserAlreadyExists(
+                message=f"User already exists with username: {user.userName}"
+            )
+
+        # Attempt to create user
+        try:
+            created_user = await new_user(
+                data=NewUserRequest(
+                    user_id=user_id,
+                    user_email=user_email,
+                    user_alias=user.name.givenName,
+                    teams=[group.value for group in user.groups] if user.groups else None,
+                    metadata={
+                        "scim_metadata": LiteLLM_UserScimMetadata(
+                            givenName=user.name.givenName,
+                            familyName=user.name.familyName,
+                        ).model_dump()
+                    },
+                    auto_create_key=False,
+                ),
+            )
+        except HTTPException as e:
+            # Convert duplicate email errors to SCIM 409
+            if e.status_code == 400 and "already exists" in str(e.detail):
+                raise ScimUserAlreadyExists(
+                    message=_extract_error_message(e)
+                )
+            raise e
+
+        # Transform and return SCIM user
+        return await ScimTransformations.transform_litellm_user_to_scim_user(created_user)
+        
     except Exception as e:
         raise handle_exception_on_proxy(e)
 
