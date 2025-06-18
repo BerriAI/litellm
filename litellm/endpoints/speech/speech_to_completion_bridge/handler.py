@@ -2,7 +2,7 @@
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
 
-from typing import TYPE_CHECKING, Optional, TypedDict
+from typing import TYPE_CHECKING, Optional, TypedDict, Union
 
 if TYPE_CHECKING:
     from litellm import LiteLLMLoggingObj
@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 class SpeechToCompletionBridgeHandlerInputKwargs(TypedDict):
     model: str
     input: str
-    voice: Optional[str]
+    voice: Optional[Union[str, dict]]
     optional_params: dict
     litellm_params: dict
     logging_obj: "LiteLLMLoggingObj"
@@ -79,6 +79,7 @@ class SpeechToCompletionBridgeHandler:
         self,
         model: str,
         input: str,
+        voice: Optional[Union[str, dict]],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -97,6 +98,7 @@ class SpeechToCompletionBridgeHandler:
         headers = validated_kwargs["headers"]
         logging_obj = validated_kwargs["logging_obj"]
         custom_llm_provider = validated_kwargs["custom_llm_provider"]
+        voice = validated_kwargs["voice"]
 
         request_data = self.transformation_handler.transform_request(
             model=model,
@@ -106,6 +108,7 @@ class SpeechToCompletionBridgeHandler:
             headers=headers,
             litellm_logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
+            voice=voice,
         )
 
         result = completion(

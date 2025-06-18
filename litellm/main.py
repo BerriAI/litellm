@@ -5200,6 +5200,7 @@ def speech(  # noqa: PLR0915
             return speech_to_completion_bridge_handler.speech(
                 model=model,
                 input=input,
+                voice=voice,
                 optional_params=optional_params,
                 litellm_params=litellm_params_dict,
                 headers=headers or {},
@@ -5228,6 +5229,7 @@ def speech(  # noqa: PLR0915
         return speech_to_completion_bridge_handler.speech(
             model=model,
             input=input,
+            voice=voice,
             optional_params=optional_params,
             litellm_params=litellm_params_dict,
             headers=headers or {},
