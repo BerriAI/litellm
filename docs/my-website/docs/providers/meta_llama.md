@@ -166,7 +166,7 @@ response = completion(
     tool_choice="auto"
 )
 
-print(response.choices[0].message.tool_calls)
+print(response.choices[0].message.content)
 ```
 
 ## Usage - LiteLLM Proxy
