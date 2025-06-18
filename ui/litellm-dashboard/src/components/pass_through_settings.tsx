@@ -188,7 +188,7 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
   }
 
   return (
-    <div className="w-full h-[75vh] p-6">
+    <div>
         <div>
           <Title>Pass Through Endpoints</Title>
           <Text className="text-tremor-content">
