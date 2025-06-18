@@ -1105,10 +1105,7 @@ async def get_pass_through_endpoints(
     GET configured pass through endpoint.
 
     If no endpoint_id given, return all configured endpoints.
-    """
-    from litellm.proxy.proxy_server import get_config_general_settings
-
-    ## Get existing pass-through endpoint field value
+    """  ## Get existing pass-through endpoint field value
     pass_through_endpoints = await _get_pass_through_endpoints_from_db(
         endpoint_id=endpoint_id, user_api_key_dict=user_api_key_dict
     )
