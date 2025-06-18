@@ -23,6 +23,9 @@ LiteLLM Proxy provides an MCP Gateway that allows you to use a fixed endpoint fo
 
 ## Adding your MCP
 
+<Tabs>
+<TabItem value="ui" label="LiteLLM UI">
+
 On the LiteLLM UI, Navigate to "MCP Servers" and click "Add New MCP Server".
 
 On this form, you should enter your MCP Server URL and the transport you want to use.
@@ -35,6 +38,49 @@ LiteLLM supports the following MCP transports:
   img={require('../img/add_mcp.png')}
   style={{width: '80%', display: 'block', margin: '0'}}
 />
+
+</TabItem>
+
+<TabItem value="config" label="config.yaml">
+
+Add your MCP servers directly in your `config.yaml` file:
+
+```yaml title="config.yaml" showLineNumbers
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: sk-xxxxxxx
+
+mcp_servers:
+  # HTTP Streamable Server
+  deepwiki_mcp:
+    url: "https://mcp.deepwiki.com/mcp"
+  # SSE Server
+  zapier_mcp:
+    url: "https://actions.zapier.com/mcp/sk-akxxxxx/sse"
+  
+  # Full configuration with all optional fields
+  my_http_server:
+    url: "https://my-mcp-server.com/mcp"
+    transport: "http"
+    description: "My custom MCP server"
+    auth_type: "api_key"
+    spec_version: "2025-03-26"
+```
+
+**Configuration Options:**
+- **Server Name**: Use any descriptive name for your MCP server (e.g., `zapier_mcp`, `deepwiki_mcp`)
+- **URL**: The endpoint URL for your MCP server (required)
+- **Transport**: Optional transport type (defaults to `sse`)
+  - `sse` - SSE (Server-Sent Events) transport
+  - `http` - Streamable HTTP transport
+- **Description**: Optional description for the server
+- **Auth Type**: Optional authentication type
+- **Spec Version**: Optional MCP specification version (defaults to `2025-03-26`)
+
+</TabItem>
+</Tabs>
 
 
 
@@ -60,7 +106,7 @@ curl --location 'https://api.openai.com/v1/responses' \
             "server_url": "<your-litellm-proxy-base-url>/mcp",
             "require_approval": "never",
             "headers": {
-                "x-litellm-api-key": "YOUR_LITELLM_API_KEY"
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
             }
         }
     ],
@@ -90,7 +136,7 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
             "server_url": "<your-litellm-proxy-base-url>/mcp",
             "require_approval": "never",
             "headers": {
-                "x-litellm-api-key": "YOUR_LITELLM_API_KEY"
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
             }
         }
     ],
@@ -119,7 +165,7 @@ Use tools directly from Cursor IDE with LiteLLM MCP:
     "LiteLLM": {
       "url": "<your-litellm-proxy-base-url>/mcp",
       "headers": {
-        "x-litellm-api-key": "$LITELLM_API_KEY"
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY"
       }
     }
   }
@@ -141,7 +187,7 @@ Connect to LiteLLM MCP using HTTP transport. Compatible with any MCP client that
 
 **Headers:**
 ```text showLineNumbers
-x-litellm-api-key: YOUR_LITELLM_API_KEY
+x-litellm-api-key: Bearer YOUR_LITELLM_API_KEY
 ```
 
 This URL can be used with any MCP client that supports HTTP transport. Refer to your client documentation to determine the appropriate transport method.
@@ -180,7 +226,7 @@ server_url = "<your-litellm-proxy-base-url>/mcp"
 transport = StreamableHttpTransport(
     server_url,
     headers={
-        "x-litellm-api-key": "YOUR_LITELLM_API_KEY"
+        "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
     }
 )
 

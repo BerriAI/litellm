@@ -5,7 +5,7 @@ from starlette.requests import Request
 from starlette.types import Scope
 
 from litellm._logging import verbose_logger
-from litellm.proxy._types import LiteLLM_TeamTableCachedObj, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 
@@ -166,12 +166,7 @@ class UserAPIKeyAuthMCP:
         first we check if the team has a object_permission_id attached
             - if it does then we look up the object_permission for the team
         """
-        from litellm.proxy.auth.auth_checks import get_team_object
-        from litellm.proxy.proxy_server import (
-            prisma_client,
-            proxy_logging_obj,
-            user_api_key_cache,
-        )
+        from litellm.proxy.proxy_server import prisma_client
 
         if user_api_key_auth is None:
             return []
@@ -179,16 +174,17 @@ class UserAPIKeyAuthMCP:
         if user_api_key_auth.team_id is None:
             return []
 
-        team_obj: LiteLLM_TeamTableCachedObj = await get_team_object(
-            team_id=user_api_key_auth.team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=None,
-            proxy_logging_obj=proxy_logging_obj,
-            check_cache_only=True,
-        )
         if prisma_client is None:
             verbose_logger.debug("prisma_client is None")
+            return []
+
+        team_obj: Optional[LiteLLM_TeamTable] = (
+            await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": user_api_key_auth.team_id},
+            )
+        )
+        if team_obj is None:
+            verbose_logger.debug("team_obj is None")
             return []
 
         object_permissions = team_obj.object_permission

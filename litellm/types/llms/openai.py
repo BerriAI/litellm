@@ -930,6 +930,19 @@ class ComputerToolParam(TypedDict, total=False):
 ALL_RESPONSES_API_TOOL_PARAMS = Union[ToolParam, ComputerToolParam]
 
 
+class PromptObject(TypedDict, total=False):
+    """Reference to a stored prompt template."""
+
+    id: Required[str]
+    """The unique identifier of the prompt template to use."""
+
+    variables: Optional[Dict]
+    """Variables to substitute into the prompt template."""
+
+    version: Optional[str]
+    """Optional version of the prompt template."""
+
+
 class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     """TypedDict for Optional parameters supported by the responses API."""
 
@@ -950,6 +963,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     top_p: Optional[float]
     truncation: Optional[Literal["auto", "disabled"]]
     user: Optional[str]
+    prompt: Optional[PromptObject]
 
 
 class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):

@@ -1050,19 +1050,38 @@ def test_update_config_fields_default_internal_user_params(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "proxy_model_list,provider",
+    "proxy_model_list,model_list,provider",
     [
-        (["openai/*"], "openai"),
-        (["bedrock/*"], "bedrock"),
-        (["anthropic/*"], "anthropic"),
-        (["cohere/*"], "cohere"),
+        (
+            ["openai/*"],
+            [{"model_name": "openai/*", "litellm_params": {"model": "openai/*"}}],
+            "openai",
+        ),
+        (
+            ["bedrock/*"],
+            [{"model_name": "bedrock/*", "litellm_params": {"model": "bedrock/*"}}],
+            "bedrock",
+        ),
+        (
+            ["anthropic/*"],
+            [{"model_name": "anthropic/*", "litellm_params": {"model": "anthropic/*"}}],
+            "anthropic",
+        ),
+        (
+            ["cohere/*"],
+            [{"model_name": "cohere/*", "litellm_params": {"model": "cohere/*"}}],
+            "cohere",
+        ),
     ],
 )
-def test_get_complete_model_list(proxy_model_list, provider):
+def test_get_complete_model_list(proxy_model_list, model_list, provider):
     """
     Test that get_complete_model_list correctly expands model groups like 'openai/*' into individual models with provider prefixes
     """
     from litellm.proxy.auth.model_checks import get_complete_model_list
+    from litellm import Router
+
+    llm_router = Router(model_list=model_list)
 
     complete_list = get_complete_model_list(
         proxy_model_list=proxy_model_list,
@@ -1070,6 +1089,7 @@ def test_get_complete_model_list(proxy_model_list, provider):
         team_models=[],
         user_model=None,
         infer_model_from_keys=False,
+        llm_router=llm_router,
     )
 
     # Check that we got a non-empty list back
@@ -1680,22 +1700,34 @@ from litellm.proxy._types import LiteLLM_UserTable
 
 
 @pytest.mark.parametrize(
-    "wildcard_model, expected_models",
+    "wildcard_model, litellm_params, expected_models",
     [
         (
             "anthropic/*",
+            {"model": "anthropic/*"},
             ["anthropic/claude-3-5-haiku-20241022", "anthropic/claude-3-opus-20240229"],
         ),
         (
             "vertex_ai/gemini-*",
+            {"model": "vertex_ai/gemini-*"},
             ["vertex_ai/gemini-1.5-flash", "vertex_ai/gemini-1.5-pro"],
+        ),
+        (
+            "foo/*",
+            {"model": "openai/*"},
+            ["foo/gpt-4o", "foo/gpt-4o-mini"],
         ),
     ],
 )
-def test_get_known_models_from_wildcard(wildcard_model, expected_models):
+def test_get_known_models_from_wildcard(
+    wildcard_model, litellm_params, expected_models
+):
     from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
 
-    wildcard_models = get_known_models_from_wildcard(wildcard_model=wildcard_model)
+    wildcard_models = get_known_models_from_wildcard(
+        wildcard_model=wildcard_model, litellm_params=LiteLLM_Params(**litellm_params)
+    )
     # Check if all expected models are in the returned list
     print(f"wildcard_models: {wildcard_models}\n")
     for model in expected_models:

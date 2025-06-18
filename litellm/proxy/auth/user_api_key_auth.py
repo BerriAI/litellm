@@ -520,7 +520,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         team_object.rpm_limit if team_object is not None else None
                     ),
                     team_models=team_object.models if team_object is not None else [],
-                    user_role=LitellmUserRoles.INTERNAL_USER,
+                    user_role=(
+                        LitellmUserRoles(user_object.user_role)
+                        if user_object is not None and user_object.user_role is not None
+                        else LitellmUserRoles.INTERNAL_USER
+                    ),
                     user_id=user_id,
                     org_id=org_id,
                     parent_otel_span=parent_otel_span,
