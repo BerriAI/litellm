@@ -389,8 +389,29 @@ export default function AuditLogs({
 
   if (!premiumUser) {
     return (
-      <div>
-        <Text>This is a LiteLLM Enterprise feature, and requires a valid key to use. Get a trial key <a href="https://litellm.ai/pricing" target="_blank" rel="noopener noreferrer">here</a>.</Text>
+      <div style={{ textAlign: 'center', marginTop: '20px' }}>
+        <h1 style={{ display: 'block', marginBottom: '10px' }}>
+        ✨ Enterprise Feature.
+        </h1>
+        <Text style={{ display: 'block', marginBottom: '10px' }}>
+          
+          This is a LiteLLM Enterprise feature, and requires a valid key to use. 
+        </Text>
+        <Text style={{ display: 'block', marginBottom: '20px', fontStyle: 'italic' }}>
+          Here&apos;s a preview of what Audit Logs offer:
+        </Text>
+        <img 
+          src="/audit-logs-preview.png"
+          alt="Audit Logs Preview" 
+          style={{ 
+            maxWidth: '100%', 
+            maxHeight: '700px',
+            border: '1px solid #ccc', 
+            borderRadius: '8px',
+            boxShadow: '0 4px 8px rgba(0,0,0,0.1)',
+            margin: '0 auto'
+          }} 
+        />
       </div>
     );
   }

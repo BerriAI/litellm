@@ -1,3 +1,7 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import Image from '@theme/IdealImage';
+
 # Custom API Server (Custom Format)
 
 Call your custom torch-serve / internal LLM APIs via LiteLLM
@@ -8,9 +12,16 @@ Call your custom torch-serve / internal LLM APIs via LiteLLM
 - For modifying incoming/outgoing calls on proxy, [go here](../proxy/call_hooks.md)
 :::
 
+Supported Routes:
+- `/v1/chat/completions` -> `litellm.completion`
+- `/v1/completions` -> `litellm.text_completion`
+- `/v1/embeddings` -> `litellm.embedding`
+- `/v1/images/generations` -> `litellm.image_generation`
+
+
 ## Quick Start 
 
-```python
+```python showLineNumbers
 import litellm
 from litellm import CustomLLM, completion, get_llm_provider
 

@@ -109,6 +109,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "argilla",
     "mlflow",
     "langfuse",
+    "langfuse_otel",
     "pagerduty",
     "humanloop",
     "gcs_pubsub",
@@ -309,7 +310,11 @@ disable_end_user_cost_tracking: Optional[bool] = None
 disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 custom_prometheus_metadata_labels: List[str] = []
-#### REQUEST PRIORITIZATION ####
+prometheus_metrics_config: Optional[List] = None
+disable_add_prefix_to_prompt: bool = (
+    False  # used by anthropic, to disable adding prefix to prompt
+)
+#### REQUEST PRIORITIZATION #####
 priority_reservation: Optional[Dict[str, float]] = None
 
 
@@ -318,9 +323,6 @@ use_aiohttp_transport: bool = (
     True  # Older variable, aiohttp is now the default. use disable_aiohttp_transport instead.
 )
 disable_aiohttp_transport: bool = False  # Set this to true to use httpx instead
-disable_aiohttp_trust_env: bool = (
-    False  # when True, aiohttp will not trust environment variables for proxy settings
-)
 force_ipv4: bool = (
     False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 )
@@ -405,6 +407,7 @@ BEDROCK_CONVERSE_MODELS = [
     "meta.llama3-70b-instruct-v1:0",
     "mistral.mistral-large-2407-v1:0",
     "mistral.mistral-large-2402-v1:0",
+    "mistral.mistral-small-2402-v1:0",
     "meta.llama3-2-1b-instruct-v1:0",
     "meta.llama3-2-3b-instruct-v1:0",
     "meta.llama3-2-11b-instruct-v1:0",
@@ -876,6 +879,7 @@ from .utils import (
     TextCompletionResponse,
     get_provider_fields,
     ModelResponseListIterator,
+    get_valid_models,
 )
 
 ALL_LITELLM_RESPONSE_TYPES = [

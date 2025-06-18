@@ -255,13 +255,13 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       setEditModalVisible(true);
     },
     handleDelete,
-    handleResetPassword
+    handleResetPassword,
+    () => {} // placeholder function, will be overridden in UserDataTable
   );
 
   return (
-    <div className="w-full p-6">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-xl font-semibold">Users</h1>
+    <div className="w-full p-6 mx-4">
+      <div className="flex items-center justify-between mb-4 mt-4">
         <div className="flex space-x-3">
           <CreateUser
             userID={userID}
@@ -485,6 +485,12 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                   sortOrder: filters.sort_order
                 }}
                 possibleUIRoles={possibleUIRoles}
+                handleEdit={(user) => {
+                  setSelectedUser(user);
+                  setEditModalVisible(true);
+                }}
+                handleDelete={handleDelete}
+                handleResetPassword={handleResetPassword}
               />
             </div>
           </TabPanel>

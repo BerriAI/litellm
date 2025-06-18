@@ -15,6 +15,7 @@ from litellm.responses.litellm_completion_transformation.handler import (
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
+    PromptObject,
     Reasoning,
     ResponseIncludable,
     ResponseInputParam,
@@ -37,6 +38,58 @@ litellm_completion_transformation_handler = LiteLLMCompletionTransformationHandl
 #################################################
 
 
+def mock_responses_api_response(
+    mock_response: str = "In a peaceful grove beneath a silver moon, a unicorn named Lumina discovered a hidden pool that reflected the stars. As she dipped her horn into the water, the pool began to shimmer, revealing a pathway to a magical realm of endless night skies. Filled with wonder, Lumina whispered a wish for all who dream to find their own hidden magic, and as she glanced back, her hoofprints sparkled like stardust.",
+):
+    return ResponsesAPIResponse(
+        **{  # type: ignore
+            "id": "resp_67ccd2bed1ec8190b14f964abc0542670bb6a6b452d3795b",
+            "object": "response",
+            "created_at": 1741476542,
+            "status": "completed",
+            "error": None,
+            "incomplete_details": None,
+            "instructions": None,
+            "max_output_tokens": None,
+            "model": "gpt-4.1-2025-04-14",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_67ccd2bf17f0819081ff3bb2cf6508e60bb6a6b452d3795b",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": mock_response,
+                            "annotations": [],
+                        }
+                    ],
+                }
+            ],
+            "parallel_tool_calls": True,
+            "previous_response_id": None,
+            "reasoning": {"effort": None, "summary": None},
+            "store": True,
+            "temperature": 1.0,
+            "text": {"format": {"type": "text"}},
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": 1.0,
+            "truncation": "disabled",
+            "usage": {
+                "input_tokens": 36,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens": 87,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 123,
+            },
+            "user": None,
+            "metadata": {},
+        }
+    )
+
+
 @client
 async def aresponses(
     input: Union[str, ResponseInputParam],
@@ -44,6 +97,7 @@ async def aresponses(
     include: Optional[List[ResponseIncludable]] = None,
     instructions: Optional[str] = None,
     max_output_tokens: Optional[int] = None,
+    prompt: Optional[PromptObject] = None,
     metadata: Optional[Dict[str, Any]] = None,
     parallel_tool_calls: Optional[bool] = None,
     previous_response_id: Optional[str] = None,
@@ -89,6 +143,7 @@ async def aresponses(
             include=include,
             instructions=instructions,
             max_output_tokens=max_output_tokens,
+            prompt=prompt,
             metadata=metadata,
             parallel_tool_calls=parallel_tool_calls,
             previous_response_id=previous_response_id,
@@ -145,6 +200,7 @@ def responses(
     include: Optional[List[ResponseIncludable]] = None,
     instructions: Optional[str] = None,
     max_output_tokens: Optional[int] = None,
+    prompt: Optional[PromptObject] = None,
     metadata: Optional[Dict[str, Any]] = None,
     parallel_tool_calls: Optional[bool] = None,
     previous_response_id: Optional[str] = None,
@@ -181,6 +237,15 @@ def responses(
 
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
+
+        ## MOCK RESPONSE LOGIC
+        if litellm_params.mock_response and isinstance(
+            litellm_params.mock_response, str
+        ):
+            return mock_responses_api_response(
+                mock_response=litellm_params.mock_response
+            )
+
         (
             model,
             custom_llm_provider,
@@ -194,11 +259,11 @@ def responses(
         )
 
         # get provider config
-        responses_api_provider_config: Optional[
-            BaseResponsesAPIConfig
-        ] = ProviderConfigManager.get_provider_responses_api_config(
-            model=model,
-            provider=litellm.LlmProviders(custom_llm_provider),
+        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+            ProviderConfigManager.get_provider_responses_api_config(
+                model=model,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         local_vars.update(kwargs)
@@ -388,11 +453,11 @@ def delete_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[
-            BaseResponsesAPIConfig
-        ] = ProviderConfigManager.get_provider_responses_api_config(
-            model=None,
-            provider=litellm.LlmProviders(custom_llm_provider),
+        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+            ProviderConfigManager.get_provider_responses_api_config(
+                model=None,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if responses_api_provider_config is None:
@@ -567,11 +632,11 @@ def get_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[
-            BaseResponsesAPIConfig
-        ] = ProviderConfigManager.get_provider_responses_api_config(
-            model=None,
-            provider=litellm.LlmProviders(custom_llm_provider),
+        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+            ProviderConfigManager.get_provider_responses_api_config(
+                model=None,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if responses_api_provider_config is None:
@@ -723,11 +788,11 @@ def list_input_items(
         if custom_llm_provider is None:
             raise ValueError("custom_llm_provider is required but passed as None")
 
-        responses_api_provider_config: Optional[
-            BaseResponsesAPIConfig
-        ] = ProviderConfigManager.get_provider_responses_api_config(
-            model=None,
-            provider=litellm.LlmProviders(custom_llm_provider),
+        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+            ProviderConfigManager.get_provider_responses_api_config(
+                model=None,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if responses_api_provider_config is None:
