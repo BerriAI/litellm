@@ -691,7 +691,7 @@ async def test_pass_through_request_with_cost_per_request():
                 pre_call_kwargs = mock_proxy_logging.pre_call_hook.call_args[1]
                 
                 # Check that the passthrough_logging_payload contains cost_per_request
-                passthrough_payload = pre_call_kwargs["call_type"]
+                passthrough_payload = pre_call_kwargs["data"]
                 assert passthrough_payload["cost_per_request"] == 2.50
 
                 # Verify that async_success_handler was called
