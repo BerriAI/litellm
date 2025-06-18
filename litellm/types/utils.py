@@ -1098,30 +1098,7 @@ class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
     def __init__(self, **kwargs):
         new_choices = []
         for choice in kwargs["choices"]:
-            if isinstance(choice, dict):
-                # Filter the dict to only include fields compatible with StreamingChoices
-                filtered_choice = {}
-                for field in ['index', 'logprobs', 'finish_reason']:
-                    if field in choice:
-                        filtered_choice[field] = choice[field]
-                
-                # Handle delta vs message conversion
-                if 'delta' in choice:
-                    filtered_choice['delta'] = choice['delta']
-                elif 'message' in choice:
-                    # Convert message to delta format for streaming
-                    message = choice['message']
-                    if isinstance(message, dict):
-                        delta_dict = {}
-                        for msg_field in ['content', 'role', 'function_call', 'tool_calls']:
-                            if msg_field in message:
-                                delta_dict[msg_field] = message[msg_field]
-                        filtered_choice['delta'] = delta_dict
-                
-                new_choice = StreamingChoices(**filtered_choice).model_dump()
-            else:
-                # If it's already a StreamingChoices object or compatible
-                new_choice = choice
+            new_choice = StreamingChoices(**choice).model_dump()
             new_choices.append(new_choice)
         kwargs["choices"] = new_choices
 
@@ -1178,48 +1155,9 @@ class ModelResponseStream(ModelResponseBase):
                 if isinstance(choice, StreamingChoices):
                     _new_choice = choice
                 elif isinstance(choice, dict):
-                    # Filter the dict to only include fields compatible with StreamingChoices
-                    filtered_choice = {}
-                    for field in ['index', 'logprobs', 'finish_reason']:
-                        if field in choice:
-                            filtered_choice[field] = choice[field]
-                    
-                    # Handle delta vs message conversion
-                    if 'delta' in choice:
-                        filtered_choice['delta'] = choice['delta']
-                    elif 'message' in choice:
-                        # Convert message to delta format for streaming
-                        message = choice['message']
-                        if isinstance(message, dict):
-                            delta_dict = {}
-                            for msg_field in ['content', 'role', 'function_call', 'tool_calls']:
-                                if msg_field in message:
-                                    delta_dict[msg_field] = message[msg_field]
-                            filtered_choice['delta'] = delta_dict
-                    
-                    _new_choice = StreamingChoices(**filtered_choice)
+                    _new_choice = StreamingChoices(**choice)
                 elif isinstance(choice, BaseModel):
-                    choice_dict = choice.model_dump()
-                    # Filter the dict to only include fields compatible with StreamingChoices
-                    filtered_choice = {}
-                    for field in ['index', 'logprobs', 'finish_reason']:
-                        if field in choice_dict:
-                            filtered_choice[field] = choice_dict[field]
-                    
-                    # Handle delta vs message conversion
-                    if 'delta' in choice_dict:
-                        filtered_choice['delta'] = choice_dict['delta']
-                    elif 'message' in choice_dict:
-                        # Convert message to delta format for streaming
-                        message = choice_dict['message']
-                        if isinstance(message, dict):
-                            delta_dict = {}
-                            for msg_field in ['content', 'role', 'function_call', 'tool_calls']:
-                                if msg_field in message:
-                                    delta_dict[msg_field] = message[msg_field]
-                            filtered_choice['delta'] = delta_dict
-                    
-                    _new_choice = StreamingChoices(**filtered_choice)
+                    _new_choice = StreamingChoices(**choice.model_dump())
                 new_choices.append(_new_choice)
             kwargs["choices"] = new_choices
         else:
@@ -1297,48 +1235,9 @@ class ModelResponse(ModelResponseBase):
                     if isinstance(choice, StreamingChoices):
                         _new_choice = choice
                     elif isinstance(choice, dict):
-                        # Filter the dict to only include fields compatible with StreamingChoices
-                        filtered_choice = {}
-                        for field in ['index', 'logprobs', 'finish_reason']:
-                            if field in choice:
-                                filtered_choice[field] = choice[field]
-                        
-                        # Handle delta vs message conversion
-                        if 'delta' in choice:
-                            filtered_choice['delta'] = choice['delta']
-                        elif 'message' in choice:
-                            # Convert message to delta format for streaming
-                            message = choice['message']
-                            if isinstance(message, dict):
-                                delta_dict = {}
-                                for msg_field in ['content', 'role', 'function_call', 'tool_calls']:
-                                    if msg_field in message:
-                                        delta_dict[msg_field] = message[msg_field]
-                                filtered_choice['delta'] = delta_dict
-                        
-                        _new_choice = StreamingChoices(**filtered_choice)
+                        _new_choice = StreamingChoices(**choice)
                     elif isinstance(choice, BaseModel):
-                        choice_dict = choice.model_dump()
-                        # Filter the dict to only include fields compatible with StreamingChoices
-                        filtered_choice = {}
-                        for field in ['index', 'logprobs', 'finish_reason']:
-                            if field in choice_dict:
-                                filtered_choice[field] = choice_dict[field]
-                        
-                        # Handle delta vs message conversion
-                        if 'delta' in choice_dict:
-                            filtered_choice['delta'] = choice_dict['delta']
-                        elif 'message' in choice_dict:
-                            # Convert message to delta format for streaming
-                            message = choice_dict['message']
-                            if isinstance(message, dict):
-                                delta_dict = {}
-                                for msg_field in ['content', 'role', 'function_call', 'tool_calls']:
-                                    if msg_field in message:
-                                        delta_dict[msg_field] = message[msg_field]
-                                filtered_choice['delta'] = delta_dict
-                        
-                        _new_choice = StreamingChoices(**filtered_choice)
+                        _new_choice = StreamingChoices(**choice.model_dump())
                     new_choices.append(_new_choice)
                 choices = new_choices
             else:
