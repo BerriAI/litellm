@@ -4,7 +4,6 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._types import NewUserRequest, ProxyException
-from litellm.proxy.management_endpoints.scim.scim_errors import ScimUserAlreadyExists
 from litellm.proxy.management_endpoints.scim.scim_v2 import (
     UserProvisionerHelpers,
     _handle_team_membership_changes,
