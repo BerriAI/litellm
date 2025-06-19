@@ -199,8 +199,14 @@ async def _add_user_to_team(
                     str(e)
                 )
             )
-    except Exception as e:
+    except ProxyException as e:
         if "already exists" in str(e) or "doesn't exist" in str(e):
+            verbose_proxy_logger.debug(
+                "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
+                    str(e)
+                )
+            )
+        elif ProxyErrorTypes.team_member_already_in_team in e.type:
             verbose_proxy_logger.debug(
                 "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
                     str(e)
