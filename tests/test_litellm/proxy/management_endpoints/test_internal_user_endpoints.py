@@ -349,3 +349,128 @@ async def test_user_info_url_encoding_plus_character(mocker):
         f"mock_prisma_client.get_data.call_args: {mock_prisma_client.get_data.call_args.kwargs}"
     )
     assert mock_prisma_client.get_data.call_args.kwargs["user_id"] == expected_user_id
+
+
+@pytest.mark.asyncio
+async def test_new_user_default_teams_flow(mocker):
+    """
+    Test that when teams are set via default_internal_user_params:
+    - Teams are NOT sent to generate_key_helper_fn
+    - Teams ARE sent to _add_user_to_team
+    """
+    import litellm
+    from litellm.proxy._types import NewUserRequest, NewUserRequestTeam, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+
+    # Mock the prisma client
+    mock_prisma_client = mocker.MagicMock()
+
+    # Setup the mock count response (under license limit)
+    async def mock_count(*args, **kwargs):
+        return 5  # Low user count, under limit
+
+    mock_prisma_client.db.litellm_usertable.count = mock_count
+
+    # Mock check_duplicate_user_email to pass
+    async def mock_check_duplicate_user_email(*args, **kwargs):
+        return None  # No duplicate found
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
+        mock_check_duplicate_user_email,
+    )
+
+    # Mock the license check to return False (under limit)
+    mock_license_check = mocker.MagicMock()
+    mock_license_check.is_over_limit.return_value = False
+
+    # Mock generate_key_helper_fn
+    mock_generate_key_helper_fn = mocker.AsyncMock()
+    mock_generate_key_helper_fn.return_value = {
+        "user_id": "test-user-123",
+        "token": "sk-test-token-123",
+        "expires": None,
+        "max_budget": 100,
+    }
+
+    # Mock _add_user_to_team
+    mock_add_user_to_team = mocker.AsyncMock()
+
+    # Mock UserManagementEventHooks.async_user_created_hook
+    mock_user_created_hook = mocker.AsyncMock()
+
+    # Setup default_internal_user_params with teams
+    original_default_params = getattr(litellm, "default_internal_user_params", None)
+    litellm.default_internal_user_params = {
+        "teams": [
+            {
+                "team_id": "96fed65b-0182-4ff4-8429-2721cd7d42af",
+                "max_budget_in_team": 100,
+                "user_role": "user",
+            }
+        ]
+    }
+
+    try:
+        # Patch all the imports
+        mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+        mocker.patch("litellm.proxy.proxy_server._license_check", mock_license_check)
+        mocker.patch(
+            "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+            mock_generate_key_helper_fn,
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.internal_user_endpoints._add_user_to_team",
+            mock_add_user_to_team,
+        )
+        mocker.patch(
+            "litellm.proxy.management_endpoints.internal_user_endpoints.UserManagementEventHooks.async_user_created_hook",
+            mock_user_created_hook,
+        )
+
+        # Create test request data WITHOUT teams (teams should come from defaults)
+        user_request = NewUserRequest(
+            user_email="test@example.com", user_role="internal_user"
+        )
+
+        # Mock user_api_key_dict
+        mock_user_api_key_dict = UserAPIKeyAuth(user_id="test_admin")
+
+        # Call new_user function
+        response = await new_user(
+            data=user_request, user_api_key_dict=mock_user_api_key_dict
+        )
+
+        # Verify generate_key_helper_fn was called WITHOUT teams
+        mock_generate_key_helper_fn.assert_called_once()
+        call_kwargs = mock_generate_key_helper_fn.call_args.kwargs
+
+        # Teams should be removed from the data passed to generate_key_helper_fn
+        assert (
+            "teams" not in call_kwargs
+        ), "Teams should not be passed to generate_key_helper_fn"
+        assert call_kwargs["request_type"] == "user"
+        assert call_kwargs["user_email"] == "test@example.com"
+        assert call_kwargs["user_role"] == "internal_user"
+
+        # Verify _add_user_to_team was called with the default team
+        mock_add_user_to_team.assert_called_once()
+        team_call_kwargs = mock_add_user_to_team.call_args.kwargs
+
+        assert team_call_kwargs["user_id"] == "test-user-123"
+        assert team_call_kwargs["team_id"] == "96fed65b-0182-4ff4-8429-2721cd7d42af"
+        assert team_call_kwargs["user_email"] == "test@example.com"
+        assert team_call_kwargs["max_budget_in_team"] == 100
+        assert team_call_kwargs["user_role"] == "user"
+
+        # Verify response structure
+        assert response.user_id == "test-user-123"
+        assert response.key == "sk-test-token-123"
+
+    finally:
+        # Restore original default params
+        if original_default_params is not None:
+            litellm.default_internal_user_params = original_default_params
+        else:
+            if hasattr(litellm, "default_internal_user_params"):
+                delattr(litellm, "default_internal_user_params")
