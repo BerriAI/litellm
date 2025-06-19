@@ -3037,6 +3037,11 @@ class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
         default=None, description="Default list of models that new users can access"
     )
 
+    teams: Optional[Union[List[str], List[NewUserRequestTeam]]] = Field(
+        default=None,
+        description="Default teams for new users created",
+    )
+
 
 class BaseDailySpendTransaction(TypedDict):
     date: str
