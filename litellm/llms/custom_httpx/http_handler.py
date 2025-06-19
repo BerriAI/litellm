@@ -558,11 +558,23 @@ class AsyncHTTPHandler:
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
                 connector=TCPConnector(
+                    ssl=AsyncHTTPHandler._get_ssl_context(),
                     verify_ssl=ssl_verify,
                     ssl_context=ssl_context,
                     local_addr=("0.0.0.0", 0) if litellm.force_ipv4 else None,
                 )
             ),
+        )
+    
+
+    @staticmethod
+    def _get_ssl_context() -> ssl.SSLContext:
+        """
+        Get the SSL context for the AiohttpTransport
+        """
+        import certifi
+        return ssl.create_default_context(
+            cafile=certifi.where()
         )
 
     @staticmethod
