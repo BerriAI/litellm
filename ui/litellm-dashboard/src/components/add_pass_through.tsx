@@ -251,12 +251,10 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                     <div className="mb-2 font-medium text-gray-600">Choose based on your API structure:</div>
                     <div className="space-y-1">
                       <div className="flex items-center text-green-600">
-                        <CheckCircleOutlined className="mr-2" />
-                        <span className="font-medium">Enable</span> if you need routes like: /bria/v1/text-to-image/base/model
+                        <CheckCircleOutlined className="mr-2" /> Enable if you need routes like: /bria/v1/text-to-image/base/model
                       </div>
                       <div className="flex items-center text-orange-600">
-                        <ExclamationCircleOutlined className="mr-2" />
-                        <span className="font-medium">Disable</span> if you only need the exact path: /bria
+                        <ExclamationCircleOutlined className="mr-2" /> Disable if you only need the exact path: /bria
                       </div>
                     </div>
                   </div>
@@ -269,35 +267,69 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
               </Form.Item>
 
               {pathValue && targetValue && (
-                <Collapse
-                  items={[
-                    {
-                      key: '1',
-                      label: (
-                        <div className="flex items-center">
-                          <RightOutlined className="mr-2" />
-                          <span className="font-medium">Route Preview</span>
+                <Accordion className="mt-4 mb-4">
+                  <AccordionHeader>
+                    <div className="flex items-center">
+                      <RightOutlined className="mr-2 text-blue-500" />
+                      <span className="font-medium">Route Preview</span>
+                    </div>
+                  </AccordionHeader>
+                  <AccordionBody>
+                    <div className="space-y-6">
+                      {/* Your API Endpoint */}
+                      <div>
+                        <div className="text-sm font-medium text-gray-700 mb-3">Your API Endpoint:</div>
+                        <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 flex items-center justify-between">
+                          <div className="flex items-center space-x-3">
+                            <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs font-medium">
+                              GET/POST
+                            </span>
+                            <code className="font-mono text-sm">{getLiteLLMProxyUrl()}</code>
+                          </div>
+                          <Button 
+                            size="xs"
+                            variant="secondary"
+                            onClick={() => copyToClipboard(getLiteLLMProxyUrl())}
+                          >
+                            Copy
+                          </Button>
                         </div>
-                      ),
-                      children: (
-                        <div className="space-y-6">
-                          {/* Your API Endpoint */}
+                      </div>
+
+                      {/* Arrow */}
+                      <div className="flex justify-center">
+                        <div className="text-gray-400">
+                          <RightOutlined className="text-xl" />
+                        </div>
+                      </div>
+
+                      {/* Forwards to */}
+                      <div>
+                        <div className="text-sm font-medium text-gray-700 mb-3">Forwards to:</div>
+                        <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+                          <code className="font-mono text-sm">{targetValue}</code>
+                        </div>
+                      </div>
+
+                      {includeSubpath && (
+                        <>
+                          {/* With Subpaths Example */}
                           <div>
-                            <div className="text-sm font-medium text-gray-700 mb-3">Your API Endpoint:</div>
-                            <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 flex items-center justify-between">
+                            <div className="text-sm font-medium text-blue-600 mb-3">With Subpaths (Example):</div>
+                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-center justify-between">
                               <div className="flex items-center space-x-3">
-                                <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs font-medium">
-                                  GET/POST
+                                <span className="bg-green-100 text-green-800 px-2 py-1 rounded text-xs font-medium">
+                                  POST
                                 </span>
-                                <code className="font-mono text-sm">{getLiteLLMProxyUrl()}</code>
+                                <code className="font-mono text-sm">{getSubpathExampleUrl()}</code>
                               </div>
-                                                             <Button 
-                                 size="xs"
-                                 variant="secondary"
-                                 onClick={() => copyToClipboard(getLiteLLMProxyUrl())}
-                               >
-                                 Copy
-                               </Button>
+                              <Button 
+                                size="xs"
+                                variant="secondary"
+                                onClick={() => copyToClipboard(getSubpathExampleUrl())}
+                              >
+                                Copy
+                              </Button>
                             </div>
                           </div>
 
@@ -308,67 +340,25 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                             </div>
                           </div>
 
-                          {/* Forwards to */}
+                          {/* Also forwards to */}
                           <div>
-                            <div className="text-sm font-medium text-gray-700 mb-3">Forwards to:</div>
-                            <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
-                              <code className="font-mono text-sm">{targetValue}</code>
+                            <div className="text-sm font-medium text-blue-600 mb-3">Also forwards to:</div>
+                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                              <code className="font-mono text-sm">{getTargetSubpathUrl()}</code>
                             </div>
                           </div>
 
-                          {includeSubpath && (
-                            <>
-                              {/* With Subpaths Example */}
-                              <div>
-                                <div className="text-sm font-medium text-blue-600 mb-3">With Subpaths (Example):</div>
-                                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-center justify-between">
-                                  <div className="flex items-center space-x-3">
-                                    <span className="bg-green-100 text-green-800 px-2 py-1 rounded text-xs font-medium">
-                                      POST
-                                    </span>
-                                    <code className="font-mono text-sm">{getSubpathExampleUrl()}</code>
-                                  </div>
-                                                                     <Button 
-                                     size="xs"
-                                     variant="secondary"
-                                     onClick={() => copyToClipboard(getSubpathExampleUrl())}
-                                   >
-                                     Copy
-                                   </Button>
-                                </div>
-                              </div>
-
-                              {/* Arrow */}
-                              <div className="flex justify-center">
-                                <div className="text-gray-400">
-                                  <RightOutlined className="text-xl" />
-                                </div>
-                              </div>
-
-                              {/* Also forwards to */}
-                              <div>
-                                <div className="text-sm font-medium text-blue-600 mb-3">Also forwards to:</div>
-                                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                                  <code className="font-mono text-sm">{getTargetSubpathUrl()}</code>
-                                </div>
-                              </div>
-
-                              {/* Note */}
-                              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                                <div className="text-xs text-blue-700">
-                                  <strong>Note:</strong> Any path after {pathValue} will be automatically appended to the target URL
-                                </div>
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      ),
-                    },
-                  ]}
-                  defaultActiveKey={['1']}
-                  className="border-0"
-                  ghost
-                />
+                          {/* Note */}
+                          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                            <div className="text-xs text-blue-700">
+                              <strong>Note:</strong> Any path after {pathValue} will be automatically appended to the target URL
+                            </div>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </AccordionBody>
+                </Accordion>
               )}
 
               <Form.Item
