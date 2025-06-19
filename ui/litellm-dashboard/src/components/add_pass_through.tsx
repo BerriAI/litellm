@@ -155,105 +155,81 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
             initialValues={{ include_subpath: true }}
           >
             {/* Route Configuration Section */}
-            <Card className="p-6">
+            <Card className="p-5">
               <Title className="text-lg font-semibold text-gray-900 mb-2">Route Configuration</Title>
-              <Subtitle className="text-gray-600 mb-6">Configure how requests to your domain will be forwarded to the target API</Subtitle>
+              <Subtitle className="text-gray-600 mb-5">Configure how requests to your domain will be forwarded to the target API</Subtitle>
               
-              <div className="space-y-6">
+              <div className="space-y-5">
                 <Form.Item
                   label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      Path Prefix
-                      <Tooltip title="The route on your LiteLLM proxy. Must start with '/'. Example: /bria for Bria API">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
+                    <span className="text-sm font-medium text-gray-700">
+                      Path Prefix <span className="text-red-500">*</span>
                     </span>
                   }
                   name="path"
                   rules={[
-                    { required: true, message: 'Please enter the endpoint path' },
-                    { pattern: /^\//, message: 'Path must start with /' }
+                    { required: true, message: '' },
+                    { pattern: /^\//, message: '' }
                   ]}
                   extra={
-                    <div className="text-xs text-gray-500 mt-2">
-                      <div className="font-medium mb-1">The path where your API will be accessible. Must start with "/".</div>
-                      <div>Example: /bria, /openai, /anthropic</div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      Example: /bria, /openai, /anthropic
                     </div>
                   }
+                  className="mb-4"
                 >
                   <div className="flex items-center">
-                    <span className="mr-1 text-gray-500 font-mono">/</span>
+                    <span className="mr-2 text-gray-500 font-mono text-base">/</span>
                     <TextInput 
                       placeholder="bria" 
                       value={pathValue.startsWith('/') ? pathValue.slice(1) : pathValue}
                       onChange={(e) => handlePathChange(e.target.value)}
-                      className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                      className="flex-1"
                     />
                   </div>
                 </Form.Item>
 
                 <Form.Item
                   label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      Target URL
-                      <Tooltip title="The base URL of the API you want to forward requests to">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
+                    <span className="text-sm font-medium text-gray-700">
+                      Target URL <span className="text-red-500">*</span>
                     </span>
                   }
                   name="target"
                   rules={[
-                    { required: true, message: 'Please enter the target URL' },
-                    { type: 'url', message: 'Please enter a valid URL' }
+                    { required: true, message: '' },
+                    { type: 'url', message: '' }
                   ]}
                   extra={
-                    <div className="text-xs text-gray-500 mt-2">
-                      <div className="font-medium mb-1">The base URL of the API you want to proxy to. Don't include trailing slash.</div>
-                      <div>Example: https://api.openai.com, https://engine.prod.bria-api.com</div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      Example: https://api.openai.com, https://engine.prod.bria-api.com
                     </div>
                   }
+                  className="mb-4"
                 >
                   <TextInput 
                     placeholder="https://engine.prod.bria-api.com" 
                     value={targetValue}
                     onChange={(e) => setTargetValue(e.target.value)}
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                   />
                 </Form.Item>
 
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      Include Subpaths
-                      <Tooltip title="Forward all subpaths to the target API (recommended for REST APIs)">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="include_subpath"
-                  valuePropName="checked"
-                  extra={
-                    <div className="text-xs mt-2 p-3 bg-blue-50 rounded-md">
-                      <div className="font-medium text-blue-900 mb-2">
-                        {includeSubpath ? 'Subpaths enabled:' : 'Subpaths disabled:'}
-                      </div>
-                      {includeSubpath ? (
-                        <div className="text-blue-700">
-                          All requests to your path prefix will be forwarded with their full subpath. This allows you to access nested API endpoints like {pathValue}/v1/text-to-image/base/model.
-                        </div>
-                      ) : (
-                        <div className="text-blue-700">
-                          Only requests to the exact path prefix will be forwarded without any subpaths.
-                        </div>
-                      )}
-                    </div>
-                  }
-                >
-                  <Switch 
-                    checked={includeSubpath}
-                    onChange={setIncludeSubpath}
-                  />
-                </Form.Item>
+                <div className="flex items-center justify-between py-3">
+                  <div>
+                    <div className="text-sm font-medium text-gray-700">Include Subpaths</div>
+                    <div className="text-xs text-gray-500 mt-0.5">Forward all subpaths to the target API (recommended for REST APIs)</div>
+                  </div>
+                  <Form.Item
+                    name="include_subpath"
+                    valuePropName="checked"
+                    className="mb-0"
+                  >
+                    <Switch 
+                      checked={includeSubpath}
+                      onChange={setIncludeSubpath}
+                    />
+                  </Form.Item>
+                </div>
               </div>
             </Card>
 
