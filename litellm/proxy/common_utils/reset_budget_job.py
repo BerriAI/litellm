@@ -465,7 +465,10 @@ class ResetBudgetJob:
             item.spend = 0.0
             if hasattr(item, "budget_duration") and item.budget_duration is not None:
                 # Get standardized reset time based on budget duration
-                from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+                from litellm.proxy.common_utils.timezone_utils import (
+                    get_budget_reset_time,
+                )
+
                 item.budget_reset_at = get_budget_reset_time(
                     budget_duration=item.budget_duration
                 )
@@ -513,7 +516,10 @@ class ResetBudgetJob:
     ) -> Optional[LiteLLM_BudgetTableFull]:
         try:
             if budget.budget_duration is not None:
-                from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+                from litellm.litellm_core_utils.duration_parser import (
+                    duration_in_seconds,
+                )
+
                 duration_s = duration_in_seconds(duration=budget.budget_duration)
 
                 # Fallback for existing budgets that do not have a budget_reset_at date set, ensuring the duration is taken into account

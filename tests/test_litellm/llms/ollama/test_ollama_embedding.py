@@ -26,9 +26,9 @@ def mock_encoding():
 
 
 def test_ollama_embeddings(mock_response_data, mock_embedding_response, mock_encoding):
-    with patch("litellm.module_level_client.post") as mock_post, \
-         patch("litellm.OllamaConfig.get_config", return_value={"truncate": 512}):
-
+    with patch("litellm.module_level_client.post") as mock_post, patch(
+        "litellm.OllamaConfig.get_config", return_value={"truncate": 512}
+    ):
         mock_response = MagicMock()
         mock_response.json.return_value = mock_response_data
         mock_post.return_value = mock_response
@@ -50,10 +50,14 @@ def test_ollama_embeddings(mock_response_data, mock_embedding_response, mock_enc
 
 
 @pytest.mark.asyncio
-async def test_ollama_aembeddings(mock_response_data, mock_embedding_response, mock_encoding):
-    with patch("litellm.module_level_aclient.post", new_callable=AsyncMock) as mock_post, \
-         patch("litellm.OllamaConfig.get_config", return_value={"truncate": 512}):
-
+async def test_ollama_aembeddings(
+    mock_response_data, mock_embedding_response, mock_encoding
+):
+    with patch(
+        "litellm.module_level_aclient.post", new_callable=AsyncMock
+    ) as mock_post, patch(
+        "litellm.OllamaConfig.get_config", return_value={"truncate": 512}
+    ):
         mock_post.return_value.json.return_value = mock_response_data
 
         response = await ollama_aembeddings(
@@ -78,9 +82,9 @@ def test_prompt_eval_fallback_when_missing(mock_embedding_response, mock_encodin
         # No "prompt_eval_count"
     }
 
-    with patch("litellm.module_level_client.post") as mock_post, \
-         patch("litellm.OllamaConfig.get_config", return_value={}):
-        
+    with patch("litellm.module_level_client.post") as mock_post, patch(
+        "litellm.OllamaConfig.get_config", return_value={}
+    ):
         mock_response = MagicMock()
         mock_response.json.return_value = response_data
         mock_post.return_value = mock_response
@@ -99,4 +103,4 @@ def test_prompt_eval_fallback_when_missing(mock_embedding_response, mock_encodin
         assert response.usage.prompt_tokens == 5
         assert response.usage.total_tokens == 5
         assert response.usage.completion_tokens == 0
-        assert response.data[0]['embedding'] == [0.1, 0.2, 0.3]
+        assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]

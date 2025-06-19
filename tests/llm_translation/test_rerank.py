@@ -55,7 +55,6 @@ def assert_response_shape(response, custom_llm_provider):
     assert isinstance(response.meta, expected_response_shape["meta"])
 
     if custom_llm_provider == "cohere":
-
         assert isinstance(
             response.meta["api_version"], expected_meta_shape["api_version"]
         )
@@ -260,7 +259,6 @@ async def test_rerank_custom_api_base(version):
 
 
 class TestLogger(CustomLogger):
-
     def __init__(self):
         self.kwargs = None
         self.response_obj = None
@@ -485,7 +483,6 @@ def test_rerank_cohere_api():
 
 
 def test_rerank_infer_region_from_model_arn(monkeypatch):
-
     mock_response = MagicMock()
 
     monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")

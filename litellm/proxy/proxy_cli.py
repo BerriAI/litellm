@@ -12,6 +12,7 @@ import click
 import httpx
 from dotenv import load_dotenv
 import urllib.parse
+
 if TYPE_CHECKING:
     from fastapi import FastAPI
 else:
@@ -778,7 +779,9 @@ def run_server(  # noqa: PLR0915
 
         # Skip server startup if requested (after all setup is done)
         if skip_server_startup:
-            print("LiteLLM: Setup complete. Skipping server startup as requested.")  # noqa
+            print(
+                "LiteLLM: Setup complete. Skipping server startup as requested."
+            )  # noqa
             return
 
         uvicorn_args = ProxyInitializationHelpers._get_default_unvicorn_init_args(

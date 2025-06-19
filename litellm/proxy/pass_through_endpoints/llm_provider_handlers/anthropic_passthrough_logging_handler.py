@@ -125,9 +125,9 @@ class AnthropicPassthroughLoggingHandler:
             litellm_model_response.id = logging_obj.litellm_call_id
             litellm_model_response.model = model
             logging_obj.model_call_details["model"] = model
-            logging_obj.model_call_details["custom_llm_provider"] = (
-                litellm.LlmProviders.ANTHROPIC.value
-            )
+            logging_obj.model_call_details[
+                "custom_llm_provider"
+            ] = litellm.LlmProviders.ANTHROPIC.value
             return kwargs
         except Exception as e:
             verbose_proxy_logger.exception(

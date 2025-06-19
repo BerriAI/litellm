@@ -147,13 +147,13 @@ class TestBedrockNovaCanvasColorGuidedGeneration(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         litellm.in_memory_llm_clients_cache = InMemoryCache()
         return {
-                "model": "bedrock/amazon.nova-canvas-v1:0",
-                "n": 1,
-                "size": "320x320",
-                "imageGenerationConfig": {"cfgScale":6.5,"seed":12},
-                "taskType": "COLOR_GUIDED_GENERATION",
-                "colorGuidedGenerationParams":{"colors":["#FFFFFF"]},
-                "aws_region_name": "us-east-1",
+            "model": "bedrock/amazon.nova-canvas-v1:0",
+            "n": 1,
+            "size": "320x320",
+            "imageGenerationConfig": {"cfgScale": 6.5, "seed": 12},
+            "taskType": "COLOR_GUIDED_GENERATION",
+            "colorGuidedGenerationParams": {"colors": ["#FFFFFF"]},
+            "aws_region_name": "us-east-1",
         }
 
 
@@ -161,9 +161,11 @@ class TestOpenAIDalle3(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "dall-e-3"}
 
+
 class TestOpenAIGPTImage1(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "gpt-image-1"}
+
 
 class TestAzureOpenAIDalle3(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
@@ -241,4 +243,3 @@ async def test_aimage_generation_bedrock_with_optional_params():
             pass
         else:
             pytest.fail(f"An exception occurred - {str(e)}")
-

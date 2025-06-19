@@ -1113,7 +1113,6 @@ generation_params = {
     ],
 )
 def test_langfuse_prompt_type(prompt):
-
     from litellm.integrations.langfuse.langfuse import _add_prompt_to_generation_params
     from unittest.mock import patch, MagicMock, Mock
 

@@ -218,6 +218,7 @@ def test_map_tool_choice():
     assert result["type"] == "none"
     print(result)
 
+
 def test_transform_response_with_prefix_prompt():
     import httpx
 
@@ -261,4 +262,3 @@ def test_transform_response_with_prefix_prompt():
         result.choices[0].message.content
         == "You are a helpful assistant. The grass is green."
     )
-

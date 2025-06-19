@@ -12,6 +12,7 @@ from litellm.proxy.management_endpoints.common_utils import (
 # Fixtures: a fake Prisma transaction and a fake UserAPIKeyAuth object
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def mock_tx():
     """
@@ -41,6 +42,7 @@ def mock_tx():
 def fake_user():
     """Cheap stand-in for UserAPIKeyAuth."""
     return types.SimpleNamespace(user_id="tester@example.com")
+
 
 # TEST: max_budget is None, disconnect only
 @pytest.mark.asyncio
@@ -156,8 +158,8 @@ async def test_upsert_create_then_update(mock_tx, fake_user):
         mock_tx,
         team_id="team-42",
         user_id="user-42",
-        max_budget=25.0,                # new limit
-        existing_budget_id=created_bid, # now we say it exists
+        max_budget=25.0,  # new limit
+        existing_budget_id=created_bid,  # now we say it exists
         user_api_key_dict=fake_user,
     )
 

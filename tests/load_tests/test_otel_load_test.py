@@ -15,9 +15,9 @@ import pytest
 def test_otel_logging_async():
     try:
         os.environ["OTEL_EXPORTER"] = "otlp_http"
-        os.environ["OTEL_ENDPOINT"] = (
-            "https://exampleopenaiendpoint-production.up.railway.app/traces"
-        )
+        os.environ[
+            "OTEL_ENDPOINT"
+        ] = "https://exampleopenaiendpoint-production.up.railway.app/traces"
         os.environ["OTEL_HEADERS"] = "Authorization=K0BSwd"
 
         def single_run():

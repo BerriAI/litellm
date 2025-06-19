@@ -449,6 +449,7 @@ def test_embedding_caching():
 
 # test_embedding_caching()
 
+
 @pytest.mark.asyncio
 async def test_embedding_caching_individual_items_and_then_list():
     litellm._turn_on_debug()
@@ -473,7 +474,7 @@ async def test_embedding_caching_individual_items_and_then_list():
     assert embedding3["data"][0]["embedding"] == embedding1["data"][0]["embedding"]
     assert embedding3["data"][1]["embedding"] == embedding2["data"][0]["embedding"]
     assert embedding3._hidden_params["cache_hit"] == True
-    assert embedding3.usage.prompt_tokens != 0 
+    assert embedding3.usage.prompt_tokens != 0
 
     ## with new input, check that prompt tokens increase
     additional_text = "this is a new text"
@@ -482,6 +483,7 @@ async def test_embedding_caching_individual_items_and_then_list():
         model="text-embedding-ada-002", input=text_to_embed, caching=True
     )
     assert embedding4.usage.prompt_tokens > embedding3.usage.prompt_tokens
+
 
 @pytest.mark.asyncio
 async def test_embedding_caching_individual_items():
@@ -500,7 +502,7 @@ async def test_embedding_caching_individual_items():
     assert embedding3["data"][0]["embedding"] == embedding1["data"][0]["embedding"]
     assert len(embedding3.data) == 1
     assert embedding3._hidden_params["cache_hit"] == True
-    assert embedding3.usage.prompt_tokens != 0 
+    assert embedding3.usage.prompt_tokens != 0
 
 
 def test_embedding_caching_azure():
@@ -2385,7 +2387,6 @@ async def test_redis_caching_llm_caching_ttl(sync_mode):
             cache_obj.set_cache(key="test", value="test")
             mock_set.assert_called_once_with(name="test", value="test", ex=120)
     else:
-
         # Patch self.init_async_client to return our mock Redis client
         with patch.object(
             cache_obj, "init_async_client", return_value=mock_redis_instance
@@ -2524,7 +2525,7 @@ async def test_redis_increment_pipeline():
         results = await redis_cache.async_increment_pipeline(increment_list)
 
         # Verify results
-        assert len(results) == 4 
+        assert len(results) == 4
 
         # Verify the values were actually set in Redis
         value1 = await redis_cache.async_get_cache("test_key1")
@@ -2665,42 +2666,75 @@ def test_caching_with_reasoning_content():
 
 def test_caching_reasoning_args_miss():  # test in memory cache
     try:
-        #litellm._turn_on_debug()
+        # litellm._turn_on_debug()
         litellm.set_verbose = True
-        litellm.cache = Cache(
+        litellm.cache = Cache()
+        response1 = completion(
+            model="claude-3-7-sonnet-latest",
+            messages=messages,
+            caching=True,
+            reasoning_effort="low",
+            mock_response="My response",
         )
-        response1 = completion(model="claude-3-7-sonnet-latest", messages=messages, caching=True, reasoning_effort="low", mock_response="My response")
-        response2 = completion(model="claude-3-7-sonnet-latest", messages=messages, caching=True, mock_response="My response")
+        response2 = completion(
+            model="claude-3-7-sonnet-latest",
+            messages=messages,
+            caching=True,
+            mock_response="My response",
+        )
         print(f"response1: {response1}")
         print(f"response2: {response2}")
         assert response1.id != response2.id
     except Exception as e:
         print(f"error occurred: {traceback.format_exc()}")
         pytest.fail(f"Error occurred: {e}")
+
 
 def test_caching_reasoning_args_hit():  # test in memory cache
     try:
-        #litellm._turn_on_debug()
+        # litellm._turn_on_debug()
         litellm.set_verbose = True
-        litellm.cache = Cache(
+        litellm.cache = Cache()
+        response1 = completion(
+            model="claude-3-7-sonnet-latest",
+            messages=messages,
+            caching=True,
+            reasoning_effort="low",
+            mock_response="My response",
         )
-        response1 = completion(model="claude-3-7-sonnet-latest", messages=messages, caching=True, reasoning_effort="low", mock_response="My response")
-        response2 = completion(model="claude-3-7-sonnet-latest", messages=messages, caching=True, reasoning_effort="low", mock_response="My response")
+        response2 = completion(
+            model="claude-3-7-sonnet-latest",
+            messages=messages,
+            caching=True,
+            reasoning_effort="low",
+            mock_response="My response",
+        )
         print(f"response1: {response1}")
         print(f"response2: {response2}")
         assert response1.id == response2.id
     except Exception as e:
         print(f"error occurred: {traceback.format_exc()}")
         pytest.fail(f"Error occurred: {e}")
- 
+
+
 def test_caching_thinking_args_miss():  # test in memory cache
     try:
-        #litellm._turn_on_debug()
+        # litellm._turn_on_debug()
         litellm.set_verbose = True
-        litellm.cache = Cache(
+        litellm.cache = Cache()
+        response1 = completion(
+            model="claude-3-7-sonnet-latest",
+            messages=messages,
+            caching=True,
+            thinking={"type": "enabled", "budget_tokens": 1024},
+            mock_response="My response",
         )
-        response1 = completion(model="claude-3-7-sonnet-latest", messages=messages, caching=True, thinking={"type": "enabled", "budget_tokens": 1024}, mock_response="My response")
-        response2 = completion(model="claude-3-7-sonnet-latest", messages=messages, caching=True, mock_response="My response")
+        response2 = completion(
+            model="claude-3-7-sonnet-latest",
+            messages=messages,
+            caching=True,
+            mock_response="My response",
+        )
         print(f"response1: {response1}")
         print(f"response2: {response2}")
         assert response1.id != response2.id
@@ -2708,18 +2742,29 @@ def test_caching_thinking_args_miss():  # test in memory cache
         print(f"error occurred: {traceback.format_exc()}")
         pytest.fail(f"Error occurred: {e}")
 
+
 def test_caching_thinking_args_hit():  # test in memory cache
     try:
-        #litellm._turn_on_debug()
+        # litellm._turn_on_debug()
         litellm.set_verbose = True
-        litellm.cache = Cache(
+        litellm.cache = Cache()
+        response1 = completion(
+            model="claude-3-7-sonnet-latest",
+            messages=messages,
+            caching=True,
+            thinking={"type": "enabled", "budget_tokens": 1024},
+            mock_response="My response",
         )
-        response1 = completion(model="claude-3-7-sonnet-latest", messages=messages, caching=True, thinking={"type": "enabled", "budget_tokens": 1024}, mock_response="My response" )
-        response2 = completion(model="claude-3-7-sonnet-latest", messages=messages, caching=True, thinking={"type": "enabled", "budget_tokens": 1024}, mock_response="My response")
+        response2 = completion(
+            model="claude-3-7-sonnet-latest",
+            messages=messages,
+            caching=True,
+            thinking={"type": "enabled", "budget_tokens": 1024},
+            mock_response="My response",
+        )
         print(f"response1: {response1}")
         print(f"response2: {response2}")
         assert response1.id == response2.id
     except Exception as e:
         print(f"error occurred: {traceback.format_exc()}")
         pytest.fail(f"Error occurred: {e}")
-

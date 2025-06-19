@@ -226,10 +226,10 @@ if MCP_AVAILABLE:
             "GLOBAL MCP TOOLS: %s", global_mcp_tool_registry.list_tools()
         )
 
-        tools_from_mcp_servers: List[MCPTool] = (
-            await global_mcp_server_manager.list_tools(
-                user_api_key_auth=user_api_key_auth,
-            )
+        tools_from_mcp_servers: List[
+            MCPTool
+        ] = await global_mcp_server_manager.list_tools(
+            user_api_key_auth=user_api_key_auth,
         )
         verbose_logger.debug("TOOLS FROM MCP SERVERS: %s", tools_from_mcp_servers)
         if tools_from_mcp_servers is not None:
@@ -258,15 +258,15 @@ if MCP_AVAILABLE:
             "litellm_logging_obj", None
         )
         if litellm_logging_obj:
-            litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
-                standard_logging_mcp_tool_call
-            )
-            litellm_logging_obj.model_call_details["model"] = (
-                f"{MCP_TOOL_NAME_PREFIX}: {standard_logging_mcp_tool_call.get('name') or ''}"
-            )
-            litellm_logging_obj.model_call_details["custom_llm_provider"] = (
-                standard_logging_mcp_tool_call.get("mcp_server_name")
-            )
+            litellm_logging_obj.model_call_details[
+                "mcp_tool_call_metadata"
+            ] = standard_logging_mcp_tool_call
+            litellm_logging_obj.model_call_details[
+                "model"
+            ] = f"{MCP_TOOL_NAME_PREFIX}: {standard_logging_mcp_tool_call.get('name') or ''}"
+            litellm_logging_obj.model_call_details[
+                "custom_llm_provider"
+            ] = standard_logging_mcp_tool_call.get("mcp_server_name")
 
         # Try managed server tool first
         if name in global_mcp_server_manager.tool_name_to_mcp_server_name_mapping:

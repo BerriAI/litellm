@@ -87,11 +87,11 @@ class MistralConfig(OpenAIGPTConfig):
             "stop",
             "response_format",
         ]
-        
+
         # Add reasoning support for magistral models
         if "magistral" in model.lower():
             supported_params.extend(["thinking", "reasoning_effort"])
-            
+
         return supported_params
 
     def _map_tool_choice(self, tool_choice: str) -> str:
@@ -232,30 +232,30 @@ Then provide a clear, concise answer based on your reasoning."""
             return super()._transform_messages(new_messages, model, False)
 
     def _add_reasoning_system_prompt_if_needed(
-        self, 
-        messages: List[AllMessageValues], 
-        optional_params: dict
+        self, messages: List[AllMessageValues], optional_params: dict
     ) -> List[AllMessageValues]:
         """
         Add reasoning system prompt for Mistral magistral models when reasoning_effort is specified.
         """
         if not optional_params.get("_add_reasoning_prompt", False):
             return messages
-        
+
         # Check if there's already a system message
         has_system_message = any(msg.get("role") == "system" for msg in messages)
-        
+
         if has_system_message:
             # Prepend reasoning instructions to existing system message
             for i, msg in enumerate(messages):
                 if msg.get("role") == "system":
                     existing_content = msg.get("content", "")
                     reasoning_prompt = self._get_mistral_reasoning_system_prompt()
-                    
+
                     # Handle both string and list content, preserving original format
                     if isinstance(existing_content, str):
                         # String content - prepend reasoning prompt
-                        new_content: Union[str, list] = f"{reasoning_prompt}\n\n{existing_content}"
+                        new_content: Union[
+                            str, list
+                        ] = f"{reasoning_prompt}\n\n{existing_content}"
                     elif isinstance(existing_content, list):
                         # List content - prepend reasoning prompt as text block
                         new_content = [
@@ -264,20 +264,22 @@ Then provide a clear, concise answer based on your reasoning."""
                     else:
                         # Fallback for any other type - convert to string
                         new_content = f"{reasoning_prompt}\n\n{str(existing_content)}"
-                    
-                    messages[i] = cast(AllMessageValues, {
-                        **msg,
-                        "content": new_content
-                    })
+
+                    messages[i] = cast(
+                        AllMessageValues, {**msg, "content": new_content}
+                    )
                     break
         else:
             # Add new system message with reasoning instructions
-            reasoning_message: AllMessageValues = cast(AllMessageValues, {
-                "role": "system",
-                "content": self._get_mistral_reasoning_system_prompt()
-            })
+            reasoning_message: AllMessageValues = cast(
+                AllMessageValues,
+                {
+                    "role": "system",
+                    "content": self._get_mistral_reasoning_system_prompt(),
+                },
+            )
             messages = [reasoning_message] + messages
-        
+
         # Remove the internal flag
         optional_params.pop("_add_reasoning_prompt", None)
         return messages
@@ -330,9 +332,13 @@ Then provide a clear, concise answer based on your reasoning."""
             dict: The transformed request. Sent as the body of the API call.
         """
         # Add reasoning system prompt if needed (for magistral models)
-        if "magistral" in model.lower() and optional_params.get("_add_reasoning_prompt", False):
-            messages = self._add_reasoning_system_prompt_if_needed(messages, optional_params)
-        
+        if "magistral" in model.lower() and optional_params.get(
+            "_add_reasoning_prompt", False
+        ):
+            messages = self._add_reasoning_system_prompt_if_needed(
+                messages, optional_params
+            )
+
         # Call parent transform_request which handles _transform_messages
         return super().transform_request(
             model=model,

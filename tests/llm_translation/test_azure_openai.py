@@ -263,7 +263,6 @@ def test_azure_openai_gpt_4o_naming(monkeypatch):
     )
 
     class ResponseFormat(BaseModel):
-
         number: str = Field(description="total number of days in a week")
         days: list[str] = Field(description="name of days in a week")
 
@@ -594,6 +593,7 @@ async def test_azure_embedding_max_retries_0(
 def test_azure_safety_result():
     """Bubble up safety result from Azure OpenAI"""
     from litellm import completion
+
     litellm._turn_on_debug()
 
     response = completion(

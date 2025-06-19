@@ -115,9 +115,9 @@ class AmazonAnthropicClaude3MessagesConfig(
 
         # 1. anthropic_version is required for all claude models
         if "anthropic_version" not in anthropic_messages_request:
-            anthropic_messages_request["anthropic_version"] = (
-                self.DEFAULT_BEDROCK_ANTHROPIC_API_VERSION
-            )
+            anthropic_messages_request[
+                "anthropic_version"
+            ] = self.DEFAULT_BEDROCK_ANTHROPIC_API_VERSION
 
         # 2. `stream` is not allowed in request body for bedrock invoke
         if "stream" in anthropic_messages_request:

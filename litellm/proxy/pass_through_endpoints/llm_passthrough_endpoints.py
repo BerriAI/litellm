@@ -705,6 +705,7 @@ class VertexAIPassThroughHandler(BaseVertexAIPassThroughHandler):
     ) -> str:
         return get_vertex_base_url(vertex_location)
 
+
 def get_vertex_base_url(vertex_location: Optional[str]) -> str:
     """
     Returns the base URL for Vertex AI based on the provided location.
@@ -712,6 +713,7 @@ def get_vertex_base_url(vertex_location: Optional[str]) -> str:
     if vertex_location == "global":
         return "https://aiplatform.googleapis.com/"
     return f"https://{vertex_location}-aiplatform.googleapis.com/"
+
 
 def get_vertex_pass_through_handler(
     call_type: Literal["discovery", "aiplatform"]

@@ -570,6 +570,7 @@ async def test_init_responses_api_endpoints():
     A simpler test for _init_responses_api_endpoints that focuses on the basic functionality
     """
     from litellm.responses.utils import ResponsesAPIRequestUtils
+
     # Create a router with a basic model
     router = Router(
         model_list=[
@@ -582,38 +583,39 @@ async def test_init_responses_api_endpoints():
             }
         ]
     )
-    
+
     # Just mock the _ageneric_api_call_with_fallbacks method
     router._ageneric_api_call_with_fallbacks = AsyncMock()
-    
+
     # Add a mock implementation of _get_model_id_from_response_id to the Router instance
-    ResponsesAPIRequestUtils.get_model_id_from_response_id = MagicMock(return_value=None)
-    
+    ResponsesAPIRequestUtils.get_model_id_from_response_id = MagicMock(
+        return_value=None
+    )
+
     # Call without a response_id (no model extraction should happen)
     await router._init_responses_api_endpoints(
-        original_function=AsyncMock(),
-        thread_id="thread_xyz"
+        original_function=AsyncMock(), thread_id="thread_xyz"
     )
-    
+
     # Verify _ageneric_api_call_with_fallbacks was called but model wasn't changed
     first_call_kwargs = router._ageneric_api_call_with_fallbacks.call_args.kwargs
     assert "model" not in first_call_kwargs
     assert first_call_kwargs["thread_id"] == "thread_xyz"
-    
+
     # Reset the mock
     router._ageneric_api_call_with_fallbacks.reset_mock()
-    
+
     # Change the return value for the second call
-    ResponsesAPIRequestUtils.get_model_id_from_response_id.return_value = "claude-3-sonnet"
-    
+    ResponsesAPIRequestUtils.get_model_id_from_response_id.return_value = (
+        "claude-3-sonnet"
+    )
+
     # Call with a response_id
     await router._init_responses_api_endpoints(
-        original_function=AsyncMock(),
-        response_id="resp_claude_123"
+        original_function=AsyncMock(), response_id="resp_claude_123"
     )
-    
+
     # Verify model was updated in the kwargs
     second_call_kwargs = router._ageneric_api_call_with_fallbacks.call_args.kwargs
     assert second_call_kwargs["model"] == "claude-3-sonnet"
     assert second_call_kwargs["response_id"] == "resp_claude_123"
-

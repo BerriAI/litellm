@@ -174,7 +174,7 @@ def test_remove_callback_from_list_by_object():
             manager.add_litellm_async_failure_callback(self.callback)
 
         def callback(self):
-            pass    
+            pass
 
     obj = TestObject()
 
@@ -190,7 +190,6 @@ def test_remove_callback_from_list_by_object():
     assert len(litellm.failure_callback) == 0
     assert len(litellm._async_success_callback) == 0
     assert len(litellm._async_failure_callback) == 0
-
 
 
 def test_reset_callbacks(callback_manager):

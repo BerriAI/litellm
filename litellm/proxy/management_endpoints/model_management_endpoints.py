@@ -219,7 +219,7 @@ async def patch_model(
             where={"model_id": model_id},
             data=update_data,
         )
-        
+
         # Clear cache and reload models
         await clear_cache()
 
@@ -951,6 +951,7 @@ def _deduplicate_litellm_router_models(models: List[Dict]) -> List[Dict]:
             seen_ids.add(model_id)
     return unique_models
 
+
 async def clear_cache():
     """
     Clear router caches and reload models.
@@ -962,12 +963,12 @@ async def clear_cache():
         proxy_logging_obj,
         verbose_proxy_logger,
     )
+
     try:
         llm_router.model_list.clear()
-        
+
         await proxy_config.add_deployment(
-            prisma_client=prisma_client, 
-            proxy_logging_obj=proxy_logging_obj
+            prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
         )
     except Exception as e:
         verbose_proxy_logger.exception(

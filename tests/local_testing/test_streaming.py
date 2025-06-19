@@ -2892,6 +2892,7 @@ def test_azure_streaming_and_function_calling():
         pytest.fail(f"Error occurred: {e}")
         raise e
 
+
 @pytest.mark.asyncio
 async def test_azure_astreaming_and_function_calling():
     import uuid

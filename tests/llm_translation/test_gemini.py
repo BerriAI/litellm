@@ -16,10 +16,11 @@ from litellm.llms.vertex_ai.context_caching.transformation import (
 import litellm
 from litellm import completion
 
+
 class TestGoogleAIStudioGemini(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         return {"model": "gemini/gemini-2.0-flash"}
-    
+
     def get_base_completion_call_args_with_reasoning_model(self) -> dict:
         return {"model": "gemini/gemini-2.5-flash-preview-04-17"}
 
@@ -34,6 +35,7 @@ class TestGoogleAIStudioGemini(BaseLLMChatTest):
 
     def test_url_context(self):
         from litellm.utils import supports_url_context
+
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
@@ -46,13 +48,21 @@ class TestGoogleAIStudioGemini(BaseLLMChatTest):
 
         response = self.completion_function(
             **base_completion_call_args,
-            messages=[{"role": "user", "content": "Summarize the content of this URL: https://en.wikipedia.org/wiki/Artificial_intelligence"}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Summarize the content of this URL: https://en.wikipedia.org/wiki/Artificial_intelligence",
+                }
+            ],
             tools=[{"urlContext": {}}],
         )
 
         assert response is not None
-        assert response.model_extra['vertex_ai_url_context_metadata'] is not None, "URL context metadata should be present"
+        assert (
+            response.model_extra["vertex_ai_url_context_metadata"] is not None
+        ), "URL context metadata should be present"
         print(f"response={response}")
+
 
 def test_gemini_context_caching_separate_messages():
     messages = [
@@ -111,7 +121,6 @@ def test_gemini_image_generation():
     assert response.choices[0].message.content is not None
 
 
-
 def test_gemini_thinking():
     litellm._turn_on_debug()
     from litellm.types.utils import Message, CallTypes
@@ -119,10 +128,20 @@ def test_gemini_thinking():
     import json
 
     messages = [
-        {"role": "user", "content": "Explain the concept of Occam's Razor and provide a simple, everyday example"}
+        {
+            "role": "user",
+            "content": "Explain the concept of Occam's Razor and provide a simple, everyday example",
+        }
     ]
     reasoning_content = "I'm thinking about Occam's Razor."
-    assistant_message = Message(content='Okay, let\'s break down Occam\'s Razor.', reasoning_content=reasoning_content, role='assistant', tool_calls=None, function_call=None, provider_specific_fields=None)
+    assistant_message = Message(
+        content="Okay, let's break down Occam's Razor.",
+        reasoning_content=reasoning_content,
+        role="assistant",
+        tool_calls=None,
+        function_call=None,
+        provider_specific_fields=None,
+    )
 
     messages.append(assistant_message)
 
@@ -131,12 +150,12 @@ def test_gemini_thinking():
         kwargs={
             "model": "gemini/gemini-2.5-flash-preview-04-17",
             "messages": messages,
-        }
+        },
     )
     assert reasoning_content in json.dumps(raw_request)
     response = completion(
         model="gemini/gemini-2.5-flash-preview-04-17",
-        messages=messages, # make sure call works
+        messages=messages,  # make sure call works
     )
     print(response.choices[0].message)
     assert response.choices[0].message.content is not None
@@ -152,9 +171,14 @@ def test_gemini_thinking_budget_0():
         endpoint=CallTypes.completion,
         kwargs={
             "model": "gemini/gemini-2.5-flash-preview-04-17",
-            "messages": [{"role": "user", "content": "Explain the concept of Occam's Razor and provide a simple, everyday example"}],
-            "thinking": {"type": "enabled", "budget_tokens": 0}
-        }
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Explain the concept of Occam's Razor and provide a simple, everyday example",
+                }
+            ],
+            "thinking": {"type": "enabled", "budget_tokens": 0},
+        },
     )
     print(raw_request)
     assert "0" in json.dumps(raw_request["raw_request_body"])
@@ -163,8 +187,13 @@ def test_gemini_thinking_budget_0():
 def test_gemini_finish_reason():
     import os
     from litellm import completion
+
     litellm._turn_on_debug()
-    response = completion(model="gemini/gemini-1.5-pro", messages=[{"role": "user", "content": "give me 3 random words"}], max_tokens=2)
+    response = completion(
+        model="gemini/gemini-1.5-pro",
+        messages=[{"role": "user", "content": "give me 3 random words"}],
+        max_tokens=2,
+    )
     print(response)
     assert response.choices[0].finish_reason is not None
     assert response.choices[0].finish_reason == "length"
@@ -172,6 +201,7 @@ def test_gemini_finish_reason():
 
 def test_gemini_url_context():
     from litellm import completion
+
     litellm._turn_on_debug()
 
     url = "https://ai.google.dev/gemini-api/docs/models"
@@ -180,23 +210,24 @@ def test_gemini_url_context():
     {url}
     """
     response = completion(
-            model="gemini/gemini-2.0-flash",
-            messages=[{"role": "user", "content": prompt}],
-            tools=[{"urlContext": {}}],
-        )
+        model="gemini/gemini-2.0-flash",
+        messages=[{"role": "user", "content": prompt}],
+        tools=[{"urlContext": {}}],
+    )
     print(response)
     message = response.choices[0].message.content
     assert message is not None
-    url_context_metadata = response.model_extra['vertex_ai_url_context_metadata']
+    url_context_metadata = response.model_extra["vertex_ai_url_context_metadata"]
     assert url_context_metadata is not None
-    urlMetadata = url_context_metadata[0]['urlMetadata'][0]
-    assert urlMetadata['retrievedUrl'] == url
-    assert urlMetadata['urlRetrievalStatus'] == 'URL_RETRIEVAL_STATUS_SUCCESS'
+    urlMetadata = url_context_metadata[0]["urlMetadata"][0]
+    assert urlMetadata["retrievedUrl"] == url
+    assert urlMetadata["urlRetrievalStatus"] == "URL_RETRIEVAL_STATUS_SUCCESS"
 
 
 @pytest.mark.flaky(retries=3, delay=2)
 def test_gemini_with_grounding():
     from litellm import completion, Usage, stream_chunk_builder
+
     litellm._turn_on_debug()
     litellm.set_verbose = True
     tools = [{"googleSearch": {}}]
@@ -207,10 +238,15 @@ def test_gemini_with_grounding():
     # assert usage.prompt_tokens_details.web_search_requests is not None
     # assert usage.prompt_tokens_details.web_search_requests > 0
 
-
     ## Check streaming
 
-    response = completion(model="gemini/gemini-2.0-flash", messages=[{"role": "user", "content": "What is the capital of France?"}], tools=tools, stream=True, stream_options={"include_usage": True})
+    response = completion(
+        model="gemini/gemini-2.0-flash",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        tools=tools,
+        stream=True,
+        stream_options={"include_usage": True},
+    )
     chunks = []
     for chunk in response:
         chunks.append(chunk)
@@ -226,6 +262,7 @@ def test_gemini_with_grounding():
 
 def test_gemini_with_empty_function_call_arguments():
     from litellm import completion
+
     litellm._turn_on_debug()
     tools = [
         {
@@ -236,6 +273,10 @@ def test_gemini_with_empty_function_call_arguments():
             },
         }
     ]
-    response = completion(model="gemini/gemini-2.0-flash", messages=[{"role": "user", "content": "What is the capital of France?"}], tools=tools)
+    response = completion(
+        model="gemini/gemini-2.0-flash",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        tools=tools,
+    )
     print(response)
     assert response.choices[0].message.content is not None

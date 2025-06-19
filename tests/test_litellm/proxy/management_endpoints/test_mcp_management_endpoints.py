@@ -147,7 +147,6 @@ class TestListMCPServers:
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
             return_value=mock_prisma_client,
         ):
-
             # Mock empty DB response
             mock_get_db_servers.return_value = []
 
@@ -246,7 +245,6 @@ class TestListMCPServers:
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
             return_value=mock_prisma_client,
         ):
-
             # Mock DB response with servers
             mock_get_db_servers.return_value = [db_server_1, db_server_2]
 
@@ -341,7 +339,6 @@ class TestListMCPServers:
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
             return_value=mock_prisma_client,
         ):
-
             # Mock user-specific DB response
             mock_get_user_servers.return_value = [db_server_allowed]
 

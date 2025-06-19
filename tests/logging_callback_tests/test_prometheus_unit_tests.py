@@ -219,7 +219,14 @@ def test_increment_token_metrics(prometheus_logger):
     )
 
     prometheus_logger.litellm_tokens_metric.labels.assert_called_once_with(
-        end_user=None, user=None, hashed_api_key='test_hash', api_key_alias='test_alias', team='test_team', team_alias='test_team_alias', requested_model=None, model='gpt-3.5-turbo'
+        end_user=None,
+        user=None,
+        hashed_api_key="test_hash",
+        api_key_alias="test_alias",
+        team="test_team",
+        team_alias="test_team_alias",
+        requested_model=None,
+        model="gpt-3.5-turbo",
     )
     prometheus_logger.litellm_tokens_metric.labels().inc.assert_called_once_with(100)
 
@@ -278,7 +285,6 @@ async def test_increment_remaining_budget_metrics(prometheus_logger):
     ) as mock_get_team, patch(
         "litellm.proxy.auth.auth_checks.get_key_object"
     ) as mock_get_key:
-
         mock_get_team.return_value = MagicMock(budget_reset_at=future_reset_time_team)
         mock_get_key.return_value = MagicMock(budget_reset_at=future_reset_time_key)
 
@@ -1029,7 +1035,6 @@ def test_deployment_state_management(prometheus_logger):
 
 
 def test_increment_deployment_cooled_down(prometheus_logger):
-
     prometheus_logger.litellm_deployment_cooled_down = MagicMock()
 
     prometheus_logger.increment_deployment_cooled_down(
@@ -1093,7 +1098,6 @@ async def test_initialize_remaining_budget_metrics(prometheus_logger):
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
         "litellm.proxy.management_endpoints.team_endpoints.get_paginated_teams"
     ) as mock_get_teams:
-
         # Create mock team data with proper datetime objects for budget_reset_at
         future_reset = datetime.now() + timedelta(hours=24)  # Reset 24 hours from now
         mock_teams = [
@@ -1191,7 +1195,6 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
     ) as mock_get_teams, patch(
         "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
     ) as mock_list_keys:
-
         # Make get_paginated_teams raise an exception
         mock_get_teams.side_effect = Exception("Database error")
         mock_list_keys.side_effect = Exception("Key listing error")
@@ -1231,7 +1234,6 @@ async def test_initialize_api_key_budget_metrics(prometheus_logger):
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
         "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
     ) as mock_list_keys:
-
         # Create mock key data with proper datetime objects for budget_reset_at
         future_reset = datetime.now() + timedelta(hours=24)  # Reset 24 hours from now
         key1 = UserAPIKeyAuth(
@@ -1499,60 +1501,71 @@ def test_get_exception_class_name(prometheus_logger):
     """
     # Test case 1: Exception with llm_provider
     rate_limit_error = litellm.RateLimitError(
-        message="Rate limit exceeded",
-        llm_provider="openai",
-        model="gpt-3.5-turbo"
+        message="Rate limit exceeded", llm_provider="openai", model="gpt-3.5-turbo"
     )
-    assert prometheus_logger._get_exception_class_name(rate_limit_error) == "Openai.RateLimitError"
+    assert (
+        prometheus_logger._get_exception_class_name(rate_limit_error)
+        == "Openai.RateLimitError"
+    )
 
     # Test case 2: Exception with empty llm_provider
     auth_error = litellm.AuthenticationError(
-        message="Invalid API key",
-        llm_provider="",
-        model="gpt-4"
+        message="Invalid API key", llm_provider="", model="gpt-4"
     )
-    assert prometheus_logger._get_exception_class_name(auth_error) == "AuthenticationError"
+    assert (
+        prometheus_logger._get_exception_class_name(auth_error) == "AuthenticationError"
+    )
 
     # Test case 3: Exception with None llm_provider
     context_window_error = litellm.ContextWindowExceededError(
-        message="Context length exceeded",
-        llm_provider=None,
-        model="gpt-4"
+        message="Context length exceeded", llm_provider=None, model="gpt-4"
     )
-    assert prometheus_logger._get_exception_class_name(context_window_error) == "ContextWindowExceededError"
+    assert (
+        prometheus_logger._get_exception_class_name(context_window_error)
+        == "ContextWindowExceededError"
+    )
+
+    assert (
+        prometheus_logger._get_exception_class_name(context_window_error)
+        == "ContextWindowExceededError"
+    )
 
 
 def test_set_llm_deployment_success_metrics_with_label_filtering():
     """
-    Test that set_llm_deployment_success_metrics correctly uses prometheus_label_factory 
+    Test that set_llm_deployment_success_metrics correctly uses prometheus_label_factory
     and respects label filtering configuration to prevent "Incorrect label names" errors.
     """
     from litellm.types.integrations.prometheus import PrometheusMetricsConfig
-    
+
     # Create a prometheus logger with label filtering configuration
     config = [
         PrometheusMetricsConfig(
             group="test_group",
             metrics=[
                 "litellm_overhead_latency_metric",
-                "litellm_remaining_requests_metric", 
+                "litellm_remaining_requests_metric",
                 "litellm_remaining_tokens_metric",
                 "litellm_deployment_success_responses",
-                "litellm_deployment_total_requests"
+                "litellm_deployment_total_requests",
             ],
-            include_labels=["requested_model", "api_provider", "hashed_api_key"]  # Limited labels
+            include_labels=[
+                "requested_model",
+                "api_provider",
+                "hashed_api_key",
+            ],  # Limited labels
         )
     ]
-    
+
     # Mock litellm.prometheus_metrics_config
-    with patch('litellm.prometheus_metrics_config', config):
+    with patch("litellm.prometheus_metrics_config", config):
         # Clear registry before creating new logger
         collectors = list(REGISTRY._collector_to_names.keys())
         for collector in collectors:
             REGISTRY.unregister(collector)
-            
+
         prometheus_logger = PrometheusLogger()
-        
+
         # Mock all the metrics used in the method
         prometheus_logger.litellm_overhead_latency_metric = MagicMock()
         prometheus_logger.litellm_remaining_requests_metric = MagicMock()
@@ -1607,46 +1620,59 @@ def test_set_llm_deployment_success_metrics_with_label_filtering():
 
         # Verify that metrics were called with filtered labels (only the configured ones)
         # The exact labels depend on what get_labels_for_metric returns for each metric
-        
+
         # Verify overhead latency metric was called with filtered labels
         prometheus_logger.litellm_overhead_latency_metric.labels.assert_called_once()
-        overhead_labels = prometheus_logger.litellm_overhead_latency_metric.labels.call_args[1]
-        
+        overhead_labels = (
+            prometheus_logger.litellm_overhead_latency_metric.labels.call_args[1]
+        )
+
         # Should only contain the filtered labels that are supported for this metric
         expected_filtered_labels = {"requested_model", "api_provider", "hashed_api_key"}
         actual_labels = set(k for k in overhead_labels.keys() if k is not None)
-        
+
         # Verify that only expected labels are present (subset of configured labels)
         assert actual_labels <= expected_filtered_labels
-        
-        # Verify remaining requests metric was called with filtered labels  
+
+        # Verify remaining requests metric was called with filtered labels
         prometheus_logger.litellm_remaining_requests_metric.labels.assert_called_once()
-        requests_labels = prometheus_logger.litellm_remaining_requests_metric.labels.call_args[1]
+        requests_labels = (
+            prometheus_logger.litellm_remaining_requests_metric.labels.call_args[1]
+        )
         actual_labels = set(k for k in requests_labels.keys() if k is not None)
         assert actual_labels <= expected_filtered_labels
-        
+
         # Verify remaining tokens metric was called with filtered labels
         prometheus_logger.litellm_remaining_tokens_metric.labels.assert_called_once()
-        tokens_labels = prometheus_logger.litellm_remaining_tokens_metric.labels.call_args[1]
+        tokens_labels = (
+            prometheus_logger.litellm_remaining_tokens_metric.labels.call_args[1]
+        )
         actual_labels = set(k for k in tokens_labels.keys() if k is not None)
         assert actual_labels <= expected_filtered_labels
-        
+
         # Verify deployment success responses metric was called with filtered labels
         prometheus_logger.litellm_deployment_success_responses.labels.assert_called_once()
-        success_labels = prometheus_logger.litellm_deployment_success_responses.labels.call_args[1]
+        success_labels = (
+            prometheus_logger.litellm_deployment_success_responses.labels.call_args[1]
+        )
         actual_labels = set(k for k in success_labels.keys() if k is not None)
         assert actual_labels <= expected_filtered_labels
-        
+
         # Verify deployment total requests metric was called with filtered labels
         prometheus_logger.litellm_deployment_total_requests.labels.assert_called_once()
-        total_labels = prometheus_logger.litellm_deployment_total_requests.labels.call_args[1]
+        total_labels = (
+            prometheus_logger.litellm_deployment_total_requests.labels.call_args[1]
+        )
         actual_labels = set(total_labels.keys())
         assert actual_labels.issubset(expected_filtered_labels.union({None}))
-        
+
         # Verify all metrics were actually called (no exceptions were raised)
         prometheus_logger.litellm_overhead_latency_metric.labels().observe.assert_called_once()
-        prometheus_logger.litellm_remaining_requests_metric.labels().set.assert_called_once_with(123)
-        prometheus_logger.litellm_remaining_tokens_metric.labels().set.assert_called_once_with(4321)
+        prometheus_logger.litellm_remaining_requests_metric.labels().set.assert_called_once_with(
+            123
+        )
+        prometheus_logger.litellm_remaining_tokens_metric.labels().set.assert_called_once_with(
+            4321
+        )
         prometheus_logger.litellm_deployment_success_responses.labels().inc.assert_called_once()
         prometheus_logger.litellm_deployment_total_requests.labels().inc.assert_called_once()
-

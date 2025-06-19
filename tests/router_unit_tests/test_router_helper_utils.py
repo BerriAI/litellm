@@ -1146,6 +1146,7 @@ def test_cached_get_model_group_info(model_list):
 def test_init_responses_api_endpoints(model_list):
     """Test if the '_init_responses_api_endpoints' function is working correctly"""
     from typing import Callable
+
     router = Router(model_list=model_list)
 
     assert router.aget_responses is not None

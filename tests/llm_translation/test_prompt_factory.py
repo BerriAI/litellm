@@ -630,7 +630,6 @@ def test_azure_tool_call_invoke_helper():
 def test_ensure_alternating_roles(
     messages, expected_messages, user_continue_message, assistant_continue_message
 ):
-
     messages = get_completion_messages(
         messages=messages,
         assistant_continue_message=assistant_continue_message,
@@ -651,7 +650,7 @@ def test_alternating_roles_e2e():
     http_handler = HTTPHandler()
 
     with patch.object(http_handler, "post", new=MagicMock()) as mock_post:
-        try: 
+        try:
             response = litellm.completion(
                 **{
                     "model": "databricks/databricks-meta-llama-3-1-70b-instruct",
@@ -663,7 +662,10 @@ def test_alternating_roles_e2e():
                         },
                         {"role": "user", "content": "What is Databricks?"},
                         {"role": "user", "content": "What is Azure?"},
-                        {"role": "assistant", "content": "I don't know anyything, do you?"},
+                        {
+                            "role": "assistant",
+                            "content": "I don't know anyything, do you?",
+                        },
                         {"role": "assistant", "content": "I can't repeat sentences."},
                     ],
                     "user_continue_message": {
@@ -712,7 +714,7 @@ def test_alternating_roles_e2e():
                         "role": "user",
                         "content": "Ok",
                     },
-                ]
+                ],
             }
         )
 

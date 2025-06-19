@@ -178,10 +178,10 @@ class UserAPIKeyAuthMCP:
             verbose_logger.debug("prisma_client is None")
             return []
 
-        team_obj: Optional[LiteLLM_TeamTable] = (
-            await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": user_api_key_auth.team_id},
-            )
+        team_obj: Optional[
+            LiteLLM_TeamTable
+        ] = await prisma_client.db.litellm_teamtable.find_unique(
+            where={"team_id": user_api_key_auth.team_id},
         )
         if team_obj is None:
             verbose_logger.debug("team_obj is None")
