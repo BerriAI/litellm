@@ -1,14 +1,19 @@
-from typing import List, Optional
+"""
+LiteLLM Proxy uses this MCP Client to connnect to other MCP servers.
+"""
 import base64
 from datetime import timedelta
+from typing import List, Optional
+
 from mcp import ClientSession
-from mcp.types import Tool as MCPTool
-from mcp.types import CallToolResult as MCPCallToolResult
-from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamablehttp_client
+from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
+from mcp.types import CallToolResult as MCPCallToolResult
+from mcp.types import Tool as MCPTool
 
-from litellm.types.mcp import MCPAuth, MCPTransport, MCPTransportType, MCPAuthType
+from litellm.types.mcp import MCPAuth, MCPAuthType, MCPTransport, MCPTransportType
+
 
 def to_basic_auth(auth_value: str) -> str:
     """Convert auth value to Basic Auth format."""
@@ -51,6 +56,14 @@ class MCPClient:
         Enable async context manager support.
           Initializes the transport and session.
         """
+        await self.connect()
+        return self
+
+    async def connect(self):
+        """Initialize the transport and session."""
+        if self._session:
+            return  # Already connected
+            
         headers = self._get_auth_headers()
 
         if self.transport_type == MCPTransport.sse:
@@ -73,7 +86,6 @@ class MCPClient:
             self._session_ctx = ClientSession(self._transport[0], self._transport[1])
             self._session = await self._session_ctx.__aenter__()
             await self._session.initialize()
-        return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Cleanup when exiting context manager."""
@@ -124,12 +136,12 @@ class MCPClient:
     async def list_tools(self) -> List[MCPTool]:
         """List available tools from the server."""
         if not self._session:
-            await self.connect() # type: ignore
+            await self.connect()
+        if self._session is None:
+            raise ValueError("Session is not initialized")
 
         result = await self._session.list_tools()
-        if hasattr(result, "tools") and result.tools:
-            return result.tools
-        return result
+        return result.tools
 
     async def call_tool(
         self, call_tool_request_params: MCPCallToolRequestParams
@@ -138,11 +150,15 @@ class MCPClient:
         Call an MCP Tool.
         """
         if not self._session:
-            await self.connect() # type: ignore
+            await self.connect()
 
+        if self._session is None:
+            raise ValueError("Session is not initialized")
+        
         tool_result = await self._session.call_tool(
             name=call_tool_request_params.name,
             arguments=call_tool_request_params.arguments,
         )
         return tool_result
+        
 
