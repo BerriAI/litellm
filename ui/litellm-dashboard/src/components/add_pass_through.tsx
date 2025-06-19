@@ -276,82 +276,67 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                   </AccordionHeader>
                   <AccordionBody>
                     <div className="space-y-6">
-                      {/* Your API Endpoint */}
+                      {/* Subtitle */}
+                      <div className="text-gray-600 text-sm">
+                        How your requests will be routed
+                      </div>
+
+                      {/* Basic routing */}
                       <div>
-                        <div className="text-sm font-medium text-gray-700 mb-3">Your API Endpoint:</div>
-                        <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 flex items-center justify-between">
-                          <div className="flex items-center space-x-3">
-                            <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs font-medium">
-                              GET/POST
-                            </span>
-                            <code className="font-mono text-sm">{getLiteLLMProxyUrl()}</code>
+                        <div className="text-base font-semibold text-gray-900 mb-4">Basic routing:</div>
+                        <div className="flex items-center gap-4">
+                          {/* Your endpoint */}
+                          <div className="flex-1 bg-gray-50 border border-gray-200 rounded-lg p-4">
+                            <div className="text-sm text-gray-600 mb-2">Your endpoint</div>
+                            <code className="font-mono text-sm text-gray-900">{getLiteLLMProxyUrl()}</code>
                           </div>
-                          <Button 
-                            size="xs"
-                            variant="secondary"
-                            onClick={() => copyToClipboard(getLiteLLMProxyUrl())}
-                          >
-                            Copy
-                          </Button>
-                        </div>
-                      </div>
-
-                      {/* Arrow */}
-                      <div className="flex justify-center">
-                        <div className="text-gray-400">
-                          <RightOutlined className="text-xl" />
-                        </div>
-                      </div>
-
-                      {/* Forwards to */}
-                      <div>
-                        <div className="text-sm font-medium text-gray-700 mb-3">Forwards to:</div>
-                        <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
-                          <code className="font-mono text-sm">{targetValue}</code>
+                          
+                          {/* Arrow */}
+                          <div className="text-gray-400">
+                            <RightOutlined className="text-lg" />
+                          </div>
+                          
+                          {/* Forwards to */}
+                          <div className="flex-1 bg-gray-50 border border-gray-200 rounded-lg p-4">
+                            <div className="text-sm text-gray-600 mb-2">Forwards to</div>
+                            <code className="font-mono text-sm text-gray-900">{targetValue}</code>
+                          </div>
                         </div>
                       </div>
 
                       {includeSubpath && (
                         <>
-                          {/* With Subpaths Example */}
+                          {/* With subpaths */}
                           <div>
-                            <div className="text-sm font-medium text-blue-600 mb-3">With Subpaths (Example):</div>
-                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-center justify-between">
-                              <div className="flex items-center space-x-3">
-                                <span className="bg-green-100 text-green-800 px-2 py-1 rounded text-xs font-medium">
-                                  POST
-                                </span>
-                                <code className="font-mono text-sm">{getSubpathExampleUrl()}</code>
+                            <div className="text-base font-semibold text-gray-900 mb-4">With subpaths:</div>
+                            <div className="flex items-center gap-4">
+                              {/* Your endpoint + subpath */}
+                              <div className="flex-1 bg-gray-50 border border-gray-200 rounded-lg p-4">
+                                <div className="text-sm text-gray-600 mb-2">Your endpoint + subpath</div>
+                                <code className="font-mono text-sm text-gray-900">
+                                  {pathValue && `https://your-domain.com${pathValue}`}
+                                  <span className="text-blue-600">/v1/text-to-image/base/model</span>
+                                </code>
                               </div>
-                              <Button 
-                                size="xs"
-                                variant="secondary"
-                                onClick={() => copyToClipboard(getSubpathExampleUrl())}
-                              >
-                                Copy
-                              </Button>
+                              
+                              {/* Arrow */}
+                              <div className="text-gray-400">
+                                <RightOutlined className="text-lg" />
+                              </div>
+                              
+                              {/* Forwards to with subpath */}
+                              <div className="flex-1 bg-gray-50 border border-gray-200 rounded-lg p-4">
+                                <div className="text-sm text-gray-600 mb-2">Forwards to</div>
+                                <code className="font-mono text-sm text-gray-900">
+                                  {targetValue}
+                                  <span className="text-blue-600">/v1/text-to-image/base/model</span>
+                                </code>
+                              </div>
                             </div>
-                          </div>
-
-                          {/* Arrow */}
-                          <div className="flex justify-center">
-                            <div className="text-gray-400">
-                              <RightOutlined className="text-xl" />
-                            </div>
-                          </div>
-
-                          {/* Also forwards to */}
-                          <div>
-                            <div className="text-sm font-medium text-blue-600 mb-3">Also forwards to:</div>
-                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                              <code className="font-mono text-sm">{getTargetSubpathUrl()}</code>
-                            </div>
-                          </div>
-
-                          {/* Note */}
-                          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                            <div className="text-xs text-blue-700">
-                              <strong>Note:</strong> Any path after {pathValue} will be automatically appended to the target URL
+                            
+                            {/* Note */}
+                            <div className="mt-4 text-sm text-gray-600">
+                              Any path after {pathValue} will be appended to the target URL
                             </div>
                           </div>
                         </>
