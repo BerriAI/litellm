@@ -315,6 +315,32 @@ class BaseResponsesAPITest(ABC):
                 assert result.output == response.output
             else:
                 raise ValueError("response is not a ResponsesAPIResponse")
+
+    @pytest.mark.asyncio
+    async def test_basic_openai_list_input_items_endpoint(self):
+        """Test that calls the OpenAI List Input Items endpoint"""
+        litellm._turn_on_debug()
+
+        response = await litellm.aresponses(
+            model="gpt-4o",
+            input="Tell me a three sentence bedtime story about a unicorn.",
+        )
+        print("Initial response=", json.dumps(response, indent=4, default=str))
+
+        response_id = response.get("id")
+        assert response_id is not None, "Response should have an ID"
+        print(f"Got response_id: {response_id}")
+
+        list_items_response = await litellm.alist_input_items(
+            response_id=response_id,
+            limit=20,
+            order="desc",
+        )
+        print(
+            "List items response=",
+            json.dumps(list_items_response, indent=4, default=str),
+        )
+
     
     @pytest.mark.asyncio
     async def test_multiturn_responses_api(self):

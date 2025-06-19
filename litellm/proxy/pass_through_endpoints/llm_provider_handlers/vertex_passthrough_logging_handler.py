@@ -86,6 +86,7 @@ class VertexPassthroughLoggingHandler:
             vertex_image_generation_class = VertexImageGeneration()
 
             model = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
+
             _json_response = httpx_response.json()
 
             litellm_prediction_response: Union[
@@ -116,6 +117,59 @@ class VertexPassthroughLoggingHandler:
 
             logging_obj.model = model
             logging_obj.model_call_details["model"] = logging_obj.model
+
+            return {
+                "result": litellm_prediction_response,
+                "kwargs": kwargs,
+            }
+        elif "rawPredict" in url_route or "streamRawPredict" in url_route:
+            from litellm.llms.vertex_ai.vertex_ai_partner_models import (
+                get_vertex_ai_partner_model_config,
+            )
+
+            model = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
+            vertex_publisher_or_api_spec = VertexPassthroughLoggingHandler._get_vertex_publisher_or_api_spec_from_url(
+                url_route
+            )
+
+            _json_response = httpx_response.json()
+
+            litellm_prediction_response = ModelResponse()
+
+            if vertex_publisher_or_api_spec is not None:
+                vertex_ai_partner_model_config = get_vertex_ai_partner_model_config(
+                    model=model,
+                    vertex_publisher_or_api_spec=vertex_publisher_or_api_spec,
+                )
+                litellm_prediction_response = (
+                    vertex_ai_partner_model_config.transform_response(
+                        model=model,
+                        raw_response=httpx_response,
+                        model_response=litellm_prediction_response,
+                        logging_obj=logging_obj,
+                        request_data={},
+                        encoding=litellm.encoding,
+                        optional_params={},
+                        litellm_params={},
+                        api_key="",
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": "no-message-pass-through-endpoint",
+                            }
+                        ],
+                    )
+                )
+
+            kwargs = VertexPassthroughLoggingHandler._create_vertex_response_logging_payload_for_generate_content(
+                litellm_model_response=litellm_prediction_response,
+                model="vertex_ai/" + model,
+                kwargs=kwargs,
+                start_time=start_time,
+                end_time=end_time,
+                logging_obj=logging_obj,
+                custom_llm_provider="vertex_ai",
+            )
 
             return {
                 "result": litellm_prediction_response,
@@ -152,6 +206,7 @@ class VertexPassthroughLoggingHandler:
                 all_chunks=all_chunks,
                 litellm_logging_obj=litellm_logging_obj,
                 model=model,
+                url_route=url_route,
             )
         )
 
@@ -186,12 +241,37 @@ class VertexPassthroughLoggingHandler:
         all_chunks: List[str],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
+        url_route: str,
     ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
-        vertex_iterator = VertexModelResponseIterator(
-            streaming_response=None,
-            sync_stream=False,
-            logging_obj=litellm_logging_obj,
-        )
+        parsed_chunks = []
+        if "generateContent" in url_route or "streamGenerateContent" in url_route:
+            vertex_iterator: Any = VertexModelResponseIterator(
+                streaming_response=None,
+                sync_stream=False,
+                logging_obj=litellm_logging_obj,
+            )
+            chunk_parsing_logic: Any = vertex_iterator._common_chunk_parsing_logic
+            parsed_chunks = [chunk_parsing_logic(chunk) for chunk in all_chunks]
+        elif "rawPredict" in url_route or "streamRawPredict" in url_route:
+            from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+            from litellm.llms.base_llm.base_model_iterator import (
+                BaseModelResponseIterator,
+            )
+
+            vertex_iterator = ModelResponseIterator(
+                streaming_response=None,
+                sync_stream=False,
+            )
+            chunk_parsing_logic = vertex_iterator.chunk_parser
+            for chunk in all_chunks:
+                dict_chunk = BaseModelResponseIterator._string_to_dict_parser(chunk)
+                if dict_chunk is None:
+                    continue
+                parsed_chunks.append(chunk_parsing_logic(dict_chunk))
+        else:
+            return None
+        if len(parsed_chunks) == 0:
+            return None
         litellm_custom_stream_wrapper = litellm.CustomStreamWrapper(
             completion_stream=vertex_iterator,
             model=model,
@@ -199,11 +279,17 @@ class VertexPassthroughLoggingHandler:
             custom_llm_provider="vertex_ai",
         )
         all_openai_chunks = []
-        for chunk in all_chunks:
-            generic_chunk = vertex_iterator._common_chunk_parsing_logic(chunk)
-            litellm_chunk = litellm_custom_stream_wrapper.chunk_creator(
-                chunk=generic_chunk
-            )
+        for parsed_chunk in parsed_chunks:
+            try:
+                litellm_chunk = litellm_custom_stream_wrapper.chunk_creator(
+                    chunk=parsed_chunk
+                )
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    "Error creating litellm chunk from vertex passthrough endpoint: %s",
+                    str(e),
+                )
+                continue
             if litellm_chunk is not None:
                 all_openai_chunks.append(litellm_chunk)
 
@@ -220,6 +306,19 @@ class VertexPassthroughLoggingHandler:
         if match:
             return match.group(1)
         return "unknown"
+
+    @staticmethod
+    def _get_vertex_publisher_or_api_spec_from_url(url: str) -> Optional[str]:
+        # Check for specific Vertex AI partner publishers
+        if "/publishers/mistralai/" in url:
+            return "mistralai"
+        elif "/publishers/anthropic/" in url:
+            return "anthropic"
+        elif "/publishers/ai21/" in url:
+            return "ai21"
+        elif "/endpoints/openapi/" in url:
+            return "openapi"
+        return None
 
     @staticmethod
     def _get_custom_llm_provider_from_url(url: str) -> str:
@@ -244,10 +343,13 @@ class VertexPassthroughLoggingHandler:
         Create the standard logging object for Vertex passthrough generateContent (streaming and non-streaming)
 
         """
+
         response_cost = litellm.completion_cost(
             completion_response=litellm_model_response,
             model=model,
+            custom_llm_provider="vertex_ai",
         )
+
         kwargs["response_cost"] = response_cost
         kwargs["model"] = model
 

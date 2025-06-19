@@ -78,6 +78,7 @@ import {
   Space,
   Row,
   Col,
+  Checkbox,
 } from "antd";
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
@@ -112,6 +113,8 @@ import ModelInfoView from "./model_info_view";
 import AddModelTab from "./add_model/add_model_tab";
 import { ModelDataTable } from "./model_dashboard/table";
 import { columns } from "./model_dashboard/columns";
+import HealthCheckComponent from "./model_dashboard/HealthCheckComponent";
+import PassThroughSettings from "./pass_through_settings";
 import { all_admin_roles } from "@/utils/roles";
 import { Table as TableInstance } from '@tanstack/react-table';
 
@@ -195,11 +198,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     []
   );
   const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI);
-  const [healthCheckResponse, setHealthCheckResponse] = useState<string>("");
+  const [healthCheckResponse, setHealthCheckResponse] = useState<any>(null);
+  const [isHealthCheckLoading, setIsHealthCheckLoading] = useState<boolean>(false);
   const [editModalVisible, setEditModalVisible] = useState<boolean>(false);
 
   const [selectedModel, setSelectedModel] = useState<any>(null);
   const [availableModelGroups, setAvailableModelGroups] = useState<
+    Array<string>
+  >([]);
+  const [availableModelAccessGroups, setAvailableModelAccessGroups] = useState<
     Array<string>
   >([]);
   const [availableProviders, setavailableProviders] = useState<
@@ -251,12 +258,16 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [selectedTeam, setSelectedTeam] = useState<string | null>(null);
 
   const [selectedTeamFilter, setSelectedTeamFilter] = useState<string | null>(null);
+  const [selectedModelAccessGroupFilter, setSelectedModelAccessGroupFilter] = useState<string | null>(null);
 
   const [showColumnDropdown, setShowColumnDropdown] = useState(false);
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const dropdownRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<TableInstance<any>>(null);
+
+
 
   const setProviderModelsFn = (provider: Providers) => {
     const _providerModels = getProviderModels(provider, modelMap);
@@ -519,7 +530,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           setProviderSettings(_providerSettings);
         }
 
-        
+
 
         // loop through modelDataResponse and get all`model_name` values
         let all_model_groups: Set<string> = new Set();
@@ -533,6 +544,22 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         _array_model_groups = _array_model_groups.sort();
 
         setAvailableModelGroups(_array_model_groups);
+
+        let all_model_access_groups: Set<string> = new Set();
+        for (let i = 0; i < modelDataResponse.data.length; i++) {
+          const model = modelDataResponse.data[i];
+          let model_info: any | null = model.model_info;
+          if (model_info) {
+            let access_groups = model_info.access_groups;
+            if (access_groups) {
+              for (let j = 0; j < access_groups.length; j++) {
+                all_model_access_groups.add(access_groups[j]);
+              }
+            }
+          }
+        }
+
+        setAvailableModelAccessGroups(Array.from(all_model_access_groups));
 
         console.log("array_model_groups:", _array_model_groups);
         let _initial_model_group = "all";
@@ -793,14 +820,19 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const runHealthCheck = async () => {
     try {
       message.info("Running health check...");
-      setHealthCheckResponse("");
+      setIsHealthCheckLoading(true);
+      setHealthCheckResponse(null);
       const response = await healthCheckCall(accessToken);
       setHealthCheckResponse(response);
     } catch (error) {
       console.error("Error running health check:", error);
       setHealthCheckResponse("Error running health check");
+    } finally {
+      setIsHealthCheckLoading(false);
     }
   };
+
+
 
   const FilterByContent = (
       <div >
@@ -1053,6 +1085,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             // Trigger a refresh to update UI
             handleRefreshClick();
           }}
+          modelAccessGroups={availableModelAccessGroups}
         />
       ) : (
         <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
@@ -1062,8 +1095,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               {all_admin_roles.includes(userRole) ? <Tab>All Models</Tab> : <Tab>Your Models</Tab>}
               <Tab>Add Model</Tab>
               {all_admin_roles.includes(userRole) && <Tab>LLM Credentials</Tab>}
+              {all_admin_roles.includes(userRole) && <Tab>Pass-Through Endpoints</Tab>}
               {all_admin_roles.includes(userRole) && <Tab>
-                <pre>/health Models</pre>
+                Health Status
               </Tab>}
               {all_admin_roles.includes(userRole) && <Tab>Model Analytics</Tab>}
               {all_admin_roles.includes(userRole) && <Tab>Model Retry Settings</Tab>}
@@ -1150,46 +1184,27 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                 ))}
                               </Select>
                             </div>
+                            <div className="flex items-center gap-2">
+                              <Text>Filter by Model Access Group:</Text>
+                              <Select
+                                className="w-64"
+                                defaultValue="all"
+                                value={selectedModelAccessGroupFilter ?? "all"}
+                                onValueChange={(value) => setSelectedModelAccessGroupFilter(value === "all" ? null : value)}
+                              >
+                                <SelectItem value="all">All Model Access Groups</SelectItem>
+                                {availableModelAccessGroups.map((accessGroup, idx) => (
+                                  <SelectItem
+                                    key={idx}
+                                    value={accessGroup}
+                                  >
+                                    {accessGroup}
+                                  </SelectItem>
+                                ))}
+                              </Select>
+                            </div>
                           </div>
-                          
-                          {/* Column Selector will be rendered here */}
-                          {/* <div className="relative" ref={dropdownRef}>
-                            <button
-                              onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                            >
-                              <TableIcon className="h-4 w-4" />
-                              Columns
-                            </button>
-                            {isDropdownOpen && tableRef.current && (
-                              <div className="absolute right-0 mt-2 w-56 bg-white rounded-md shadow-lg ring-1 ring-black ring-opacity-5 z-50">
-                                <div className="py-1">
-                                  {tableRef.current.getAllLeafColumns().map((column: any) => {
-                                    if (column.id === 'actions') return null;
-                                    return (
-                                      <div
-                                        key={column.id}
-                                        className="flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
-                                        onClick={() => column.toggleVisibility()}
-                                      >
-                                        <input
-                                          type="checkbox"
-                                          checked={column.getIsVisible()}
-                                          onChange={() => column.toggleVisibility()}
-                                          className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                                        />
-                                        <span className="ml-2">
-                                          {typeof column.columnDef.header === 'string' 
-                                            ? column.columnDef.header 
-                                            : column.columnDef.header?.props?.children || column.id}
-                                        </span>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            )}
-                          </div> */}
+
                         </div>
 
                         {/* Results Count */}
@@ -1202,21 +1217,24 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     </div>
 
                     <ModelDataTable
-                      columns={columns(
-                        userRole,
-                        userID,
-                        premiumUser,
-                        setSelectedModelId,
-                        setSelectedTeamId,
-                        getDisplayModelName,
-                        handleEditClick,
-                        handleRefreshClick,
-                        setEditModel,
-                      )}
+                        columns={columns(
+                          userRole,
+                          userID,
+                          premiumUser,
+                          setSelectedModelId,
+                          setSelectedTeamId,
+                          getDisplayModelName,
+                          handleEditClick,
+                          handleRefreshClick,
+                          setEditModel,
+                          expandedRows,
+                          setExpandedRows,
+                        )}
                       data={modelData.data.filter(
                         (model: any) => (
                           (selectedModelGroup === "all" || model.model_name === selectedModelGroup || !selectedModelGroup) &&
-                          (selectedTeamFilter === "all" || model.model_info["team_id"] === selectedTeamFilter || !selectedTeamFilter)
+                          (selectedTeamFilter === "all" || model.model_info["team_id"] === selectedTeamFilter || !selectedTeamFilter) &&
+                          (selectedModelAccessGroupFilter === "all" || model.model_info["access_groups"]?.includes(selectedModelAccessGroupFilter) || !selectedModelAccessGroupFilter)
                         )
                       )}
                       isLoading={false}
@@ -1248,17 +1266,20 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               <CredentialsPanel accessToken={accessToken} uploadProps={uploadProps} credentialList={credentialsList} fetchCredentials={fetchCredentials} />
             </TabPanel>
             <TabPanel>
-              <Card>
-                <Text>
-                  `/health` will run a very small request through your models
-                  configured on litellm
-                </Text>
-
-                <Button onClick={runHealthCheck}>Run `/health`</Button>
-                {healthCheckResponse && (
-                  <pre>{JSON.stringify(healthCheckResponse, null, 2)}</pre>
-                )}
-              </Card>
+              <PassThroughSettings
+                accessToken={accessToken}
+                userRole={userRole}
+                userID={userID}
+                modelData={modelData}
+              />
+            </TabPanel>
+            <TabPanel>
+              <HealthCheckComponent
+                accessToken={accessToken}
+                modelData={modelData}
+                all_models_on_proxy={all_models_on_proxy}
+                getDisplayModelName={getDisplayModelName}
+              />
             </TabPanel>
             <TabPanel>
               <Grid numItems={4} className="mt-2 mb-2">
@@ -1606,6 +1627,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           </TabPanels>
         </TabGroup>
       )}
+
     </div>  
   );
 };

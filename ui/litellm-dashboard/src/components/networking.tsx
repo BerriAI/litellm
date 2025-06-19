@@ -1921,7 +1921,8 @@ export const modelAvailableCall = async (
   userRole: String,
   return_wildcard_routes: boolean = false,
   teamID: String | null = null,
-  include_model_access_groups: boolean = false
+  include_model_access_groups: boolean = false,
+  only_model_access_groups: boolean = false
 ) => {
   /**
    * Get all the models user has access to
@@ -1930,11 +1931,12 @@ export const modelAvailableCall = async (
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/models` : `/models`;
     const params = new URLSearchParams();
+    params.append('include_model_access_groups', 'True');
     if (return_wildcard_routes === true) {
       params.append('return_wildcard_routes', 'True');
     }
-    if (include_model_access_groups === true) {
-      params.append('include_model_access_groups', 'True');
+    if (only_model_access_groups === true) {
+      params.append('only_model_access_groups', 'True');
     }
     if (teamID) {
       params.append('team_id', teamID.toString());
@@ -4282,6 +4284,34 @@ export const healthCheckCall = async (accessToken: String) => {
   }
 };
 
+export const individualModelHealthCheckCall = async (accessToken: String, modelName: string) => {
+  /**
+   * Run health check for a specific model using model name
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/health?model=${encodeURIComponent(modelName)}` : `/health?model=${encodeURIComponent(modelName)}`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error(errorData || "Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error(`Failed to call /health for model ${modelName}:`, error);
+    throw error;
+  }
+};
+
 export const cachingHealthCheckCall = async (accessToken: String) => {
   /**
    * Get all the models user has access to
@@ -4310,6 +4340,80 @@ export const cachingHealthCheckCall = async (accessToken: String) => {
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to call /cache/ping:", error);
+    throw error;
+  }
+};
+
+export const healthCheckHistoryCall = async (
+  accessToken: String,
+  model?: string,
+  statusFilter?: string,
+  limit: number = 100,
+  offset: number = 0
+) => {
+  /**
+   * Get health check history for models
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/health/history` : `/health/history`;
+    
+    const params = new URLSearchParams();
+    if (model) params.append('model', model);
+    if (statusFilter) params.append('status_filter', statusFilter);
+    params.append('limit', limit.toString());
+    params.append('offset', offset.toString());
+    
+    if (params.toString()) {
+      url += `?${params.toString()}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error(errorData);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to call /health/history:", error);
+    throw error;
+  }
+};
+
+export const latestHealthChecksCall = async (accessToken: String) => {
+  /**
+   * Get the latest health check status for all models
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/health/latest` : `/health/latest`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error(errorData);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to call /health/latest:", error);
     throw error;
   }
 };
@@ -4578,6 +4682,33 @@ export const createMCPServer = async (
   }
 };
 
+export const updateMCPServer = async (
+  accessToken: string,
+  formValues: Record<string, any>
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
+    const response = await fetch(url, {
+      method: "PUT",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(formValues),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to update MCP server:", error);
+    throw error;
+  }
+};
+
 export const deleteMCPServer = async (
   accessToken: String,
   serverId: String
@@ -4609,8 +4740,8 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
   try {
     // Construct base URL
     let url = proxyBaseUrl 
-      ? `${proxyBaseUrl}/mcp/tools/list?server_id=${serverId}`
-      : `/mcp/tools/list?server_id=${serverId}`;
+      ? `${proxyBaseUrl}/mcp-rest/tools/list?server_id=${serverId}`
+      : `/mcp-rest/tools/list?server_id=${serverId}`;
 
     console.log("Fetching MCP tools from:", url);
     
@@ -4642,8 +4773,8 @@ export const callMCPTool = async (accessToken: string, toolName: string, toolArg
   try {
     // Construct base URL
     let url = proxyBaseUrl 
-      ? `${proxyBaseUrl}/mcp/tools/call`
-      : `/mcp/tools/call`;
+      ? `${proxyBaseUrl}/mcp-rest/tools/call`
+      : `/mcp-rest/tools/call`;
 
     console.log("Calling MCP tool:", toolName, "with arguments:", toolArguments);
     
@@ -5498,6 +5629,77 @@ export const getRemainingUsers = async (accessToken: string): Promise<{
     return data;
   } catch (error) {
     console.error("Failed to fetch remaining users:", error);
+    throw error;
+  }
+};
+
+export const updatePassThroughEndpoint = async (
+  accessToken: string,
+  endpointPath: string,
+  formValues: Record<string, any>
+) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/config/pass_through_endpoint/${encodeURIComponent(endpointPath)}`
+      : `/config/pass_through_endpoint/${encodeURIComponent(endpointPath)}`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(formValues),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    message.success("Pass through endpoint updated successfully");
+    return data;
+  } catch (error) {
+    console.error("Failed to update pass through endpoint:", error);
+    throw error;
+  }
+};
+
+export const getPassThroughEndpointInfo = async (
+  accessToken: string,
+  endpointPath: string
+) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/config/pass_through_endpoint?endpoint_id=${encodeURIComponent(endpointPath)}`
+      : `/config/pass_through_endpoint?endpoint_id=${encodeURIComponent(endpointPath)}`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    const endpoints = data["endpoints"];
+    
+    if (!endpoints || endpoints.length === 0) {
+      throw new Error("Pass through endpoint not found");
+    }
+    
+    return endpoints[0]; // Return the first (and should be only) endpoint
+  } catch (error) {
+    console.error("Failed to get pass through endpoint info:", error);
     throw error;
   }
 };
