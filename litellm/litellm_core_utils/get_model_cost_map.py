@@ -12,6 +12,7 @@ export LITELLM_PRICE_DIR=config
 import os
 import json
 import httpx
+import logging
 
 def load_local_backup() -> dict:
     """
@@ -37,5 +38,5 @@ def get_model_cost_map(url: str) -> dict:
         response.raise_for_status()
         return response.json()
     except Exception:
-        print("[WARN] Remote fetch failed, falling back to local model cost map.")
+        logging.warning("[WARN] Remote fetch failed, falling back to local model cost map.")
         return load_local_backup()
