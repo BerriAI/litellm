@@ -299,6 +299,10 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         model_response.choices[0].finish_reason = map_finish_reason(
             json_resp["results"][0]["stop_reason"]
         )
+        if json_resp["results"][0]["moderations"]:
+            model_response.choices[0].message.provider_specific_fields = {
+                "moderations": json_resp["results"][0]["moderations"]
+            }
         if json_resp.get("created_at"):
             model_response.created = int(
                 datetime.fromisoformat(json_resp["created_at"]).timestamp()
