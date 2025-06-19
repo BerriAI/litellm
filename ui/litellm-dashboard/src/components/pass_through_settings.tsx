@@ -48,6 +48,7 @@ import {
 } from "@heroicons/react/outline";
 import AddFallbacks from "./add_fallbacks";
 import AddPassThroughEndpoint from "./add_pass_through";
+import PassThroughInfoView from "./pass_through_info";
 import openai from "openai";
 import Paragraph from "antd/es/skeleton/Paragraph";
 import { DataTable } from "./view_logs/table";
@@ -79,7 +80,7 @@ export interface passThroughItem {
   target: string
   headers: object
   include_subpath?: boolean
-  input_cost_per_request?: number
+  cost_per_request?: number
 }
 
 // Password field component for headers
@@ -116,6 +117,7 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
   const [generalSettings, setGeneralSettings] = useState<passThroughItem[]>(
     []
   );
+  const [selectedEndpointPath, setSelectedEndpointPath] = useState<string | null>(null);
 
   useEffect(() => {
     if (!accessToken || !userRole || !userID) {
@@ -126,6 +128,16 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
       setGeneralSettings(general_settings);
     });
   }, [accessToken, userRole, userID]);
+
+  const handleEndpointUpdated = () => {
+    // Refresh the endpoints list when an endpoint is updated
+    if (accessToken) {
+      getPassThroughEndpointsCall(accessToken).then((data) => {
+        let general_settings = data["endpoints"];
+        setGeneralSettings(general_settings);
+      });
+    }
+  };
 
   const handleResetField = (fieldName: string, idx: number) => {
     if (!accessToken) {
@@ -150,7 +162,16 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
       header: "Path",
       accessorKey: "path",
       cell: (info: any) => (
-        <Text className="font-mono">{info.getValue()}</Text>
+        <div className="overflow-hidden">
+          <Button 
+            size="xs"
+            variant="light"
+            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+            onClick={() => setSelectedEndpointPath(info.getValue())}
+          >
+            {info.getValue()}
+          </Button>
+        </div>
       ),
     },
     {
@@ -168,17 +189,23 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
       ),
     },
     {
-      header: "Action",
+      header: "Actions",
       id: "actions",
       cell: ({ row }) => (
-        <Icon
-          icon={TrashIcon}
-          color="red"
-          className="cursor-pointer"
-          onClick={() => handleResetField(row.original.path, row.index)}
-        >
-          Delete
-        </Icon>
+        <div className="flex space-x-1">
+          <Icon
+            icon={PencilAltIcon}
+            size="sm"
+            onClick={() => setSelectedEndpointPath(row.original.path)}
+            title="Edit"
+          />
+          <Icon
+            icon={TrashIcon}
+            size="sm"
+            onClick={() => handleResetField(row.original.path, row.index)}
+            title="Delete"
+          />
+        </div>
       ),
     },
   ];
@@ -187,16 +214,27 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
     return null;
   }
 
+  // If a specific endpoint is selected, show the info view
+  if (selectedEndpointPath) {
+    return (
+      <PassThroughInfoView
+        endpointPath={selectedEndpointPath}
+        onClose={() => setSelectedEndpointPath(null)}
+        accessToken={accessToken}
+        isAdmin={userRole === "Admin" || userRole === "admin"}
+        onEndpointUpdated={handleEndpointUpdated}
+      />
+    );
+  }
+
   return (
-    <div className="w-full h-[75vh] p-6">
-      <div className="mb-2 mt-4">
+    <div>
         <div>
           <Title>Pass Through Endpoints</Title>
           <Text className="text-tremor-content">
             Configure and manage your pass-through endpoints
           </Text>
         </div>
-      </div>
       
       <AddPassThroughEndpoint 
         accessToken={accessToken} 
