@@ -564,6 +564,26 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                         placeholder="Select vector stores (optional)"
                       />
                     </Form.Item>
+                    <Form.Item 
+                      label={
+                        <span>
+                          Allowed MCP Servers{' '}
+                          <Tooltip title="Select which MCP servers this organization can access by default. Leave empty for access to all MCP servers">
+                            <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                          </Tooltip>
+                        </span>
+                      }
+                      name="allowed_mcp_server_ids"
+                      className="mt-4"
+                      help="Select MCP servers this organization can access. Leave empty for access to all MCP servers"
+                    >
+                      <MCPServerSelector
+                        onChange={(values) => form.setFieldValue('allowed_vector_store_ids', values)}
+                        value={form.getFieldValue('allowed_vector_store_ids')}
+                        accessToken={accessToken || ''}
+                        placeholder="Select vector stores (optional)"
+                      />
+                    </Form.Item>
 
                     <Form.Item label="Metadata" name="metadata">  
                       <Input.TextArea rows={4} />
