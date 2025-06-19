@@ -8,15 +8,11 @@ model_list:
       model: "anthropic/*"
       api_key: os.environ/ANTHROPIC_API_KEY
 
-litellm_settings:
-  callbacks: ["prometheus"]
-  prometheus_metrics_config:
-    # High-cardinality metrics with minimal labels
-    - group: "proxy_metrics"
-      metrics:
-        - "litellm_proxy_total_requests_metric"
-        - "litellm_proxy_failed_requests_metric"
-      include_labels:
-        - "hashed_api_key"
-        - "requested_model"
-        - "model_group"
+mcp_servers:
+  deepwiki_mcp:
+    url: "https://mcp.deepwiki.com/mcp"
+    transport: "http"
+
+general_settings:
+  store_model_in_db: true
+  store_prompts_in_spend_logs: true
