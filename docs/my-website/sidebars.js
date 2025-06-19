@@ -396,6 +396,7 @@ const sidebars = {
         "providers/xai",
         "providers/lm_studio",
         "providers/cerebras",
+        "providers/centml",
         "providers/volcano",
         "providers/triton-inference-server",
         "providers/ollama",
