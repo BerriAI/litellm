@@ -11,12 +11,12 @@ import hashlib
 import json
 from typing import Any, Dict, List, Optional, cast
 
-from mcp import ClientSession
-from mcp.client.sse import sse_client
+from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult
 from mcp.types import Tool as MCPTool
 
 from litellm._logging import verbose_logger
+from litellm.experimental_mcp_client.client import MCPClient
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     UserAPIKeyAuthMCP,
 )
@@ -29,12 +29,6 @@ from litellm.proxy._types import (
     MCPTransportType,
     UserAPIKeyAuth,
 )
-
-try:
-    from mcp.client.streamable_http import streamablehttp_client
-except ImportError:
-    streamablehttp_client = None  # type: ignore
-
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 
 
@@ -192,6 +186,25 @@ class MCPServerManager:
 
         return list_tools_result
 
+    def _create_mcp_client(self, server: MCPServer) -> MCPClient:
+        """
+        Create an MCPClient instance for the given server.
+
+        Args:
+            server (MCPServer): The server configuration
+
+        Returns:
+            MCPClient: Configured MCP client instance
+        """
+        transport = server.transport or MCPTransport.sse
+        return MCPClient(
+            server_url=server.url,
+            transport_type=transport,
+            auth_type=server.auth_type,
+            auth_value=server.authentication_token,
+            timeout=60.0,
+        )
+
     async def _get_tools_from_server(self, server: MCPServer) -> List[MCPTool]:
         """
         Helper method to get tools from a single MCP server.
@@ -203,57 +216,18 @@ class MCPServerManager:
             List[MCPTool]: List of tools available on the server
         """
         verbose_logger.debug(f"Connecting to url: {server.url}")
-
         verbose_logger.info("_get_tools_from_server...")
-        # send transport to connect to the server
-        if server.transport is None or server.transport == MCPTransport.sse:
-            async with sse_client(url=server.url) as (read, write):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
 
-                    tools_result = await session.list_tools()
-                    verbose_logger.debug(f"Tools from {server.name}: {tools_result}")
+        client = self._create_mcp_client(server)
+        async with client:
+            tools = await client.list_tools()
+            verbose_logger.debug(f"Tools from {server.name}: {tools}")
 
-                    # Update tool to server mapping
-                    for tool in tools_result.tools:
-                        self.tool_name_to_mcp_server_name_mapping[tool.name] = (
-                            server.name
-                        )
+            # Update tool to server mapping
+            for tool in tools:
+                self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
 
-                    return tools_result.tools
-        elif server.transport == MCPTransport.http:
-            if streamablehttp_client is None:
-                verbose_logger.error(
-                    "streamablehttp_client not available - install mcp with HTTP support"
-                )
-                raise ValueError(
-                    "streamablehttp_client not available - please run `pip install mcp -U`"
-                )
-            verbose_logger.debug(f"Using HTTP streamable transport for {server.url}")
-            async with streamablehttp_client(
-                url=server.url,
-            ) as (read_stream, write_stream, get_session_id):
-                async with ClientSession(read_stream, write_stream) as session:
-                    await session.initialize()
-
-                    if get_session_id is not None:
-                        session_id = get_session_id()
-                        if session_id:
-                            verbose_logger.debug(f"HTTP session ID: {session_id}")
-
-                    tools_result = await session.list_tools()
-                    verbose_logger.debug(f"Tools from {server.name}: {tools_result}")
-
-                    # Update tool to server mapping
-                    for tool in tools_result.tools:
-                        self.tool_name_to_mcp_server_name_mapping[tool.name] = (
-                            server.name
-                        )
-
-                    return tools_result.tools
-        else:
-            verbose_logger.warning(f"Unsupported transport type: {server.transport}")
-            return []
+            return tools
 
     def initialize_tool_name_to_mcp_server_name_mapping(self):
         """
@@ -278,45 +252,21 @@ class MCPServerManager:
             for tool in tools:
                 self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
 
-    async def call_tool(self, name: str, arguments: Dict[str, Any]):
+    async def call_tool(self, name: str, arguments: Dict[str, Any]) -> CallToolResult:
         """
         Call a tool with the given name and arguments
         """
         mcp_server = self._get_mcp_server_from_tool_name(name)
         if mcp_server is None:
             raise ValueError(f"Tool {name} not found")
-        elif mcp_server.transport is None or mcp_server.transport == MCPTransport.sse:
-            async with sse_client(url=mcp_server.url) as (read, write):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    return await session.call_tool(name, arguments)
-        elif mcp_server.transport == MCPTransport.http:
-            if streamablehttp_client is None:
-                verbose_logger.error(
-                    "streamablehttp_client not available - install mcp with HTTP support"
-                )
-                raise ValueError(
-                    "streamablehttp_client not available - please run `pip install mcp -U`"
-                )
-            verbose_logger.debug(
-                f"Using HTTP streamable transport for tool call: {name}"
+
+        client = self._create_mcp_client(mcp_server)
+        async with client:
+            call_tool_params = MCPCallToolRequestParams(
+                name=name,
+                arguments=arguments,
             )
-            async with streamablehttp_client(
-                url=mcp_server.url,
-            ) as (read_stream, write_stream, get_session_id):
-                async with ClientSession(read_stream, write_stream) as session:
-                    await session.initialize()
-
-                    if get_session_id is not None:
-                        session_id = get_session_id()
-                        if session_id:
-                            verbose_logger.debug(
-                                f"HTTP session ID for tool call: {session_id}"
-                            )
-
-                    return await session.call_tool(name, arguments)
-        else:
-            return CallToolResult(content=[], isError=True)
+            return await client.call_tool(call_tool_params)
 
     def _get_mcp_server_from_tool_name(self, tool_name: str) -> Optional[MCPServer]:
         """
