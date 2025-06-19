@@ -38,6 +38,7 @@ export const healthCheckColumns = (
   getStatusBadge: (status: string) => JSX.Element,
   getDisplayModelName: (model: any) => string,
   showErrorModal?: (modelName: string, cleanedError: string, fullError: string) => void,
+  setSelectedModelId?: (modelId: string) => void,
 ): ColumnDef<HealthCheckData>[] => [
   {
     header: () => (
@@ -46,6 +47,7 @@ export const healthCheckColumns = (
           checked={allModelsSelected}
           indeterminate={selectedModelsForHealth.length > 0 && !allModelsSelected}
           onChange={(e) => handleSelectAll(e.target.checked)}
+          onClick={(e) => e.stopPropagation()}
         />
         <span>Model ID</span>
       </div>
@@ -63,10 +65,12 @@ export const healthCheckColumns = (
           <Checkbox
             checked={isSelected}
             onChange={(e) => handleModelSelection(modelName, e.target.checked)}
+            onClick={(e) => e.stopPropagation()}
           />
           <Tooltip title={model.model_info.id}>
             <div 
               className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left w-full truncate whitespace-nowrap cursor-pointer max-w-[15ch]"
+              onClick={() => setSelectedModelId && setSelectedModelId(model.model_info.id)}
             >
               {model.model_info.id}
             </div>
