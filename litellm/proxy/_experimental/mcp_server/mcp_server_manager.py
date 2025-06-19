@@ -241,7 +241,13 @@ class MCPServerManager:
 
             return tools
     
-    async def call_tool(self, name: str, arguments: Dict[str, Any]) -> CallToolResult:
+    async def call_tool(
+        self, 
+        name: str, 
+        arguments: Dict[str, Any],
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        mcp_auth_header: Optional[str] = None,
+    ) -> CallToolResult:
         """
         Call a tool with the given name and arguments
         """
@@ -249,7 +255,10 @@ class MCPServerManager:
         if mcp_server is None:
             raise ValueError(f"Tool {name} not found")
 
-        client = self._create_mcp_client(mcp_server)
+        client = self._create_mcp_client(
+            server=mcp_server,
+            mcp_auth_header=mcp_auth_header,
+        )
         async with client:
             call_tool_params = MCPCallToolRequestParams(
                 name=name,
