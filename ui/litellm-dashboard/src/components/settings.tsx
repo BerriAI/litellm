@@ -205,9 +205,14 @@ const Settings: React.FC<SettingsPageProps> = ({
     try {
       await setCallbacksCall(accessToken, payload);
       message.success(`Callback ${new_callback} added successfully`);
-      setIsModalVisible(false);
+      setShowAddCallbacksModal(false);
       form.resetFields();
       setSelectedCallback(null);
+      setSelectedCallbackParams([]);
+      
+      // Refresh the callbacks list
+      const updatedData = await getCallbacksCall(accessToken, userID || "", userRole || "");
+      setCallbacks(updatedData.callbacks);
     } catch (error) {
       message.error("Failed to add callback: " + error, 20);
     }
