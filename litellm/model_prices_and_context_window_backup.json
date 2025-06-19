@@ -5812,9 +5812,9 @@
         "max_output_tokens": 4028,
         "litellm_provider": "meta_llama",
         "mode": "chat",
-        "supports_function_calling": false,
+        "supports_function_calling": true,
         "source": "https://llama.developer.meta.com/docs/models",
-        "supports_tool_choice": false,
+        "supports_tool_choice": true,
         "supported_modalities": [
             "text",
             "image"
@@ -5829,9 +5829,9 @@
         "max_output_tokens": 4028,
         "litellm_provider": "meta_llama",
         "mode": "chat",
-        "supports_function_calling": false,
+        "supports_function_calling": true,
         "source": "https://llama.developer.meta.com/docs/models",
-        "supports_tool_choice": false,
+        "supports_tool_choice": true,
         "supported_modalities": [
             "text",
             "image"
@@ -5846,9 +5846,9 @@
         "max_output_tokens": 4028,
         "litellm_provider": "meta_llama",
         "mode": "chat",
-        "supports_function_calling": false,
+        "supports_function_calling": true,
         "source": "https://llama.developer.meta.com/docs/models",
-        "supports_tool_choice": false,
+        "supports_tool_choice": true,
         "supported_modalities": [
             "text"
         ],
@@ -5862,9 +5862,9 @@
         "max_output_tokens": 4028,
         "litellm_provider": "meta_llama",
         "mode": "chat",
-        "supports_function_calling": false,
+        "supports_function_calling": true,
         "source": "https://llama.developer.meta.com/docs/models",
-        "supports_tool_choice": false,
+        "supports_tool_choice": true,
         "supported_modalities": [
             "text"
         ],
