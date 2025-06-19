@@ -336,6 +336,9 @@ class UserAPIKeyLabelValues(BaseModel):
     team_alias: Annotated[
         Optional[str], Field(..., alias=UserAPIKeyLabelNames.TEAM_ALIAS.value)
     ] = None
+    model_group: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.MODEL_GROUP.value)
+    ] = None
     requested_model: Annotated[
         Optional[str], Field(..., alias=UserAPIKeyLabelNames.REQUESTED_MODEL.value)
     ] = None
