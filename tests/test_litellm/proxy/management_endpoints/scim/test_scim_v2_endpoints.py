@@ -36,14 +36,16 @@ async def test_create_user_existing_user_conflict(mocker):
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
-    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value={"user_id": "existing-user"})
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value={"user_id": "existing-user"}
+    )
 
     # Mock the _get_prisma_client_or_raise_exception to return our mock
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
         AsyncMock(return_value=mock_prisma_client),
     )
-    
+
     mocked_new_user = mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2.new_user",
         AsyncMock(),
@@ -52,7 +54,7 @@ async def test_create_user_existing_user_conflict(mocker):
     with pytest.raises(HTTPException) as exc_info:
         await create_user(user=scim_user)
 
-    # Check that it's an HTTPException with status 409 
+    # Check that it's an HTTPException with status 409
     assert exc_info.value.status_code == 409
     assert "existing-user" in str(exc_info.value.detail)
     mocked_new_user.assert_not_called()
@@ -62,7 +64,7 @@ async def test_create_user_existing_user_conflict(mocker):
 async def test_handle_existing_user_by_email_no_email(mocker):
     """Should return None when new_user_request has no email"""
     mock_prisma_client = mocker.MagicMock()
-    
+
     new_user_request = NewUserRequest(
         user_id="test-user",
         user_email=None,  # No email provided
@@ -71,12 +73,11 @@ async def test_handle_existing_user_by_email_no_email(mocker):
         metadata={},
         auto_create_key=False,
     )
-    
+
     result = await UserProvisionerHelpers.handle_existing_user_by_email(
-        prisma_client=mock_prisma_client,
-        new_user_request=new_user_request
+        prisma_client=mock_prisma_client, new_user_request=new_user_request
     )
-    
+
     assert result is None
 
 
@@ -87,21 +88,20 @@ async def test_handle_existing_user_by_email_no_existing_user(mocker):
     mock_prisma_client.db = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
-    
+
     new_user_request = NewUserRequest(
         user_id="test-user",
         user_email="test@example.com",
-        user_alias="Test User", 
+        user_alias="Test User",
         teams=["team1"],
         metadata={"key": "value"},
         auto_create_key=False,
     )
-    
+
     result = await UserProvisionerHelpers.handle_existing_user_by_email(
-        prisma_client=mock_prisma_client,
-        new_user_request=new_user_request
+        prisma_client=mock_prisma_client, new_user_request=new_user_request
     )
-    
+
     assert result is None
     mock_prisma_client.db.litellm_usertable.find_first.assert_called_once_with(
         where={"user_email": "test@example.com"}
@@ -118,16 +118,16 @@ async def test_handle_existing_user_by_email_existing_user_updated(mocker):
     existing_user.user_alias = "Old Name"
     existing_user.teams = ["old-team"]
     existing_user.metadata = {"old": "data"}
-    
+
     # Mock updated user
     updated_user = {
         "user_id": "new-user-id",
-        "user_email": "test@example.com", 
+        "user_email": "test@example.com",
         "user_alias": "New Name",
         "teams": ["new-team"],
-        "metadata": '{"new": "data"}'
+        "metadata": '{"new": "data"}',
     }
-    
+
     # Mock SCIM user to be returned
     mock_scim_user = SCIMUser(
         schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
@@ -136,52 +136,55 @@ async def test_handle_existing_user_by_email_existing_user_updated(mocker):
         name=SCIMUserName(familyName="Name", givenName="New"),
         emails=[SCIMUserEmail(value="test@example.com")],
     )
-    
+
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
-    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=existing_user)
-    mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value=updated_user)
-    
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(
+        return_value=existing_user
+    )
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(
+        return_value=updated_user
+    )
+
     # Mock the transformation function
     mock_transform = mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
-        AsyncMock(return_value=mock_scim_user)
+        AsyncMock(return_value=mock_scim_user),
     )
-    
+
     new_user_request = NewUserRequest(
         user_id="new-user-id",
         user_email="test@example.com",
         user_alias="New Name",
-        teams=["new-team"], 
+        teams=["new-team"],
         metadata={"new": "data"},
         auto_create_key=False,
     )
-    
+
     result = await UserProvisionerHelpers.handle_existing_user_by_email(
-        prisma_client=mock_prisma_client,
-        new_user_request=new_user_request
+        prisma_client=mock_prisma_client, new_user_request=new_user_request
     )
-    
+
     # Verify the result
     assert result == mock_scim_user
-    
+
     # Verify database operations
     mock_prisma_client.db.litellm_usertable.find_first.assert_called_once_with(
         where={"user_email": "test@example.com"}
     )
-    
+
     mock_prisma_client.db.litellm_usertable.update.assert_called_once_with(
         where={"user_id": "old-user-id"},
         data={
             "user_id": "new-user-id",
-            "user_email": "test@example.com", 
+            "user_email": "test@example.com",
             "user_alias": "New Name",
             "teams": ["new-team"],
             "metadata": '{"new": "data"}',
         },
     )
-    
+
     # Verify transformation was called
     mock_transform.assert_called_once_with(updated_user)
 
@@ -191,16 +194,16 @@ async def test_handle_team_membership_changes_no_changes(mocker):
     """Should not call patch_team_membership when existing teams equal new teams"""
     mock_patch_team_membership = mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
-        AsyncMock()
+        AsyncMock(),
     )
-    
+
     # Same teams - no changes
     await _handle_team_membership_changes(
         user_id="test-user",
         existing_teams=["team1", "team2"],
-        new_teams=["team1", "team2"]
+        new_teams=["team1", "team2"],
     )
-    
+
     # Should not be called since no changes
     mock_patch_team_membership.assert_not_called()
 
@@ -210,19 +213,19 @@ async def test_handle_team_membership_changes_add_teams(mocker):
     """Should call patch_team_membership with teams to add"""
     mock_patch_team_membership = mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
-        AsyncMock()
+        AsyncMock(),
     )
-    
+
     # Adding teams
     await _handle_team_membership_changes(
         user_id="test-user",
         existing_teams=["team1"],
-        new_teams=["team1", "team2", "team3"]
+        new_teams=["team1", "team2", "team3"],
     )
-    
+
     # Verify the call was made once
     mock_patch_team_membership.assert_called_once()
-    
+
     # Check the arguments more flexibly to handle order variations
     call_args = mock_patch_team_membership.call_args
     assert call_args[1]["user_id"] == "test-user"
@@ -235,19 +238,19 @@ async def test_handle_team_membership_changes_remove_teams(mocker):
     """Should call patch_team_membership with teams to remove"""
     mock_patch_team_membership = mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
-        AsyncMock()
+        AsyncMock(),
     )
-    
+
     # Removing teams
     await _handle_team_membership_changes(
         user_id="test-user",
         existing_teams=["team1", "team2", "team3"],
-        new_teams=["team1"]
+        new_teams=["team1"],
     )
-    
+
     # Verify the call was made once
     mock_patch_team_membership.assert_called_once()
-    
+
     # Check the arguments more flexibly to handle order variations
     call_args = mock_patch_team_membership.call_args
     assert call_args[1]["user_id"] == "test-user"
@@ -260,19 +263,19 @@ async def test_handle_team_membership_changes_add_and_remove(mocker):
     """Should call patch_team_membership with both teams to add and remove"""
     mock_patch_team_membership = mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
-        AsyncMock()
+        AsyncMock(),
     )
-    
+
     # Both adding and removing teams
     await _handle_team_membership_changes(
         user_id="test-user",
         existing_teams=["team1", "team2"],
-        new_teams=["team2", "team3"]
+        new_teams=["team2", "team3"],
     )
-    
+
     # Verify the call was made once
     mock_patch_team_membership.assert_called_once()
-    
+
     # Check the arguments - team1 should be removed, team3 should be added, team2 stays
     call_args = mock_patch_team_membership.call_args
     assert call_args[1]["user_id"] == "test-user"
@@ -286,25 +289,25 @@ async def test_update_user_success(mocker):
     # Mock existing user
     existing_user = mocker.MagicMock()
     existing_user.teams = ["old-team"]
-    
+
     # Mock updated user
     updated_user = {
         "user_id": "test-user",
         "user_email": "updated@example.com",
         "user_alias": "Updated User",
         "teams": ["new-team"],
-        "metadata": '{"scim_metadata": {"givenName": "Updated", "familyName": "User"}}'
+        "metadata": '{"scim_metadata": {"givenName": "Updated", "familyName": "User"}}',
     }
-    
+
     # Mock SCIM user for request
     scim_user = SCIMUser(
         schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
         userName="test-user",
         name=SCIMUserName(familyName="User", givenName="Updated"),
         emails=[SCIMUserEmail(value="updated@example.com")],
-        groups=[SCIMUserGroup(value="new-team")]
+        groups=[SCIMUserGroup(value="new-team")],
     )
-    
+
     # Mock SCIM user for response
     response_scim_user = SCIMUser(
         schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
@@ -313,37 +316,39 @@ async def test_update_user_success(mocker):
         name=SCIMUserName(familyName="User", givenName="Updated"),
         emails=[SCIMUserEmail(value="updated@example.com")],
     )
-    
+
     # Mock prisma client
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
-    mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value=updated_user)
-    
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(
+        return_value=updated_user
+    )
+
     # Mock dependencies
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
-        AsyncMock(return_value=mock_prisma_client)
+        AsyncMock(return_value=mock_prisma_client),
     )
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._check_user_exists",
-        AsyncMock(return_value=existing_user)
+        AsyncMock(return_value=existing_user),
     )
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._handle_team_membership_changes",
-        AsyncMock()
+        AsyncMock(),
     )
     mock_transform = mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
-        AsyncMock(return_value=response_scim_user)
+        AsyncMock(return_value=response_scim_user),
     )
-    
+
     # Call update_user
     result = await update_user(user_id="test-user", user=scim_user)
-    
+
     # Verify result
     assert result == response_scim_user
-    
+
     # Verify database update was called with correct data
     mock_prisma_client.db.litellm_usertable.update.assert_called_once()
     call_args = mock_prisma_client.db.litellm_usertable.update.call_args
@@ -361,17 +366,21 @@ async def test_update_user_not_found(mocker):
         name=SCIMUserName(familyName="User", givenName="Test"),
         emails=[SCIMUserEmail(value="test@example.com")],
     )
-    
+
     # Mock dependencies to raise HTTPException for user not found
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
-        AsyncMock(return_value=mocker.MagicMock())
+        AsyncMock(return_value=mocker.MagicMock()),
     )
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._check_user_exists",
-        AsyncMock(side_effect=HTTPException(status_code=404, detail={"error": "User not found"}))
+        AsyncMock(
+            side_effect=HTTPException(
+                status_code=404, detail={"error": "User not found"}
+            )
+        ),
     )
-    
+
     # Should raise ProxyException (which wraps the HTTPException)
     with pytest.raises(ProxyException):
         await update_user(user_id="nonexistent-user", user=scim_user)
@@ -384,24 +393,24 @@ async def test_patch_user_success(mocker):
     existing_user = mocker.MagicMock()
     existing_user.teams = ["team1"]
     existing_user.metadata = {}
-    
+
     # Mock updated user
     updated_user = {
         "user_id": "test-user",
         "user_alias": "Patched User",
         "teams": ["team1", "team2"],
-        "metadata": '{"scim_metadata": {}}'
+        "metadata": '{"scim_metadata": {}}',
     }
-    
+
     # Mock patch operations
     patch_ops = SCIMPatchOp(
         schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
         Operations=[
             SCIMPatchOperation(op="replace", path="displayName", value="Patched User"),
-            SCIMPatchOperation(op="add", path="groups", value=[{"value": "team2"}])
-        ]
+            SCIMPatchOperation(op="add", path="groups", value=[{"value": "team2"}]),
+        ],
     )
-    
+
     # Mock response SCIM user
     response_scim_user = SCIMUser(
         schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
@@ -409,37 +418,39 @@ async def test_patch_user_success(mocker):
         userName="test-user",
         name=SCIMUserName(familyName="User", givenName="Patched"),
     )
-    
+
     # Mock prisma client
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
-    mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value=updated_user)
-    
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(
+        return_value=updated_user
+    )
+
     # Mock dependencies
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
-        AsyncMock(return_value=mock_prisma_client)
+        AsyncMock(return_value=mock_prisma_client),
     )
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._check_user_exists",
-        AsyncMock(return_value=existing_user)
+        AsyncMock(return_value=existing_user),
     )
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._handle_team_membership_changes",
-        AsyncMock()
+        AsyncMock(),
     )
     mock_transform = mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
-        AsyncMock(return_value=response_scim_user)
+        AsyncMock(return_value=response_scim_user),
     )
-    
+
     # Call patch_user
     result = await patch_user(user_id="test-user", patch_ops=patch_ops)
-    
+
     # Verify result
     assert result == response_scim_user
-    
+
     # Verify database update was called
     mock_prisma_client.db.litellm_usertable.update.assert_called_once()
     call_args = mock_prisma_client.db.litellm_usertable.update.call_args
@@ -453,19 +464,23 @@ async def test_patch_user_not_found(mocker):
         schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
         Operations=[
             SCIMPatchOperation(op="replace", path="displayName", value="New Name")
-        ]
+        ],
     )
-    
+
     # Mock dependencies to raise HTTPException for user not found
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
-        AsyncMock(return_value=mocker.MagicMock())
+        AsyncMock(return_value=mocker.MagicMock()),
     )
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._check_user_exists",
-        AsyncMock(side_effect=HTTPException(status_code=404, detail={"error": "User not found"}))
+        AsyncMock(
+            side_effect=HTTPException(
+                status_code=404, detail={"error": "User not found"}
+            )
+        ),
     )
-    
+
     # Should raise ProxyException (which wraps the HTTPException)
     with pytest.raises(ProxyException):
         await patch_user(user_id="nonexistent-user", patch_ops=patch_ops)

@@ -470,10 +470,10 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             "litellm_params": {
                 "metadata": _metadata,
                 "proxy_server_request": {
-                        "url": str(request.url),
-                        "method": request.method,
-                        "body": copy.copy(_parsed_body),  # use copy instead of deepcopy
-                    }
+                    "url": str(request.url),
+                    "method": request.method,
+                    "body": copy.copy(_parsed_body),  # use copy instead of deepcopy
+                },
             },
             "call_type": "pass_through_endpoint",
             "litellm_call_id": litellm_call_id,
@@ -1179,7 +1179,7 @@ async def update_pass_through_endpoints(
     # Find and update the endpoint
     updated_endpoint: Optional[PassThroughGenericEndpoint] = None
     endpoint_found = False
-    
+
     for idx, endpoint in enumerate(pass_through_endpoint_data):
         _endpoint: Optional[PassThroughGenericEndpoint] = None
         if isinstance(endpoint, dict):
@@ -1191,19 +1191,19 @@ async def update_pass_through_endpoints(
             endpoint_found = True
             # Get the update data as dict, excluding None values for partial updates
             update_data = data.model_dump(exclude_none=True)
-            
+
             # Start with existing endpoint data
             endpoint_dict = _endpoint.model_dump()
-            
+
             # Update with new data (only non-None values)
             endpoint_dict.update(update_data)
-            
+
             # Ensure the path stays the same (can't change the endpoint_id)
             endpoint_dict["path"] = endpoint_id
-            
+
             # Create updated endpoint object
             updated_endpoint = PassThroughGenericEndpoint(**endpoint_dict)
-            
+
             # Update the list
             pass_through_endpoint_data[idx] = endpoint_dict
             break
@@ -1211,9 +1211,7 @@ async def update_pass_through_endpoints(
     if not endpoint_found:
         raise HTTPException(
             status_code=404,
-            detail={
-                "error": f"Endpoint with path '{endpoint_id}' not found"
-            },
+            detail={"error": f"Endpoint with path '{endpoint_id}' not found"},
         )
 
     ## Update db
@@ -1226,7 +1224,9 @@ async def update_pass_through_endpoints(
         data=updated_data, user_api_key_dict=user_api_key_dict
     )
 
-    return PassThroughEndpointResponse(endpoints=[updated_endpoint] if updated_endpoint else [])
+    return PassThroughEndpointResponse(
+        endpoints=[updated_endpoint] if updated_endpoint else []
+    )
 
 
 @router.post(
