@@ -22,11 +22,12 @@ import {
   Divider,
   Collapse,
 } from "antd";
-import { InfoCircleOutlined, ApiOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CopyOutlined, RightOutlined } from "@ant-design/icons";
+import { InfoCircleOutlined, ApiOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CopyOutlined } from "@ant-design/icons";
 import { keyCreateCall, slackBudgetAlertsHealthCheck, modelAvailableCall } from "./networking";
 import { list } from "postcss";
 import KeyValueInput from "./key_value_input";
 import { passThroughItem } from "./pass_through_settings";
+import RoutePreview from "./route_preview";
 const { Option } = Select2;
 
 interface AddFallbacksProps {
@@ -101,17 +102,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
     message.success('Copied to clipboard!');
   };
 
-  const getLiteLLMProxyUrl = () => {
-    return pathValue ? `https://your-domain.com${pathValue}` : '';
-  };
 
-  const getSubpathExampleUrl = () => {
-    return pathValue ? `https://your-domain.com${pathValue}/v1/text-to-image/base/model` : '';
-  };
-
-  const getTargetSubpathUrl = () => {
-    return targetValue ? `${targetValue}/v1/text-to-image/base/model` : '';
-  };
 
   return (
     <div>
@@ -234,75 +225,11 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
             </Card>
 
             {/* Route Preview Section */}
-            {pathValue && targetValue && (
-              <Card className="p-5">
-                <Title className="text-lg font-semibold text-gray-900 mb-2">Route Preview</Title>
-                <Subtitle className="text-gray-600 mb-5">How your requests will be routed</Subtitle>
-                
-                <div className="space-y-5">
-                  {/* Basic routing */}
-                  <div>
-                    <div className="text-base font-semibold text-gray-900 mb-3">Basic routing:</div>
-                    <div className="flex items-center gap-4">
-                      {/* Your endpoint */}
-                      <div className="flex-1 bg-gray-50 border border-gray-200 rounded-lg p-3">
-                        <div className="text-sm text-gray-600 mb-2">Your endpoint</div>
-                        <code className="font-mono text-sm text-gray-900">{getLiteLLMProxyUrl()}</code>
-                      </div>
-                      
-                      {/* Arrow */}
-                      <div className="text-gray-400">
-                        <RightOutlined className="text-lg" />
-                      </div>
-                      
-                      {/* Forwards to */}
-                      <div className="flex-1 bg-gray-50 border border-gray-200 rounded-lg p-3">
-                        <div className="text-sm text-gray-600 mb-2">Forwards to</div>
-                        <code className="font-mono text-sm text-gray-900">{targetValue}</code>
-                      </div>
-                    </div>
-                  </div>
-
-                  {includeSubpath && (
-                    <>
-                      {/* With subpaths */}
-                      <div>
-                        <div className="text-base font-semibold text-gray-900 mb-3">With subpaths:</div>
-                        <div className="flex items-center gap-4">
-                          {/* Your endpoint + subpath */}
-                          <div className="flex-1 bg-gray-50 border border-gray-200 rounded-lg p-3">
-                            <div className="text-sm text-gray-600 mb-2">Your endpoint + subpath</div>
-                            <code className="font-mono text-sm text-gray-900">
-                              {pathValue && `https://your-domain.com${pathValue}`}
-                              <span className="text-blue-600">/v1/text-to-image/base/model</span>
-                            </code>
-                          </div>
-                          
-                          {/* Arrow */}
-                          <div className="text-gray-400">
-                            <RightOutlined className="text-lg" />
-                          </div>
-                          
-                          {/* Forwards to with subpath */}
-                          <div className="flex-1 bg-gray-50 border border-gray-200 rounded-lg p-3">
-                            <div className="text-sm text-gray-600 mb-2">Forwards to</div>
-                            <code className="font-mono text-sm text-gray-900">
-                              {targetValue}
-                              <span className="text-blue-600">/v1/text-to-image/base/model</span>
-                            </code>
-                          </div>
-                        </div>
-                        
-                        {/* Note */}
-                        <div className="mt-3 text-sm text-gray-600">
-                          Any path after {pathValue} will be appended to the target URL
-                        </div>
-                      </div>
-                    </>
-                  )}
-                </div>
-              </Card>
-            )}
+            <RoutePreview 
+              pathValue={pathValue}
+              targetValue={targetValue}
+              includeSubpath={includeSubpath}
+            />
 
             {/* Headers Section */}
             <Card className="p-6">
