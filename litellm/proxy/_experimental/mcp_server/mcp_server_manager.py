@@ -158,7 +158,9 @@ class MCPServerManager:
             return list(self.get_registry().keys())
 
     async def list_tools(
-        self, user_api_key_auth: Optional[UserAPIKeyAuth] = None
+        self, 
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        mcp_auth_header: Optional[str] = None,
     ) -> List[MCPTool]:
         """
         List all tools available across all MCP Servers.
@@ -177,7 +179,10 @@ class MCPServerManager:
                 verbose_logger.warning(f"MCP Server {server_id} not found")
                 continue
             try:
-                tools = await self._get_tools_from_server(server)
+                tools = await self._get_tools_from_server(
+                    server=server,
+                    mcp_auth_header=mcp_auth_header,
+                )
                 list_tools_result.extend(tools)
             except Exception as e:
                 verbose_logger.exception(
@@ -189,12 +194,13 @@ class MCPServerManager:
     #########################################################
     # Methods that call the upstream MCP servers
     #########################################################
-    def _create_mcp_client(self, server: MCPServer) -> MCPClient:
+    def _create_mcp_client(self, server: MCPServer, mcp_auth_header: Optional[str] = None) -> MCPClient:
         """
         Create an MCPClient instance for the given server.
 
         Args:
             server (MCPServer): The server configuration
+            mcp_auth_header: MCP auth header to be passed to the MCP server. This is optional and will be used if provided.
 
         Returns:
             MCPClient: Configured MCP client instance
@@ -204,11 +210,11 @@ class MCPServerManager:
             server_url=server.url,
             transport_type=transport,
             auth_type=server.auth_type,
-            auth_value=server.authentication_token,
+            auth_value=mcp_auth_header or server.authentication_token,
             timeout=60.0,
         )
 
-    async def _get_tools_from_server(self, server: MCPServer) -> List[MCPTool]:
+    async def _get_tools_from_server(self, server: MCPServer, mcp_auth_header: Optional[str] = None) -> List[MCPTool]:
         """
         Helper method to get tools from a single MCP server.
 
@@ -221,7 +227,10 @@ class MCPServerManager:
         verbose_logger.debug(f"Connecting to url: {server.url}")
         verbose_logger.info("_get_tools_from_server...")
 
-        client = self._create_mcp_client(server)
+        client = self._create_mcp_client(
+            server=server,
+            mcp_auth_header=mcp_auth_header,
+        )
         async with client:
             tools = await client.list_tools()
             verbose_logger.debug(f"Tools from {server.name}: {tools}")
