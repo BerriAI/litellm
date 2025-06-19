@@ -2,7 +2,7 @@
 Handles transforming from Responses API -> LiteLLM completion  (Chat Completion API)
 """
 
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
@@ -33,6 +33,7 @@ from litellm.types.llms.openai import (
     GenericChatCompletionMessage,
     OpenAIMcpServerTool,
     OpenAIWebSearchOptions,
+    OpenAIWebSearchUserLocation,
     Reasoning,
     ResponseAPIUsage,
     ResponseInputParam,
@@ -485,9 +486,11 @@ class LiteLLMCompletionResponsesConfig:
             if tool.get("type") == "mcp":
                 chat_completion_tools.append(cast(OpenAIMcpServerTool, tool))
             elif tool.get("type") == "web_search_preview" or tool.get("type") == "web_search":
+                _search_context_size: Literal["low", "medium", "high"] = cast(Literal["low", "medium", "high"], tool.get("search_context_size"))
+                _user_location: Optional[OpenAIWebSearchUserLocation] = cast(Optional[OpenAIWebSearchUserLocation], tool.get("user_location") or None)
                 web_search_options = OpenAIWebSearchOptions(
-                    search_context_size=tool.get("search_context_size"),
-                    user_location=tool.get("user_location") or None,
+                    search_context_size=_search_context_size,
+                    user_location=_user_location,
                 )
             else:
                 typed_tool = cast(FunctionToolParam, tool)
