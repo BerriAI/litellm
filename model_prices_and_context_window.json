@@ -6801,7 +6801,9 @@
         "source": "https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-preview",
         "supports_parallel_function_calling": true,
         "supports_web_search": true,
-        "supports_url_context": true
+        "supports_url_context": true,
+        "tpm": 8e-6,
+        "rpm": 1e-5
     },
     "gemini-2.5-flash": {
         "max_tokens": 65535,
