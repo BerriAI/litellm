@@ -2,7 +2,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { Button, Badge } from "@tremor/react";
 import { Tooltip, Checkbox } from "antd";
 import { Text } from "@tremor/react";
-import { InformationCircleIcon } from "@heroicons/react/outline";
+import { InformationCircleIcon, PlayIcon, RefreshIcon } from "@heroicons/react/outline";
 
 interface HealthCheckData {
   model_name: string;
@@ -226,21 +226,41 @@ export const healthCheckColumns = (
       const model = row.original;
       const modelName = model.model_name;
       
+      const hasExistingStatus = model.health_status && model.health_status !== 'none';
+      const tooltipText = model.health_loading 
+        ? 'Checking...' 
+        : hasExistingStatus 
+          ? 'Re-run Health Check' 
+          : 'Run Health Check';
+
       return (
-        <div 
-          className={`text-sm cursor-pointer ${
-            model.health_loading 
-              ? 'text-gray-400 cursor-not-allowed' 
-              : 'text-indigo-600 hover:text-indigo-700 hover:underline'
-          }`}
-          onClick={() => {
-            if (!model.health_loading) {
-              runIndividualHealthCheck(modelName);
-            }
-          }}
-        >
-          {model.health_loading ? 'Checking...' : 'Run Check'}
-        </div>
+        <Tooltip title={tooltipText} placement="top">
+          <button
+            className={`p-2 rounded-md transition-colors ${
+              model.health_loading 
+                ? 'text-gray-400 cursor-not-allowed bg-gray-100' 
+                : 'text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50'
+            }`}
+            onClick={() => {
+              if (!model.health_loading) {
+                runIndividualHealthCheck(modelName);
+              }
+            }}
+            disabled={model.health_loading}
+          >
+            {model.health_loading ? (
+              <div className="flex space-x-1">
+                <div className="w-1 h-1 bg-gray-400 rounded-full animate-pulse"></div>
+                <div className="w-1 h-1 bg-gray-400 rounded-full animate-pulse" style={{animationDelay: '0.2s'}}></div>
+                <div className="w-1 h-1 bg-gray-400 rounded-full animate-pulse" style={{animationDelay: '0.4s'}}></div>
+              </div>
+            ) : hasExistingStatus ? (
+              <RefreshIcon className="h-4 w-4" />
+            ) : (
+              <PlayIcon className="h-4 w-4" />
+            )}
+          </button>
+        </Tooltip>
       );
     },
     enableSorting: false,
