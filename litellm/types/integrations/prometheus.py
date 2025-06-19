@@ -71,6 +71,7 @@ class UserAPIKeyLabelNames(Enum):
     STATUS_CODE = "status_code"
     FALLBACK_MODEL = "fallback_model"
     ROUTE = "route"
+    MODEL_GROUP = "model_group"
 
 
 DEFINED_PROMETHEUS_METRICS = Literal[
@@ -161,7 +162,7 @@ class PrometheusMetricLabels:
     ]
 
     litellm_overhead_latency_metric = [
-        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
         UserAPIKeyLabelNames.API_BASE.value,
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
@@ -170,7 +171,7 @@ class PrometheusMetricLabels:
     ]
 
     litellm_remaining_requests_metric = [
-        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
         UserAPIKeyLabelNames.API_BASE.value,
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
@@ -179,7 +180,7 @@ class PrometheusMetricLabels:
     ]
 
     litellm_remaining_tokens_metric = [
-        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
         UserAPIKeyLabelNames.API_BASE.value,
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
