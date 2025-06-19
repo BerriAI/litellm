@@ -292,7 +292,7 @@ curl --location 'https://api.openai.com/v1/responses' \
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
-                "x-mcp-auth": "Bearer YOUR_MCP_AUTH_TOKEN"
+                "x-mcp-auth": YOUR_MCP_AUTH_TOKEN
             }
         }
     ],
@@ -323,7 +323,7 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
-                "x-mcp-auth": "Bearer YOUR_MCP_AUTH_TOKEN"
+                "x-mcp-auth": "YOUR_MCP_AUTH_TOKEN"
             }
         }
     ],
@@ -353,7 +353,7 @@ Use tools directly from Cursor IDE with LiteLLM MCP and include your MCP authent
       "url": "<your-litellm-proxy-base-url>/mcp",
       "headers": {
         "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
-        "x-mcp-auth": "Bearer $MCP_AUTH_TOKEN"
+        "x-mcp-auth": "$MCP_AUTH_TOKEN"
       }
     }
   }
