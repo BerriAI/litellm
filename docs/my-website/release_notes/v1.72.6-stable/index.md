@@ -1,5 +1,5 @@
 ---
-title: "[PRE-RELEASE] v1.72.6-stable"
+title: "[PRE-RELEASE] v1.72.6-stable - MCP Gateway Permission Management"
 slug: "v1-72-6-stable"
 date: 2025-06-14T10:00:00
 authors:
