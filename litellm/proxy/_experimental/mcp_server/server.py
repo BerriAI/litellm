@@ -238,7 +238,7 @@ if MCP_AVAILABLE:
 
     @client
     async def call_mcp_tool(
-        name: str, arguments: Optional[Dict[str, Any]] = None, **kwargs: Any
+        name: str, arguments: Optional[Dict[str, Any]] = None, mcp_auth_header: Optional[str] = None, **kwargs: Any
     ) -> List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]:
         """
         Call a specific tool with the provided arguments
