@@ -893,12 +893,6 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     updated_by: Optional[str] = None
 
 
-class NewUserRequestTeam(LiteLLMPydanticObjectBase):
-    team_id: str
-    max_budget_in_team: Optional[float] = None
-    user_role: Literal["user", "admin"] = "user"
-
-
 class NewUserRequest(GenerateRequestBase):
     max_budget: Optional[float] = None
     user_email: Optional[str] = None
@@ -911,7 +905,7 @@ class NewUserRequest(GenerateRequestBase):
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
         ]
     ] = None
-    teams: Optional[Union[List[str], List[NewUserRequestTeam]]] = None
+    teams: Optional[list] = None
     auto_create_key: bool = (
         True  # flag used for returning a key as part of the /user/new response
     )
@@ -3035,11 +3029,6 @@ class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
     )
     models: Optional[List[str]] = Field(
         default=None, description="Default list of models that new users can access"
-    )
-
-    teams: Optional[Union[List[str], List[NewUserRequestTeam]]] = Field(
-        default=None,
-        description="Default teams for new users created",
     )
 
 
