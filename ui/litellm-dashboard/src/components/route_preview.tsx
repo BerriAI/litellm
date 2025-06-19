@@ -1,6 +1,6 @@
 import React from "react";
 import { Card, Title, Subtitle } from "@tremor/react";
-import { RightOutlined } from "@ant-design/icons";
+import { RightOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import { getProxyBaseUrl } from "./networking";
 
 interface RoutePreviewProps {
@@ -89,7 +89,18 @@ const RoutePreview: React.FC<RoutePreviewProps> = ({
                 Any path after {pathValue} will be appended to the target URL
               </div>
             </div>
-          </>
+                      </>
+          )}
+
+        {!includeSubpath && (
+          <div className="mt-4 p-3 bg-blue-50 rounded-md border border-blue-200">
+            <div className="flex items-start">
+              <InfoCircleOutlined className="text-blue-500 mt-0.5 mr-2 flex-shrink-0" />
+              <div className="text-sm text-blue-700">
+                <span className="font-medium">Not seeing the routing you wanted?</span> Try enabling "Include Subpaths" above - this allows subroutes like <code className="bg-blue-100 px-1 py-0.5 rounded font-mono text-xs">/api/v1/models</code> to be forwarded automatically.
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </Card>
