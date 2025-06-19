@@ -97,7 +97,7 @@ const RoutePreview: React.FC<RoutePreviewProps> = ({
             <div className="flex items-start">
               <InfoCircleOutlined className="text-blue-500 mt-0.5 mr-2 flex-shrink-0" />
               <div className="text-sm text-blue-700">
-                <span className="font-medium">Not seeing the routing you wanted?</span> Try enabling "Include Subpaths" above - this allows subroutes like <code className="bg-blue-100 px-1 py-0.5 rounded font-mono text-xs">/api/v1/models</code> to be forwarded automatically.
+                <span className="font-medium">Not seeing the routing you wanted?</span> Try enabling - Include Subpaths - above - this allows subroutes like <code className="bg-blue-100 px-1 py-0.5 rounded font-mono text-xs">/api/v1/models</code> to be forwarded automatically.
               </div>
             </div>
           </div>
