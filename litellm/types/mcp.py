@@ -1,7 +1,8 @@
 import enum
-from typing import Literal, Optional, TypedDict
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
+from typing_extensions import TypedDict
 
 
 class MCPTransport(str, enum.Enum):
