@@ -91,11 +91,6 @@ anthropic_api_key_header = APIKeyHeader(
     auto_error=False,
     description="If anthropic client used.",
 )
-mcp_auth_header: Optional[str] = Header(
-    name=SpecialHeaders.mcp_auth.value,
-    default=None,
-    description="MCP Auth header to be passed to the mcp servers",
-)
 google_ai_studio_api_key_header = APIKeyHeader(
     name=SpecialHeaders.google_ai_studio_authorization.value,
     auto_error=False,
