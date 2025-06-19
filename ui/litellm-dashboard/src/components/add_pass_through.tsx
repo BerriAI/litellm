@@ -18,8 +18,11 @@ import {
   Select as Select2,
   message,
   Tooltip,
+  Alert,
+  Divider,
+  Collapse,
 } from "antd";
-import { InfoCircleOutlined, ApiOutlined } from "@ant-design/icons";
+import { InfoCircleOutlined, ApiOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CopyOutlined, RightOutlined } from "@ant-design/icons";
 import { keyCreateCall, slackBudgetAlertsHealthCheck, modelAvailableCall } from "./networking";
 import { list } from "postcss";
 import KeyValueInput from "./key_value_input";
@@ -40,9 +43,26 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedModel, setSelectedModel] = useState("");
+  const [pathValue, setPathValue] = useState("");
+  const [targetValue, setTargetValue] = useState("");
+  const [includeSubpath, setIncludeSubpath] = useState(true);
+
   const handleCancel = () => {
     form.resetFields();
+    setPathValue("");
+    setTargetValue("");
+    setIncludeSubpath(true);
     setIsModalVisible(false);
+  };
+
+  const handlePathChange = (value: string) => {
+    // Auto-add leading slash if missing
+    let formattedPath = value;
+    if (value && !value.startsWith('/')) {
+      formattedPath = '/' + value;
+    }
+    setPathValue(formattedPath);
+    form.setFieldsValue({ path: formattedPath });
   };
 
   const addPassThrough = async (formValues: Record<string, any>) => {
@@ -65,6 +85,9 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
       
       message.success("Pass-through endpoint created successfully");
       form.resetFields();
+      setPathValue("");
+      setTargetValue("");
+      setIncludeSubpath(true);
       setIsModalVisible(false);
     } catch (error) {
       message.error("Error creating pass-through endpoint: " + error, 20);
@@ -73,6 +96,22 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
     }
   };
 
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    message.success('Copied to clipboard!');
+  };
+
+  const getLiteLLMProxyUrl = () => {
+    return pathValue ? `https://your-domain.com${pathValue}` : '';
+  };
+
+  const getSubpathExampleUrl = () => {
+    return pathValue ? `https://your-domain.com${pathValue}/v1/text-to-image/base/model` : '';
+  };
+
+  const getTargetSubpathUrl = () => {
+    return targetValue ? `${targetValue}/v1/text-to-image/base/model` : '';
+  };
 
   return (
     <div>
@@ -100,27 +139,47 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
         }}
       >
         <div className="mt-6">
+          <Alert
+            message="What is a Pass-Through Endpoint?"
+            description="Route requests from your LiteLLM proxy to any external API. Perfect for custom models, image generation APIs, or any service you want to proxy through LiteLLM."
+            type="info"
+            showIcon
+            className="mb-6"
+          />
+
           <Form
             form={form}
             onFinish={addPassThrough}
             layout="vertical"
             className="space-y-6"
+            initialValues={{ include_subpath: true }}
           >
             <div className="grid grid-cols-1 gap-6">
               <Form.Item
                 label={
                   <span className="text-sm font-medium text-gray-700 flex items-center">
                     Path
-                    <Tooltip title="The route to be added to the LiteLLM Proxy Server (e.g., /my-endpoint)">
+                    <Tooltip title="The route on your LiteLLM proxy. Must start with '/'. Example: /bria for Bria API">
                       <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                     </Tooltip>
                   </span>
                 }
                 name="path"
-                rules={[{ required: true, message: 'Please enter the endpoint path' }]}
+                rules={[
+                  { required: true, message: 'Please enter the endpoint path' },
+                  { pattern: /^\//, message: 'Path must start with /' }
+                ]}
+                extra={
+                  <div className="text-xs text-gray-500 mt-1">
+                    <div>✓ Good: /bria, /openai, /custom-api</div>
+                    <div>✗ Bad: bria, openai (missing leading slash)</div>
+                  </div>
+                }
               >
                 <TextInput 
-                  placeholder="e.g., /my-endpoint" 
+                  placeholder="/bria" 
+                  value={pathValue}
+                  onChange={(e) => handlePathChange(e.target.value)}
                   className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                 />
               </Form.Item>
@@ -129,7 +188,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                 label={
                   <span className="text-sm font-medium text-gray-700 flex items-center">
                     Target URL
-                    <Tooltip title="The URL to which requests for this path should be forwarded">
+                    <Tooltip title="The base URL of the API you want to forward requests to">
                       <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                     </Tooltip>
                   </span>
@@ -139,9 +198,19 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                   { required: true, message: 'Please enter the target URL' },
                   { type: 'url', message: 'Please enter a valid URL' }
                 ]}
+                extra={
+                  <div className="text-xs text-gray-500 mt-1">
+                    <div>Examples:</div>
+                    <div>• https://engine.prod.bria-api.com</div>
+                    <div>• https://api.openai.com</div>
+                    <div>• https://your-custom-api.example.com</div>
+                  </div>
+                }
               >
                 <TextInput 
-                  placeholder="https://your-service.com/api" 
+                  placeholder="https://engine.prod.bria-api.com" 
+                  value={targetValue}
+                  onChange={(e) => setTargetValue(e.target.value)}
                   className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                 />
               </Form.Item>
@@ -150,13 +219,18 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                 label={
                   <span className="text-sm font-medium text-gray-700 flex items-center">
                     Headers
-                    <Tooltip title="Key-value pairs of headers to be forwarded with the request">
+                    <Tooltip title="Authentication and other headers to forward with requests">
                       <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                     </Tooltip>
                   </span>
                 }
                 name="headers"
                 rules={[{ required: true, message: 'Please configure the headers' }]}
+                extra={
+                  <div className="text-xs text-gray-500 mt-1">
+                    Common examples: auth_token, Authorization, x-api-key
+                  </div>
+                }
               >
                 <KeyValueInput/>
               </Form.Item>
@@ -165,27 +239,153 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                 label={
                   <span className="text-sm font-medium text-gray-700 flex items-center">
                     Include Subpath
-                    <Tooltip title="If enabled, requests to subpaths will also be forwarded to the target endpoint">
-                      <InfoCircleOutlined className="ml-2 text-gray-400 hover:text-gray-600" />
+                    <Tooltip title="Forward the full path including subpaths to the target URL">
+                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600" />
                     </Tooltip>
                   </span>
                 }
                 name="include_subpath"
                 valuePropName="checked"
+                extra={
+                  <div className="text-xs mt-2">
+                    <div className="mb-2 font-medium text-gray-600">Choose based on your API structure:</div>
+                    <div className="space-y-1">
+                      <div className="flex items-center text-green-600">
+                        <CheckCircleOutlined className="mr-2" />
+                        <span className="font-medium">Enable</span> if you need routes like: /bria/v1/text-to-image/base/model
+                      </div>
+                      <div className="flex items-center text-orange-600">
+                        <ExclamationCircleOutlined className="mr-2" />
+                        <span className="font-medium">Disable</span> if you only need the exact path: /bria
+                      </div>
+                    </div>
+                  </div>
+                }
               >
-                <Switch />
+                <Switch 
+                  checked={includeSubpath}
+                  onChange={setIncludeSubpath}
+                />
               </Form.Item>
+
+              {pathValue && targetValue && (
+                <Collapse
+                  items={[
+                    {
+                      key: '1',
+                      label: (
+                        <div className="flex items-center">
+                          <RightOutlined className="mr-2" />
+                          <span className="font-medium">Route Preview</span>
+                        </div>
+                      ),
+                      children: (
+                        <div className="space-y-6">
+                          {/* Your API Endpoint */}
+                          <div>
+                            <div className="text-sm font-medium text-gray-700 mb-3">Your API Endpoint:</div>
+                            <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 flex items-center justify-between">
+                              <div className="flex items-center space-x-3">
+                                <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs font-medium">
+                                  GET/POST
+                                </span>
+                                <code className="font-mono text-sm">{getLiteLLMProxyUrl()}</code>
+                              </div>
+                                                             <Button 
+                                 size="xs"
+                                 variant="secondary"
+                                 onClick={() => copyToClipboard(getLiteLLMProxyUrl())}
+                               >
+                                 Copy
+                               </Button>
+                            </div>
+                          </div>
+
+                          {/* Arrow */}
+                          <div className="flex justify-center">
+                            <div className="text-gray-400">
+                              <RightOutlined className="text-xl" />
+                            </div>
+                          </div>
+
+                          {/* Forwards to */}
+                          <div>
+                            <div className="text-sm font-medium text-gray-700 mb-3">Forwards to:</div>
+                            <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+                              <code className="font-mono text-sm">{targetValue}</code>
+                            </div>
+                          </div>
+
+                          {includeSubpath && (
+                            <>
+                              {/* With Subpaths Example */}
+                              <div>
+                                <div className="text-sm font-medium text-blue-600 mb-3">With Subpaths (Example):</div>
+                                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-center justify-between">
+                                  <div className="flex items-center space-x-3">
+                                    <span className="bg-green-100 text-green-800 px-2 py-1 rounded text-xs font-medium">
+                                      POST
+                                    </span>
+                                    <code className="font-mono text-sm">{getSubpathExampleUrl()}</code>
+                                  </div>
+                                                                     <Button 
+                                     size="xs"
+                                     variant="secondary"
+                                     onClick={() => copyToClipboard(getSubpathExampleUrl())}
+                                   >
+                                     Copy
+                                   </Button>
+                                </div>
+                              </div>
+
+                              {/* Arrow */}
+                              <div className="flex justify-center">
+                                <div className="text-gray-400">
+                                  <RightOutlined className="text-xl" />
+                                </div>
+                              </div>
+
+                              {/* Also forwards to */}
+                              <div>
+                                <div className="text-sm font-medium text-blue-600 mb-3">Also forwards to:</div>
+                                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                                  <code className="font-mono text-sm">{getTargetSubpathUrl()}</code>
+                                </div>
+                              </div>
+
+                              {/* Note */}
+                              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                                <div className="text-xs text-blue-700">
+                                  <strong>Note:</strong> Any path after {pathValue} will be automatically appended to the target URL
+                                </div>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      ),
+                    },
+                  ]}
+                  defaultActiveKey={['1']}
+                  className="border-0"
+                  ghost
+                />
+              )}
 
               <Form.Item
                 label={
                   <span className="text-sm font-medium text-gray-700 flex items-center">
                     Cost Per Request (USD)
-                    <Tooltip title="The cost in USD per request to the target endpoint">
+                    <Tooltip title="Optional: Track costs for requests to this endpoint">
                       <InfoCircleOutlined className="ml-2 text-gray-400 hover:text-gray-600" />
                     </Tooltip>
                   </span>
                 }
                 name="cost_per_request"
+                extra={
+                  <div className="text-xs text-gray-500 mt-1">
+                    Leave as 0 if you don't want to track costs for this endpoint
+                  </div>
+                }
               >
                 <InputNumber 
                   min={0} 
