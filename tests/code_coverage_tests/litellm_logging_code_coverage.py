@@ -64,12 +64,12 @@ ignored_function_names = [
 
 
 def main():
-    logging_file = "./litellm/litellm_core_utils/litellm_logging.py"
-    tests_dir = "./tests/"
+    # logging_file = "./litellm/litellm_core_utils/litellm_logging.py"
+    # tests_dir = "./tests/"
 
     # LOCAL TESTING
-    # logging_file = "../../litellm/litellm_core_utils/litellm_logging.py"
-    # tests_dir = "../../tests/"
+    logging_file = "../../litellm/litellm_core_utils/litellm_logging.py"
+    tests_dir = "../../tests/"
 
     logging_functions = get_function_names_from_file(logging_file)
     print("logging_functions:", logging_functions)

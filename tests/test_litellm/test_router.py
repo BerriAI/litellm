@@ -348,3 +348,39 @@ def test_router_ignore_invalid_deployments():
     )
 
     assert router.get_model_list() == []
+
+
+@pytest.mark.asyncio
+async def test_router_aretrieve_batch():
+    """
+    Test that router.aretrieve_batch returns the correct response
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "custom_llm_provider": "azure",
+                    "api_key": "my-custom-key",
+                    "api_base": "my-custom-base",
+                },
+            }
+        ],
+    )
+
+    with patch.object(
+        litellm, "aretrieve_batch", return_value=AsyncMock()
+    ) as mock_aretrieve_batch:
+        try:
+            response = await router.aretrieve_batch(
+                model="gpt-3.5-turbo",
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_aretrieve_batch.assert_called_once()
+
+        print(mock_aretrieve_batch.call_args.kwargs)
+        assert mock_aretrieve_batch.call_args.kwargs["api_key"] == "my-custom-key"
+        assert mock_aretrieve_batch.call_args.kwargs["api_base"] == "my-custom-base"

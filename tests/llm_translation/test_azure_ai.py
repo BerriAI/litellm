@@ -14,6 +14,7 @@ from litellm.llms.anthropic.chat import ModelResponseIterator
 import httpx
 import json
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
 # from base_rerank_unit_tests import BaseLLMRerankTest
 
 load_dotenv()
@@ -183,6 +184,7 @@ def test_azure_ai_services_with_api_version():
             mock_client.call_args.kwargs["url"]
             == "https://litellm8397336933.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview"
         )
+
 
 @pytest.mark.skip(reason="Skipping due to cohere ssl issues")
 def test_completion_azure_ai_command_r():
