@@ -53,6 +53,10 @@ class AzureAIStudioConfig(OpenAIConfig):
         else:
             headers["Authorization"] = f"Bearer {api_key}"
 
+        headers["Content-Type"] = (
+            "application/json"  # tell Azure AI Studio to expect JSON
+        )
+
         return headers
 
     def _should_use_api_key_header(self, api_base: str) -> bool:
