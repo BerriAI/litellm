@@ -551,6 +551,7 @@ class PrometheusLogger(CustomLogger):
             hashed_api_key=user_api_key,
             api_key_alias=user_api_key_alias,
             requested_model=standard_logging_payload["model_group"],
+            model_group=standard_logging_payload["model_group"],
             team=user_api_team,
             team_alias=user_api_team_alias,
             user=user_id,
