@@ -40,6 +40,14 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
                 or get_secret_str("VERTEXAI_CREDENTIALS")
             )
 
+            vertex_ai_location = (
+                litellm_params.pop("vertex_location", None)
+                or litellm_params.pop("vertex_ai_location", None)
+                or litellm.vertex_location
+                or get_secret_str("VERTEXAI_LOCATION")
+                or get_secret_str("VERTEX_LOCATION")
+            )
+
             access_token, project_id = self._ensure_access_token(
                 credentials=vertex_credentials,
                 project_id=vertex_ai_project,
@@ -50,7 +58,7 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
 
             api_base = self.get_complete_vertex_url(
                 custom_api_base=api_base,
-                vertex_location=litellm_params.pop("vertex_location", None),
+                vertex_location=vertex_ai_location,
                 vertex_project=vertex_ai_project,
                 project_id=project_id,
                 partner=VertexPartnerProvider.claude,

@@ -11,6 +11,7 @@ from typing import (
     Iterable,
     Iterator,
     List,
+    Literal,
     Optional,
     Tuple,
     Union,
@@ -25,6 +26,7 @@ from litellm.llms.base_llm.bridges.completion_transformation import (
 )
 
 if TYPE_CHECKING:
+    from openai.types.responses import ResponseInputImageParam
     from pydantic import BaseModel
 
     from litellm import LiteLLMLoggingObj, ModelResponse
@@ -32,6 +34,7 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import (
         ALL_RESPONSES_API_TOOL_PARAMS,
         AllMessageValues,
+        ChatCompletionImageObject,
         ChatCompletionThinkingBlock,
         OpenAIMessageContentListBlock,
     )
@@ -141,10 +144,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 responses_api_request["max_output_tokens"] = value
             elif key == "tools" and value is not None:
                 # Convert chat completion tools to responses API tools format
-                responses_api_request[
-                    "tools"
-                ] = self._convert_tools_to_responses_format(
-                    cast(List[Dict[str, Any]], value)
+                responses_api_request["tools"] = (
+                    self._convert_tools_to_responses_format(
+                        cast(List[Dict[str, Any]], value)
+                    )
                 )
             elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
                 responses_api_request[key] = value  # type: ignore
@@ -320,6 +323,36 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         else:
             return {"type": "output_text", "text": content}
 
+    def _convert_content_to_responses_format_image(
+        self, content: "ChatCompletionImageObject", role: str
+    ) -> "ResponseInputImageParam":
+        from openai.types.responses import ResponseInputImageParam
+
+        content_image_url = content.get("image_url")
+        actual_image_url: Optional[str] = None
+        detail: Optional[Literal["low", "high", "auto"]] = None
+
+        if isinstance(content_image_url, str):
+            actual_image_url = content_image_url
+        elif isinstance(content_image_url, dict):
+            actual_image_url = content_image_url.get("url")
+            detail = cast(
+                Optional[Literal["low", "high", "auto"]],
+                content_image_url.get("detail"),
+            )
+
+        if actual_image_url is None:
+            raise ValueError(f"Invalid image URL: {content_image_url}")
+
+        image_param = ResponseInputImageParam(
+            image_url=actual_image_url, detail="auto", type="input_image"
+        )
+
+        if detail:
+            image_param["detail"] = detail
+
+        return image_param
+
     def _convert_content_to_responses_format(
         self,
         content: Union[
@@ -331,6 +364,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         role: str,
     ) -> List[Dict[str, Any]]:
         """Convert chat completion content to responses API format"""
+        from litellm.types.llms.openai import ChatCompletionImageObject
+
         verbose_logger.debug(
             f"Chat provider: Converting content to responses format - input type: {type(content)}"
         )
@@ -360,10 +395,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         verbose_logger.debug(f"Chat provider:   text -> {converted}")
                     elif original_type == "image_url":
                         # Map to responses API image format
-                        converted = {
-                            "type": "input_image",
-                            "image_url": item.get("image_url", {}),
-                        }
+                        converted = cast(
+                            dict,
+                            self._convert_content_to_responses_format_image(
+                                cast(ChatCompletionImageObject, item), role
+                            ),
+                        )
                         result.append(converted)
                         verbose_logger.debug(
                             f"Chat provider:   image_url -> {converted}"
