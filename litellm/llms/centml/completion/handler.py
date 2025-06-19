@@ -12,4 +12,5 @@ class CentmlTextCompletion(OpenAITextCompletion):
     CentML's text completion endpoint is OpenAI-compatible, so we can use the OpenAI implementation.
     The only difference is in the configuration and parameter handling, which is done in transformation.py.
     """
+
     pass

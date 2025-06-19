@@ -191,6 +191,7 @@ clarifai_key: Optional[str] = None
 maritalk_key: Optional[str] = None
 ai21_key: Optional[str] = None
 ollama_key: Optional[str] = None
+centml_key: Optional[str] = None
 openrouter_key: Optional[str] = None
 datarobot_key: Optional[str] = None
 predibase_key: Optional[str] = None
