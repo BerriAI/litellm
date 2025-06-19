@@ -186,6 +186,9 @@ class MCPServerManager:
 
         return list_tools_result
 
+    #########################################################
+    # Methods that call the upstream MCP servers
+    #########################################################
     def _create_mcp_client(self, server: MCPServer) -> MCPClient:
         """
         Create an MCPClient instance for the given server.
@@ -228,6 +231,27 @@ class MCPServerManager:
                 self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
 
             return tools
+    
+    async def call_tool(self, name: str, arguments: Dict[str, Any]) -> CallToolResult:
+        """
+        Call a tool with the given name and arguments
+        """
+        mcp_server = self._get_mcp_server_from_tool_name(name)
+        if mcp_server is None:
+            raise ValueError(f"Tool {name} not found")
+
+        client = self._create_mcp_client(mcp_server)
+        async with client:
+            call_tool_params = MCPCallToolRequestParams(
+                name=name,
+                arguments=arguments,
+            )
+            return await client.call_tool(call_tool_params)
+    
+    #########################################################
+    # End of Methods that call the upstream MCP servers
+    #########################################################
+
 
     def initialize_tool_name_to_mcp_server_name_mapping(self):
         """
@@ -251,22 +275,6 @@ class MCPServerManager:
             tools = await self._get_tools_from_server(server)
             for tool in tools:
                 self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
-
-    async def call_tool(self, name: str, arguments: Dict[str, Any]) -> CallToolResult:
-        """
-        Call a tool with the given name and arguments
-        """
-        mcp_server = self._get_mcp_server_from_tool_name(name)
-        if mcp_server is None:
-            raise ValueError(f"Tool {name} not found")
-
-        client = self._create_mcp_client(mcp_server)
-        async with client:
-            call_tool_params = MCPCallToolRequestParams(
-                name=name,
-                arguments=arguments,
-            )
-            return await client.call_tool(call_tool_params)
 
     def _get_mcp_server_from_tool_name(self, tool_name: str) -> Optional[MCPServer]:
         """
