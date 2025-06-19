@@ -7135,7 +7135,7 @@
         "supports_web_search": true,
         "supports_url_context": true
     },
-    "gemini-2.0-flash-lite": {
+    "gemini-2.0-flash": {
         "max_tokens": 8192,
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
@@ -7172,7 +7172,7 @@
         "supports_web_search": true,
         "supports_url_context": true
     },
-    "gemini-2.0-flash-": {
+    "gemini-2.0-flash-lite": {
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
         "max_images_per_prompt": 3000,
