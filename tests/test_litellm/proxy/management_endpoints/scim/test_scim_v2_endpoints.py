@@ -220,11 +220,14 @@ async def test_handle_team_membership_changes_add_teams(mocker):
         new_teams=["team1", "team2", "team3"]
     )
     
-    mock_patch_team_membership.assert_called_once_with(
-        user_id="test-user",
-        teams_ids_to_add_user_to=["team2", "team3"],  # Order might vary due to set operations
-        teams_ids_to_remove_user_from=[]
-    )
+    # Verify the call was made once
+    mock_patch_team_membership.assert_called_once()
+    
+    # Check the arguments more flexibly to handle order variations
+    call_args = mock_patch_team_membership.call_args
+    assert call_args[1]["user_id"] == "test-user"
+    assert set(call_args[1]["teams_ids_to_add_user_to"]) == {"team2", "team3"}
+    assert call_args[1]["teams_ids_to_remove_user_from"] == []
 
 
 @pytest.mark.asyncio
@@ -242,11 +245,14 @@ async def test_handle_team_membership_changes_remove_teams(mocker):
         new_teams=["team1"]
     )
     
-    mock_patch_team_membership.assert_called_once_with(
-        user_id="test-user",
-        teams_ids_to_add_user_to=[],
-        teams_ids_to_remove_user_from=["team2", "team3"]  # Order might vary due to set operations
-    )
+    # Verify the call was made once
+    mock_patch_team_membership.assert_called_once()
+    
+    # Check the arguments more flexibly to handle order variations
+    call_args = mock_patch_team_membership.call_args
+    assert call_args[1]["user_id"] == "test-user"
+    assert call_args[1]["teams_ids_to_add_user_to"] == []
+    assert set(call_args[1]["teams_ids_to_remove_user_from"]) == {"team2", "team3"}
 
 
 @pytest.mark.asyncio
@@ -264,12 +270,14 @@ async def test_handle_team_membership_changes_add_and_remove(mocker):
         new_teams=["team2", "team3"]
     )
     
-    # team1 should be removed, team3 should be added, team2 stays
-    mock_patch_team_membership.assert_called_once_with(
-        user_id="test-user",
-        teams_ids_to_add_user_to=["team3"],
-        teams_ids_to_remove_user_from=["team1"]
-    )
+    # Verify the call was made once
+    mock_patch_team_membership.assert_called_once()
+    
+    # Check the arguments - team1 should be removed, team3 should be added, team2 stays
+    call_args = mock_patch_team_membership.call_args
+    assert call_args[1]["user_id"] == "test-user"
+    assert call_args[1]["teams_ids_to_add_user_to"] == ["team3"]
+    assert call_args[1]["teams_ids_to_remove_user_from"] == ["team1"]
 
 
 @pytest.mark.asyncio
