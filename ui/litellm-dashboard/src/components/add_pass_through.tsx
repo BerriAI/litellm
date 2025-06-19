@@ -5,7 +5,7 @@
 
 
 import React, { useState, useEffect, useRef } from "react";
-import { Button, TextInput, Grid, Col } from "@tremor/react";
+import { Button, TextInput, Grid, Col, Switch } from "@tremor/react";
 import { Select, SelectItem, MultiSelect, MultiSelectItem, Card, Metric, Text, Title, Subtitle, Accordion, AccordionHeader, AccordionBody, } from "@tremor/react";
 import { CopyToClipboard } from 'react-copy-to-clipboard';
 import { createPassThroughEndpoint } from "./networking";
@@ -17,7 +17,9 @@ import {
   InputNumber,
   Select as Select2,
   message,
+  Tooltip,
 } from "antd";
+import { InfoCircleOutlined, ApiOutlined } from "@ant-design/icons";
 import { keyCreateCall, slackBudgetAlertsHealthCheck, modelAvailableCall } from "./networking";
 import { list } from "postcss";
 import KeyValueInput from "./key_value_input";
@@ -36,110 +38,182 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
 }) => {
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [selectedModel, setSelectedModel] = useState("");
-  const handleOk = () => {
-    setIsModalVisible(false);
-    form.resetFields();
-  };
-
   const handleCancel = () => {
-    setIsModalVisible(false);
     form.resetFields();
+    setIsModalVisible(false);
   };
 
-  const addPassThrough = (formValues: Record<string, any>) => {
-    // Print the received value
-    console.log(formValues);
+  const addPassThrough = async (formValues: Record<string, any>) => {
+    setIsLoading(true);
+    try {
+      console.log(`formValues: ${JSON.stringify(formValues)}`);
 
-    // // Extract model_name and models from formValues
-    // const { model_name, models } = formValues;
-
-    // // Create new fallback
-    // const newFallback = { [model_name]: models };
-
-    // // Get current fallbacks, or an empty array if it's null
-    // const currentFallbacks = routerSettings.fallbacks || [];
-
-    // // Add new fallback to the current fallbacks
-    // const updatedFallbacks = [...currentFallbacks, newFallback];
-
-    // // Create a new routerSettings object with updated fallbacks
-    // const updatedRouterSettings = { ...routerSettings, fallbacks: updatedFallbacks };
-
-    const newPassThroughItem: passThroughItem = {
+      const newPassThroughItem: passThroughItem = {
         "headers": formValues["headers"],
         "path": formValues["path"],
-        "target": formValues["target"]
-    }
-    const updatedPassThroughSettings = [...passThroughItems, newPassThroughItem]
-
-
-    try {
-        createPassThroughEndpoint(accessToken, formValues);
-        setPassThroughItems(updatedPassThroughSettings)
+        "target": formValues["target"],
+        "include_subpath": formValues["include_subpath"] || false,
+        "cost_per_request": formValues["cost_per_request"] || 0
+      }
+      
+      await createPassThroughEndpoint(accessToken, formValues);
+      
+      const updatedPassThroughSettings = [...passThroughItems, newPassThroughItem]
+      setPassThroughItems(updatedPassThroughSettings)
+      
+      message.success("Pass-through endpoint created successfully");
+      form.resetFields();
+      setIsModalVisible(false);
     } catch (error) {
-        message.error("Failed to update router settings: " + error, 20);
+      message.error("Error creating pass-through endpoint: " + error, 20);
+    } finally {
+      setIsLoading(false);
     }
-
-    message.success("Pass through endpoint successfully added");
-
-    setIsModalVisible(false)
-    form.resetFields();
   };
 
 
   return (
     <div>
-      <Button className="mx-auto" onClick={() => setIsModalVisible(true)}>
+      <Button 
+        className="mx-auto mb-4 mt-4" 
+        onClick={() => setIsModalVisible(true)}
+      >
         + Add Pass-Through Endpoint
       </Button>
       <Modal
-        title="Add Pass-Through Endpoint"
-        visible={isModalVisible}
-        width={800}
-        footer={null}
-        onOk={handleOk}
+        title={
+          <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
+            <ApiOutlined className="text-xl text-blue-500" />
+            <h2 className="text-xl font-semibold text-gray-900">Add Pass-Through Endpoint</h2>
+          </div>
+        }
+        open={isModalVisible}
+        width={1000}
         onCancel={handleCancel}
+        footer={null}
+        className="top-8"
+        styles={{
+          body: { padding: '24px' },
+          header: { padding: '24px 24px 0 24px', border: 'none' },
+        }}
       >
-        <Form
-          form={form}
-          onFinish={addPassThrough}
-          labelCol={{ span: 8 }}
-          wrapperCol={{ span: 16 }}
-          labelAlign="left"
-        >
-            <>
-              <Form.Item 
-                label="Path" 
+        <div className="mt-6">
+          <Form
+            form={form}
+            onFinish={addPassThrough}
+            layout="vertical"
+            className="space-y-6"
+          >
+            <div className="grid grid-cols-1 gap-6">
+              <Form.Item
+                label={
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    Path
+                    <Tooltip title="The route to be added to the LiteLLM Proxy Server (e.g., /my-endpoint)">
+                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                    </Tooltip>
+                  </span>
+                }
                 name="path"
-                rules={[{ required: true, message: 'The route to be added to the LiteLLM Proxy Server.' }]}
-                help="required"
+                rules={[{ required: true, message: 'Please enter the endpoint path' }]}
               >
-                <TextInput/>
+                <TextInput 
+                  placeholder="e.g., /my-endpoint" 
+                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                />
               </Form.Item>
 
-              <Form.Item 
-                label="Target" 
+              <Form.Item
+                label={
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    Target URL
+                    <Tooltip title="The URL to which requests for this path should be forwarded">
+                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                    </Tooltip>
+                  </span>
+                }
                 name="target"
-                rules={[{ required: true, message: 'The URL to which requests for this path should be forwarded.' }]}
-                help="required"
+                rules={[
+                  { required: true, message: 'Please enter the target URL' },
+                  { type: 'url', message: 'Please enter a valid URL' }
+                ]}
               >
-                <TextInput/>
+                <TextInput 
+                  placeholder="https://your-service.com/api" 
+                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                />
               </Form.Item>
-              <Form.Item 
-                label="Headers" 
+
+              <Form.Item
+                label={
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    Headers
+                    <Tooltip title="Key-value pairs of headers to be forwarded with the request">
+                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                    </Tooltip>
+                  </span>
+                }
                 name="headers"
-                rules={[{ required: true, message: 'Key-value pairs of headers to be forwarded with the request. You can set any key value pair here and it will be forwarded to your target endpoint' }]}
-                help="required"
+                rules={[{ required: true, message: 'Please configure the headers' }]}
               >
                 <KeyValueInput/>
               </Form.Item>
-            </>
-          
-          <div style={{ textAlign: "right", marginTop: "10px" }}>
-            <Button2 htmlType="submit">Add Pass-Through Endpoint</Button2>
-          </div>
-        </Form>
+
+              <Form.Item
+                label={
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    Include Subpath
+                    <Tooltip title="If enabled, requests to subpaths will also be forwarded to the target endpoint">
+                      <InfoCircleOutlined className="ml-2 text-gray-400 hover:text-gray-600" />
+                    </Tooltip>
+                  </span>
+                }
+                name="include_subpath"
+                valuePropName="checked"
+              >
+                <Switch />
+              </Form.Item>
+
+              <Form.Item
+                label={
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    Cost Per Request (USD)
+                    <Tooltip title="The cost in USD per request to the target endpoint">
+                      <InfoCircleOutlined className="ml-2 text-gray-400 hover:text-gray-600" />
+                    </Tooltip>
+                  </span>
+                }
+                name="cost_per_request"
+              >
+                <InputNumber 
+                  min={0} 
+                  step={0.001} 
+                  precision={6}
+                  placeholder="0.000000"
+                  size="large"
+                  className="rounded-lg w-full"
+                />
+              </Form.Item>
+            </div>
+
+            <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100">
+              <Button 
+                variant="secondary"
+                onClick={handleCancel}
+              >
+                Cancel
+              </Button>
+              <Button 
+                variant="primary"
+                loading={isLoading}
+              >
+                {isLoading ? 'Creating...' : 'Add Pass-Through Endpoint'}
+              </Button>
+            </div>
+          </Form>
+        </div>
       </Modal>
 
     </div>

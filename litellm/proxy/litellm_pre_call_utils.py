@@ -390,11 +390,11 @@ class LiteLLMProxyRequestSetup:
 
         ## KEY-LEVEL SPEND LOGS / TAGS
         if "tags" in key_metadata and key_metadata["tags"] is not None:
-            data[_metadata_variable_name][
-                "tags"
-            ] = LiteLLMProxyRequestSetup._merge_tags(
-                request_tags=data[_metadata_variable_name].get("tags"),
-                tags_to_add=key_metadata["tags"],
+            data[_metadata_variable_name]["tags"] = (
+                LiteLLMProxyRequestSetup._merge_tags(
+                    request_tags=data[_metadata_variable_name].get("tags"),
+                    tags_to_add=key_metadata["tags"],
+                )
             )
         if "spend_logs_metadata" in key_metadata and isinstance(
             key_metadata["spend_logs_metadata"], dict
@@ -483,23 +483,6 @@ class LiteLLMProxyRequestSetup:
                 tags = [tag.strip() for tag in _tags]
             elif isinstance(headers["x-litellm-tags"], list):
                 tags = headers["x-litellm-tags"]
-        if "user-agent" in headers:
-            """
-            Allow tracking spend by cli tools like Claude Code - e.g. "claude-cli/1.0.25 (external, cli)"
-            """
-            # add user-agent to tags
-            if tags is None:
-                tags = []
-            user_agent = headers["user-agent"]
-            if user_agent is not None:
-                user_agent_part: Optional[str] = None
-                if "/" in user_agent:
-                    user_agent_part = user_agent.split("/")[
-                        0
-                    ]  # extract "claude-cli" - enables spend tracking acrosss versions
-                if user_agent_part is not None:
-                    tags.append(user_agent_part)
-                tags.append(user_agent)  # append full user-agent
         # Check request body for tags
         if "tags" in data and isinstance(data["tags"], list):
             tags = data["tags"]
@@ -630,9 +613,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name]["litellm_api_version"] = version
 
     if general_settings is not None:
-        data[_metadata_variable_name][
-            "global_max_parallel_requests"
-        ] = general_settings.get("global_max_parallel_requests", None)
+        data[_metadata_variable_name]["global_max_parallel_requests"] = (
+            general_settings.get("global_max_parallel_requests", None)
+        )
 
     ### KEY-LEVEL Controls
     key_metadata = user_api_key_dict.metadata
