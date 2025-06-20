@@ -783,7 +783,10 @@ async def insert_sso_user(
     if result_openid:
         new_user_request.metadata = {"auth_provider": result_openid.provider}
 
-    response = await new_user(data=new_user_request, user_api_key_dict=UserAPIKeyAuth())
+    response = await new_user(
+        data=new_user_request,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
 
     return response
 
