@@ -67,6 +67,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
   };
 
   const addPassThrough = async (formValues: Record<string, any>) => {
+    console.log("addPassThrough called with:", formValues);
     setIsLoading(true);
     try {
       console.log(`formValues: ${JSON.stringify(formValues)}`);
@@ -143,7 +144,11 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
             onFinish={addPassThrough}
             layout="vertical"
             className="space-y-6"
-            initialValues={{ include_subpath: true }}
+            initialValues={{ 
+              include_subpath: true,
+              path: pathValue,
+              target: targetValue
+            }}
           >
             {/* Route Configuration Section */}
             <Card className="p-5">
@@ -159,8 +164,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                   }
                   name="path"
                   rules={[
-                    { required: true, message: '' },
-                    { pattern: /^\//, message: '' }
+                    { required: true, message: 'Path is required' },
                   ]}
                   extra={
                     <div className="text-xs text-gray-500 mt-1">
@@ -188,8 +192,8 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                   }
                   name="target"
                   rules={[
-                    { required: true, message: '' },
-                    { type: 'url', message: '' }
+                    { required: true, message: 'Target URL is required' },
+                    { type: 'url', message: 'Please enter a valid URL' }
                   ]}
                   extra={
                     <div className="text-xs text-gray-500 mt-1">
