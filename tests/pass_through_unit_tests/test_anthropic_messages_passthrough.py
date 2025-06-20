@@ -122,6 +122,13 @@ class TestAnthropicOpenAIAPI(BaseAnthropicMessagesTest):
         This is the model name that is expected to be in the logging payload
         """
         return "gpt-4o-mini"
+    
+    @pytest.mark.asyncio
+    async def test_anthropic_messages_litellm_router_streaming_with_logging(self):
+        """
+        Test the anthropic_messages with streaming request
+        """
+        pass
 
 
 @pytest.mark.asyncio
