@@ -146,3 +146,35 @@ async def test_logging_non_streaming_request():
             "kwargs"
         ]["standard_logging_object"]
         assert standard_logging_object["stream"] is not True
+
+
+def test_get_user_agent_tags():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    tags = StandardLoggingPayloadSetup._get_user_agent_tags(
+        proxy_server_request={
+            "headers": {
+                "user-agent": "litellm/0.1.0",
+            }
+        }
+    )
+
+    assert "User-Agent: litellm" in tags
+    assert "User-Agent: litellm/0.1.0" in tags
+
+
+def test_get_request_tags():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    tags = StandardLoggingPayloadSetup._get_request_tags(
+        metadata={"tags": ["test-tag"]},
+        proxy_server_request={
+            "headers": {
+                "user-agent": "litellm/0.1.0",
+            }
+        },
+    )
+
+    assert "test-tag" in tags
+    assert "User-Agent: litellm" in tags
+    assert "User-Agent: litellm/0.1.0" in tags
