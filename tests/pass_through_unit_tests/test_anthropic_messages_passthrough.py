@@ -79,6 +79,8 @@ class TestAnthropicDirectAPI(BaseAnthropicMessagesTest):
             "model": "claude-3-haiku-20240307",
             "api_key": os.getenv("ANTHROPIC_API_KEY"),
         }
+    
+    
 
 class TestAnthropicBedrockAPI(BaseAnthropicMessagesTest):
     """Tests for Anthropic via Bedrock"""
@@ -87,6 +89,14 @@ class TestAnthropicBedrockAPI(BaseAnthropicMessagesTest):
         return {
             "model": "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
         }
+    
+
+    @property
+    def expected_model_name_in_logging(self) -> str:
+        """
+        This is the model name that is expected to be in the logging payload
+        """
+        return "us.anthropic.claude-3-5-sonnet-20240620-v1:0"
 
 
 
@@ -97,6 +107,13 @@ class TestAnthropicOpenAIAPI(BaseAnthropicMessagesTest):
         return {
             "model": "openai/gpt-4o-mini",
         }
+    
+    @property
+    def expected_model_name_in_logging(self) -> str:
+        """
+        This is the model name that is expected to be in the logging payload
+        """
+        return "gpt-4o-mini"
 
 
 @pytest.mark.asyncio

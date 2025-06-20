@@ -46,6 +46,13 @@ class BaseAnthropicMessagesTest:
         """Override in subclasses to provide model-specific configuration"""
         raise NotImplementedError("Subclasses must implement model_config")
     
+    @property
+    def expected_model_name_in_logging(self) -> str:
+        """
+        This is the model name that is expected to be in the logging payload
+        """
+        raise NotImplementedError("Subclasses must implement expected_model_name_in_logging")
+    
     def _validate_response(self, response: Any):
         """Validate non-streaming response structure"""
         # Handle type checking - response should be a dict for non-streaming
@@ -58,7 +65,8 @@ class BaseAnthropicMessagesTest:
         assert "model" in response
         assert response.get("role") == "assistant"
     
-    async def _test_non_streaming_base(self):
+    @pytest.mark.asyncio
+    async def test_non_streaming_base(self):
         """Base test for non-streaming requests"""
         litellm._turn_on_debug()
         
@@ -90,7 +98,8 @@ class BaseAnthropicMessagesTest:
         print(f"Non-streaming response: {json.dumps(response, indent=2, default=str)}")
         return response
     
-    async def _test_streaming_base(self):
+    @pytest.mark.asyncio
+    async def test_streaming_base(self):
         """Base test for streaming requests"""
         request_params = self.model_config
         # Set up test parameters
@@ -236,7 +245,7 @@ class BaseAnthropicMessagesTest:
         assert test_custom_logger.logged_standard_logging_payload["response"] is not None
         assert (
             test_custom_logger.logged_standard_logging_payload["model"]
-            == self.model_config["model"]
+            == self.expected_model_name_in_logging
         )
 
         # check logged usage + spend
