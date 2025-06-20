@@ -752,21 +752,6 @@ try:
     current_dir = os.path.dirname(os.path.abspath(__file__))
     ui_path = os.path.join(current_dir, "_experimental", "out")
     litellm_asset_prefix = "/litellm-asset-prefix"
-    # # Mount the _next directory at the root level
-    app.mount(
-        "/_next",
-        StaticFiles(directory=os.path.join(ui_path, "_next")),
-        name="next_static",
-    )
-    app.mount(
-        f"{litellm_asset_prefix}/_next",
-        StaticFiles(directory=os.path.join(ui_path, "_next")),
-        name="next_static",
-    )
-    # print(f"mounted _next at {server_root_path}/ui/_next")
-
-    app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
-
     # Iterate through files in the UI directory
     for root, dirs, files in os.walk(ui_path):
         for filename in files:
@@ -792,18 +777,36 @@ try:
 
                 # Replace the asset prefix with the server root path
                 modified_content = content.replace(
-                    f"{litellm_asset_prefix}", server_root_path
+                    f"{litellm_asset_prefix}",
+                    f"{server_root_path}",
                 )
+
                 # Replace the /.well-known/litellm-ui-config with the server root path
                 modified_content = modified_content.replace(
                     "/litellm/.well-known/litellm-ui-config",
                     f"{server_root_path}/.well-known/litellm-ui-config",
                 )
+
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(modified_content)
             except UnicodeDecodeError:
                 # Skip binary files that can't be decoded
                 continue
+
+    # # Mount the _next directory at the root level
+    app.mount(
+        "/_next",
+        StaticFiles(directory=os.path.join(ui_path, "_next")),
+        name="next_static",
+    )
+    app.mount(
+        f"{litellm_asset_prefix}/_next",
+        StaticFiles(directory=os.path.join(ui_path, "_next")),
+        name="next_static",
+    )
+    # print(f"mounted _next at {server_root_path}/ui/_next")
+
+    app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
     # Handle HTML file restructuring
     for filename in os.listdir(ui_path):
