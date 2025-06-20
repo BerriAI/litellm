@@ -534,6 +534,39 @@ class AsyncHTTPHandler:
         return True
 
     @staticmethod
+    def _get_ssl_connector_kwargs(
+        ssl_verify: Optional[bool] = None,
+        ssl_context: Optional[ssl.SSLContext] = None,
+    ) -> Dict[str, Any]:
+        """
+        Helper method to get SSL connector initialization arguments for aiohttp TCPConnector.
+        
+        SSL Configuration Priority:
+        1. If ssl_context is provided -> use the custom SSL context
+        2. If ssl_verify is False -> disable SSL verification (ssl=False)
+        3. If ssl_verify is True/None -> use default SSL context with certifi CA bundle
+
+        Returns:
+            Dict with appropriate SSL configuration for TCPConnector
+        """
+        connector_kwargs: Dict[str, Any] = {
+            "local_addr": ("0.0.0.0", 0) if litellm.force_ipv4 else None,
+        }
+        
+        if ssl_context is not None:
+            # Priority 1: Use the provided custom SSL context
+            connector_kwargs["ssl"] = ssl_context
+        elif ssl_verify is False:
+            # Priority 2: Explicitly disable SSL verification
+            connector_kwargs["verify_ssl"] = False
+        else:
+            # Priority 3: Use our default SSL context with certifi CA bundle
+            # This covers ssl_verify=True and ssl_verify=None cases
+            connector_kwargs["ssl"] = AsyncHTTPHandler._get_ssl_context()
+        
+        return connector_kwargs
+
+    @staticmethod
     def _create_aiohttp_transport(
         ssl_verify: Optional[bool] = None,
         ssl_context: Optional[ssl.SSLContext] = None,
@@ -541,28 +574,33 @@ class AsyncHTTPHandler:
         """
         Creates an AiohttpTransport with RequestNotRead error handling
 
-        - If force_ipv4 is True, it will create an AiohttpTransport with local_addr set to "0.0.0.0"
-        - [Default] If force_ipv4 is False, it will create an AiohttpTransport with default settings
+        Note: aiohttp TCPConnector ssl parameter accepts:
+        - SSLContext: custom SSL context
+        - False: disable SSL verification
+        - True: use default SSL verification (equivalent to ssl.create_default_context())
         """
         from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 
-        #########################################################
-        # If ssl_verify is None, set it to True
-        # TCP Connector does not allow ssl_verify to be None
-        # by default aiohttp sets ssl_verify to True
-        #########################################################
-        if ssl_verify is None:
-            ssl_verify = True
+        connector_kwargs = AsyncHTTPHandler._get_ssl_connector_kwargs(
+            ssl_verify=ssl_verify, ssl_context=ssl_context
+        )
 
         verbose_logger.debug("Creating AiohttpTransport...")
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
-                connector=TCPConnector(
-                    verify_ssl=ssl_verify,
-                    ssl_context=ssl_context,
-                    local_addr=("0.0.0.0", 0) if litellm.force_ipv4 else None,
-                )
+                connector=TCPConnector(**connector_kwargs)
             ),
+        )
+    
+
+    @staticmethod
+    def _get_ssl_context() -> ssl.SSLContext:
+        """
+        Get the SSL context for the AiohttpTransport
+        """
+        import certifi
+        return ssl.create_default_context(
+            cafile=certifi.where()
         )
 
     @staticmethod
