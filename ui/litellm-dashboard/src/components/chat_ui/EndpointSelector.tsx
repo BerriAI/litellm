@@ -30,6 +30,7 @@ const EndpointSelector: React.FC<EndpointSelectorProps> = ({
     <div className={className}>
       <Text>Endpoint Type:</Text>
       <Select
+        showSearch
         value={endpointType}
         style={{ width: "100%" }}
         onChange={onEndpointChange}

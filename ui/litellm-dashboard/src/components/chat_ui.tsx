@@ -124,12 +124,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
         if (uniqueModels.length > 0) {
           setModelInfo(uniqueModels);
           setSelectedModel(uniqueModels[0].model_group);
-          
-          // Auto-set endpoint based on the first model's mode
-          if (uniqueModels[0].mode) {
-            const initialEndpointType = determineEndpointType(uniqueModels[0].model_group, uniqueModels);
-            setEndpointType(initialEndpointType);
-          }
+        
         }
       } catch (error) {
         console.error("Error fetching model info:", error);
@@ -467,18 +462,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
     console.log(`selected ${value}`);
     setSelectedModel(value);
     
-    // Use the utility function to determine the endpoint type
-    if (value !== 'custom') {
-      const newEndpointType = determineEndpointType(value, modelInfo);
-      setEndpointType(newEndpointType);
-    }
     
     setShowCustomModelInput(value === 'custom');
   };
 
-  const handleEndpointChange = (value: string) => {
-    setEndpointType(value);
-  };
 
   const antIcon = <LoadingOutlined style={{ fontSize: 24 }} spin />;
 
@@ -561,7 +548,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 </Text>
                 <EndpointSelector 
                   endpointType={endpointType}
-                  onEndpointChange={handleEndpointChange}
+                  onEndpointChange={setEndpointType}
                   className="mb-4"
                 />  
               </div>
