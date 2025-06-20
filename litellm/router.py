@@ -2454,6 +2454,14 @@ class Router:
             The response from the handler function
         """
         handler_name = original_function.__name__
+        function_name = "_ageneric_api_call_with_fallbacks"
+        self._update_kwargs_before_fallbacks(
+            model=model,
+            kwargs=kwargs,
+            metadata_variable_name = _get_router_metadata_variable_name(
+                function_name=function_name
+            )
+        )
         try:
             verbose_router_logger.debug(
                 f"Inside _ageneric_api_call() - handler: {handler_name}, model: {model}; kwargs: {kwargs}"
@@ -2467,7 +2475,7 @@ class Router:
             )
 
             self._update_kwargs_with_deployment(
-                deployment=deployment, kwargs=kwargs, function_name="generic_api_call"
+                deployment=deployment, kwargs=kwargs, function_name=function_name
             )
 
             data = deployment["litellm_params"].copy()
@@ -3180,6 +3188,11 @@ class Router:
         original_function: Callable,
         **kwargs,
     ):
+        # update kwargs with model_group
+        self._update_kwargs_before_fallbacks(
+            model=kwargs.get("model", ""),
+            kwargs=kwargs,
+        )
         if kwargs.get("model") and self.get_model_list(model_name=kwargs["model"]):
             deployment = await self.async_get_available_deployment(
                 model=kwargs["model"],

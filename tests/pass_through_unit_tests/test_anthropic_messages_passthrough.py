@@ -222,10 +222,11 @@ async def test_anthropic_messages_litellm_router_non_streaming_with_logging():
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
     litellm._turn_on_debug()
+    MODEL_GROUP = "claude-special-alias"
     router = Router(
         model_list=[
             {
-                "model_name": "claude-special-alias",
+                "model_name": MODEL_GROUP,
                 "litellm_params": {
                     "model": "claude-3-haiku-20240307",
                     "api_key": os.getenv("ANTHROPIC_API_KEY"),
@@ -240,7 +241,7 @@ async def test_anthropic_messages_litellm_router_non_streaming_with_logging():
     # Call the handler
     response = await router.aanthropic_messages(
         messages=messages,
-        model="claude-special-alias",
+        model=MODEL_GROUP,
         max_tokens=100,
     )
 
@@ -252,6 +253,7 @@ async def test_anthropic_messages_litellm_router_non_streaming_with_logging():
     await asyncio.sleep(1)
     
     assert test_custom_logger.logged_standard_logging_payload is not None, "Logging payload should not be None"
+    print("tracked standard logging payload", json.dumps(test_custom_logger.logged_standard_logging_payload, indent=4, default=str))
     assert test_custom_logger.logged_standard_logging_payload["messages"] == messages
     assert test_custom_logger.logged_standard_logging_payload["response"] is not None
     assert (
@@ -269,6 +271,9 @@ async def test_anthropic_messages_litellm_router_non_streaming_with_logging():
         test_custom_logger.logged_standard_logging_payload["completion_tokens"]
         == response["usage"]["output_tokens"]
     )
+
+    # assert model_group
+    assert test_custom_logger.logged_standard_logging_payload["model_group"] == MODEL_GROUP
 
 
 @pytest.mark.asyncio
