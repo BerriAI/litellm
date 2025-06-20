@@ -689,6 +689,80 @@ async def test_openai_responses_litellm_router_with_metadata():
         mock_post.assert_called_once()
 
 
+@pytest.mark.asyncio
+async def test_openai_responses_litellm_router_with_prompt():
+    """Test that prompt object is passed through the Router for responses API"""
+
+    prompt_obj = {
+        "id": "pmpt_abc123",
+        "version": "2",
+        "variables": {"random_variable": "ishaan_from_litellm"},
+    }
+
+    mock_response = {
+        "id": "resp_123",
+        "object": "response",
+        "created_at": 1741476542,
+        "status": "completed",
+        "model": "gpt-4o",
+        "output": [],
+        "parallel_tool_calls": True,
+        "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+        "text": {"format": {"type": "text"}},
+        "error": None,
+        "incomplete_details": None,
+        "instructions": None,
+        "metadata": {},
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 1.0,
+        "max_output_tokens": None,
+        "previous_response_id": None,
+        "reasoning": {"effort": None, "summary": None},
+        "truncation": "disabled",
+        "user": None,
+    }
+
+    class MockResponse:
+        def __init__(self, json_data, status_code):
+            self._json_data = json_data
+            self.status_code = status_code
+            self.text = str(json_data)
+
+        def json(self):
+            return self._json_data
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = MockResponse(mock_response, 200)
+
+        litellm._turn_on_debug()
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt4o-special-alias",
+                    "litellm_params": {
+                        "model": "gpt-4o",
+                        "api_key": "fake-key",
+                    },
+                }
+            ]
+        )
+
+        await router.aresponses(
+            model="gpt4o-special-alias",
+            input="Hello",
+            prompt=prompt_obj,
+        )
+
+        request_body = mock_post.call_args.kwargs["json"]
+        assert request_body["prompt"] == prompt_obj
+        mock_post.assert_called_once()
+
+
 def test_bad_request_bad_param_error():
     """Raise a BadRequestError when an invalid parameter value is provided"""
     try:

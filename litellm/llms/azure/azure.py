@@ -771,10 +771,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             status_code = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
             error_response = getattr(e, "response", None)
+            error_text = str(e)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
+                error_text = error_response.text
             raise AzureOpenAIError(
-                status_code=status_code, message=str(e), headers=error_headers
+                status_code=status_code, message=error_text, headers=error_headers
             )
 
     async def make_async_azure_httpx_request(

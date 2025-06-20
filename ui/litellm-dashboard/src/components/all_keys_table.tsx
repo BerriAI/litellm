@@ -294,8 +294,8 @@ export function AllKeysTable({
       accessorKey: "user_id",
       header: "User ID",
       cell: (info) => {
-        const userId = info.getValue() as string;
-        if (userId.length > 15) {
+        const userId = info.getValue() as string | null;
+        if (userId && userId.length > 15) {
           return (
             <Tooltip title={userId}>
               <span>{userId.slice(0, 7)}...</span>
@@ -319,8 +319,8 @@ export function AllKeysTable({
       accessorKey: "created_by",
       header: "Created By",
       cell: (info) => {
-        const value = info.getValue() as string;
-        if (value.length > 15) {
+        const value = info.getValue() as string | null;
+        if (value && value.length > 15) {
           return (
             <Tooltip title={value}>
               <span>{value.slice(0, 7)}...</span>

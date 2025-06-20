@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.54.0",
     "@headlessui/react": "^1.7.18",
     "@headlessui/tailwindcss": "^0.2.0",
     "@heroicons/react": "^1.0.6",
@@ -25,7 +26,7 @@
     "jwt-decode": "^4.0.0",
     "lucide-react": "^0.513.0",
     "moment": "^2.30.1",
-    "next": "^14.2.26",
+    "next": "^14.2.30",
     "openai": "^4.93.0",
     "papaparse": "^5.5.2",
     "react": "^18",
@@ -52,5 +53,8 @@
     "prettier": "3.2.5",
     "tailwindcss": "^3.4.1",
     "typescript": "5.3.3"
+  },
+  "overrides": {
+    "prismjs": ">=1.30.0"
   }
 }

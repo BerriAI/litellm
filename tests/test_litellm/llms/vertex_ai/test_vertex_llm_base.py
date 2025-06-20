@@ -243,6 +243,98 @@ class TestVertexBase:
             assert token == "refreshed-token"
             assert project == not_quota_project_id
 
+    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_identity_pool_credentials(self, is_async):
+        vertex_base = VertexBase()
+
+        # Test case: Using Workload Identity Federation for Microsoft Azure and
+        # OIDC identity providers (default behavior)
+        credentials = {
+            "project_id": "test-project",
+            "refresh_token": "fake-refresh-token",
+            "type": "external_account",
+        }
+        mock_creds = MagicMock()
+        mock_creds.token = "token-1"
+        mock_creds.expired = False
+        mock_creds.project_id = "test-project"
+
+        with patch.object(
+            vertex_base, "_credentials_from_identity_pool", return_value=mock_creds
+        ) as mock_credentials_from_identity_pool, patch.object(
+            vertex_base, "refresh_auth"
+        ) as mock_refresh:
+
+            def mock_refresh_impl(creds):
+                creds.token = "refreshed-token"
+
+            mock_refresh.side_effect = mock_refresh_impl
+
+            if is_async:
+                token, _ = await vertex_base._ensure_access_token_async(
+                    credentials=credentials,
+                    project_id=None,
+                    custom_llm_provider="vertex_ai",
+                )
+            else:
+                token, _ = vertex_base._ensure_access_token(
+                    credentials=credentials,
+                    project_id=None,
+                    custom_llm_provider="vertex_ai",
+                )
+
+            assert mock_credentials_from_identity_pool.called
+            assert token == "refreshed-token"
+
+    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_identity_pool_credentials_with_aws(self, is_async):
+        vertex_base = VertexBase()
+
+        # Test case: Using Workload Identity Federation for Microsoft Azure and
+        # OIDC identity providers (default behavior)
+        credentials = {
+            "project_id": "test-project",
+            "refresh_token": "fake-refresh-token",
+            "type": "external_account",
+            "credential_source": {
+                "environment_id": "aws1"
+            }
+        }
+        mock_creds = MagicMock()
+        mock_creds.token = "token-1"
+        mock_creds.expired = False
+        mock_creds.project_id = "test-project"
+
+        with patch.object(
+            vertex_base, "_credentials_from_identity_pool_with_aws", return_value=mock_creds
+        ) as mock_credentials_from_identity_pool_with_aws, patch.object(
+            vertex_base, "refresh_auth"
+        ) as mock_refresh:
+
+            def mock_refresh_impl(creds):
+                creds.token = "refreshed-token"
+
+            mock_refresh.side_effect = mock_refresh_impl
+
+            if is_async:
+                token, _ = await vertex_base._ensure_access_token_async(
+                    credentials=credentials,
+                    project_id=None,
+                    custom_llm_provider="vertex_ai",
+                )
+            else:
+                token, _ = vertex_base._ensure_access_token(
+                    credentials=credentials,
+                    project_id=None,
+                    custom_llm_provider="vertex_ai",
+                )
+
+            assert mock_credentials_from_identity_pool_with_aws.called
+            assert token == "refreshed-token"
+
+
     @pytest.mark.parametrize(
         "api_base, vertex_location, expected",
         [
@@ -270,6 +362,7 @@ class TestVertexBase:
             ),
         ],
     )
+
     def test_get_api_base(self, api_base, vertex_location, expected):
         vertex_base = VertexBase()
         assert (
