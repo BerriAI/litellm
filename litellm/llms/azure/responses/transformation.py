@@ -91,7 +91,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             # ensure the request go to /openai/v1 and not just /openai
             if "/openai/v1" not in new_url:
                 parsed_url = httpx.URL(new_url)
-                new_url = parsed_url.copy_with(path=parsed_url.path.replace("/openai", "/openai/v1"))
+                new_url = str(parsed_url.copy_with(path=parsed_url.path.replace("/openai", "/openai/v1")))
 
 
         # Use the new query_params dictionary
