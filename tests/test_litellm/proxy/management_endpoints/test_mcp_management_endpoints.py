@@ -18,11 +18,11 @@ from typing import Optional
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     LitellmUserRoles,
-    MCPAuth,
     MCPSpecVersion,
     MCPTransport,
     UserAPIKeyAuth,
 )
+from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 
 

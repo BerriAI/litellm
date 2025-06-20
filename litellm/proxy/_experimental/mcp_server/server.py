@@ -4,7 +4,7 @@ LiteLLM MCP Server Routes
 
 import asyncio
 import contextlib
-from typing import Any, AsyncIterator, Dict, List, Optional, Union
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 
 from fastapi import FastAPI, HTTPException
 from pydantic import ConfigDict
@@ -166,11 +166,14 @@ if MCP_AVAILABLE:
         List all available tools
         """
         # Get user authentication from context variable
-        user_api_key_auth = get_auth_context()
+        user_api_key_auth, mcp_auth_header = get_auth_context()
         verbose_logger.debug(
             f"MCP list_tools - User API Key Auth from context: {user_api_key_auth}"
         )
-        return await _list_mcp_tools(user_api_key_auth)
+        return await _list_mcp_tools(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
+        )
 
     @server.call_tool()
     async def mcp_server_tool_call(
@@ -190,9 +193,15 @@ if MCP_AVAILABLE:
             HTTPException: If tool not found or arguments missing
         """
         # Validate arguments
+        user_api_key_auth, mcp_auth_header = get_auth_context()
+        verbose_logger.debug(
+            f"MCP mcp_server_tool_call - User API Key Auth from context: {user_api_key_auth}"
+        )
         response = await call_mcp_tool(
             name=name,
             arguments=arguments,
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
         )
         return response
 
@@ -206,6 +215,7 @@ if MCP_AVAILABLE:
 
     async def _list_mcp_tools(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        mcp_auth_header: Optional[str] = None,
     ) -> List[MCPTool]:
         """
         List all available tools
@@ -229,6 +239,7 @@ if MCP_AVAILABLE:
         tools_from_mcp_servers: List[MCPTool] = (
             await global_mcp_server_manager.list_tools(
                 user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
             )
         )
         verbose_logger.debug("TOOLS FROM MCP SERVERS: %s", tools_from_mcp_servers)
@@ -238,7 +249,11 @@ if MCP_AVAILABLE:
 
     @client
     async def call_mcp_tool(
-        name: str, arguments: Optional[Dict[str, Any]] = None, **kwargs: Any
+        name: str, 
+        arguments: Optional[Dict[str, Any]] = None, 
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        mcp_auth_header: Optional[str] = None, 
+        **kwargs: Any
     ) -> List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]:
         """
         Call a specific tool with the provided arguments
@@ -270,7 +285,12 @@ if MCP_AVAILABLE:
 
         # Try managed server tool first
         if name in global_mcp_server_manager.tool_name_to_mcp_server_name_mapping:
-            return await _handle_managed_mcp_tool(name, arguments)
+            return await _handle_managed_mcp_tool(
+                name=name,
+                arguments=arguments,
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+            )
 
         # Fall back to local tool registry
         return await _handle_local_mcp_tool(name, arguments)
@@ -295,12 +315,17 @@ if MCP_AVAILABLE:
             )
 
     async def _handle_managed_mcp_tool(
-        name: str, arguments: Dict[str, Any]
+        name: str, 
+        arguments: Dict[str, Any],
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        mcp_auth_header: Optional[str] = None,
     ) -> List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]:
         """Handle tool execution for managed server tools"""
         call_tool_result = await global_mcp_server_manager.call_tool(
             name=name,
             arguments=arguments,
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
         )
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
         return call_tool_result.content
@@ -325,11 +350,14 @@ if MCP_AVAILABLE:
         """Handle MCP requests through StreamableHTTP."""
         try:
             # Validate headers and log request info
-            user_api_key_auth: UserAPIKeyAuth = (
+            user_api_key_auth, mcp_auth_header = (
                 await UserAPIKeyAuthMCP.user_api_key_auth_mcp(scope)
             )
             # Set the auth context variable for easy access in MCP functions
-            set_auth_context(user_api_key_auth)
+            set_auth_context(
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+            )
 
             # Ensure session managers are initialized
             if not _SESSION_MANAGERS_INITIALIZED:
@@ -346,11 +374,14 @@ if MCP_AVAILABLE:
         """Handle MCP requests through SSE."""
         try:
             # Validate headers and log request info
-            user_api_key_auth: UserAPIKeyAuth = (
+            user_api_key_auth, mcp_auth_header = (
                 await UserAPIKeyAuthMCP.user_api_key_auth_mcp(scope)
             )
             # Set the auth context variable for easy access in MCP functions
-            set_auth_context(user_api_key_auth)
+            set_auth_context(
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+            )
 
             # Ensure session managers are initialized
             if not _SESSION_MANAGERS_INITIALIZED:
@@ -390,17 +421,31 @@ if MCP_AVAILABLE:
     ############ Auth Context Functions ####################
     ########################################################
 
-    def set_auth_context(user_api_key_auth: UserAPIKeyAuth) -> None:
-        """Set the UserAPIKeyAuth in the auth context variable."""
-        auth_user = LiteLLMAuthenticatedUser(user_api_key_auth)
+    def set_auth_context(user_api_key_auth: UserAPIKeyAuth, mcp_auth_header: Optional[str] = None) -> None:
+        """
+        Set the UserAPIKeyAuth in the auth context variable.
+
+        Args:
+            user_api_key_auth: UserAPIKeyAuth object
+            mcp_auth_header: MCP auth header to be passed to the MCP server
+        """
+        auth_user = LiteLLMAuthenticatedUser(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
+        )
         auth_context_var.set(auth_user)
 
-    def get_auth_context() -> Optional[UserAPIKeyAuth]:
-        """Get the UserAPIKeyAuth from the auth context variable."""
+    def get_auth_context() -> Tuple[Optional[UserAPIKeyAuth], Optional[str]]:
+        """
+        Get the UserAPIKeyAuth from the auth context variable.
+
+        Returns:
+            Tuple[Optional[UserAPIKeyAuth], Optional[str]]: UserAPIKeyAuth object and MCP auth header
+        """
         auth_user = auth_context_var.get()
         if auth_user and isinstance(auth_user, LiteLLMAuthenticatedUser):
-            return auth_user.user_api_key_auth
-        return None
+            return auth_user.user_api_key_auth, auth_user.mcp_auth_header
+        return None, None
 
     ########################################################
     ############ End of Auth Context Functions #############

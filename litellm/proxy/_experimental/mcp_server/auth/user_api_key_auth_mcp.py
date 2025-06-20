@@ -1,11 +1,11 @@
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from starlette.datastructures import Headers
 from starlette.requests import Request
 from starlette.types import Scope
 
 from litellm._logging import verbose_logger
-from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_TeamTable, SpecialHeaders, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 
@@ -16,11 +16,14 @@ class UserAPIKeyAuthMCP:
     Utilizes the main `user_api_key_auth` function to validate the request
     """
 
-    LITELLM_API_KEY_HEADER_NAME_PRIMARY = "x-litellm-api-key"
-    LITELLM_API_KEY_HEADER_NAME_SECONDARY = "Authorization"
+    LITELLM_API_KEY_HEADER_NAME_PRIMARY = SpecialHeaders.custom_litellm_api_key.value
+    LITELLM_API_KEY_HEADER_NAME_SECONDARY = SpecialHeaders.openai_authorization.value
+
+    # This is the header to use if you want LiteLLM to use this header for authenticating to the MCP server
+    LITELLM_MCP_AUTH_HEADER_NAME = SpecialHeaders.mcp_auth.value
 
     @staticmethod
-    async def user_api_key_auth_mcp(scope: Scope) -> UserAPIKeyAuth:
+    async def user_api_key_auth_mcp(scope: Scope) -> Tuple[UserAPIKeyAuth, Optional[str]]:
         """
         Validate and extract headers from the ASGI scope for MCP requests.
 
@@ -29,6 +32,7 @@ class UserAPIKeyAuthMCP:
 
         Returns:
             UserAPIKeyAuth containing validated authentication information
+            mcp_auth_header: Optional[str] MCP auth header to be passed to the MCP server
 
         Raises:
             HTTPException: If headers are invalid or missing required headers
@@ -37,6 +41,7 @@ class UserAPIKeyAuthMCP:
         litellm_api_key = (
             UserAPIKeyAuthMCP.get_litellm_api_key_from_headers(headers) or ""
         )
+        mcp_auth_header = headers.get(UserAPIKeyAuthMCP.LITELLM_MCP_AUTH_HEADER_NAME)
 
         # Create a proper Request object with mock body method to avoid ASGI receive channel issues
         request = Request(scope=scope)
@@ -52,7 +57,7 @@ class UserAPIKeyAuthMCP:
             api_key=litellm_api_key, request=request
         )
 
-        return validated_user_api_key_auth
+        return validated_user_api_key_auth, mcp_auth_header
 
     @staticmethod
     def get_litellm_api_key_from_headers(headers: Headers) -> Optional[str]:
