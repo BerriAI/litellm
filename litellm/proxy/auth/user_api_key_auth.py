@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import List, Optional, Tuple, cast
 
 import fastapi
-from fastapi import Header, HTTPException, Request, WebSocket, status
+from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security.api_key import APIKeyHeader
 
 import litellm
