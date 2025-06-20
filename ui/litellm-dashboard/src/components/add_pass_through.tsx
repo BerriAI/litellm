@@ -164,11 +164,11 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                   }
                   name="path"
                   rules={[
-                    { required: true, message: 'Path is required' },
+                    { required: true, message: 'Path is required' }
                   ]}
                   extra={
                     <div className="text-xs text-gray-500 mt-1">
-                      Example: /bria, /openai, /anthropic
+                      Example: /bria, /adobe-photoshop, /elasticsearch
                     </div>
                   }
                   className="mb-4"
@@ -197,7 +197,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                   ]}
                   extra={
                     <div className="text-xs text-gray-500 mt-1">
-                      Example: https://api.openai.com, https://engine.prod.bria-api.com
+                      Example:https://engine.prod.bria-api.com
                     </div>
                   }
                   className="mb-4"
@@ -205,7 +205,10 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                   <TextInput 
                     placeholder="https://engine.prod.bria-api.com" 
                     value={targetValue}
-                    onChange={(e) => setTargetValue(e.target.value)}
+                    onChange={(e) => {
+                      setTargetValue(e.target.value);
+                      form.setFieldsValue({ target: e.target.value });
+                    }}
                   />
                 </Form.Item>
 
@@ -304,6 +307,10 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
               <Button 
                 variant="primary"
                 loading={isLoading}
+                onClick={() => {
+                  console.log("Submit button clicked");
+                  form.submit();
+                }}
               >
                 {isLoading ? 'Creating...' : 'Add Pass-Through Endpoint'}
               </Button>
