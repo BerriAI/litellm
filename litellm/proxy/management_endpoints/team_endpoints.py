@@ -132,6 +132,44 @@ async def get_all_team_memberships(
     return returned_tm
 
 
+async def _create_team_member_budget_table(
+    data: NewTeamRequest,
+    new_team_data_json: dict,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> dict:
+    """Allows admin to create 1 budget, that applies to all team members"""
+    from litellm.proxy._types import BudgetNewRequest
+    from litellm.proxy.management_endpoints.budget_management_endpoints import (
+        new_budget,
+    )
+
+    if data.team_alias is not None:
+        budget_id = f"team-{data.team_alias}-budget-{uuid.uuid4().hex}"
+    else:
+        budget_id = f"team-budget-{uuid.uuid4().hex}"
+
+    team_member_budget_table = await new_budget(
+        budget_obj=BudgetNewRequest(
+            max_budget=data.team_member_budget,
+            budget_duration=data.budget_duration,
+            budget_id=budget_id,
+        ),
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    # Add team_member_budget_id as metadata field to team table
+    if new_team_data_json.get("metadata") is None:
+        new_team_data_json["metadata"] = {}
+    new_team_data_json["metadata"][
+        "team_member_budget_id"
+    ] = team_member_budget_table.budget_id
+    new_team_data_json.pop(
+        "team_member_budget", None
+    )  # remove team_member_budget from new_team_data_json
+
+    return new_team_data_json
+
+
 #### TEAM MANAGEMENT ####
 @router.post(
     "/team/new",
@@ -311,9 +349,18 @@ async def new_team(  # noqa: PLR0915
             prisma_client=prisma_client,
         )
 
+        ## Create Team Member Budget Table
+        data_json = data.json()
+        if data.team_member_budget is not None:
+            data_json = await _create_team_member_budget_table(
+                data=data,
+                new_team_data_json=data_json,
+                user_api_key_dict=user_api_key_dict,
+            )
+
         ## ADD TO TEAM TABLE
         complete_team_data = LiteLLM_TeamTable(
-            **data.json(),
+            **data_json,
             model_id=_model_id,
             object_permission_id=object_permission_id,
         )
