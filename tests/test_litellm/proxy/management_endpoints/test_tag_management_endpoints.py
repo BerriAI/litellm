@@ -26,6 +26,8 @@ async def test_create_and_get_tag():
     """
     # Mock the prisma client and _get_tags_config and _save_tags_config
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.llm_router"
+    ) as mock_router, patch(
         "litellm.proxy.management_endpoints.tag_management_endpoints._get_tags_config"
     ) as mock_get_tags, patch(
         "litellm.proxy.management_endpoints.tag_management_endpoints._save_tags_config"
@@ -50,6 +52,7 @@ async def test_create_and_get_tag():
 
         # Test tag creation
         response = client.post("/tag/new", json=tag_data, headers=headers)
+        print(f"response: {response.text}")
         assert response.status_code == 200
         result = response.json()
         assert result["message"] == "Tag test-tag created successfully"
