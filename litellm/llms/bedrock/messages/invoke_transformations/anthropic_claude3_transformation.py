@@ -142,25 +142,64 @@ class AmazonAnthropicClaude3MessagesConfig(
             httpx_response.aiter_bytes(chunk_size=aws_decoder.DEFAULT_CHUNK_SIZE)
         )
         # Convert decoded Bedrock events to Server-Sent Events expected by Anthropic clients.
-        return self.bedrock_sse_wrapper(completion_stream)
+        return self.bedrock_sse_wrapper(
+            completion_stream=completion_stream, 
+            litellm_logging_obj=litellm_logging_obj,
+            request_body=request_body,
+        )
 
     async def bedrock_sse_wrapper(
         self,
         completion_stream: AsyncIterator[
             Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]
         ],
+        litellm_logging_obj: LiteLLMLoggingObj,
+        request_body: dict,
     ):
         """
         Bedrock invoke does not return SSE formatted data. This function is a wrapper to ensure litellm chunks are SSE formatted.
         """
+        import asyncio
+        from datetime import datetime
+
+        from litellm.proxy.pass_through_endpoints.streaming_handler import (
+            PassThroughStreamingHandler,
+        )
+        from litellm.proxy.pass_through_endpoints.success_handler import (
+            PassThroughEndpointLogging,
+        )
+        from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+            EndpointType,
+        )
+        collected_chunks = []
+        start_time = datetime.now()
+        passthrough_success_handler_obj = PassThroughEndpointLogging()
         async for chunk in completion_stream:
             if isinstance(chunk, dict):
                 event_type: str = str(chunk.get("type", "message"))
                 payload = f"event: {event_type}\n" f"data: {json.dumps(chunk)}\n\n"
-                yield payload.encode()
+                encoded_payload = payload.encode()
+                collected_chunks.append(encoded_payload)
+                yield encoded_payload
             else:
                 # For non-dict chunks, forward the original value unchanged so callers can leverage the richer Python objects if they wish.
+                collected_chunks.append(chunk)
                 yield chunk
+        
+        end_time = datetime.now()
+        asyncio.create_task(
+                PassThroughStreamingHandler._route_streaming_logging_to_handler(
+                    litellm_logging_obj=litellm_logging_obj,
+                    passthrough_success_handler_obj=passthrough_success_handler_obj,
+                    url_route="/v1/messages",
+                    request_body=request_body or {},
+                    endpoint_type=EndpointType.ANTHROPIC,
+                    start_time=start_time,
+                    raw_bytes=collected_chunks,
+                    end_time=end_time,
+                )
+            )
+        
 
 
 class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
