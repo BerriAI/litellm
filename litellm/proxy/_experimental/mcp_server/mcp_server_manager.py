@@ -7,16 +7,19 @@ This is a Proxy
 """
 
 import asyncio
+import hashlib
 import json
-import uuid
 from typing import Any, Dict, List, Optional, cast
 
-from mcp import ClientSession
-from mcp.client.sse import sse_client
+from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult
 from mcp.types import Tool as MCPTool
 
 from litellm._logging import verbose_logger
+from litellm.experimental_mcp_client.client import MCPClient
+from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+    UserAPIKeyAuthMCP,
+)
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     MCPAuthType,
@@ -24,13 +27,8 @@ from litellm.proxy._types import (
     MCPSpecVersionType,
     MCPTransport,
     MCPTransportType,
+    UserAPIKeyAuth,
 )
-
-try:
-    from mcp.client.streamable_http import streamablehttp_client
-except ImportError:
-    streamablehttp_client = None  # type: ignore
-
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 
 
@@ -78,13 +76,22 @@ class MCPServerManager:
             mcp_info = MCPInfo(**_mcp_info)
             mcp_info["server_name"] = server_name
             mcp_info["description"] = server_config.get("description", None)
-            server_id = str(uuid.uuid4())
+
+            # Generate stable server ID based on parameters
+            server_id = self._generate_stable_server_id(
+                server_name=server_name,
+                url=server_config["url"],
+                transport=server_config.get("transport", MCPTransport.http),
+                spec_version=server_config.get("spec_version", MCPSpecVersion.mar_2025),
+                auth_type=server_config.get("auth_type", None),
+            )
+
             new_server = MCPServer(
                 server_id=server_id,
                 name=server_name,
                 url=server_config["url"],
                 # TODO: utility fn the default values
-                transport=server_config.get("transport", MCPTransport.sse),
+                transport=server_config.get("transport", MCPTransport.http),
                 spec_version=server_config.get("spec_version", MCPSpecVersion.mar_2025),
                 auth_type=server_config.get("auth_type", None),
                 mcp_info=mcp_info,
@@ -130,19 +137,52 @@ class MCPServerManager:
                 f"Added MCP Server: {mcp_server.alias or mcp_server.server_id}"
             )
 
-    async def list_tools(self) -> List[MCPTool]:
+    async def get_allowed_mcp_servers(
+        self, user_api_key_auth: Optional[UserAPIKeyAuth] = None
+    ) -> List[str]:
+        """
+        Get the allowed MCP Servers for the user
+        """
+        allowed_mcp_servers = await UserAPIKeyAuthMCP.get_allowed_mcp_servers(
+            user_api_key_auth
+        )
+        verbose_logger.debug(
+            f"Allowed MCP Servers for user api key auth: {allowed_mcp_servers}"
+        )
+        if len(allowed_mcp_servers) > 0:
+            return allowed_mcp_servers
+        else:
+            verbose_logger.debug(
+                "No allowed MCP Servers found for user api key auth, returning default registry servers"
+            )
+            return list(self.get_registry().keys())
+
+    async def list_tools(
+        self, 
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        mcp_auth_header: Optional[str] = None,
+    ) -> List[MCPTool]:
         """
         List all tools available across all MCP Servers.
 
         Returns:
             List[MCPTool]: Combined list of tools from all servers
         """
+        allowed_mcp_servers = await self.get_allowed_mcp_servers(user_api_key_auth)
+
         list_tools_result: List[MCPTool] = []
         verbose_logger.debug("SERVER MANAGER LISTING TOOLS")
 
-        for _, server in self.get_registry().items():
+        for server_id in allowed_mcp_servers:
+            server = self.get_mcp_server_by_id(server_id)
+            if server is None:
+                verbose_logger.warning(f"MCP Server {server_id} not found")
+                continue
             try:
-                tools = await self._get_tools_from_server(server)
+                tools = await self._get_tools_from_server(
+                    server=server,
+                    mcp_auth_header=mcp_auth_header,
+                )
                 list_tools_result.extend(tools)
             except Exception as e:
                 verbose_logger.exception(
@@ -151,7 +191,30 @@ class MCPServerManager:
 
         return list_tools_result
 
-    async def _get_tools_from_server(self, server: MCPServer) -> List[MCPTool]:
+    #########################################################
+    # Methods that call the upstream MCP servers
+    #########################################################
+    def _create_mcp_client(self, server: MCPServer, mcp_auth_header: Optional[str] = None) -> MCPClient:
+        """
+        Create an MCPClient instance for the given server.
+
+        Args:
+            server (MCPServer): The server configuration
+            mcp_auth_header: MCP auth header to be passed to the MCP server. This is optional and will be used if provided.
+
+        Returns:
+            MCPClient: Configured MCP client instance
+        """
+        transport = server.transport or MCPTransport.sse
+        return MCPClient(
+            server_url=server.url,
+            transport_type=transport,
+            auth_type=server.auth_type,
+            auth_value=mcp_auth_header or server.authentication_token,
+            timeout=60.0,
+        )
+
+    async def _get_tools_from_server(self, server: MCPServer, mcp_auth_header: Optional[str] = None) -> List[MCPTool]:
         """
         Helper method to get tools from a single MCP server.
 
@@ -162,57 +225,51 @@ class MCPServerManager:
             List[MCPTool]: List of tools available on the server
         """
         verbose_logger.debug(f"Connecting to url: {server.url}")
-
         verbose_logger.info("_get_tools_from_server...")
-        # send transport to connect to the server
-        if server.transport is None or server.transport == MCPTransport.sse:
-            async with sse_client(url=server.url) as (read, write):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
 
-                    tools_result = await session.list_tools()
-                    verbose_logger.debug(f"Tools from {server.name}: {tools_result}")
+        client = self._create_mcp_client(
+            server=server,
+            mcp_auth_header=mcp_auth_header,
+        )
+        async with client:
+            tools = await client.list_tools()
+            verbose_logger.debug(f"Tools from {server.name}: {tools}")
 
-                    # Update tool to server mapping
-                    for tool in tools_result.tools:
-                        self.tool_name_to_mcp_server_name_mapping[tool.name] = (
-                            server.name
-                        )
+            # Update tool to server mapping
+            for tool in tools:
+                self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
 
-                    return tools_result.tools
-        elif server.transport == MCPTransport.http:
-            if streamablehttp_client is None:
-                verbose_logger.error(
-                    "streamablehttp_client not available - install mcp with HTTP support"
-                )
-                raise ValueError(
-                    "streamablehttp_client not available - please run `pip install mcp -U`"
-                )
-            verbose_logger.debug(f"Using HTTP streamable transport for {server.url}")
-            async with streamablehttp_client(
-                url=server.url,
-            ) as (read_stream, write_stream, get_session_id):
-                async with ClientSession(read_stream, write_stream) as session:
-                    await session.initialize()
+            return tools
+    
+    async def call_tool(
+        self, 
+        name: str, 
+        arguments: Dict[str, Any],
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        mcp_auth_header: Optional[str] = None,
+    ) -> CallToolResult:
+        """
+        Call a tool with the given name and arguments
+        """
+        mcp_server = self._get_mcp_server_from_tool_name(name)
+        if mcp_server is None:
+            raise ValueError(f"Tool {name} not found")
 
-                    if get_session_id is not None:
-                        session_id = get_session_id()
-                        if session_id:
-                            verbose_logger.debug(f"HTTP session ID: {session_id}")
+        client = self._create_mcp_client(
+            server=mcp_server,
+            mcp_auth_header=mcp_auth_header,
+        )
+        async with client:
+            call_tool_params = MCPCallToolRequestParams(
+                name=name,
+                arguments=arguments,
+            )
+            return await client.call_tool(call_tool_params)
+    
+    #########################################################
+    # End of Methods that call the upstream MCP servers
+    #########################################################
 
-                    tools_result = await session.list_tools()
-                    verbose_logger.debug(f"Tools from {server.name}: {tools_result}")
-
-                    # Update tool to server mapping
-                    for tool in tools_result.tools:
-                        self.tool_name_to_mcp_server_name_mapping[tool.name] = (
-                            server.name
-                        )
-
-                    return tools_result.tools
-        else:
-            verbose_logger.warning(f"Unsupported transport type: {server.transport}")
-            return []
 
     def initialize_tool_name_to_mcp_server_name_mapping(self):
         """
@@ -236,46 +293,6 @@ class MCPServerManager:
             tools = await self._get_tools_from_server(server)
             for tool in tools:
                 self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
-
-    async def call_tool(self, name: str, arguments: Dict[str, Any]):
-        """
-        Call a tool with the given name and arguments
-        """
-        mcp_server = self._get_mcp_server_from_tool_name(name)
-        if mcp_server is None:
-            raise ValueError(f"Tool {name} not found")
-        elif mcp_server.transport is None or mcp_server.transport == MCPTransport.sse:
-            async with sse_client(url=mcp_server.url) as (read, write):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    return await session.call_tool(name, arguments)
-        elif mcp_server.transport == MCPTransport.http:
-            if streamablehttp_client is None:
-                verbose_logger.error(
-                    "streamablehttp_client not available - install mcp with HTTP support"
-                )
-                raise ValueError(
-                    "streamablehttp_client not available - please run `pip install mcp -U`"
-                )
-            verbose_logger.debug(
-                f"Using HTTP streamable transport for tool call: {name}"
-            )
-            async with streamablehttp_client(
-                url=mcp_server.url,
-            ) as (read_stream, write_stream, get_session_id):
-                async with ClientSession(read_stream, write_stream) as session:
-                    await session.initialize()
-
-                    if get_session_id is not None:
-                        session_id = get_session_id()
-                        if session_id:
-                            verbose_logger.debug(
-                                f"HTTP session ID for tool call: {session_id}"
-                            )
-
-                    return await session.call_tool(name, arguments)
-        else:
-            return CallToolResult(content=[], isError=True)
 
     def _get_mcp_server_from_tool_name(self, tool_name: str) -> Optional[MCPServer]:
         """
@@ -310,6 +327,44 @@ class MCPServerManager:
             if server.server_id == server_id:
                 return server
         return None
+
+    def _generate_stable_server_id(
+        self,
+        server_name: str,
+        url: str,
+        transport: str,
+        spec_version: str,
+        auth_type: Optional[str] = None,
+    ) -> str:
+        """
+        Generate a stable server ID based on server parameters using a hash function.
+
+        This is critical to ensure the server_id is stable across server restarts.
+        Some users store MCPs on the config.yaml and permission management is based on server_ids.
+
+        Eg a key might have mcp_servers = ["1234"], if the server_id changes across restarts, the key will no longer have access to the MCP.
+
+        Args:
+            server_name: Name of the server
+            url: Server URL
+            transport: Transport type (sse, http, etc.)
+            spec_version: MCP spec version
+            auth_type: Authentication type (optional)
+
+        Returns:
+            A deterministic server ID string
+        """
+        # Create a string from all the identifying parameters
+        params_string = (
+            f"{server_name}|{url}|{transport}|{spec_version}|{auth_type or ''}"
+        )
+
+        # Generate SHA-256 hash
+        hash_object = hashlib.sha256(params_string.encode("utf-8"))
+        hash_hex = hash_object.hexdigest()
+
+        # Take first 32 characters and format as UUID-like string
+        return hash_hex[:32]
 
 
 global_mcp_server_manager: MCPServerManager = MCPServerManager()

@@ -79,7 +79,15 @@ class VertexBase:
 
             # Check if the JSON object contains Workload Identity Federation configuration
             if "type" in json_obj and json_obj["type"] == "external_account":
-                creds = self._credentials_from_identity_pool(json_obj)
+                # If environment_id key contains "aws" value it corresponds to an AWS config file
+                if (
+                    "credential_source" in json_obj
+                    and "environment_id" in json_obj["credential_source"]
+                    and "aws" in json_obj["credential_source"]["environment_id"]
+                ):
+                    creds = self._credentials_from_identity_pool_with_aws(json_obj)
+                else:
+                    creds = self._credentials_from_identity_pool(json_obj)
             # Check if the JSON object contains Authorized User configuration (via gcloud auth application-default login)
             elif "type" in json_obj and json_obj["type"] == "authorized_user":
                 creds = self._credentials_from_authorized_user(
@@ -122,6 +130,11 @@ class VertexBase:
         from google.auth import identity_pool
 
         return identity_pool.Credentials.from_info(json_obj)
+    
+    def _credentials_from_identity_pool_with_aws(self, json_obj):
+        from google.auth import aws
+
+        return aws.Credentials.from_info(json_obj)
 
     def _credentials_from_authorized_user(self, json_obj, scopes):
         import google.oauth2.credentials

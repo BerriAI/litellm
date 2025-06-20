@@ -664,6 +664,63 @@ response = completion(
 )
 ```
 
+### Disable Tool Calling
+
+You can disable tool calling by setting the `tool_choice` to `"none"`.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="anthropic/claude-3-opus-20240229",
+    messages=messages,
+    tools=tools,
+    tool_choice="none",
+)
+
+```
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: anthropic-claude-model
+    litellm_params:
+        model: anthropic/claude-3-opus-20240229
+        api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+Replace `anything` with your LiteLLM Proxy Virtual Key, if [setup](../proxy/virtual_keys).
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer anything" \
+  -d '{
+    "model": "anthropic-claude-model",
+    "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
+    "tools": [{"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp", "require_approval": "never"}],
+    "tool_choice": "none"
+  }'
+```
+</TabItem>
+</Tabs>
+
+
+
 ### MCP Tool Calling 
 
 Here's how to use MCP tool calling with Anthropic:
