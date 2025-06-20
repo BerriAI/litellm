@@ -7,7 +7,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Button, TextInput, Grid, Col, Switch } from "@tremor/react";
 import { Select, SelectItem, MultiSelect, MultiSelectItem, Card, Metric, Text, Title, Subtitle, Accordion, AccordionHeader, AccordionBody, } from "@tremor/react";
-import { CopyToClipboard } from 'react-copy-to-clipboard';
 import { createPassThroughEndpoint } from "./networking";
 import {
   Button as Button2,
@@ -159,7 +158,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                 <Form.Item
                   label={
                     <span className="text-sm font-medium text-gray-700">
-                      Path Prefix <span className="text-red-500">*</span>
+                      Path Prefix
                     </span>
                   }
                   name="path"
@@ -174,10 +173,9 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                   className="mb-4"
                 >
                   <div className="flex items-center">
-                    <span className="mr-2 text-gray-500 font-mono text-base">/</span>
                     <TextInput 
                       placeholder="bria" 
-                      value={pathValue.startsWith('/') ? pathValue.slice(1) : pathValue}
+                      value={pathValue}
                       onChange={(e) => handlePathChange(e.target.value)}
                       className="flex-1"
                     />
@@ -187,7 +185,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                 <Form.Item
                   label={
                     <span className="text-sm font-medium text-gray-700">
-                      Target URL <span className="text-red-500">*</span>
+                      Target URL
                     </span>
                   }
                   name="target"
