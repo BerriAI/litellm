@@ -3188,6 +3188,11 @@ class Router:
         original_function: Callable,
         **kwargs,
     ):
+        # update kwargs with model_group
+        self._update_kwargs_before_fallbacks(
+            model=kwargs.get("model", ""),
+            kwargs=kwargs,
+        )
         if kwargs.get("model") and self.get_model_list(model_name=kwargs["model"]):
             deployment = await self.async_get_available_deployment(
                 model=kwargs["model"],
