@@ -24,6 +24,7 @@ interface HealthCheckComponentProps {
   modelData: any;
   all_models_on_proxy: string[];
   getDisplayModelName: (model: any) => string;
+  setSelectedModelId?: (modelId: string) => void;
 }
 
 const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
@@ -31,6 +32,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
   modelData,
   all_models_on_proxy,
   getDisplayModelName,
+  setSelectedModelId,
 }) => {
   const [modelHealthStatuses, setModelHealthStatuses] = useState<{[key: string]: HealthStatus}>({});
   const [selectedModelsForHealth, setSelectedModelsForHealth] = useState<string[]>([]);
@@ -468,8 +470,8 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
   };
 
   return (
-    <div className="bg-white rounded-lg shadow">
-      <div className="border-b px-6 py-4">
+    <div>
+      <div className="mb-6">
         <div className="flex justify-between items-center">
           <div>
             <Title>Model Health Status</Title>
@@ -503,7 +505,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
         </div>
       </div>
 
-      <div className="p-6">
+      <div>
         <ModelDataTable
           columns={healthCheckColumns(
             modelHealthStatuses,
@@ -515,6 +517,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
             getStatusBadge,
             getDisplayModelName,
             showErrorModal,
+            setSelectedModelId,
           )}
           data={modelData.data.map((model: any) => {
             const modelName = model.model_name;
