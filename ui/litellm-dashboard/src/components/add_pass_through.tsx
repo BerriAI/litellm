@@ -7,7 +7,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Button, TextInput, Grid, Col, Switch } from "@tremor/react";
 import { Select, SelectItem, MultiSelect, MultiSelectItem, Card, Metric, Text, Title, Subtitle, Accordion, AccordionHeader, AccordionBody, } from "@tremor/react";
-import { CopyToClipboard } from 'react-copy-to-clipboard';
 import { createPassThroughEndpoint } from "./networking";
 import {
   Button as Button2,
@@ -67,6 +66,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
   };
 
   const addPassThrough = async (formValues: Record<string, any>) => {
+    console.log("addPassThrough called with:", formValues);
     setIsLoading(true);
     try {
       console.log(`formValues: ${JSON.stringify(formValues)}`);
@@ -143,7 +143,11 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
             onFinish={addPassThrough}
             layout="vertical"
             className="space-y-6"
-            initialValues={{ include_subpath: true }}
+            initialValues={{ 
+              include_subpath: true,
+              path: pathValue,
+              target: targetValue
+            }}
           >
             {/* Route Configuration Section */}
             <Card className="p-5">
@@ -154,26 +158,24 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                 <Form.Item
                   label={
                     <span className="text-sm font-medium text-gray-700">
-                      Path Prefix <span className="text-red-500">*</span>
+                      Path Prefix
                     </span>
                   }
                   name="path"
                   rules={[
-                    { required: true, message: '' },
-                    { pattern: /^\//, message: '' }
+                    { required: true, message: 'Path is required', pattern: /^\// }
                   ]}
                   extra={
                     <div className="text-xs text-gray-500 mt-1">
-                      Example: /bria, /openai, /anthropic
+                      Example: /bria, /adobe-photoshop, /elasticsearch
                     </div>
                   }
                   className="mb-4"
                 >
                   <div className="flex items-center">
-                    <span className="mr-2 text-gray-500 font-mono text-base">/</span>
                     <TextInput 
                       placeholder="bria" 
-                      value={pathValue.startsWith('/') ? pathValue.slice(1) : pathValue}
+                      value={pathValue}
                       onChange={(e) => handlePathChange(e.target.value)}
                       className="flex-1"
                     />
@@ -183,17 +185,17 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                 <Form.Item
                   label={
                     <span className="text-sm font-medium text-gray-700">
-                      Target URL <span className="text-red-500">*</span>
+                      Target URL
                     </span>
                   }
                   name="target"
                   rules={[
-                    { required: true, message: '' },
-                    { type: 'url', message: '' }
+                    { required: true, message: 'Target URL is required' },
+                    { type: 'url', message: 'Please enter a valid URL' }
                   ]}
                   extra={
                     <div className="text-xs text-gray-500 mt-1">
-                      Example: https://api.openai.com, https://engine.prod.bria-api.com
+                      Example:https://engine.prod.bria-api.com
                     </div>
                   }
                   className="mb-4"
@@ -201,7 +203,10 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                   <TextInput 
                     placeholder="https://engine.prod.bria-api.com" 
                     value={targetValue}
-                    onChange={(e) => setTargetValue(e.target.value)}
+                    onChange={(e) => {
+                      setTargetValue(e.target.value);
+                      form.setFieldsValue({ target: e.target.value });
+                    }}
                   />
                 </Form.Item>
 
@@ -300,6 +305,10 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
               <Button 
                 variant="primary"
                 loading={isLoading}
+                onClick={() => {
+                  console.log("Submit button clicked");
+                  form.submit();
+                }}
               >
                 {isLoading ? 'Creating...' : 'Add Pass-Through Endpoint'}
               </Button>
