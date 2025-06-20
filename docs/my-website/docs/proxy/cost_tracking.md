@@ -577,6 +577,35 @@ curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end
 </Tabs>
 
 
+## 📊 Spend Logs API - Individual Transaction Logs
+
+The `/spend/logs` endpoint now supports a `summarize` parameter to control data format when using date filters.
+
+### Key Parameters
+
+| Parameter | Description |
+|-----------|-------------|
+| `summarize` | **New parameter**: `true` (default) = aggregated data, `false` = individual transaction logs |
+
+### Examples
+
+**Get individual transaction logs:**
+```bash
+curl -X GET "http://localhost:4000/spend/logs?start_date=2024-01-01&end_date=2024-01-02&summarize=false" \
+-H "Authorization: Bearer sk-1234"
+```
+
+**Get summarized data (default):**
+```bash
+curl -X GET "http://localhost:4000/spend/logs?start_date=2024-01-01&end_date=2024-01-02" \
+-H "Authorization: Bearer sk-1234"
+```
+
+**Use Cases:**
+- `summarize=false`: Analytics dashboards, ETL processes, detailed audit trails
+- `summarize=true`: Daily spending reports, high-level cost tracking (legacy behavior)
+
+
 ## ✨ Custom Spend Log metadata
 
 Log specific key,value pairs as part of the metadata for a spend log

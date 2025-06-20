@@ -58,7 +58,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const menuItems: MenuItem[] = [
     { key: "1", page: "api-keys", label: "Virtual Keys", icon: <KeyOutlined /> },
     { key: "3", page: "llm-playground", label: "Test Key", icon: <PlayCircleOutlined />, roles: rolesWithWriteAccess },
-    { key: "2", page: "models", label: "Models", icon: <BlockOutlined />, roles: rolesWithWriteAccess },
+    { key: "2", page: "models", label: "Models + Endpoints", icon: <BlockOutlined />, roles: rolesWithWriteAccess },
     { key: "12", page: "new_usage", label: "Usage", icon: <BarChartOutlined />, roles: [...all_admin_roles, ...internalUserRoles] },
     { key: "6", page: "teams", label: "Teams", icon: <TeamOutlined /> },
     { key: "17", page: "organizations", label: "Organizations", icon: <BankOutlined />, roles: all_admin_roles },
@@ -90,7 +90,6 @@ const Sidebar: React.FC<SidebarProps> = ({
       roles: all_admin_roles,
       children: [
         { key: "11", page: "general-settings", label: "Router Settings", icon: <SettingOutlined />, roles: all_admin_roles },
-        { key: "12", page: "pass-through-settings", label: "Pass-Through", icon: <ApiOutlined />, roles: all_admin_roles },
         { key: "8", page: "settings", label: "Logging & Alerts", icon: <SettingOutlined />, roles: all_admin_roles },
         { key: "13", page: "admin-panel", label: "Admin Settings", icon: <SettingOutlined />, roles: all_admin_roles },
       ]

@@ -330,9 +330,19 @@ class BaseAWSLLM:
                 and isinstance(standard_aws_region_name, str)
             ):
                 aws_region_name = standard_aws_region_name
-
         if aws_region_name is None:
-            aws_region_name = "us-west-2"
+            try:
+                import boto3
+
+                with tracer.trace("boto3.Session()"):
+                    session = boto3.Session()
+                configured_region = session.region_name
+                if configured_region:
+                    aws_region_name = configured_region
+                else:
+                    aws_region_name = "us-west-2"
+            except Exception:
+                aws_region_name = "us-west-2"
 
         return aws_region_name
 

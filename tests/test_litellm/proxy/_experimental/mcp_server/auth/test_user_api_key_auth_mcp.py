@@ -116,17 +116,19 @@ class TestUserAPIKeyAuthMCP:
                     mock_find_unique.assert_not_called()
 
     @pytest.mark.parametrize(
-        "headers,expected_api_key",
+        "headers,expected_api_key,expected_mcp_auth_header",
         [
             # Test case 1: x-litellm-api-key header present
             (
                 [(b"x-litellm-api-key", b"test-api-key-123")],
                 "test-api-key-123",
+                None,
             ),
             # Test case 2: Authorization header present (fallback)
             (
                 [(b"authorization", b"Bearer test-auth-token")],
                 "Bearer test-auth-token",
+                None,
             ),
             # Test case 3: Both headers present (primary should win)
             (
@@ -135,22 +137,40 @@ class TestUserAPIKeyAuthMCP:
                     (b"authorization", b"Bearer fallback-token"),
                 ],
                 "primary-key",
+                None,
             ),
             # Test case 4: Case insensitive headers
             (
                 [(b"X-LITELLM-API-KEY", b"case-insensitive-key")],
                 "case-insensitive-key",
+                None,
             ),
             # Test case 5: No relevant headers
             (
                 [(b"content-type", b"application/json")],
                 "",
+                None,
             ),
             # Test case 6: Empty headers
-            ([], ""),
+            ([], "", None),
+            # Test case 7: MCP auth header present
+            (
+                [
+                    (b"x-litellm-api-key", b"test-api-key-123"),
+                    (b"x-mcp-auth", b"mcp-auth-token"),
+                ],
+                "test-api-key-123",
+                "mcp-auth-token",
+            ),
+            # Test case 8: Only MCP auth header present (no API key)
+            (
+                [(b"x-mcp-auth", b"mcp-auth-token")],
+                "",
+                "mcp-auth-token",
+            ),
         ],
     )
-    async def test_user_api_key_auth_mcp(self, headers, expected_api_key):
+    async def test_user_api_key_auth_mcp(self, headers, expected_api_key, expected_mcp_auth_header):
         """Test user_api_key_auth_mcp method with various header scenarios"""
 
         # Create ASGI scope with headers
@@ -174,10 +194,11 @@ class TestUserAPIKeyAuthMCP:
             mock_user_api_key_auth.return_value = mock_auth_result
 
             # Call the method
-            result = await UserAPIKeyAuthMCP.user_api_key_auth_mcp(scope)
+            auth_result, mcp_auth_header = await UserAPIKeyAuthMCP.user_api_key_auth_mcp(scope)
 
-            # Assert the result
-            assert result == mock_auth_result
+            # Assert the results
+            assert auth_result == mock_auth_result
+            assert mcp_auth_header == expected_mcp_auth_header
 
             # Verify user_api_key_auth was called with correct parameters
             mock_user_api_key_auth.assert_called_once()

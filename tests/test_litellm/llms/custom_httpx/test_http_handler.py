@@ -5,6 +5,7 @@ import ssl
 import sys
 from unittest.mock import MagicMock, patch
 
+import certifi
 import httpx
 import pytest
 from aiohttp import ClientSession, TCPConnector
@@ -120,3 +121,34 @@ async def test_ssl_verification_with_aiohttp_transport():
 
     # assert both litellm transport and aiohttp session have ssl_verify=False
     assert transport_connector._ssl == aiohttp_session.connector._ssl
+
+
+def test_get_ssl_context():
+    """Test that _get_ssl_context() returns a proper SSL context with certifi CA bundle"""
+    with patch('ssl.create_default_context') as mock_create_context:
+        # Mock the return value
+        mock_ssl_context = MagicMock(spec=ssl.SSLContext)
+        mock_create_context.return_value = mock_ssl_context
+        
+        # Call the static method
+        result = AsyncHTTPHandler._get_ssl_context()
+        
+        # Verify ssl.create_default_context was called with certifi's CA file
+        expected_ca_file = certifi.where()
+        mock_create_context.assert_called_once_with(cafile=expected_ca_file)
+        
+        # Verify it returns the mocked SSL context
+        assert result == mock_ssl_context
+
+
+def test_get_ssl_context_integration():
+    """Integration test that _get_ssl_context() returns a working SSL context"""
+    # Call the static method without mocking
+    ssl_context = AsyncHTTPHandler._get_ssl_context()
+    
+    # Verify it returns an SSLContext instance
+    assert isinstance(ssl_context, ssl.SSLContext)
+    
+    # Verify it has basic SSL context properties
+    assert ssl_context.protocol is not None
+    assert ssl_context.verify_mode is not None

@@ -1,11 +1,11 @@
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from starlette.datastructures import Headers
 from starlette.requests import Request
 from starlette.types import Scope
 
 from litellm._logging import verbose_logger
-from litellm.proxy._types import LiteLLM_TeamTableCachedObj, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_TeamTable, SpecialHeaders, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 
@@ -16,11 +16,14 @@ class UserAPIKeyAuthMCP:
     Utilizes the main `user_api_key_auth` function to validate the request
     """
 
-    LITELLM_API_KEY_HEADER_NAME_PRIMARY = "x-litellm-api-key"
-    LITELLM_API_KEY_HEADER_NAME_SECONDARY = "Authorization"
+    LITELLM_API_KEY_HEADER_NAME_PRIMARY = SpecialHeaders.custom_litellm_api_key.value
+    LITELLM_API_KEY_HEADER_NAME_SECONDARY = SpecialHeaders.openai_authorization.value
+
+    # This is the header to use if you want LiteLLM to use this header for authenticating to the MCP server
+    LITELLM_MCP_AUTH_HEADER_NAME = SpecialHeaders.mcp_auth.value
 
     @staticmethod
-    async def user_api_key_auth_mcp(scope: Scope) -> UserAPIKeyAuth:
+    async def user_api_key_auth_mcp(scope: Scope) -> Tuple[UserAPIKeyAuth, Optional[str]]:
         """
         Validate and extract headers from the ASGI scope for MCP requests.
 
@@ -29,6 +32,7 @@ class UserAPIKeyAuthMCP:
 
         Returns:
             UserAPIKeyAuth containing validated authentication information
+            mcp_auth_header: Optional[str] MCP auth header to be passed to the MCP server
 
         Raises:
             HTTPException: If headers are invalid or missing required headers
@@ -37,6 +41,7 @@ class UserAPIKeyAuthMCP:
         litellm_api_key = (
             UserAPIKeyAuthMCP.get_litellm_api_key_from_headers(headers) or ""
         )
+        mcp_auth_header = headers.get(UserAPIKeyAuthMCP.LITELLM_MCP_AUTH_HEADER_NAME)
 
         # Create a proper Request object with mock body method to avoid ASGI receive channel issues
         request = Request(scope=scope)
@@ -52,7 +57,7 @@ class UserAPIKeyAuthMCP:
             api_key=litellm_api_key, request=request
         )
 
-        return validated_user_api_key_auth
+        return validated_user_api_key_auth, mcp_auth_header
 
     @staticmethod
     def get_litellm_api_key_from_headers(headers: Headers) -> Optional[str]:
@@ -166,12 +171,7 @@ class UserAPIKeyAuthMCP:
         first we check if the team has a object_permission_id attached
             - if it does then we look up the object_permission for the team
         """
-        from litellm.proxy.auth.auth_checks import get_team_object
-        from litellm.proxy.proxy_server import (
-            prisma_client,
-            proxy_logging_obj,
-            user_api_key_cache,
-        )
+        from litellm.proxy.proxy_server import prisma_client
 
         if user_api_key_auth is None:
             return []
@@ -179,16 +179,17 @@ class UserAPIKeyAuthMCP:
         if user_api_key_auth.team_id is None:
             return []
 
-        team_obj: LiteLLM_TeamTableCachedObj = await get_team_object(
-            team_id=user_api_key_auth.team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=None,
-            proxy_logging_obj=proxy_logging_obj,
-            check_cache_only=True,
-        )
         if prisma_client is None:
             verbose_logger.debug("prisma_client is None")
+            return []
+
+        team_obj: Optional[LiteLLM_TeamTable] = (
+            await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": user_api_key_auth.team_id},
+            )
+        )
+        if team_obj is None:
+            verbose_logger.debug("team_obj is None")
             return []
 
         object_permissions = team_obj.object_permission

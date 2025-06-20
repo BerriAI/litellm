@@ -63,6 +63,15 @@ const sidebars = {
         "proxy/custom_prompt_management"
       ].sort()
     },
+    {
+      type: "category",
+      label: "AI Tools (OpenWebUI, Claude Code, etc.)",
+      items: [
+        "tutorials/openweb_ui",
+        "tutorials/openai_codex",
+        "tutorials/claude_responses_api",
+      ]
+    },
     
   ],
   // But you can create a sidebar manually

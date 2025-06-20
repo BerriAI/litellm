@@ -91,9 +91,9 @@ def _get_spend_logs_metadata(
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
-    clean_metadata[
-        "vector_store_request_metadata"
-    ] = _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
+    clean_metadata["vector_store_request_metadata"] = (
+        _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
+    )
     clean_metadata["guardrail_information"] = guardrail_information
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
@@ -212,6 +212,11 @@ def get_logging_payload(  # noqa: PLR0915
         if isinstance(metadata.get("tags", []), list)
         else "[]"
     )
+    if (
+        standard_logging_payload is not None
+        and standard_logging_payload.get("request_tags") is not None
+    ):  # use 'tags' from standard logging payload instead
+        request_tags = json.dumps(standard_logging_payload["request_tags"])
     if (
         _is_master_key(api_key=api_key, _master_key=master_key)
         and general_settings.get("disable_adding_master_key_hash_to_db") is True

@@ -22,8 +22,10 @@ guardrails:
     litellm_params:
       guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
       mode: "during_call"
-      guardrailIdentifier: ff6ujrregl1q # your guardrail ID on bedrock
-      guardrailVersion: "DRAFT"         # your guardrail version on bedrock
+      guardrailIdentifier: ff6ujrregl1q      # your guardrail ID on bedrock
+      guardrailVersion: "DRAFT"              # your guardrail version on bedrock
+      aws_region_name: os.environ/AWS_REGION # region guardrail is defined
+      aws_role_name: os.environ/AWS_ROLE_ARN # your role with permissions to use the guardrail
   
 ```
 
@@ -158,6 +160,8 @@ guardrails:
       mode: "pre_call"  # Important: must use pre_call mode for masking
       guardrailIdentifier: wf0hkdb5x07f
       guardrailVersion: "DRAFT"
+      aws_region_name: os.environ/AWS_REGION
+      aws_role_name: os.environ/AWS_ROLE_ARN
       mask_request_content: true    # Enable masking in user requests
       mask_response_content: true   # Enable masking in model responses
 ```

@@ -71,11 +71,15 @@ class UserAPIKeyLabelNames(Enum):
     STATUS_CODE = "status_code"
     FALLBACK_MODEL = "fallback_model"
     ROUTE = "route"
+    MODEL_GROUP = "model_group"
 
 
 DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_llm_api_latency_metric",
     "litellm_request_total_latency_metric",
+    "litellm_overhead_latency_metric",
+    "litellm_remaining_requests_metric",
+    "litellm_remaining_tokens_metric",
     "litellm_proxy_total_requests_metric",
     "litellm_proxy_failed_requests_metric",
     "litellm_deployment_latency_per_output_token",
@@ -155,6 +159,33 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
+    ]
+
+    litellm_overhead_latency_metric = [
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.API_BASE.value,
+        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+    ]
+
+    litellm_remaining_requests_metric = [
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.API_BASE.value,
+        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+    ]
+
+    litellm_remaining_tokens_metric = [
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.API_BASE.value,
+        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
     ]
 
     litellm_requests_metric = [
@@ -304,6 +335,9 @@ class UserAPIKeyLabelValues(BaseModel):
     ] = None
     team_alias: Annotated[
         Optional[str], Field(..., alias=UserAPIKeyLabelNames.TEAM_ALIAS.value)
+    ] = None
+    model_group: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.MODEL_GROUP.value)
     ] = None
     requested_model: Annotated[
         Optional[str], Field(..., alias=UserAPIKeyLabelNames.REQUESTED_MODEL.value)
