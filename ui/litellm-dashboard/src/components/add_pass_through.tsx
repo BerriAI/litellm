@@ -163,7 +163,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                   }
                   name="path"
                   rules={[
-                    { required: true, message: 'Path is required' }
+                    { required: true, message: 'Path is required', pattern: /^\// }
                   ]}
                   extra={
                     <div className="text-xs text-gray-500 mt-1">
