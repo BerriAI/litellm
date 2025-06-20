@@ -76,6 +76,7 @@ interface nestedFieldItem {
 }
 
 export interface passThroughItem {
+  id?: string
   path: string
   target: string
   headers: object
@@ -117,7 +118,7 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
   const [generalSettings, setGeneralSettings] = useState<passThroughItem[]>(
     []
   );
-  const [selectedEndpointPath, setSelectedEndpointPath] = useState<string | null>(null);
+  const [selectedEndpointId, setSelectedEndpointId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!accessToken || !userRole || !userID) {
@@ -139,15 +140,15 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
     }
   };
 
-  const handleResetField = (fieldName: string, idx: number) => {
+  const handleResetField = (endpointId: string, idx: number) => {
     if (!accessToken) {
       return;
     }
 
     try {
-      deletePassThroughEndpointsCall(accessToken, fieldName);
+      deletePassThroughEndpointsCall(accessToken, endpointId);
       
-      const updatedSettings = generalSettings.filter((setting) => setting.path !== fieldName);
+      const updatedSettings = generalSettings.filter((setting) => setting.id !== endpointId);
       setGeneralSettings(updatedSettings);
 
       message.success("Endpoint deleted successfully.");
@@ -159,6 +160,15 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
   // Define columns for the DataTable
   const columns: ColumnDef<passThroughItem>[] = [
     {
+      header: "ID",
+      accessorKey: "id",
+      cell: (info: any) => (
+        <Text className="font-mono text-xs text-gray-500 truncate max-w-[120px]">
+          {info.getValue()}
+        </Text>
+      ),
+    },
+    {
       header: "Path",
       accessorKey: "path",
       cell: (info: any) => (
@@ -167,7 +177,7 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
             size="xs"
             variant="light"
             className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
-            onClick={() => setSelectedEndpointPath(info.getValue())}
+            onClick={() => info.row.original.id && setSelectedEndpointId(info.row.original.id)}
           >
             {info.getValue()}
           </Button>
@@ -196,13 +206,13 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
           <Icon
             icon={PencilAltIcon}
             size="sm"
-            onClick={() => setSelectedEndpointPath(row.original.path)}
+            onClick={() => row.original.id && setSelectedEndpointId(row.original.id)}
             title="Edit"
           />
           <Icon
             icon={TrashIcon}
             size="sm"
-            onClick={() => handleResetField(row.original.path, row.index)}
+            onClick={() => handleResetField(row.original.id!, row.index)}
             title="Delete"
           />
         </div>
@@ -215,11 +225,15 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
   }
 
   // If a specific endpoint is selected, show the info view
-  if (selectedEndpointPath) {
+  if (selectedEndpointId) {
+    // Find the endpoint by ID to get the path for the info view
+    const selectedEndpoint = generalSettings.find(endpoint => endpoint.id === selectedEndpointId);
+    const endpointPath = selectedEndpoint?.path || selectedEndpointId;
+    
     return (
       <PassThroughInfoView
-        endpointPath={selectedEndpointPath}
-        onClose={() => setSelectedEndpointPath(null)}
+        endpointPath={endpointPath}
+        onClose={() => setSelectedEndpointId(null)}
         accessToken={accessToken}
         isAdmin={userRole === "Admin" || userRole === "admin"}
         onEndpointUpdated={handleEndpointUpdated}
