@@ -133,9 +133,10 @@ async def get_all_team_memberships(
 
 
 async def _create_team_member_budget_table(
-    data: NewTeamRequest,
+    data: Union[NewTeamRequest, LiteLLM_TeamTable],
     new_team_data_json: dict,
     user_api_key_dict: UserAPIKeyAuth,
+    team_member_budget: float,
 ) -> dict:
     """Allows admin to create 1 budget, that applies to all team members"""
     from litellm.proxy._types import BudgetNewRequest
@@ -144,13 +145,15 @@ async def _create_team_member_budget_table(
     )
 
     if data.team_alias is not None:
-        budget_id = f"team-{data.team_alias}-budget-{uuid.uuid4().hex}"
+        budget_id = (
+            f"team-{data.team_alias.replace(' ', '-')}-budget-{uuid.uuid4().hex}"
+        )
     else:
         budget_id = f"team-budget-{uuid.uuid4().hex}"
 
     team_member_budget_table = await new_budget(
         budget_obj=BudgetNewRequest(
-            max_budget=data.team_member_budget,
+            max_budget=team_member_budget,
             budget_duration=data.budget_duration,
             budget_id=budget_id,
         ),
@@ -168,6 +171,48 @@ async def _create_team_member_budget_table(
     )  # remove team_member_budget from new_team_data_json
 
     return new_team_data_json
+
+
+async def _upsert_team_member_budget_table(
+    team_table: LiteLLM_TeamTable,
+    user_api_key_dict: UserAPIKeyAuth,
+    team_member_budget: float,
+    updated_kv: dict,
+) -> dict:
+    """
+    Add budget if none exists
+
+    If budget exists, update it
+    """
+    from litellm.proxy._types import BudgetNewRequest
+    from litellm.proxy.management_endpoints.budget_management_endpoints import (
+        update_budget,
+    )
+
+    if team_table.metadata is None:
+        team_table.metadata = {}
+
+    team_member_budget_id = team_table.metadata.get("team_member_budget_id")
+    if team_member_budget_id is None and isinstance(team_member_budget_id, str):
+        # Budget exists
+        budget_row = await update_budget(
+            budget_obj=BudgetNewRequest(
+                budget_id=team_member_budget_id,
+                max_budget=team_member_budget,
+            ),
+            user_api_key_dict=user_api_key_dict,
+        )
+        if updated_kv.get("metadata") is None:
+            updated_kv["metadata"] = {}
+        updated_kv["metadata"]["team_member_budget_id"] = budget_row.budget_id
+    else:  # budget does not exist
+        updated_kv = await _create_team_member_budget_table(
+            data=team_table,
+            new_team_data_json=updated_kv,
+            user_api_key_dict=user_api_key_dict,
+            team_member_budget=team_member_budget,
+        )
+    return updated_kv
 
 
 #### TEAM MANAGEMENT ####
@@ -356,6 +401,7 @@ async def new_team(  # noqa: PLR0915
                 data=data,
                 new_team_data_json=data_json,
                 user_api_key_dict=user_api_key_dict,
+                team_member_budget=data.team_member_budget,
             )
 
         ## ADD TO TEAM TABLE
@@ -714,6 +760,14 @@ async def update_team(
 
         # set the budget_reset_at in DB
         updated_kv["budget_reset_at"] = reset_at
+
+    if data.team_member_budget is not None:
+        updated_kv = await _upsert_team_member_budget_table(
+            team_table=existing_team_row,
+            updated_kv=updated_kv,
+            team_member_budget=data.team_member_budget,
+            user_api_key_dict=user_api_key_dict,
+        )
 
     # Check object permission
     if data.object_permission is not None:

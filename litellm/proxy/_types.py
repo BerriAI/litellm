@@ -1156,6 +1156,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     model_aliases: Optional[dict] = None
     guardrails: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+    team_member_budget: Optional[float] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
