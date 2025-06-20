@@ -149,7 +149,9 @@ async def test_openai_azure_embedding_simple(model, api_base, api_key, sync_mode
 
         assert isinstance(response.usage, litellm.Usage)
     except litellm.BadRequestError:
-        print("Bad request error occurred - Together AI raises 404s for their embedding models")
+        print(
+            "Bad request error occurred - Together AI raises 404s for their embedding models"
+        )
         pass
 
     except Exception as e:
@@ -321,6 +323,7 @@ def test_openai_azure_embedding():
     or os.environ.get("AZURE_CLIENT_ID") is None,
     reason="Cannot run without being in CircleCI Runner and having AZURE_TENANT_ID and AZURE_CLIENT_ID set",
 )
+
 def test_openai_azure_embedding_with_oidc_and_cf():
     # Verify required environment variables are present
     azure_tenant_id = os.environ.get("AZURE_TENANT_ID")
@@ -653,7 +656,9 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
 @pytest.mark.asyncio
-@patch("litellm.llms.huggingface.embedding.handler.async_get_hf_task_embedding_for_model")
+@patch(
+    "litellm.llms.huggingface.embedding.handler.async_get_hf_task_embedding_for_model"
+)
 @patch("litellm.llms.huggingface.embedding.handler.get_hf_task_embedding_for_model")
 @pytest.mark.parametrize("sync_mode", [True, False])
 async def test_hf_embedding_sentence_sim(
@@ -1117,10 +1122,13 @@ def test_embedding_response_ratelimit_headers(model):
 
     # Azure is flaky with returning x-ratelimit-remaining-requests, we need to verify the upstream api returns this header
     # if upstream api returns this header, we need to verify the header is transformed by litellm
-    if "llm_provider-x-ratelimit-limit-requests" in additional_headers or "x-ratelimit-limit-requests" in additional_headers:
+    if (
+        "llm_provider-x-ratelimit-limit-requests" in additional_headers
+        or "x-ratelimit-limit-requests" in additional_headers
+    ):
         assert "x-ratelimit-remaining-requests" in additional_headers
         assert int(additional_headers["x-ratelimit-remaining-requests"]) > 0
-    
+
     assert "x-ratelimit-remaining-tokens" in additional_headers
     assert int(additional_headers["x-ratelimit-remaining-tokens"]) > 0
 
@@ -1179,4 +1187,3 @@ async def test_embedding_with_extra_headers(sync_mode):
 
         mock_post.assert_called_once()
         assert "my-test-param" in mock_post.call_args.kwargs["headers"]
-        
