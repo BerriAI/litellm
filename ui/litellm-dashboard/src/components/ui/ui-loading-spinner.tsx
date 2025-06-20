@@ -1,25 +1,32 @@
-import React, { useId } from 'react';
-import { useSafeLayoutEffect } from '@/hooks/use-safe-layout-effect';
-import { cx } from '@/lib/cva.config';
+import React, { useId } from "react";
+import { useSafeLayoutEffect } from "@/hooks/use-safe-layout-effect";
+import { cx } from "@/lib/cva.config";
 
 type LoadingSpinnerProps = React.SVGProps<SVGSVGElement>;
 
-export function UiLoadingSpinner({ className = "", ...props }: LoadingSpinnerProps) {
+export function UiLoadingSpinner({
+  className = "",
+  ...props
+}: LoadingSpinnerProps) {
   const id = useId();
 
   useSafeLayoutEffect(() => {
     const animations = document
       .getAnimations()
-      .filter((a) => a instanceof CSSAnimation && a.animationName === 'spin') as CSSAnimation[];
+      .filter(
+        (a) => a instanceof CSSAnimation && a.animationName === "spin",
+      ) as CSSAnimation[];
 
     const self = animations.find(
-      (a) => (a.effect as KeyframeEffect).target?.getAttribute('data-spinner-id') === id,
+      (a) =>
+        (a.effect as KeyframeEffect).target?.getAttribute("data-spinner-id") ===
+        id,
     );
 
     const anyOther = animations.find(
       (a) =>
         a.effect instanceof KeyframeEffect &&
-        a.effect.target?.getAttribute('data-spinner-id') !== id,
+        a.effect.target?.getAttribute("data-spinner-id") !== id,
     );
 
     if (self && anyOther) {
@@ -30,7 +37,11 @@ export function UiLoadingSpinner({ className = "", ...props }: LoadingSpinnerPro
   return (
     <svg
       data-spinner-id={id}
-      className={cx('pointer-events-none size-12 animate-spin text-current', className)}
+      className={cx(
+        "pointer-events-none size-12 text-current",
+        "animate-spin [animation-duration:700ms]",
+        className,
+      )}
       fill="none"
       viewBox="0 0 24 24"
       {...props}

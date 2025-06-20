@@ -4,9 +4,10 @@
 import { all_admin_roles } from "@/utils/roles";
 import { message } from "antd";
 import { TagNewRequest, TagUpdateRequest, TagDeleteRequest, TagInfoRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
-import { Team } from "./key_team_helpers/key_list";
+import { KeyResponse, Team } from "./key_team_helpers/key_list";
 import { UserInfo } from "./view_users/types";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
+import { AiModel } from "../types";
 
 const isLocal = process.env.NODE_ENV === "development";
 export const defaultProxyBaseUrl = isLocal ? "http://localhost:4000" : null;
@@ -1960,7 +1961,7 @@ export const modelAvailableCall = async (
       throw new Error("Network response was not ok");
     }
 
-    const data = await response.json();
+    const data = await response.json() as { data: AiModel[] };
     //message.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -2830,7 +2831,12 @@ export const keyListCall = async (
       throw new Error("Network response was not ok");
     }
 
-    const data = await response.json();
+    const data = await response.json() as { 
+      keys: KeyResponse[];
+      total_count: number,
+      current_page: number;
+      total_pages: number;
+    };
     console.log("/team/list API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key

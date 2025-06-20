@@ -22,7 +22,7 @@ export interface KeyResponse {
     key_alias: string;
     spend: number;
     max_budget: number;
-    expires: string;
+    expires: string | null;
     models: string[];
     aliases: Record<string, unknown>;
     config: Record<string, unknown>;
@@ -34,7 +34,7 @@ export interface KeyResponse {
     rpm_limit: number;
     duration: string;
     budget_duration: string;
-    budget_reset_at: string;
+    budget_reset_at: string | null;
     allowed_cache_controls: string[];
     permissions: Record<string, unknown>;
     model_spend: Record<string, number>;
@@ -46,7 +46,7 @@ export interface KeyResponse {
     created_at: string;
     updated_at: string;
     team_spend: number;
-    team_alias: string;
+    team_alias: string | null;
     team_tpm_limit: number;
     team_rpm_limit: number;
     team_max_budget: number;
@@ -74,7 +74,7 @@ export interface KeyResponse {
     tpm_limit_per_model: Record<string, number>;
     user_tpm_limit: number;
     user_rpm_limit: number;
-    user_email: string;
+    user_email: string | null;
     object_permission?: {
         object_permission_id: string;
         mcp_servers: string[];

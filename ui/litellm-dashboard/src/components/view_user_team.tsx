@@ -29,7 +29,7 @@ interface ViewUserTeamProps {
     accessToken: string | null;
 }
 const ViewUserTeam: React.FC<ViewUserTeamProps> = ({ userID, userRole, selectedTeam, accessToken}) => {
-    const [userModels, setUserModels] = useState([]);
+    const [userModels, setUserModels] = useState<string[]>([]);
     useEffect(() => {
         const fetchUserModels = async () => {
           try {
