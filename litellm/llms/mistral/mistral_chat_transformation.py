@@ -86,8 +86,9 @@ class MistralConfig(OpenAIGPTConfig):
             "seed",
             "stop",
             "response_format",
+            "parallel_tool_calls",
         ]
-        
+
         # Add reasoning support for magistral models
         if "magistral" in model.lower():
             supported_params.extend(["thinking", "reasoning_effort"])
@@ -154,6 +155,8 @@ Then provide a clear, concise answer based on your reasoning."""
             if param == "thinking" and "magistral" in model.lower():
                 # Flag that we need to add reasoning system prompt
                 optional_params["_add_reasoning_prompt"] = True
+            if param == "parallel_tool_calls":
+                optional_params["parallel_tool_calls"] = value
         return optional_params
 
     def _get_openai_compatible_provider_info(
@@ -287,12 +290,18 @@ Then provide a clear, concise answer based on your reasoning."""
         """
         Mistral API only supports `name` in tool messages
 
-        If role == tool, then we keep `name`
+        If role == tool, then we keep `name` if it's not an empty string
         Otherwise, we drop `name`
         """
         _name = message.get("name")  # type: ignore
-        if _name is not None and message["role"] != "tool":
-            message.pop("name", None)  # type: ignore
+        
+        if _name is not None:
+            # Remove name if not a tool message
+            if message["role"] != "tool":
+                message.pop("name", None)  # type: ignore
+            # For tool messages, remove name if it's an empty string
+            elif isinstance(_name, str) and len(_name.strip()) == 0:
+                message.pop("name", None)  # type: ignore
 
         return message
 
