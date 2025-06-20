@@ -308,3 +308,20 @@ def test_vertex_ai_transform_empty_function_call_arguments():
     assert result["args"] == {
         "type": "object",
     }
+
+
+@pytest.mark.asyncio
+async def test_bedrock_process_image_async_factory():
+    """
+    Test that the _process_image_async_factory method handles image input correctly
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockImageProcessor,
+    )
+
+    image_url = "data:application/pdf; qs=0.001;base64,JVBERi0xLjQKJcOkw7zDtsOfCjIgMCBvYmoKPDwvTGVuZ3RoIDMgMCBSL0ZpbHRlci9GbGF0ZURlY29kZT4"
+
+    content_block = await BedrockImageProcessor.process_image_async(
+        image_url=image_url, format=None
+    )
+    print(f"content_block: {content_block}")
