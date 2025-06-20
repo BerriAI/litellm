@@ -80,6 +80,13 @@ class TestAnthropicDirectAPI(BaseAnthropicMessagesTest):
             "api_key": os.getenv("ANTHROPIC_API_KEY"),
         }
     
+    @property
+    def expected_model_name_in_logging(self) -> str:
+        """
+        This is the model name that is expected to be in the logging payload
+        """
+        return "claude-3-haiku-20240307"
+    
     
 
 class TestAnthropicBedrockAPI(BaseAnthropicMessagesTest):
