@@ -47,6 +47,28 @@ class BaseAnthropicMessagesStreamingIterator:
                 end_time=end_time,
             )
         )
+    
+    def get_async_streaming_response_iterator(
+        self,
+        httpx_response,
+        request_body: dict,
+        litellm_logging_obj: LiteLLMLoggingObj,
+    ) -> AsyncIterator:
+        """Helper function to handle Anthropic streaming responses using the existing logging handlers"""
+        from litellm.proxy.pass_through_endpoints.streaming_handler import (
+            PassThroughStreamingHandler,
+        )
+
+        # Use the existing streaming handler for Anthropic
+        return PassThroughStreamingHandler.chunk_processor(
+            response=httpx_response,
+            request_body=request_body,
+            litellm_logging_obj=litellm_logging_obj,
+            endpoint_type=EndpointType.ANTHROPIC,
+            start_time=self.start_time,
+            passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
+            url_route="/v1/messages",
+        )
 
     def _convert_chunk_to_sse_format(self, chunk: Union[dict, Any]) -> bytes:
         """
@@ -84,32 +106,3 @@ class BaseAnthropicMessagesStreamingIterator:
         
         # Handle logging after all chunks are processed
         await self._handle_streaming_logging(collected_chunks)
-
-
-class BedrockPassThroughStreamingHandler(BaseAnthropicMessagesStreamingIterator):
-    """
-    Bedrock-specific implementation of pass-through streaming handler.
-    """
-
-    def __init__(
-        self,
-        litellm_logging_obj: LiteLLMLoggingObj,
-        request_body: dict,
-    ):
-        super().__init__(
-            litellm_logging_obj=litellm_logging_obj,
-            request_body=request_body,
-        )
-
-    async def bedrock_sse_wrapper(
-        self,
-        completion_stream: AsyncIterator[
-            Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]
-        ],
-    ) -> AsyncIterator[bytes]:
-        """
-        Bedrock SSE wrapper that converts Bedrock streaming chunks to SSE format.
-        
-        This replaces the original bedrock_sse_wrapper method with shared logic.
-        """
-        return self.async_sse_wrapper(completion_stream)
