@@ -215,40 +215,25 @@ class PrometheusLogger(CustomLogger):
             self.litellm_remaining_requests_metric = self._gauge_factory(
                 "litellm_remaining_requests",
                 "LLM Deployment Analytics - remaining requests for model, returned from LLM API Provider",
-                labelnames=[
-                    "model_group",
-                    "api_provider",
-                    "api_base",
-                    "litellm_model_name",
-                    "hashed_api_key",
-                    "api_key_alias",
-                ],
+                labelnames=self.get_labels_for_metric(
+                    "litellm_remaining_requests_metric"
+                ),
             )
 
             self.litellm_remaining_tokens_metric = self._gauge_factory(
                 "litellm_remaining_tokens",
                 "remaining tokens for model, returned from LLM API Provider",
-                labelnames=[
-                    "model_group",
-                    "api_provider",
-                    "api_base",
-                    "litellm_model_name",
-                    "hashed_api_key",
-                    "api_key_alias",
-                ],
+                labelnames=self.get_labels_for_metric(
+                    "litellm_remaining_tokens_metric"
+                ),
             )
 
             self.litellm_overhead_latency_metric = self._histogram_factory(
                 "litellm_overhead_latency_metric",
                 "Latency overhead (milliseconds) added by LiteLLM processing",
-                labelnames=[
-                    "model_group",
-                    "api_provider",
-                    "api_base",
-                    "litellm_model_name",
-                    "hashed_api_key",
-                    "api_key_alias",
-                ],
+                labelnames=self.get_labels_for_metric(
+                    "litellm_overhead_latency_metric"
+                ),
                 buckets=LATENCY_BUCKETS,
             )
             # llm api provider budget metrics
@@ -566,6 +551,7 @@ class PrometheusLogger(CustomLogger):
             hashed_api_key=user_api_key,
             api_key_alias=user_api_key_alias,
             requested_model=standard_logging_payload["model_group"],
+            model_group=standard_logging_payload["model_group"],
             team=user_api_team,
             team_alias=user_api_team_alias,
             user=user_id,
@@ -1160,6 +1146,7 @@ class PrometheusLogger(CustomLogger):
         enum_values: UserAPIKeyLabelValues,
         output_tokens: float = 1.0,
     ):
+
         try:
             verbose_logger.debug("setting remaining tokens requests metric")
             standard_logging_payload: Optional[StandardLoggingPayload] = (
@@ -1292,7 +1279,7 @@ class PrometheusLogger(CustomLogger):
                 ).observe(latency_per_token)
 
         except Exception as e:
-            verbose_logger.error(
+            verbose_logger.exception(
                 "Prometheus Error: set_llm_deployment_success_metrics. Exception occured - {}".format(
                     str(e)
                 )

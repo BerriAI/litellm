@@ -1279,6 +1279,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 modelData={modelData}
                 all_models_on_proxy={all_models_on_proxy}
                 getDisplayModelName={getDisplayModelName}
+                setSelectedModelId={setSelectedModelId}
               />
             </TabPanel>
             <TabPanel>

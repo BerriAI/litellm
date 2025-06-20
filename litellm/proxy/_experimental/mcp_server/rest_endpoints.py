@@ -70,7 +70,9 @@ if MCP_AVAILABLE:
             if server_id and server.server_id != server_id:
                 continue
             try:
-                tools = await global_mcp_server_manager._get_tools_from_server(server)
+                tools = await global_mcp_server_manager._get_tools_from_server(
+                    server=server,
+                )
                 for tool in tools:
                     list_tools_result.append(
                         ListMCPToolsRestAPIResponseObject(

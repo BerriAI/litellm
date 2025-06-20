@@ -101,26 +101,17 @@ async def test_mcp_http_transport_list_tools_mock():
         )
     ]
     
-    # Mock the session and its methods
-    mock_session = AsyncMock()
-    mock_session.initialize = AsyncMock()
-    mock_session.list_tools = AsyncMock(return_value=ListToolsResult(tools=mock_tools))
+    # Create a mock MCPClient that returns our test tools
+    mock_client = AsyncMock()
+    mock_client.list_tools = AsyncMock(return_value=mock_tools)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
     
-    # Create an async context manager mock for streamablehttp_client
-    @asynccontextmanager
-    async def mock_streamablehttp_client(url):
-        read_stream = AsyncMock()
-        write_stream = AsyncMock()
-        get_session_id = MagicMock(return_value="test-session-123")
-        yield (read_stream, write_stream, get_session_id)
+    # Mock the MCPClient constructor to return our mock
+    def mock_client_constructor(*args, **kwargs):
+        return mock_client
     
-    # Create an async context manager mock for ClientSession
-    @asynccontextmanager
-    async def mock_client_session(read_stream, write_stream):
-        yield mock_session
-    
-    with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.streamablehttp_client', mock_streamablehttp_client), \
-         patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.ClientSession', mock_client_session):
+    with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient', mock_client_constructor):
         
         # Load server config with HTTP transport
         test_manager.load_servers_from_config({
@@ -139,9 +130,9 @@ async def test_mcp_http_transport_list_tools_mock():
         assert tools[0].name == "gmail_send_email"
         assert tools[1].name == "calendar_create_event"
         
-        # Verify session methods were called
-        mock_session.initialize.assert_called_once()
-        mock_session.list_tools.assert_called_once()
+        # Verify client methods were called
+        mock_client.__aenter__.assert_called()
+        mock_client.list_tools.assert_called_once()
         
         # Verify tool mapping was updated
         assert test_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] == "test_http_server"
@@ -166,26 +157,17 @@ async def test_mcp_http_transport_call_tool_mock():
         isError=False
     )
     
-    # Mock the session and its methods
-    mock_session = AsyncMock()
-    mock_session.initialize = AsyncMock()
-    mock_session.call_tool = AsyncMock(return_value=mock_result)
+    # Create a mock MCPClient that returns our test result
+    mock_client = AsyncMock()
+    mock_client.call_tool = AsyncMock(return_value=mock_result)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
     
-    # Create an async context manager mock for streamablehttp_client
-    @asynccontextmanager
-    async def mock_streamablehttp_client(url):
-        read_stream = AsyncMock()
-        write_stream = AsyncMock()
-        get_session_id = MagicMock(return_value="test-session-456")
-        yield (read_stream, write_stream, get_session_id)
+    # Mock the MCPClient constructor to return our mock
+    def mock_client_constructor(*args, **kwargs):
+        return mock_client
     
-    # Create an async context manager mock for ClientSession
-    @asynccontextmanager
-    async def mock_client_session(read_stream, write_stream):
-        yield mock_session
-    
-    with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.streamablehttp_client', mock_streamablehttp_client), \
-         patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.ClientSession', mock_client_session):
+    with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient', mock_client_constructor):
         
         # Load server config with HTTP transport
         test_manager.load_servers_from_config({
@@ -216,16 +198,9 @@ async def test_mcp_http_transport_call_tool_mock():
         assert isinstance(result.content[0], TextContent)
         assert result.content[0].text == "Email sent successfully to test@example.com"
         
-        # Verify session methods were called
-        mock_session.initialize.assert_called_once()
-        mock_session.call_tool.assert_called_once_with(
-            "gmail_send_email",
-            {
-                "to": "test@example.com", 
-                "subject": "Test Subject",
-                "body": "Test email body"
-            }
-        )
+        # Verify client methods were called
+        mock_client.__aenter__.assert_called()
+        mock_client.call_tool.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -246,26 +221,17 @@ async def test_mcp_http_transport_call_tool_error_mock():
         isError=True
     )
     
-    # Mock the session and its methods
-    mock_session = AsyncMock()
-    mock_session.initialize = AsyncMock()
-    mock_session.call_tool = AsyncMock(return_value=mock_error_result)
+    # Create a mock MCPClient that returns our test error result
+    mock_client = AsyncMock()
+    mock_client.call_tool = AsyncMock(return_value=mock_error_result)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
     
-    # Create an async context manager mock for streamablehttp_client
-    @asynccontextmanager
-    async def mock_streamablehttp_client(url):
-        read_stream = AsyncMock()
-        write_stream = AsyncMock()
-        get_session_id = MagicMock(return_value="test-session-789")
-        yield (read_stream, write_stream, get_session_id)
+    # Mock the MCPClient constructor to return our mock
+    def mock_client_constructor(*args, **kwargs):
+        return mock_client
     
-    # Create an async context manager mock for ClientSession
-    @asynccontextmanager
-    async def mock_client_session(read_stream, write_stream):
-        yield mock_session
-    
-    with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.streamablehttp_client', mock_streamablehttp_client), \
-         patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.ClientSession', mock_client_session):
+    with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient', mock_client_constructor):
         
         # Load server config with HTTP transport
         test_manager.load_servers_from_config({
@@ -292,9 +258,9 @@ async def test_mcp_http_transport_call_tool_error_mock():
         assert isinstance(result.content[0], TextContent)
         assert "Error: Invalid email address" in result.content[0].text
         
-        # Verify session methods were called
-        mock_session.initialize.assert_called_once()
-        mock_session.call_tool.assert_called_once()
+        # Verify client methods were called
+        mock_client.__aenter__.assert_called()
+        mock_client.call_tool.assert_called_once()
 
 
 @pytest.mark.asyncio

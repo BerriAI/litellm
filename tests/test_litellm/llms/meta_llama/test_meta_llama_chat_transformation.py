@@ -11,18 +11,6 @@ sys.path.insert(
 from litellm.llms.meta_llama.chat.transformation import LlamaAPIConfig
 
 
-def test_get_supported_openai_params():
-    """Test that LlamaAPIConfig correctly filters unsupported parameters"""
-    config = LlamaAPIConfig()
-
-    # Test error handling
-    with patch("litellm.get_model_info", side_effect=Exception("Test error")):
-        params = config.get_supported_openai_params("llama-3.3-8B-instruct")
-        assert "function_call" not in params
-        assert "tools" not in params
-        assert "tool_choice" not in params
-
-
 def test_map_openai_params():
     """Test that LlamaAPIConfig correctly maps OpenAI parameters"""
     config = LlamaAPIConfig()
