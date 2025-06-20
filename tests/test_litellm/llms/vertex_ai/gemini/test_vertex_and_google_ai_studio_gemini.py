@@ -713,3 +713,31 @@ def test_vertex_ai_transform_parts():
     assert function["name"] == "simple_function"
     assert function["arguments"] == "{}"
     assert tools is None
+
+
+def test_vertex_ai_usage_metadata_missing_token_count():
+    """Test that missing tokenCount in responseTokensDetails defaults to 0"""
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    v = VertexGeminiConfig()
+    usage_metadata = {
+        "promptTokenCount": 57,
+        "responseTokenCount": 74,
+        "totalTokenCount": 131,
+        "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 57}],
+        "responseTokensDetails": [
+            {"modality": "TEXT"},  # Missing tokenCount
+            {"modality": "AUDIO"},  # Missing tokenCount
+        ],
+    }
+    usage_metadata = UsageMetadata(**usage_metadata)
+    result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+    
+    # Should not crash and should default missing tokenCount to 0
+    assert result.prompt_tokens == 57
+    assert result.completion_tokens == 74
+    assert result.total_tokens == 131
+    assert result.completion_tokens_details.text_tokens == 0  # Default value for missing tokenCount
+    assert result.completion_tokens_details.audio_tokens == 0  # Default value for missing tokenCount
+
+

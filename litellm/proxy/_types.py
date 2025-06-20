@@ -17,6 +17,13 @@ from typing_extensions import Required, TypedDict
 
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.openai import AllMessageValues, OpenAIFileObject
+from litellm.types.mcp import (
+    MCPAuthType,
+    MCPSpecVersion,
+    MCPSpecVersionType,
+    MCPTransport,
+    MCPTransportType,
+)
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.utils import (
     CallTypes,
@@ -830,32 +837,6 @@ class SpecialMCPServerName(str, enum.Enum):
     all_team_servers = "all-team-mcpservers"
     all_proxy_servers = "all-proxy-mcpservers"
 
-
-class MCPTransport(str, enum.Enum):
-    sse = "sse"
-    http = "http"
-
-
-class MCPSpecVersion(str, enum.Enum):
-    nov_2024 = "2024-11-05"
-    mar_2025 = "2025-03-26"
-
-
-class MCPAuth(str, enum.Enum):
-    none = "none"
-    api_key = "api_key"
-    bearer_token = "bearer_token"
-    basic = "basic"
-
-
-# MCP Literals
-MCPTransportType = Literal[MCPTransport.sse, MCPTransport.http]
-MCPSpecVersionType = Literal[MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025]
-MCPAuthType = Optional[
-    Literal[MCPAuth.none, MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.basic]
-]
-
-
 # MCP Proxy Request Types
 class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: Optional[str] = None
@@ -893,6 +874,12 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     updated_by: Optional[str] = None
 
 
+class NewUserRequestTeam(LiteLLMPydanticObjectBase):
+    team_id: str
+    max_budget_in_team: Optional[float] = None
+    user_role: Literal["user", "admin"] = "user"
+
+
 class NewUserRequest(GenerateRequestBase):
     max_budget: Optional[float] = None
     user_email: Optional[str] = None
@@ -905,7 +892,7 @@ class NewUserRequest(GenerateRequestBase):
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
         ]
     ] = None
-    teams: Optional[list] = None
+    teams: Optional[Union[List[str], List[NewUserRequestTeam]]] = None
     auto_create_key: bool = (
         True  # flag used for returning a key as part of the /user/new response
     )
@@ -1456,7 +1443,7 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         default=False,
         description="If True, requests to subpaths of the path will be forwarded to the target endpoint. For example, if the path is /bria and include_subpath is True, requests to /bria/v1/text-to-image/base/2.3 will be forwarded to the target endpoint.",
     )
-    input_cost_per_request: float = Field(
+    cost_per_request: float = Field(
         default=0.0,
         description="The USD cost per request to the target endpoint. This is used to calculate the cost of the request to the target endpoint.",
     )
@@ -2697,6 +2684,7 @@ class SpecialHeaders(enum.Enum):
     google_ai_studio_authorization = "x-goog-api-key"
     azure_apim_authorization = "Ocp-Apim-Subscription-Key"
     custom_litellm_api_key = "x-litellm-api-key"
+    mcp_auth = "x-mcp-auth"
 
 
 class LitellmDataForBackendLLMCall(TypedDict, total=False):
@@ -3029,6 +3017,11 @@ class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
     )
     models: Optional[List[str]] = Field(
         default=None, description="Default list of models that new users can access"
+    )
+
+    teams: Optional[Union[List[str], List[NewUserRequestTeam]]] = Field(
+        default=None,
+        description="Default teams for new users created",
     )
 
 

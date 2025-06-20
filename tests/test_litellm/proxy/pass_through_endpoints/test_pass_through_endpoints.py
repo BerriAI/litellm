@@ -343,6 +343,7 @@ def test_add_exact_path_route():
         forward_headers=forward_headers,
         merge_query_params=merge_query_params,
         dependencies=dependencies,
+        cost_per_request=None,
     )
 
     # Verify add_api_route was called with correct parameters
@@ -383,6 +384,7 @@ def test_add_subpath_route():
         forward_headers=forward_headers,
         merge_query_params=merge_query_params,
         dependencies=dependencies,
+        cost_per_request=None,
     )
 
     # Verify add_api_route was called with correct parameters
@@ -492,3 +494,361 @@ async def test_initialize_pass_through_endpoints_without_include_subpath():
                     exact_call_args = mock_add_exact_route.call_args[1]
                     assert exact_call_args["path"] == "/test/endpoint"
                     assert exact_call_args["target"] == "http://example.com"
+
+
+def test_set_cost_per_request():
+    """
+    Test that _set_cost_per_request correctly sets the cost in logging object and kwargs
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        PassthroughStandardLoggingPayload,
+    )
+
+    handler = PassThroughEndpointLogging()
+
+    # Mock the logging object
+    mock_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+    mock_logging_obj.model_call_details = {}
+
+    # Test with cost_per_request set
+    passthrough_logging_payload = PassthroughStandardLoggingPayload(
+        url="http://example.com/api",
+        request_body={"test": "data"},
+        request_method="POST",
+        cost_per_request=0.50,
+    )
+
+    kwargs = {"some_existing_key": "value"}
+
+    # Call the method
+    result_kwargs = handler._set_cost_per_request(
+        logging_obj=mock_logging_obj,
+        passthrough_logging_payload=passthrough_logging_payload,
+        kwargs=kwargs,
+    )
+
+    # Verify that response_cost is set in kwargs and logging object
+    assert result_kwargs["response_cost"] == 0.50
+    assert mock_logging_obj.model_call_details["response_cost"] == 0.50
+    assert result_kwargs["some_existing_key"] == "value"  # Existing kwargs preserved
+
+
+def test_set_cost_per_request_none():
+    """
+    Test that _set_cost_per_request does nothing when cost_per_request is None
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        PassthroughStandardLoggingPayload,
+    )
+
+    handler = PassThroughEndpointLogging()
+
+    # Mock the logging object
+    mock_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+    mock_logging_obj.model_call_details = {}
+
+    # Test with cost_per_request not set (None)
+    passthrough_logging_payload = PassthroughStandardLoggingPayload(
+        url="http://example.com/api",
+        request_body={"test": "data"},
+        request_method="POST",
+        cost_per_request=None,
+    )
+
+    kwargs = {"some_existing_key": "value"}
+
+    # Call the method
+    result_kwargs = handler._set_cost_per_request(
+        logging_obj=mock_logging_obj,
+        passthrough_logging_payload=passthrough_logging_payload,
+        kwargs=kwargs,
+    )
+
+    # Verify that response_cost is not set
+    assert "response_cost" not in result_kwargs
+    assert "response_cost" not in mock_logging_obj.model_call_details
+    assert result_kwargs["some_existing_key"] == "value"  # Existing kwargs preserved
+
+
+@pytest.mark.asyncio
+async def test_pass_through_success_handler_with_cost_per_request():
+    """
+    Test that the success handler correctly processes cost_per_request
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        PassthroughStandardLoggingPayload,
+    )
+
+    handler = PassThroughEndpointLogging()
+
+    # Mock the logging object
+    mock_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+    mock_logging_obj.model_call_details = {}
+
+    # Mock the _handle_logging method to capture the call
+    handler._handle_logging = AsyncMock()
+
+    # Mock httpx response
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.text = '{"status": "success", "data": "test"}'
+
+    # Create passthrough logging payload with cost_per_request
+    passthrough_logging_payload = PassthroughStandardLoggingPayload(
+        url="http://example.com/api",
+        request_body={"test": "data"},
+        request_method="POST",
+        cost_per_request=1.25,
+    )
+
+    start_time = datetime.now()
+    end_time = datetime.now()
+
+    # Call the success handler
+    result = await handler.pass_through_async_success_handler(
+        httpx_response=mock_response,
+        response_body={"status": "success", "data": "test"},
+        logging_obj=mock_logging_obj,
+        url_route="http://example.com/api",
+        result="",
+        start_time=start_time,
+        end_time=end_time,
+        cache_hit=False,
+        request_body={"test": "data"},
+        passthrough_logging_payload=passthrough_logging_payload,
+    )
+
+    # Verify that the logging object has the cost set
+    assert mock_logging_obj.model_call_details["response_cost"] == 1.25
+
+    # Verify that _handle_logging was called with the correct kwargs
+    handler._handle_logging.assert_called_once()
+    call_kwargs = handler._handle_logging.call_args[1]
+    assert call_kwargs["response_cost"] == 1.25
+
+
+@pytest.mark.asyncio
+async def test_create_pass_through_route_with_cost_per_request():
+    """
+    Test that create_pass_through_route correctly passes cost_per_request to the endpoint function
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        create_pass_through_route,
+    )
+
+    # Create the endpoint function with cost_per_request
+    endpoint_func = create_pass_through_route(
+        endpoint="/test/path",
+        target="http://example.com",
+        custom_headers={},
+        _forward_headers=True,
+        _merge_query_params=False,
+        dependencies=[],
+        cost_per_request=3.75,
+    )
+
+    # Mock the pass_through_request function to capture its call
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_request"
+    ) as mock_pass_through:
+        mock_pass_through.return_value = MagicMock()
+
+        # Create mock request
+        mock_request = MagicMock(spec=Request)
+        mock_request.path_params = {}
+        mock_request.query_params = QueryParams({})
+
+        # Call the endpoint function
+        # Create a proper UserAPIKeyAuth mock
+        mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict.api_key = "test-key"
+        
+        await endpoint_func(
+            request=mock_request,
+            user_api_key_dict=mock_user_api_key_dict,
+            fastapi_response=MagicMock(),
+        )
+
+        # Verify that pass_through_request was called with cost_per_request
+        mock_pass_through.assert_called_once()
+        call_kwargs = mock_pass_through.call_args[1]
+        assert call_kwargs["cost_per_request"] == 3.75
+
+
+def test_initialize_pass_through_endpoints_with_cost_per_request():
+    """
+    Test that initialize_pass_through_endpoints correctly passes cost_per_request to route creation
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+    )
+
+    # Mock FastAPI app
+    mock_app = MagicMock()
+
+    # Test exact path route with cost_per_request
+    InitPassThroughEndpointHelpers.add_exact_path_route(
+        app=mock_app,
+        path="/test/path",
+        target="http://example.com",
+        custom_headers={},
+        forward_headers=True,
+        merge_query_params=False,
+        dependencies=[],
+        cost_per_request=5.00,
+    )
+
+    # Verify add_api_route was called
+    mock_app.add_api_route.assert_called_once()
+    call_args = mock_app.add_api_route.call_args[1]
+
+    # Verify the endpoint function was created with cost_per_request
+    # We can't directly test the internal cost_per_request value, but we can verify
+    # that the endpoint function was created properly
+    assert call_args["path"] == "/test/path"
+    assert callable(call_args["endpoint"])
+
+    # Reset mock for subpath test
+    mock_app.reset_mock()
+
+    # Test subpath route with cost_per_request
+    InitPassThroughEndpointHelpers.add_subpath_route(
+        app=mock_app,
+        path="/test/path",
+        target="http://example.com",
+        custom_headers={},
+        forward_headers=True,
+        merge_query_params=False,
+        dependencies=[],
+        cost_per_request=7.50,
+    )
+
+    # Verify add_api_route was called for subpath
+    mock_app.add_api_route.assert_called_once()
+    call_args = mock_app.add_api_route.call_args[1]
+
+    # Verify the wildcard path and endpoint function
+    assert call_args["path"] == "/test/path/{subpath:path}"
+    assert callable(call_args["endpoint"])
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_contains_proxy_server_request_in_kwargs():
+    """
+    Test that pass_through_request (parent method) correctly includes proxy_server_request
+    in kwargs passed to the success handler.
+    
+    Critical Test: Ensures that when pass_through_request is called, the kwargs passed to 
+    downstream methods contain the proxy server request details (url, method, body).
+    """
+    print("running test_pass_through_request_contains_proxy_server_request_in_kwargs")
+    
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.HttpPassThroughEndpointHelpers.non_streaming_http_request_handler"
+        ) as mock_http_handler:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.ProxyBaseLLMRequestProcessing"
+            ) as mock_processing:
+                with patch(
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
+                ) as mock_success_handler:
+                    with patch(
+                        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_response_body"
+                    ) as mock_get_response_body:
+                        # Setup mock for pre_call_hook and post_call_failure_hook  
+                        mock_proxy_logging.pre_call_hook = AsyncMock(return_value={"test": "data"})
+                        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                        
+                        # Setup mock for http response
+                        mock_response = MagicMock()
+                        mock_response.status_code = 200
+                        mock_response.headers = {}
+                        mock_response.aread = AsyncMock(return_value=b'{"success": true}')
+                        mock_response.text = '{"success": true}'
+                        mock_response.raise_for_status = MagicMock()
+                        
+                        # Mock the HTTP request handler directly
+                        mock_http_handler.return_value = mock_response
+                        
+                        # Mock response body parser
+                        mock_get_response_body.return_value = {"success": True}
+                        
+                        # Mock headers for custom headers
+                        mock_processing.get_custom_headers.return_value = {}
+                        
+                        # Mock success handler to capture kwargs
+                        mock_success_handler.return_value = None
+                        
+                        # Create mock request
+                        mock_request = MagicMock(spec=Request)
+                        mock_request.method = "POST"
+                        mock_request.url = "http://test-proxy.com/api/endpoint"
+                        mock_request.body = AsyncMock(return_value=b'{"message": "test request"}')
+                        mock_request.headers = Headers({})
+                        mock_request.query_params = QueryParams({})
+                        
+                        # Create mock user API key dict
+                        mock_user_api_key_dict = MagicMock()
+                        mock_user_api_key_dict.api_key = "test-api-key"
+                        mock_user_api_key_dict.key_alias = "test-alias"
+                        mock_user_api_key_dict.user_email = "test@example.com"
+                        mock_user_api_key_dict.user_id = "test-user-id"
+                        mock_user_api_key_dict.team_id = "test-team-id"
+                        mock_user_api_key_dict.org_id = "test-org-id"
+                        mock_user_api_key_dict.team_alias = "test-team-alias"
+                        mock_user_api_key_dict.end_user_id = "test-end-user-id"
+                        mock_user_api_key_dict.request_route = "/api/endpoint"
+                        
+                        # Call pass_through_request (the parent method)
+                        result = await pass_through_request(
+                            request=mock_request,
+                            target="http://target-api.com/endpoint",
+                            custom_headers={"X-Custom": "header"},
+                            user_api_key_dict=mock_user_api_key_dict,
+                        )
+                        
+                        # Verify the success handler was called
+                        mock_success_handler.assert_called_once()
+                        
+                        # Extract the kwargs passed to the success handler
+                        call_kwargs = mock_success_handler.call_args[1]
+                        
+                        # Verify that litellm_params exists in kwargs
+                        assert "litellm_params" in call_kwargs
+                        litellm_params = call_kwargs["litellm_params"]
+                        
+                        # Verify that proxy_server_request exists in litellm_params
+                        assert "proxy_server_request" in litellm_params
+                        proxy_server_request = litellm_params["proxy_server_request"]
+                        
+                        # Verify the proxy_server_request contains expected fields
+                        assert "url" in proxy_server_request
+                        assert "method" in proxy_server_request
+                        assert "body" in proxy_server_request
+                        
+                        # Verify the values match the original request
+                        assert proxy_server_request["url"] == str(mock_request.url)
+                        assert proxy_server_request["method"] == mock_request.method
+                        # The body should be the value returned by pre_call_hook, not the original request body
+                        assert proxy_server_request["body"] == {"test": "data"}
+                        
+                        # Verify other required kwargs are present
+                        assert "call_type" in call_kwargs
+                        assert call_kwargs["call_type"] == "pass_through_endpoint"
+                        assert "litellm_call_id" in call_kwargs
+                        assert "passthrough_logging_payload" in call_kwargs
+                        
+                        # Verify metadata contains user information
+                        assert "metadata" in litellm_params
+                        metadata = litellm_params["metadata"]
+                        assert metadata["user_api_key_hash"] == "test-api-key"
+                        assert metadata["user_api_key_alias"] == "test-alias"
+                        assert metadata["user_api_key_user_email"] == "test@example.com"
+                        assert metadata["user_api_key_user_id"] == "test-user-id"
