@@ -1,6 +1,8 @@
 import os
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
+
 from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from litellm.types.integrations.langfuse_otel import LangfuseOtelConfig
 

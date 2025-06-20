@@ -2,12 +2,15 @@
 Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
-from typing import List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple
 
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.router import LiteLLM_Params
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+
+if TYPE_CHECKING:
+    from litellm.types.llms.openai import AllMessageValues
 
 
 class LiteLLMProxyChatConfig(OpenAIGPTConfig):
@@ -113,3 +116,33 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
         )
 
         return model, custom_llm_provider, api_key, api_base
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List["AllMessageValues"],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        # don't transform the request
+        return {
+            "model": model,
+            "messages": messages,
+            **optional_params,
+        }
+
+    async def async_transform_request(
+        self,
+        model: str,
+        messages: List["AllMessageValues"],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        # don't transform the request
+        return {
+            "model": model,
+            "messages": messages,
+            **optional_params,
+        }
