@@ -78,19 +78,30 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # Add api_version if needed
         if "api-version" not in query_params and api_version:
             query_params["api-version"] = api_version
-
+        
         # Add the path to the base URL
-        if "/openai/v1/responses" not in api_base:
+        if "/openai/responses" not in api_base:
             new_url = _add_path_to_api_base(
-                api_base=api_base, ending_path="/openai/v1/responses"
+                api_base=api_base, ending_path="/openai/responses"
             )
         else:
             new_url = api_base
+        
+        if self._is_azure_v1_api_version(api_version):
+            # ensure the request go to /openai/v1 and not just /openai
+            if "/openai/v1" not in new_url:
+                new_url = new_url.replace("/openai", "/openai/v1")
+
 
         # Use the new query_params dictionary
         final_url = httpx.URL(new_url).copy_with(params=query_params)
 
         return str(final_url)
+    
+    def _is_azure_v1_api_version(self, api_version: Optional[str]) -> bool:
+        if api_version is None:
+            return False
+        return api_version == "preview" or api_version == "latest"
 
     #########################################################
     ########## DELETE RESPONSE API TRANSFORMATION ##############
