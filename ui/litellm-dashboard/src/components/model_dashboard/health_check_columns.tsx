@@ -23,9 +23,11 @@ interface HealthCheckData {
 interface HealthStatus {
   status: string;
   lastCheck: string;
+  lastSuccess?: string;
   loading: boolean;
   error?: string;
   fullError?: string;
+  successResponse?: any;
 }
 
 export const healthCheckColumns = (
@@ -38,6 +40,7 @@ export const healthCheckColumns = (
   getStatusBadge: (status: string) => JSX.Element,
   getDisplayModelName: (model: any) => string,
   showErrorModal?: (modelName: string, cleanedError: string, fullError: string) => void,
+  showSuccessModal?: (modelName: string, response: any) => void,
   setSelectedModelId?: (modelId: string) => void,
 ): ColumnDef<HealthCheckData>[] => [
   {
@@ -135,9 +138,22 @@ export const healthCheckColumns = (
         );
       }
 
+      const modelName = model.model_name;
+      const hasSuccessResponse = healthStatus.status === 'healthy' && modelHealthStatuses[modelName]?.successResponse;
+
       return (
         <div className="flex items-center space-x-2">
           {getStatusBadge(healthStatus.status)}
+          {hasSuccessResponse && showSuccessModal && (
+            <Tooltip title="View response details" placement="top">
+              <button
+                onClick={() => showSuccessModal(modelName, modelHealthStatuses[modelName]?.successResponse)}
+                className="p-1 text-green-600 hover:text-green-800 hover:bg-green-50 rounded cursor-pointer transition-colors"
+              >
+                <InformationCircleIcon className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          )}
         </div>
       );
     },
