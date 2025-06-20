@@ -163,15 +163,6 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
       header: "ID",
       accessorKey: "id",
       cell: (info: any) => (
-        <Text className="font-mono text-xs text-gray-500 truncate max-w-[120px]">
-          {info.getValue()}
-        </Text>
-      ),
-    },
-    {
-      header: "Path",
-      accessorKey: "path",
-      cell: (info: any) => (
         <div className="overflow-hidden">
           <Button 
             size="xs"
@@ -183,6 +174,10 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
           </Button>
         </div>
       ),
+    },
+    {
+      header: "Path",
+      accessorKey: "path"
     },
     {
       header: "Target",
