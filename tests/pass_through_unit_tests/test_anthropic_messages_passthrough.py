@@ -113,6 +113,7 @@ class TestAnthropicOpenAIAPI(BaseAnthropicMessagesTest):
     def model_config(self) -> Dict[str, Any]:
         return {
             "model": "openai/gpt-4o-mini",
+            "client": None,
         }
     
     @property
