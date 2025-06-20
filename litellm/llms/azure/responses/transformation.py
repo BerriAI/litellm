@@ -80,9 +80,9 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             query_params["api-version"] = api_version
 
         # Add the path to the base URL
-        if "/openai/responses" not in api_base:
+        if "/openai/v1/responses" not in api_base:
             new_url = _add_path_to_api_base(
-                api_base=api_base, ending_path="/openai/responses"
+                api_base=api_base, ending_path="/openai/v1/responses"
             )
         else:
             new_url = api_base
