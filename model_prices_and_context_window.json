@@ -6984,6 +6984,8 @@
         "output_cost_per_reasoning_token": 4e-07,
         "litellm_provider": "gemini",
         "mode": "chat",
+        "rpm": 15,
+        "tpm": 250000,
         "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_function_calling": true,
