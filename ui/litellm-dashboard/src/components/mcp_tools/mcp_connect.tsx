@@ -181,7 +181,7 @@ const MCPConnect: React.FC = () => {
             "server_url": "${proxyBaseUrl}/mcp",
             "require_approval": "never",
             "headers": {
-                "Authorization": "Bearer YOUR_LITELLM_API_KEY"
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
             }
         }
     ],
@@ -266,7 +266,7 @@ const MCPConnect: React.FC = () => {
             "server_url": "${proxyBaseUrl}/mcp",
             "require_approval": "never",
             "headers": {
-                "Authorization": "Bearer YOUR_LITELLM_API_KEY"
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
             }
         }
     ],
@@ -321,7 +321,7 @@ const MCPConnect: React.FC = () => {
     "LiteLLM": {
       "url": "${proxyBaseUrl}/mcp",
       "headers": {
-        "Authorization": "Bearer $LITELLM_API_KEY"
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY"
       }
     }
   }

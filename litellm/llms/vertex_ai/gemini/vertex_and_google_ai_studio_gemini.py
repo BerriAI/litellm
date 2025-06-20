@@ -304,9 +304,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 return None
 
         for tool in value:
-            openai_function_object: Optional[
-                ChatCompletionToolParamFunctionChunk
-            ] = None
+            openai_function_object: Optional[ChatCompletionToolParamFunctionChunk] = (
+                None
+            )
             if "function" in tool:  # tools list
                 _openai_function_object = ChatCompletionToolParamFunctionChunk(  # type: ignore
                     **tool["function"]
@@ -489,7 +489,49 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 status_code=400,
             )
 
-    def map_openai_params(
+    def _map_audio_params(self, value: dict) -> dict:
+        """
+        Expected input:
+        {
+            "voice": "alloy",
+            "format": "mp3",
+        }
+
+        Expected output:
+        speechConfig = {
+            voiceConfig: {
+                prebuiltVoiceConfig: {
+                    voiceName: "alloy",
+                }
+            }
+        }
+        """
+        from litellm.types.llms.vertex_ai import (
+            PrebuiltVoiceConfig,
+            SpeechConfig,
+            VoiceConfig,
+        )
+
+        # Validate audio format - Gemini TTS only supports pcm16
+        audio_format = value.get("format")
+        if audio_format is not None and audio_format != "pcm16":
+            raise ValueError(
+                f"Unsupported audio format for Gemini TTS models: {audio_format}. "
+                f"Gemini TTS models only support 'pcm16' format as they return audio data in L16 PCM format. "
+                f"Please set audio format to 'pcm16'."
+            )
+
+        # Map OpenAI audio parameter to Gemini speech config
+        speech_config: SpeechConfig = {}
+
+        if "voice" in value:
+            prebuilt_voice_config: PrebuiltVoiceConfig = {"voiceName": value["voice"]}
+            voice_config: VoiceConfig = {"prebuiltVoiceConfig": prebuilt_voice_config}
+            speech_config["voiceConfig"] = voice_config
+
+        return cast(dict, speech_config)
+
+    def map_openai_params(  # noqa: PLR0915
         self,
         non_default_params: Dict,
         optional_params: Dict,
@@ -507,6 +549,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["stream"] = value
             elif param == "n":
                 optional_params["candidate_count"] = value
+            elif param == "audio" and isinstance(value, dict):
+                optional_params["speechConfig"] = self._map_audio_params(value)
             elif param == "stop":
                 if isinstance(value, str):
                     optional_params["stop_sequences"] = [value]
@@ -552,14 +596,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif param == "seed":
                 optional_params["seed"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
-                optional_params[
-                    "thinkingConfig"
-                ] = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(value)
+                optional_params["thinkingConfig"] = (
+                    VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(value)
+                )
             elif param == "thinking":
-                optional_params[
-                    "thinkingConfig"
-                ] = VertexGeminiConfig._map_thinking_param(
-                    cast(AnthropicThinkingParam, value)
+                optional_params["thinkingConfig"] = (
+                    VertexGeminiConfig._map_thinking_param(
+                        cast(AnthropicThinkingParam, value)
+                    )
                 )
             elif param == "modalities" and isinstance(value, list):
                 response_modalities = self.map_response_modalities(value)
@@ -571,6 +615,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 )
         if litellm.vertex_ai_safety_settings is not None:
             optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
+
+        # if audio param is set, ensure responseModalities is set to AUDIO
+        audio_param = optional_params.get("speechConfig")
+        if audio_param is not None:
+            if "responseModalities" not in optional_params:
+                optional_params["responseModalities"] = ["AUDIO"]
+            elif "AUDIO" not in optional_params["responseModalities"]:
+                optional_params["responseModalities"].append("AUDIO")
+
         return optional_params
 
     def get_mapped_special_auth_params(self) -> dict:
@@ -972,9 +1025,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             response_tokens_details = CompletionTokensDetailsWrapper()
             for detail in usage_metadata["responseTokensDetails"]:
                 if detail["modality"] == "TEXT":
-                    response_tokens_details.text_tokens = detail["tokenCount"]
+                    response_tokens_details.text_tokens = detail.get("tokenCount", 0)
                 elif detail["modality"] == "AUDIO":
-                    response_tokens_details.audio_tokens = detail["tokenCount"]
+                    response_tokens_details.audio_tokens = detail.get("tokenCount", 0)
         #########################################################
 
         if "promptTokensDetails" in usage_metadata:
@@ -1263,28 +1316,28 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             ## ADD METADATA TO RESPONSE ##
 
             setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)
-            model_response._hidden_params[
-                "vertex_ai_grounding_metadata"
-            ] = grounding_metadata
+            model_response._hidden_params["vertex_ai_grounding_metadata"] = (
+                grounding_metadata
+            )
 
             setattr(
                 model_response, "vertex_ai_url_context_metadata", url_context_metadata
             )
 
-            model_response._hidden_params[
-                "vertex_ai_url_context_metadata"
-            ] = url_context_metadata
+            model_response._hidden_params["vertex_ai_url_context_metadata"] = (
+                url_context_metadata
+            )
 
             setattr(model_response, "vertex_ai_safety_results", safety_ratings)
-            model_response._hidden_params[
-                "vertex_ai_safety_results"
-            ] = safety_ratings  # older approach - maintaining to prevent regressions
+            model_response._hidden_params["vertex_ai_safety_results"] = (
+                safety_ratings  # older approach - maintaining to prevent regressions
+            )
 
             ## ADD CITATION METADATA ##
             setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)
-            model_response._hidden_params[
-                "vertex_ai_citation_metadata"
-            ] = citation_metadata  # older approach - maintaining to prevent regressions
+            model_response._hidden_params["vertex_ai_citation_metadata"] = (
+                citation_metadata  # older approach - maintaining to prevent regressions
+            )
 
         except Exception as e:
             raise VertexAIError(
