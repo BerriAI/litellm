@@ -896,8 +896,6 @@ async def team_member_add(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    [BETA]
-
     Add new members (either via user_email or user_id) to a team
 
     If user doesn't exist, new user row will also be added to User Table
@@ -991,6 +989,11 @@ async def team_member_add(
                 user_api_key_dict=user_api_key_dict,
                 litellm_proxy_admin_name=litellm_proxy_admin_name,
                 team_id=data.team_id,
+                default_team_budget_id=(
+                    complete_team_data.metadata.get("team_member_budget_id")
+                    if complete_team_data.metadata is not None
+                    else None
+                ),
             )
         except Exception as e:
             raise HTTPException(
@@ -1016,6 +1019,11 @@ async def team_member_add(
                     user_api_key_dict=user_api_key_dict,
                     litellm_proxy_admin_name=litellm_proxy_admin_name,
                     team_id=data.team_id,
+                    default_team_budget_id=(
+                        complete_team_data.metadata.get("team_member_budget_id")
+                        if complete_team_data.metadata is not None
+                        else None
+                    ),
                 )
             except Exception as e:
                 raise HTTPException(
