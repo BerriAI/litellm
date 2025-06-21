@@ -123,6 +123,55 @@ async def test_ssl_verification_with_aiohttp_transport():
     assert transport_connector._ssl == aiohttp_session.connector._ssl
 
 
+@pytest.mark.asyncio
+async def test_aiohttp_trust_env_disabled_by_default():
+    """
+    Test that aiohttp ClientSession has trust_env=False by default to prevent sync calls to netrc
+    """
+    import os
+    
+    # Ensure no environment override is set
+    if "DISABLE_AIOHTTP_TRUST_ENV" in os.environ:
+        del os.environ["DISABLE_AIOHTTP_TRUST_ENV"]
+    
+    # Create AsyncHTTPHandler 
+    async_client = AsyncHTTPHandler()
+    
+    # Get the transport and verify it's an aiohttp transport
+    transport = async_client.client._transport
+    if hasattr(transport, '_get_valid_client_session'):
+        client_session = transport._get_valid_client_session()
+        
+        # Check that trust_env is False by default (to prevent sync netrc calls)
+        assert client_session._trust_env is False, "trust_env should be False by default to prevent sync calls to netrc"
+
+
+@pytest.mark.asyncio  
+async def test_aiohttp_trust_env_can_be_enabled():
+    """
+    Test that users can enable trust_env by setting DISABLE_AIOHTTP_TRUST_ENV=False
+    """
+    import os
+    
+    # Set environment variable to enable trust_env
+    os.environ["DISABLE_AIOHTTP_TRUST_ENV"] = "False"
+    
+    try:
+        # Create AsyncHTTPHandler
+        async_client = AsyncHTTPHandler()
+        
+        # Get the transport and verify trust_env is enabled
+        transport = async_client.client._transport
+        if hasattr(transport, '_get_valid_client_session'):
+            client_session = transport._get_valid_client_session()
+            
+            # Check that trust_env is True when explicitly enabled
+            assert client_session._trust_env is True, "trust_env should be True when DISABLE_AIOHTTP_TRUST_ENV=False"
+    finally:
+        # Clean up environment variable
+        del os.environ["DISABLE_AIOHTTP_TRUST_ENV"]
+
+
 def test_get_ssl_context():
     """Test that _get_ssl_context() returns a proper SSL context with certifi CA bundle"""
     with patch('ssl.create_default_context') as mock_create_context:

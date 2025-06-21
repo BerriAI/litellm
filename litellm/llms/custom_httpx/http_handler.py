@@ -580,15 +580,22 @@ class AsyncHTTPHandler:
         - True: use default SSL verification (equivalent to ssl.create_default_context())
         """
         from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
+        from litellm.secret_managers.main import str_to_bool
 
         connector_kwargs = AsyncHTTPHandler._get_ssl_connector_kwargs(
             ssl_verify=ssl_verify, ssl_context=ssl_context
         )
 
+        # Check if user wants to disable trust_env for aiohttp
+        # By default, we disable trust_env to prevent sync calls to netrc
+        disable_trust_env = str_to_bool(os.getenv("DISABLE_AIOHTTP_TRUST_ENV", "True"))
+        trust_env = not disable_trust_env
+
         verbose_logger.debug("Creating AiohttpTransport...")
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
-                connector=TCPConnector(**connector_kwargs)
+                connector=TCPConnector(**connector_kwargs),
+                trust_env=trust_env
             ),
         )
     
@@ -683,7 +690,7 @@ class HTTPHandler:
     @staticmethod
     def extract_query_params(url: str) -> Dict[str, str]:
         """
-        Parse a URL’s query-string into a dict.
+        Parse a URL's query-string into a dict.
 
         :param url: full URL, e.g. "https://.../path?foo=1&bar=2"
         :return: {"foo": "1", "bar": "2"}
