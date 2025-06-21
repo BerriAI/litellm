@@ -5546,6 +5546,7 @@ async def get_all_team_models(
     """
     team_models: Dict[str, Set[str]] = {}
     team_db_objects_typed: List[LiteLLM_TeamTable] = []
+
     if user_teams == "*":
         team_db_objects = await prisma_client.db.litellm_teamtable.find_many()
         team_db_objects_typed = [
@@ -5562,14 +5563,16 @@ async def get_all_team_models(
         ]
 
     for team_object in team_db_objects_typed:
-        for model_name in team_object.models:
-            # handle special case where team has access to all proxy models
-            if model_name == SpecialModelNames.all_proxy_models.value:
-                _model_ids = llm_router.get_model_ids()
-                if _model_ids is not None:
-                    for model_id in _model_ids:
-                        team_models.setdefault(model_id, set()).add(team_object.team_id)
-            else:
+        if (
+            len(team_object.models) == 0  # empty list = all model access
+            or SpecialModelNames.all_proxy_models.value in team_object.models
+        ):
+            _model_ids = llm_router.get_model_ids()
+            if _model_ids is not None:
+                for model_id in _model_ids:
+                    team_models.setdefault(model_id, set()).add(team_object.team_id)
+        else:
+            for model_name in team_object.models:
                 _models = llm_router.get_model_list(model_name=model_name)
                 if _models is not None:
                     for model in _models:
@@ -5585,6 +5588,25 @@ async def get_all_team_models(
         returned_team_models[model_id] = list(team_ids)
 
     return returned_team_models
+
+
+def get_direct_access_models(
+    user_db_object: LiteLLM_UserTable,
+    llm_router: Router,
+) -> List[str]:
+    """
+    Get all models that user has direct access to
+    """
+
+    direct_access_models: List[str] = []
+    for model in user_db_object.models:
+        deployments = llm_router.get_model_list(model_name=model)
+        if deployments is not None:
+            for deployment in deployments:
+                model_id = deployment.get("model_info", {}).get("id", None)
+                if model_id is not None:
+                    direct_access_models.append(model_id)
+    return direct_access_models
 
 
 @router.get(
@@ -5634,10 +5656,6 @@ async def model_info_v2(
         # if user does not use a config.yaml, https://github.com/BerriAI/litellm/issues/2061
         all_models += [user_model]
 
-    # check all models user has access to in user_api_key_dict
-    if len(user_api_key_dict.models) > 0:
-        pass
-
     if model is not None:
         all_models = [m for m in all_models if m["model_name"] == model]
 
@@ -5651,15 +5669,24 @@ async def model_info_v2(
 
     if include_team_models:
         user_teams: Optional[Union[List[str], Literal["*"]]] = None
+        direct_access_models: List[str] = []
         if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
             user_teams = "*"
+            direct_access_models = (
+                llm_router.get_model_ids()
+            )  # has access to all models
         else:
             user_db_object = await prisma_client.db.litellm_usertable.find_unique(
                 where={"user_id": user_api_key_dict.user_id}
             )
             if user_db_object is not None:
-                user_object = LiteLLM_UserTable(**user_db_object)
+                user_object = LiteLLM_UserTable(**user_db_object.model_dump())
                 user_teams = user_object.teams or []
+                direct_access_models = get_direct_access_models(
+                    user_db_object=user_object,
+                    llm_router=llm_router,
+                )
+        ## ADD ACCESS_VIA_TEAM_IDS TO ALL MODELS
         if user_teams is not None:
             team_models = await get_all_team_models(
                 user_teams=user_teams,
@@ -5669,8 +5696,23 @@ async def model_info_v2(
             for _model in all_models:
                 model_id = _model.get("model_info", {}).get("id", None)
                 if model_id is not None:
-                    _model["accesss_via_team_ids"] = team_models.get(model_id, [])
+                    _model["model_info"]["accesss_via_team_ids"] = team_models.get(
+                        model_id, []
+                    )
 
+        ## ADD DIRECT_ACCESS TO RELEVANT MODELS
+        for _model in all_models:
+            model_id = _model.get("model_info", {}).get("id", None)
+            if model_id is not None and model_id in direct_access_models:
+                _model["model_info"]["direct_access"] = True
+
+        ## FILTER OUT MODELS THAT ARE NOT IN DIRECT_ACCESS_MODELS OR ACCESS_VIA_TEAM_IDS - only show user models they can call
+        all_models = [
+            _model
+            for _model in all_models
+            if _model.get("model_info", {}).get("direct_access", False)
+            or _model.get("model_info", {}).get("accesss_via_team_ids", [])
+        ]
     # fill in model info based on config.yaml and litellm model_prices_and_context_window.json
     for _model in all_models:
         # provided model_info in config.yaml
