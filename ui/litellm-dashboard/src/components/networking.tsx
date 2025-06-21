@@ -5740,9 +5740,12 @@ export const uiAuditLogsCall = async (
 export const getRemainingUsers = async (
   accessToken: string
 ): Promise<{
-  total_users: number;
+  total_users: number | null;
   total_users_used: number;
-  total_users_remaining: number;
+  total_users_remaining: number | null;
+  total_teams: number | null;
+  total_teams_used: number;
+  total_teams_remaining: number | null;
 } | null> => {
   try {
     const url = proxyBaseUrl
