@@ -352,7 +352,14 @@ const sidebars = {
         },
         "providers/azure_ai",
         "providers/aiml",
-        "providers/vertex",
+        {
+          type: "category",
+          label: "Vertex AI",
+          items: [
+            "providers/vertex",
+            "pass_through/vertex_image",
+          ]
+        },
         {
           type: "category",
           label: "Google AI Studio",
