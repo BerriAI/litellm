@@ -1056,6 +1056,7 @@ const Teams: React.FC<TeamProps> = ({
                             label="Team Member Budget (USD)" 
                             name="team_member_budget"
                             normalize={(value) => value ? Number(value) : undefined}
+                            tooltip="This is the individual budget for a user in the team."
                           >  
                             <NumericalInput step={0.01} precision={2} width={200} />
                           </Form.Item>

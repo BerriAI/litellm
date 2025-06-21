@@ -449,7 +449,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
                   </Form.Item>
 
-                  <Form.Item label="Team Member Budget (USD)" name="team_member_budget">
+                  <Form.Item label="Team Member Budget (USD)" name="team_member_budget" tooltip="This is the individual budget for a user in the team.">
                     <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
                   </Form.Item>
 
