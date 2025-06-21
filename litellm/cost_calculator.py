@@ -773,6 +773,8 @@ def completion_cost(  # noqa: PLR0915
                             n=n,
                             size=size,
                             optional_params=optional_params,
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
                         )
                 elif (
                     call_type == CallTypes.speech.value
@@ -1079,6 +1081,8 @@ def default_image_cost_calculator(
     n: Optional[int] = 1,  # Default to 1 image
     size: Optional[str] = "1024-x-1024",  # OpenAI default
     optional_params: Optional[dict] = None,
+    prompt_tokens: Optional[int] = None,  # Actual prompt tokens from usage
+    completion_tokens: Optional[int] = None,  # Actual completion tokens from usage
 ) -> float:
     """
     Default image cost calculator for image generation
@@ -1155,7 +1159,119 @@ def default_image_cost_calculator(
             f"Model not found in cost map. Tried checking {models_to_check}"
         )
 
-    return cost_info["input_cost_per_pixel"] * height * width * n
+    # Ensure n is never None for calculations
+    n_value = n if n is not None else 1
+
+    # Check if this is a token-based pricing model (like gpt-image-1)
+    if "input_cost_per_token" in cost_info or "output_cost_per_token" in cost_info:
+        return _calculate_token_based_image_cost(
+            model=model,
+            cost_info=cost_info,
+            quality=quality,
+            height=height,
+            width=width,
+            n=n_value,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+    else:
+        # Pixel-based pricing (legacy models like DALL-E 2/3)
+        return cost_info["input_cost_per_pixel"] * height * width * n_value
+
+
+def _calculate_token_based_image_cost(
+    model: str,
+    cost_info: dict,
+    quality: Optional[str],
+    height: int,
+    width: int,
+    n: int,
+    prompt_tokens: Optional[int] = None,
+    completion_tokens: Optional[int] = None,
+) -> float:
+    """
+    Calculate the cost for token-based gpt-image-1 models.
+    
+    Supports both OpenAI and Azure deployments by extracting the base model name.
+    Requires actual token usage from the API response - no estimation fallbacks.
+    
+    Args:
+        model: Model name (e.g., "gpt-image-1", "azure/gpt-image-1", "azure/deployment-name")
+        cost_info: Cost information dictionary from model_prices_and_context_window.json
+        quality: Image quality setting ("low", "medium", "high") - unused but kept for API compatibility
+        height: Image height in pixels - unused but kept for API compatibility
+        width: Image width in pixels - unused but kept for API compatibility
+        n: Number of images to generate
+        prompt_tokens: Actual prompt tokens from response (required)
+        completion_tokens: Actual completion tokens from response (required)
+        
+    Returns:
+        float: Total cost for the image generation
+        
+    Raises:
+        ValueError: If model is not a gpt-image-1 variant or if token counts are not provided
+    """
+    # Extract base model name to handle both OpenAI and Azure variants
+    # Examples: "gpt-image-1" -> "gpt-image-1"
+    #          "azure/gpt-image-1" -> "gpt-image-1"
+    #          "azure/deployment-name" -> "deployment-name" (might contain gpt-image-1)
+    base_model_str = model.split("/")[-1] if "/" in model else model
+    
+    # Check if this is a gpt-image-1 model (works for both OpenAI and Azure)
+    if "gpt-image-1" in base_model_str or "gpt-image-1" in model:
+        # Always require actual token counts - no fallbacks
+        if prompt_tokens is None or completion_tokens is None:
+            raise ValueError(f"Token counts are required for gpt-image-1 cost calculation. prompt_tokens={prompt_tokens}, completion_tokens={completion_tokens}")
+        
+        text_input_tokens = prompt_tokens
+        output_tokens = completion_tokens
+        
+        input_cost = text_input_tokens * cost_info.get("input_cost_per_token", 0)
+        output_cost = output_tokens * cost_info.get("output_cost_per_token", 0)
+        
+        return (input_cost + output_cost) * n
+    else:
+        # For other token-based image models, we should not have reached this point
+        # This function should only be called for models with token-based pricing
+        raise ValueError(f"Model {model} does not support token-based pricing or is not a gpt-image-1 variant")
+
+
+def _estimate_gpt_image_1_output_tokens(
+    quality: Optional[str], height: int, width: int
+) -> int:
+    """
+    Estimate output tokens for gpt-image-1 based on quality and dimensions.
+    Based on community research from OpenAI forum discussions.
+    
+    Returns:
+        int: Estimated output tokens
+    """
+    # Default to medium quality if not specified
+    if not quality:
+        quality = "medium"
+    
+    quality = quality.lower()
+    
+    # Base token estimates from OpenAI
+    if height == 1024 and width == 1024:
+        # Square 1024x1024
+        token_map = {"low": 272, "medium": 1056, "high": 4160}
+        return token_map.get(quality, 1056)
+    elif (height == 1024 and width == 1536) or (height == 1536 and width == 1024):
+        # Rectangular 1024x1536 or 1536x1024
+        token_map = {"low": 408, "medium": 1584, "high": 6240}
+        return token_map.get(quality, 1584)
+    else:
+        # For other dimensions, scale proportionally from base 1024x1024
+        base_pixels = 1024 * 1024
+        actual_pixels = height * width
+        pixel_ratio = actual_pixels / base_pixels
+        
+        base_tokens = {"low": 272, "medium": 1056, "high": 4160}
+        base_token_count = base_tokens.get(quality, 1056)
+        
+        # Scale tokens roughly proportionally to pixel count
+        return int(base_token_count * pixel_ratio)
 
 
 def batch_cost_calculator(
