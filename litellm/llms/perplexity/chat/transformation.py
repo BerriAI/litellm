@@ -108,13 +108,13 @@ class PerplexityChatConfig(OpenAIGPTConfig):
         """
         if not hasattr(model_response, "usage") or model_response.usage is None:
             # Create a usage object if it doesn't exist (when usage was None)
-            model_response.usage = Usage(
+            model_response.usage = Usage(  # type: ignore[attr-defined]
                 prompt_tokens=0,
                 completion_tokens=0,
                 total_tokens=0
             )
 
-        usage = model_response.usage
+        usage = model_response.usage  # type: ignore[attr-defined]
 
         # Extract citation tokens count
         citations = raw_response_json.get("citations", [])
