@@ -444,6 +444,7 @@ async def test_default_team_params(team_params):
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_teamtable.find_first = AsyncMock(return_value=None)
     mock_prisma.db.litellm_teamtable.create = AsyncMock()
+    mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
     mock_prisma.get_data = AsyncMock(return_value=None)
     mock_prisma.jsonify_team_object = MagicMock(side_effect=mock_jsonify_team_object)
 
@@ -492,6 +493,7 @@ async def test_create_team_without_default_params():
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_teamtable.find_first = AsyncMock(return_value=None)
     mock_prisma.db.litellm_teamtable.create = AsyncMock()
+    mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
     mock_prisma.get_data = AsyncMock(return_value=None)
     mock_prisma.jsonify_team_object = MagicMock(side_effect=mock_jsonify_team_object)
 
@@ -521,7 +523,7 @@ async def test_create_team_without_default_params():
 
 
 def test_apply_user_info_values_to_sso_user_defined_values():
-    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy._types import LiteLLM_UserTable, SSOUserDefinedValues
     from litellm.proxy.management_endpoints.ui_sso import (
         apply_user_info_values_to_sso_user_defined_values,
     )
@@ -532,10 +534,13 @@ def test_apply_user_info_values_to_sso_user_defined_values():
         user_role="admin",
     )
 
-    user_defined_values = {
+    user_defined_values: SSOUserDefinedValues = {
+        "models": [],
         "user_id": "456",
         "user_email": "test@example.com",
         "user_role": "admin",
+        "max_budget": None,
+        "budget_duration": None,
     }
 
     sso_user_defined_values = apply_user_info_values_to_sso_user_defined_values(
@@ -543,6 +548,7 @@ def test_apply_user_info_values_to_sso_user_defined_values():
         user_defined_values=user_defined_values,
     )
 
+    assert sso_user_defined_values is not None
     assert sso_user_defined_values["user_id"] == "123"
 
 
@@ -582,8 +588,8 @@ async def test_get_user_info_from_db():
         "user_email": user_email,
         "user_defined_values": user_defined_values,
     }
-    with patch.object(
-        litellm.proxy.management_endpoints.ui_sso, "get_user_object"
+    with patch(
+        "litellm.proxy.management_endpoints.ui_sso.get_user_object"
     ) as mock_get_user_object:
         user_info = await get_user_info_from_db(**args)
         mock_get_user_object.assert_called_once()
@@ -623,8 +629,8 @@ async def test_get_user_info_from_db_alternate_user_id():
         "user_defined_values": user_defined_values,
         "alternate_user_id": "krrishd-email1234",
     }
-    with patch.object(
-        litellm.proxy.management_endpoints.ui_sso, "get_user_object"
+    with patch(
+        "litellm.proxy.management_endpoints.ui_sso.get_user_object"
     ) as mock_get_user_object:
         user_info = await get_user_info_from_db(**args)
         mock_get_user_object.assert_called_once()
