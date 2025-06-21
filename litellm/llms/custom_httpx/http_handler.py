@@ -568,8 +568,8 @@ class AsyncHTTPHandler:
 
     @staticmethod
     def _create_aiohttp_transport(
-        ssl_verify: Optional[bool] = None,
-        ssl_context: Optional[ssl.SSLContext] = None,
+            ssl_verify: Optional[bool] = None,
+            ssl_context: Optional[ssl.SSLContext] = None,
     ) -> LiteLLMAiohttpTransport:
         """
         Creates an AiohttpTransport with RequestNotRead error handling
@@ -588,10 +588,10 @@ class AsyncHTTPHandler:
         verbose_logger.debug("Creating AiohttpTransport...")
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
-                connector=TCPConnector(**connector_kwargs)
+                connector=TCPConnector(**connector_kwargs),
+                trust_env=True # Trust environment variables for proxy settings
             ),
         )
-    
 
     @staticmethod
     def _get_ssl_context() -> ssl.SSLContext:
