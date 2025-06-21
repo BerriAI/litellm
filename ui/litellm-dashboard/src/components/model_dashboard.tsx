@@ -260,6 +260,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [selectedTeamFilter, setSelectedTeamFilter] = useState<string | null>(null);
   const [selectedModelAccessGroupFilter, setSelectedModelAccessGroupFilter] = useState<string | null>(null);
 
+  // Add new state for current team and model view mode
+  const [currentTeam, setCurrentTeam] = useState<string>('personal'); // 'personal' or team_id
+  const [modelViewMode, setModelViewMode] = useState<'current_team' | 'all'>('current_team');
+
   const [showColumnDropdown, setShowColumnDropdown] = useState(false);
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -1161,27 +1165,41 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               </Select>
                             </div>
 
-                            {/* Team Filter */}
+                            {/* Current Team Selector */}
                             <div className="flex items-center gap-2">
-                              <Text>Filter by Team:</Text>
+                              <Text>Current Team:</Text>
                               <Select
                                 className="w-64"
-                                defaultValue="all"
-                                value={selectedTeamFilter ?? "all"}
-                                onValueChange={(value) => setSelectedTeamFilter(value === "all" ? null : value)}
+                                defaultValue="personal"
+                                value={currentTeam}
+                                onValueChange={(value) => setCurrentTeam(value)}
                               >
-                                <SelectItem value="all">All Teams</SelectItem>
+                                <SelectItem value="personal">Personal</SelectItem>
                                 {teams?.filter(team => team.team_id).map((team) => (
                                   <SelectItem
                                     key={team.team_id}
                                     value={team.team_id}
                                   >
                                     {team.team_alias 
-                                      ? `${team.team_alias} (${team.team_id.slice(0, 8)}...)`
+                                      ? `${team.team_alias}`
                                       : `Team ${team.team_id.slice(0, 8)}...`
                                     }
                                   </SelectItem>
                                 ))}
+                              </Select>
+                            </div>
+
+                            {/* Model View Mode Toggle */}
+                            <div className="flex items-center gap-2">
+                              <Text>View:</Text>
+                              <Select
+                                className="w-64"
+                                defaultValue="current_team"
+                                value={modelViewMode}
+                                onValueChange={(value) => setModelViewMode(value as 'current_team' | 'all')}
+                              >
+                                <SelectItem value="current_team">Current Team Models</SelectItem>
+                                <SelectItem value="all">All Models</SelectItem>
                               </Select>
                             </div>
                             <div className="flex items-center gap-2">
@@ -1210,7 +1228,20 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                         {/* Results Count */}
                         <div className="flex justify-between items-center">
                           <Text className="text-sm text-gray-700">
-                            Showing {modelData && modelData.data.length > 0 ? modelData.data.length : 0} results
+                            Showing {modelData && modelData.data.length > 0 ? 
+                              modelData.data.filter((model: any) => {
+                                const modelNameMatch = selectedModelGroup === "all" || model.model_name === selectedModelGroup || !selectedModelGroup;
+                                const accessGroupMatch = selectedModelAccessGroupFilter === "all" || model.model_info["access_groups"]?.includes(selectedModelAccessGroupFilter) || !selectedModelAccessGroupFilter;
+                                let teamAccessMatch = true;
+                                if (modelViewMode === 'current_team') {
+                                  if (currentTeam === 'personal') {
+                                    teamAccessMatch = model.model_info?.direct_access === true;
+                                  } else {
+                                    teamAccessMatch = model.model_info?.access_via_team_ids?.includes(currentTeam) === true;
+                                  }
+                                }
+                                return modelNameMatch && accessGroupMatch && teamAccessMatch;
+                              }).length : 0} results
                           </Text>
                         </div>
                       </div>
@@ -1231,11 +1262,28 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           setExpandedRows,
                         )}
                       data={modelData.data.filter(
-                        (model: any) => (
-                          (selectedModelGroup === "all" || model.model_name === selectedModelGroup || !selectedModelGroup) &&
-                          (selectedTeamFilter === "all" || model.model_info["team_id"] === selectedTeamFilter || !selectedTeamFilter) &&
-                          (selectedModelAccessGroupFilter === "all" || model.model_info["access_groups"]?.includes(selectedModelAccessGroupFilter) || !selectedModelAccessGroupFilter)
-                        )
+                        (model: any) => {
+                          // Model name filter
+                          const modelNameMatch = selectedModelGroup === "all" || model.model_name === selectedModelGroup || !selectedModelGroup;
+                          
+                          // Model access group filter
+                          const accessGroupMatch = selectedModelAccessGroupFilter === "all" || model.model_info["access_groups"]?.includes(selectedModelAccessGroupFilter) || !selectedModelAccessGroupFilter;
+                          
+                          // Team access filter based on current team and view mode
+                          let teamAccessMatch = true;
+                          if (modelViewMode === 'current_team') {
+                            if (currentTeam === 'personal') {
+                              // Show only models with direct access
+                              teamAccessMatch = model.model_info?.direct_access === true;
+                            } else {
+                              // Show only models accessible by the current team
+                              teamAccessMatch = model.model_info?.access_via_team_ids?.includes(currentTeam) === true;
+                            }
+                          }
+                          // For 'all' mode, show all models (teamAccessMatch remains true)
+                          
+                          return modelNameMatch && accessGroupMatch && teamAccessMatch;
+                        }
                       )}
                       isLoading={false}
                       table={tableRef}
