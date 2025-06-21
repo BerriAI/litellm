@@ -347,6 +347,7 @@ const sidebars = {
           label: "Azure OpenAI",
           items: [
             "providers/azure/azure",
+            "providers/azure/azure_responses",
             "providers/azure/azure_embedding",
           ]
         },
