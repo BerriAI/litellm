@@ -100,7 +100,7 @@ import {
 } from "@heroicons/react/outline";
 import DeleteModelButton from "./delete_model_button";
 const { Title: Title2, Link } = Typography;
-import { UploadOutlined } from "@ant-design/icons";
+import { InfoCircleOutlined, UploadOutlined } from "@ant-design/icons";
 import type { UploadProps } from "antd";
 import { Upload } from "antd";
 import TimeToFirstToken from "./model_metrics/time_to_first_token";
@@ -1143,6 +1143,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       <div className="flex flex-col space-y-4">
                         {/* Current Team Selector - Prominent */}
                         <div className="flex items-center justify-between bg-gray-50 rounded-lg p-4 border-2 border-gray-200">
+                          <div>
                           <div className="flex items-center gap-4">
                             <Text className="text-lg font-semibold text-gray-900">Current Team:</Text>
                             <Select
@@ -1174,7 +1175,29 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                 </SelectItem>
                               ))}
                             </Select>
+                            </div>
+                            <div className="flex items-start gap-2 mt-2 bg-gray-50 rounded">
+                              <InfoCircleOutlined className="text-gray-400 mt-0.5 flex-shrink-0 text-xs" />
+                              <div className="text-xs text-gray-500">
+                                {currentTeam === "personal" ? (
+                                  <span>
+                                    To access these models: Create a Virtual Key without selecting a team on the {" "}
+                                    <a href="/?login=success&page=api-keys" className="text-gray-600 hover:text-gray-800 underline">
+                                      Virtual Keys page
+                                    </a>
+                                  </span>
+                                ) : (
+                                  <span>
+                                    To access these models: Create a Virtual Key and select Team as "{currentTeam}" on the {" "}
+                                    <a href="/?login=success&page=api-keys" className="text-gray-600 hover:text-gray-800 underline">
+                                      Virtual Keys page
+                                    </a>
+                                  </span>
+                                )}
+                              </div>
+                            </div>
                           </div>
+                          
                           
                           {/* Model View Mode Toggle - Also prominent */}
                           <div className="flex items-center gap-4">
@@ -1199,8 +1222,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               </SelectItem>
                             </Select>
                           </div>
+                          
                         </div>
 
+                        
                         {/* Other Filters */}
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
