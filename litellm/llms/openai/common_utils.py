@@ -209,4 +209,5 @@ class BaseOpenAILLM:
         return httpx.Client(
             limits=httpx.Limits(max_connections=1000, max_keepalive_connections=100),
             verify=litellm.ssl_verify,
+            follow_redirects=True,
         )
