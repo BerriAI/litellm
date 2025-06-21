@@ -1,6 +1,13 @@
+import os
+import sys
+from unittest.mock import patch
+
+sys.path.insert(
+    0, os.path.abspath("../../../../..")
+)  # Adds the parent directory to the system path
+
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.types.router import GenericLiteLLMParams
-from unittest.mock import AsyncMock, MagicMock, patch
 
 
 def test_validate_environment_api_key_within_litellm_params():
