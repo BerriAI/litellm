@@ -462,9 +462,8 @@ def _count_messages(
                     default_token_count,
                 )
             else:
-                raise ValueError(
-                    f"Unsupported type {type(value)} for key {key} in message {message}"
-                )
+                # Skip unsupported keys instead of raising an error
+                continue
     return num_tokens
 
 

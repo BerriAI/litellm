@@ -54,6 +54,15 @@ def test_token_counter_basic():
     )
 
 
+def test_token_counter_with_prefix():
+    messages = [
+        {"role": "user", "content": "Who won the world cup in 2022?"},
+        {"role": "assistant", "content": "Argentina", "prefix": True}
+    ]
+    tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
+    assert tokens == 22 , f"Expected 22 tokens, got {tokens}"
+
+
 def test_token_counter_normal_plus_function_calling():
     messages = [
         {"role": "system", "content": "System prompt"},
