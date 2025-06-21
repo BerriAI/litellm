@@ -291,12 +291,7 @@ This allows teams to leverage OpenAI's newest API features while maintaining com
 #### Bugs
 - **[Observability](../../docs/observability)**
     - Fix boto3 tracer wrapping for observability - [PR](https://github.com/BerriAI/litellm/pull/11869)
-- **[Documentation](../../docs)**
-    - Fix JSX syntax error in documentation causing Vercel deployment failure - [PR](https://github.com/BerriAI/litellm/pull/11818)
-    - Update bedrock guardrail docs - [PR](https://github.com/BerriAI/litellm/pull/11826)
-    - Update billing.md docs to call the new GPT-4o model - [PR](https://github.com/BerriAI/litellm/pull/11858)
-    - Remove retired version of gpt-3.5 from prometheus.md - [PR](https://github.com/BerriAI/litellm/pull/11859)
-    - Fix updated model version in alerting.md - [PR](https://github.com/BerriAI/litellm/pull/11855)
+
 
 ---
 
