@@ -347,12 +347,20 @@ const sidebars = {
           label: "Azure OpenAI",
           items: [
             "providers/azure/azure",
+            "providers/azure/azure_responses",
             "providers/azure/azure_embedding",
           ]
         },
         "providers/azure_ai",
         "providers/aiml",
-        "providers/vertex",
+        {
+          type: "category",
+          label: "Vertex AI",
+          items: [
+            "providers/vertex",
+            "providers/vertex_image",
+          ]
+        },
         {
           type: "category",
           label: "Google AI Studio",
