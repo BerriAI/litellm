@@ -568,8 +568,8 @@ class AsyncHTTPHandler:
 
     @staticmethod
     def _create_aiohttp_transport(
-            ssl_verify: Optional[bool] = None,
-            ssl_context: Optional[ssl.SSLContext] = None,
+        ssl_verify: Optional[bool] = None,
+        ssl_context: Optional[ssl.SSLContext] = None,
     ) -> LiteLLMAiohttpTransport:
         """
         Creates an AiohttpTransport with RequestNotRead error handling
