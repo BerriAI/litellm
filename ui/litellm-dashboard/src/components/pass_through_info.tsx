@@ -92,6 +92,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
       }
 
       const updateData = {
+        path: endpointData.path,
         target: values.target,
         headers: headers,
         include_subpath: values.include_subpath,
