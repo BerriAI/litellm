@@ -56,14 +56,10 @@ pip install litellm==1.73.0
 * **Why Upgrade**
     - Passthrough Endpoints v2: Enhanced support for subroutes and custom cost tracking for passthrough endpoints.
     - Health Check Dashboard: New frontend UI for monitoring model health and status.
-    - Azure AD Scope Configuration: Make Azure AD scope configurable for better enterprise integration.
-    - OpenAI Responses API Bridge: Day-0 support for OpenAI re-usable prompts via Responses API.
-    - Gemini TTS Support: Working Gemini text-to-speech support via OpenAI's `/v1/speech` endpoint.
 * **Who Should Read**
     - Teams using **Passthrough Endpoints**
-    - Teams needing **Health Monitoring** for models
-    - Teams using **Azure AD** authentication
-    - Teams using **Gemini TTS** or **OpenAI Responses API**
+    - Teams using **Health Check Dashboard** for models
+    - Teams using **Claude Code** with LiteLLM
 * **Risk of Upgrade**
     - **Low**
         - No major breaking changes to existing functionality.
@@ -100,19 +96,6 @@ New comprehensive health check frontend UI components and dashboard integration 
 - Clickable model IDs for detailed information
 
 This provides administrators with better visibility into the health and availability of their configured models.
-
-
-### OpenAI Responses API Bridge
-
-Day-0 support for OpenAI's re-usable prompts Responses API, enabling seamless integration with OpenAI's latest features.
-
-**Capabilities:**
-- Support for re-usable prompts
-- Image URL passing support
-- Completion-to-Responses bridge functionality
-- Cost tracking and logging for Responses API calls
-
-This allows teams to leverage OpenAI's newest API features while maintaining compatibility with existing LiteLLM infrastructure.
 
 
 ---
@@ -196,23 +179,22 @@ This allows teams to leverage OpenAI's newest API features while maintaining com
     - Add Allowed MCPs to Creating/Editing Organizations - [PR](https://github.com/BerriAI/litellm/pull/11893)
     - Allow connecting to MCP with authentication headers - [PR](https://github.com/BerriAI/litellm/pull/11891)
     - Fix using MCPs defined on config.yaml - [PR](https://github.com/BerriAI/litellm/pull/11824)
-
-#### Passthrough Endpoints
-- **v2 Passthrough Endpoints**
+- **[Passthrough Endpoints](../../docs/pass_through/custom_routes)**
     - Add support for subroutes for passthrough endpoints - [PR](https://github.com/BerriAI/litellm/pull/11827)
     - Support for setting custom cost per passthrough request - [PR](https://github.com/BerriAI/litellm/pull/11870)
     - Ensure "Request" is tracked for passthrough requests on LiteLLM Proxy - [PR](https://github.com/BerriAI/litellm/pull/11873)
     - Add V2 Passthrough endpoints on UI - [PR](https://github.com/BerriAI/litellm/pull/11905)
     - Move passthrough endpoints under Models + Endpoints in UI - [PR](https://github.com/BerriAI/litellm/pull/11871)
     - QA improvements for adding passthrough endpoints - [PR](https://github.com/BerriAI/litellm/pull/11909), [PR](https://github.com/BerriAI/litellm/pull/11939)
-- **[Langfuse Integration](../../docs/observability/langfuse_integration)**
-    - Don't log request to Langfuse passthrough on Langfuse - [PR](https://github.com/BerriAI/litellm/pull/11768)
 
 #### Bugs
 - **[Completion API](../../docs/completion/input)**
     - Allow dict for tool_choice argument in acompletion - [PR](https://github.com/BerriAI/litellm/pull/11860)
     - Fix model_group tracking for `/v1/messages` and `/moderations` - [PR](https://github.com/BerriAI/litellm/pull/11933)
     - Fix cost tracking and logging via `/v1/messages` API when using Claude Code - [PR](https://github.com/BerriAI/litellm/pull/11928)
+
+- **[Passthrough Endpoints](../../docs/pass_through/langfuse)**
+    - Don't log request to Langfuse passthrough on Langfuse - [PR](https://github.com/BerriAI/litellm/pull/11768)
 
 ---
 
