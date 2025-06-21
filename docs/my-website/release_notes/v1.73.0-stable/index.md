@@ -1,5 +1,5 @@
 ---
-title: "v1.73.0-stable"
+title: "[Pre-Release] v1.73.0-stable"
 slug: "v1-73-0-stable"
 date: 2025-06-21T10:00:00
 authors:
