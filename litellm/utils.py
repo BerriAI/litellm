@@ -6844,6 +6844,8 @@ class ProviderConfigManager:
     ) -> Optional[BaseLLMModelInfo]:
         if LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIConfig()
+        elif LlmProviders.CENTML == provider:
+            return litellm.CentmlConfig()
         elif LlmProviders.OPENAI == provider:
             return litellm.OpenAIGPTConfig()
         elif LlmProviders.GEMINI == provider:
