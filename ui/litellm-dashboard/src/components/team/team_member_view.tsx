@@ -12,6 +12,8 @@ import {
   Icon,
   Button as TremorButton,
 } from '@tremor/react';
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { Tooltip } from "antd";
 import {
     TeamData,
 } from './team_info';
@@ -77,7 +79,12 @@ const TeamMembersComponent: React.FC<TeamMembersComponentProps> = ({
               <TableHeaderCell>User ID</TableHeaderCell>
               <TableHeaderCell>User Email</TableHeaderCell>
               <TableHeaderCell>Role</TableHeaderCell>
-              <TableHeaderCell>Spend (USD)</TableHeaderCell>
+              <TableHeaderCell>Team Member Spend (USD)  
+                {" "}
+                <Tooltip title="This is the amount spent by a user in the team.">
+                  <InfoCircleOutlined />
+                </Tooltip>
+              </TableHeaderCell>
               <TableHeaderCell>Team Member Budget (USD)</TableHeaderCell>
               <TableHeaderCell></TableHeaderCell>
             </TableRow>
