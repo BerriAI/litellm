@@ -34,6 +34,7 @@ import {
   Button as Button2,
   message,
   InputNumber,
+  Tooltip,
 } from "antd";
 import {
   PencilAltIcon,
@@ -153,16 +154,14 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
       header: "ID",
       accessorKey: "id",
       cell: (info: any) => (
-        <div className="overflow-hidden">
-          <Button 
-            size="xs"
-            variant="light"
-            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+        <Tooltip title={info.row.original.id}>
+          <div 
+            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left w-full truncate whitespace-nowrap cursor-pointer max-w-[15ch]"
             onClick={() => info.row.original.id && setSelectedEndpointId(info.row.original.id)}
           >
-            {info.getValue()}
-          </Button>
-        </div>
+            {info.row.original.id}
+          </div>
+        </Tooltip>
       ),
     },
     {
