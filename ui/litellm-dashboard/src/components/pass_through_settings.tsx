@@ -110,6 +110,8 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
     []
   );
   const [selectedEndpointId, setSelectedEndpointId] = useState<string | null>(null);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [endpointToDelete, setEndpointToDelete] = useState<string | null>(null);
 
   useEffect(() => {
     if (!accessToken || !userRole || !userID) {
@@ -131,21 +133,43 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
     }
   };
 
-  const handleResetField = (endpointId: string, idx: number) => {
-    if (!accessToken) {
+  const handleDelete = async (endpointId: string) => {
+    // Set the endpoint to delete and open the confirmation modal
+    setEndpointToDelete(endpointId);
+    setIsDeleteModalOpen(true);
+  };
+
+  const confirmDelete = async () => {
+    if (endpointToDelete == null || !accessToken) {
       return;
     }
 
     try {
-      deletePassThroughEndpointsCall(accessToken, endpointId);
+      await deletePassThroughEndpointsCall(accessToken, endpointToDelete);
       
-      const updatedSettings = generalSettings.filter((setting) => setting.id !== endpointId);
+      const updatedSettings = generalSettings.filter((setting) => setting.id !== endpointToDelete);
       setGeneralSettings(updatedSettings);
 
       message.success("Endpoint deleted successfully.");
     } catch (error) {
-      // do something
+      console.error("Error deleting the endpoint:", error);
+      message.error("Error deleting the endpoint: " + error);
     }
+
+    // Close the confirmation modal and reset the endpointToDelete
+    setIsDeleteModalOpen(false);
+    setEndpointToDelete(null);
+  };
+
+  const cancelDelete = () => {
+    // Close the confirmation modal and reset the endpointToDelete
+    setIsDeleteModalOpen(false);
+    setEndpointToDelete(null);
+  };
+
+  const handleResetField = (endpointId: string, idx: number) => {
+    // Use handleDelete instead of direct deletion
+    handleDelete(endpointId);
   };
 
   // Define columns for the DataTable
@@ -253,6 +277,55 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
         isLoading={false}
         noDataMessage="No pass-through endpoints configured"
       />
+
+      {isDeleteModalOpen && (
+        <div className="fixed z-10 inset-0 overflow-y-auto">
+          <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div
+              className="fixed inset-0 transition-opacity"
+              aria-hidden="true"
+            >
+              <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
+            </div>
+
+            {/* Modal Panel */}
+            <span
+              className="hidden sm:inline-block sm:align-middle sm:h-screen"
+              aria-hidden="true"
+            >
+              &#8203;
+            </span>
+
+            {/* Confirmation Modal Content */}
+            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <div className="sm:flex sm:items-start">
+                  <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
+                    <h3 className="text-lg leading-6 font-medium text-gray-900">
+                      Delete Pass-Through Endpoint
+                    </h3>
+                    <div className="mt-2">
+                      <p className="text-sm text-gray-500">
+                        Are you sure you want to delete this pass-through endpoint? This action cannot be undone.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <Button
+                  onClick={confirmDelete}
+                  color="red"
+                  className="ml-2"
+                >
+                  Delete
+                </Button>
+                <Button onClick={cancelDelete}>Cancel</Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
