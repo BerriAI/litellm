@@ -117,8 +117,8 @@ Now Proxy Admins see incremental health check results in real-time, making it ea
     - Handle more GPT custom naming patterns - [PR](https://github.com/BerriAI/litellm/pull/11914)
     - Update o3 pricing to match OpenAI pricing - [PR](https://github.com/BerriAI/litellm/pull/11937)
 - **[VertexAI](../../docs/providers/vertex)**
+    - Add Vertex Imagen-4 models - [PR](https://github.com/BerriAI/litellm/pull/11767), [Get Started](../../docs/providers/vertex_image)
     - Anthropic streaming passthrough cost tracking - [PR](https://github.com/BerriAI/litellm/pull/11734)
-    - Add Vertex Imagen-4 models - [PR](https://github.com/BerriAI/litellm/pull/11767)
 - **[Gemini](../../docs/providers/gemini)**
     - Working Gemini TTS support via `/v1/speech` endpoint - [PR](https://github.com/BerriAI/litellm/pull/11832)
     - Fix gemini 2.5 flash config - [PR](https://github.com/BerriAI/litellm/pull/11830)
