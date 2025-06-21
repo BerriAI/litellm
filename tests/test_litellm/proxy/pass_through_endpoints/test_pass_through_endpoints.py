@@ -852,3 +852,396 @@ async def test_pass_through_request_contains_proxy_server_request_in_kwargs():
                         assert metadata["user_api_key_alias"] == "test-alias"
                         assert metadata["user_api_key_user_email"] == "test@example.com"
                         assert metadata["user_api_key_user_id"] == "test-user-id"
+
+
+@pytest.mark.asyncio
+async def test_create_pass_through_endpoint():
+    """
+    Test creating a new pass-through endpoint
+    
+    This test verifies that the create_pass_through_endpoints function:
+    1. Accepts a PassThroughGenericEndpoint object
+    2. Auto-generates an ID if not provided
+    3. Adds the endpoint to the database
+    4. Returns the created endpoint with the generated ID
+    """
+    from litellm.proxy._types import (
+        ConfigFieldInfo,
+        ConfigFieldUpdate,
+        PassThroughEndpointResponse,
+        PassThroughGenericEndpoint,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        create_pass_through_endpoints,
+    )
+
+    # Mock the database functions
+    with patch("litellm.proxy.proxy_server.get_config_general_settings") as mock_get_config:
+        with patch("litellm.proxy.proxy_server.update_config_general_settings") as mock_update_config:
+            # Mock existing config (empty list)
+            mock_get_config.return_value = ConfigFieldInfo(
+                field_name="pass_through_endpoints",
+                field_value=[]
+            )
+            
+            # Create test endpoint data
+            test_endpoint = PassThroughGenericEndpoint(
+                path="/test/endpoint",
+                target="http://example.com/api",
+                headers={"Authorization": "Bearer test-token"},
+                include_subpath=True,
+                cost_per_request=0.50
+            )
+            
+            # Mock user API key dict
+            mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+            
+            # Call the create function
+            result = await create_pass_through_endpoints(
+                data=test_endpoint,
+                user_api_key_dict=mock_user_api_key_dict
+            )
+            
+            # Verify the result
+            assert isinstance(result, PassThroughEndpointResponse)
+            assert len(result.endpoints) == 1
+            
+            created_endpoint = result.endpoints[0]
+            assert created_endpoint.path == "/test/endpoint"
+            assert created_endpoint.target == "http://example.com/api"
+            assert created_endpoint.headers == {"Authorization": "Bearer test-token"}
+            assert created_endpoint.include_subpath is True
+            assert created_endpoint.cost_per_request == 0.50
+            assert created_endpoint.id is not None  # Should be auto-generated
+            
+            # Verify database calls
+            mock_get_config.assert_called_once_with(
+                field_name="pass_through_endpoints",
+                user_api_key_dict=mock_user_api_key_dict
+            )
+            
+            mock_update_config.assert_called_once()
+            update_call_args = mock_update_config.call_args[1]
+            assert update_call_args["data"].field_name == "pass_through_endpoints"
+            assert len(update_call_args["data"].field_value) == 1
+            assert update_call_args["data"].field_value[0]["path"] == "/test/endpoint"
+            assert update_call_args["data"].field_value[0]["id"] is not None
+
+
+@pytest.mark.asyncio
+async def test_update_pass_through_endpoint():
+    """
+    Test updating an existing pass-through endpoint
+    
+    This test verifies that the update_pass_through_endpoints function:
+    1. Finds the existing endpoint by ID
+    2. Updates only the provided fields (partial updates)
+    3. Preserves the existing ID
+    4. Updates the database with the modified endpoint
+    5. Returns the updated endpoint
+    """
+    from litellm.proxy._types import (
+        ConfigFieldInfo,
+        ConfigFieldUpdate,
+        PassThroughEndpointResponse,
+        PassThroughGenericEndpoint,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        update_pass_through_endpoints,
+    )
+
+    # Mock the database functions
+    with patch("litellm.proxy.proxy_server.get_config_general_settings") as mock_get_config:
+        with patch("litellm.proxy.proxy_server.update_config_general_settings") as mock_update_config:
+            # Create existing endpoint data
+            existing_endpoint_id = "test-endpoint-123"
+            existing_endpoints = [
+                {
+                    "id": existing_endpoint_id,
+                    "path": "/test/endpoint",
+                    "target": "http://example.com/api",
+                    "headers": {"Authorization": "Bearer old-token"},
+                    "include_subpath": False,
+                    "cost_per_request": 0.25
+                }
+            ]
+            
+            # Mock existing config
+            mock_get_config.return_value = ConfigFieldInfo(
+                field_name="pass_through_endpoints",
+                field_value=existing_endpoints
+            )
+            
+            # Create update data (partial update)
+            update_data = PassThroughGenericEndpoint(
+                path="/test/endpoint",  # Keep same path
+                target="http://newapi.com/v2",  # Update target
+                headers={"Authorization": "Bearer new-token", "X-Custom": "header"},  # Update headers
+                cost_per_request=0.75  # Update cost
+                # include_subpath not provided - should preserve existing value
+            )
+            
+            # Mock user API key dict
+            mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+            
+            # Call the update function
+            result = await update_pass_through_endpoints(
+                endpoint_id=existing_endpoint_id,
+                data=update_data,
+                user_api_key_dict=mock_user_api_key_dict
+            )
+            
+            # Verify the result
+            assert isinstance(result, PassThroughEndpointResponse)
+            assert len(result.endpoints) == 1
+            
+            updated_endpoint = result.endpoints[0]
+            assert updated_endpoint.id == existing_endpoint_id  # ID preserved
+            assert updated_endpoint.path == "/test/endpoint"
+            assert updated_endpoint.target == "http://newapi.com/v2"  # Updated
+            assert updated_endpoint.headers == {"Authorization": "Bearer new-token", "X-Custom": "header"}  # Updated
+            assert updated_endpoint.include_subpath is False  # Preserved existing value
+            assert updated_endpoint.cost_per_request == 0.75  # Updated
+            
+            # Verify database calls
+            mock_get_config.assert_called_once_with(
+                field_name="pass_through_endpoints",
+                user_api_key_dict=mock_user_api_key_dict
+            )
+            
+            mock_update_config.assert_called_once()
+            update_call_args = mock_update_config.call_args[1]
+            assert update_call_args["data"].field_name == "pass_through_endpoints"
+            assert len(update_call_args["data"].field_value) == 1
+            updated_data = update_call_args["data"].field_value[0]
+            assert updated_data["id"] == existing_endpoint_id
+            assert updated_data["target"] == "http://newapi.com/v2"
+            assert updated_data["cost_per_request"] == 0.75
+
+
+@pytest.mark.asyncio
+async def test_update_pass_through_endpoint_not_found():
+    """
+    Test updating a non-existent pass-through endpoint raises HTTPException
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import (
+        ConfigFieldInfo,
+        PassThroughGenericEndpoint,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        update_pass_through_endpoints,
+    )
+
+    # Mock the database functions
+    with patch("litellm.proxy.proxy_server.get_config_general_settings") as mock_get_config:
+        # Mock existing config with different endpoint
+        existing_endpoints = [
+            {
+                "id": "different-endpoint-456",
+                "path": "/different/endpoint",
+                "target": "http://different.com/api",
+                "headers": {},
+                "include_subpath": False,
+                "cost_per_request": 0.0
+            }
+        ]
+        
+        mock_get_config.return_value = ConfigFieldInfo(
+            field_name="pass_through_endpoints",
+            field_value=existing_endpoints
+        )
+        
+        # Create update data
+        update_data = PassThroughGenericEndpoint(
+            path="/test/endpoint",
+            target="http://newapi.com/v2"
+        )
+        
+        # Mock user API key dict
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        
+        # Call the update function with non-existent ID
+        with pytest.raises(HTTPException) as exc_info:
+            await update_pass_through_endpoints(
+                endpoint_id="non-existent-endpoint-123",
+                data=update_data,
+                user_api_key_dict=mock_user_api_key_dict
+            )
+        
+        # Verify the exception
+        assert exc_info.value.status_code == 404
+        assert "not found" in str(exc_info.value.detail).lower()
+
+
+@pytest.mark.asyncio
+async def test_delete_pass_through_endpoint():
+    """
+    Test deleting an existing pass-through endpoint
+    
+    This test verifies that the delete_pass_through_endpoints function:
+    1. Finds the existing endpoint by ID
+    2. Removes it from the database
+    3. Returns the deleted endpoint
+    """
+    from litellm.proxy._types import (
+        ConfigFieldInfo,
+        ConfigFieldUpdate,
+        PassThroughEndpointResponse,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        delete_pass_through_endpoints,
+    )
+
+    # Mock the database functions
+    with patch("litellm.proxy.proxy_server.get_config_general_settings") as mock_get_config:
+        with patch("litellm.proxy.proxy_server.update_config_general_settings") as mock_update_config:
+            # Create existing endpoint data
+            endpoint_to_delete_id = "test-endpoint-123"
+            other_endpoint_id = "other-endpoint-456"
+            existing_endpoints = [
+                {
+                    "id": endpoint_to_delete_id,
+                    "path": "/test/endpoint",
+                    "target": "http://example.com/api",
+                    "headers": {"Authorization": "Bearer test-token"},
+                    "include_subpath": True,
+                    "cost_per_request": 0.50
+                },
+                {
+                    "id": other_endpoint_id,
+                    "path": "/other/endpoint",
+                    "target": "http://other.com/api",
+                    "headers": {},
+                    "include_subpath": False,
+                    "cost_per_request": 0.25
+                }
+            ]
+            
+            # Mock existing config
+            mock_get_config.return_value = ConfigFieldInfo(
+                field_name="pass_through_endpoints",
+                field_value=existing_endpoints
+            )
+            
+            # Mock user API key dict
+            mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+            
+            # Call the delete function
+            result = await delete_pass_through_endpoints(
+                endpoint_id=endpoint_to_delete_id,
+                user_api_key_dict=mock_user_api_key_dict
+            )
+            
+            # Verify the result
+            assert isinstance(result, PassThroughEndpointResponse)
+            assert len(result.endpoints) == 1
+            
+            deleted_endpoint = result.endpoints[0]
+            assert deleted_endpoint.id == endpoint_to_delete_id
+            assert deleted_endpoint.path == "/test/endpoint"
+            assert deleted_endpoint.target == "http://example.com/api"
+            assert deleted_endpoint.headers == {"Authorization": "Bearer test-token"}
+            assert deleted_endpoint.include_subpath is True
+            assert deleted_endpoint.cost_per_request == 0.50
+            
+            # Verify database calls
+            mock_get_config.assert_called_once_with(
+                field_name="pass_through_endpoints",
+                user_api_key_dict=mock_user_api_key_dict
+            )
+            
+            mock_update_config.assert_called_once()
+            update_call_args = mock_update_config.call_args[1]
+            assert update_call_args["data"].field_name == "pass_through_endpoints"
+            # Should only have the other endpoint remaining
+            assert len(update_call_args["data"].field_value) == 1
+            remaining_endpoint = update_call_args["data"].field_value[0]
+            assert remaining_endpoint["id"] == other_endpoint_id
+            assert remaining_endpoint["path"] == "/other/endpoint"
+
+
+@pytest.mark.asyncio
+async def test_delete_pass_through_endpoint_not_found():
+    """
+    Test deleting a non-existent pass-through endpoint raises HTTPException
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import ConfigFieldInfo, UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        delete_pass_through_endpoints,
+    )
+
+    # Mock the database functions
+    with patch("litellm.proxy.proxy_server.get_config_general_settings") as mock_get_config:
+        # Mock existing config with different endpoint
+        existing_endpoints = [
+            {
+                "id": "different-endpoint-456",
+                "path": "/different/endpoint",
+                "target": "http://different.com/api",
+                "headers": {},
+                "include_subpath": False,
+                "cost_per_request": 0.0
+            }
+        ]
+        
+        mock_get_config.return_value = ConfigFieldInfo(
+            field_name="pass_through_endpoints",
+            field_value=existing_endpoints
+        )
+        
+        # Mock user API key dict
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        
+        # Call the delete function with non-existent ID
+        with pytest.raises(HTTPException) as exc_info:
+            await delete_pass_through_endpoints(
+                endpoint_id="non-existent-endpoint-123",
+                user_api_key_dict=mock_user_api_key_dict
+            )
+        
+        # Verify the exception
+        assert exc_info.value.status_code == 400
+        assert "not found" in str(exc_info.value.detail).lower()
+
+
+@pytest.mark.asyncio
+async def test_delete_pass_through_endpoint_empty_list():
+    """
+    Test deleting from an empty endpoint list raises HTTPException
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import ConfigFieldInfo, UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        delete_pass_through_endpoints,
+    )
+
+    # Mock the database functions
+    with patch("litellm.proxy.proxy_server.get_config_general_settings") as mock_get_config:
+        # Mock empty config
+        mock_get_config.return_value = ConfigFieldInfo(
+            field_name="pass_through_endpoints",
+            field_value=None
+        )
+        
+        # Mock user API key dict
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        
+        # Call the delete function
+        with pytest.raises(HTTPException) as exc_info:
+            await delete_pass_through_endpoints(
+                endpoint_id="any-endpoint-123",
+                user_api_key_dict=mock_user_api_key_dict
+            )
+        
+        # Verify the exception
+        assert exc_info.value.status_code == 400
+        assert "no pass-through endpoints setup" in str(exc_info.value.detail).lower()

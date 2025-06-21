@@ -15,14 +15,14 @@ import {
 } from "@tremor/react";
 import { Button, Form, Input, Switch, message, InputNumber } from "antd";
 import { 
-  getPassThroughEndpointInfo, 
   updatePassThroughEndpoint,
   deletePassThroughEndpointsCall 
 } from "./networking";
 import { Eye, EyeOff } from "lucide-react";
+import RoutePreview from "./route_preview";
 
 export interface PassThroughInfoProps {
-  endpointPath: string;
+  endpointData: PassThroughEndpoint;
   onClose: () => void;
   accessToken: string | null;
   isAdmin: boolean;
@@ -30,6 +30,7 @@ export interface PassThroughInfoProps {
 }
 
 interface PassThroughEndpoint {
+  id?: string;
   path: string;
   target: string;
   headers: Record<string, any>;
@@ -63,38 +64,20 @@ const PasswordField: React.FC<{ value: Record<string, any> }> = ({ value }) => {
 };
 
 const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({ 
-  endpointPath, 
+  endpointData: initialEndpointData,
   onClose, 
   accessToken,
   isAdmin,
   onEndpointUpdated
 }) => {
-  const [endpointData, setEndpointData] = useState<PassThroughEndpoint | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [endpointData, setEndpointData] = useState<PassThroughEndpoint | null>(initialEndpointData);
+  const [loading, setLoading] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [form] = Form.useForm();
 
-  const fetchEndpointInfo = async () => {
-    try {
-      setLoading(true);
-      if (!accessToken) return;
-      const response = await getPassThroughEndpointInfo(accessToken, endpointPath);
-      setEndpointData(response);
-    } catch (error) {
-      message.error("Failed to load pass through endpoint information");
-      console.error("Error fetching endpoint info:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchEndpointInfo();
-  }, [endpointPath, accessToken]);
-
   const handleEndpointUpdate = async (values: any) => {
     try {
-      if (!accessToken) return;
+      if (!accessToken || !endpointData?.id) return;
       
       // Parse headers if provided as string
       let headers = {};
@@ -110,15 +93,21 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
       }
 
       const updateData = {
+        path: endpointData.path,
         target: values.target,
         headers: headers,
         include_subpath: values.include_subpath,
         cost_per_request: values.cost_per_request,
       };
       
-      await updatePassThroughEndpoint(accessToken, endpointPath, updateData);
-      message.success("Pass through endpoint updated successfully");
-      fetchEndpointInfo();
+      await updatePassThroughEndpoint(accessToken, endpointData.id, updateData);
+
+      // Update local state with the new values
+      setEndpointData({
+        ...endpointData,
+        ...updateData,
+      });
+      
       setIsEditing(false);
       if (onEndpointUpdated) {
         onEndpointUpdated();
@@ -131,9 +120,9 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
 
   const handleDeleteEndpoint = async () => {
     try {
-      if (!accessToken) return;
+      if (!accessToken || !endpointData?.id) return;
       
-      await deletePassThroughEndpointsCall(accessToken, endpointPath);
+      await deletePassThroughEndpointsCall(accessToken, endpointData.id);
       message.success("Pass through endpoint deleted successfully");
       onClose();
       if (onEndpointUpdated) {
@@ -158,8 +147,8 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
       <div className="flex justify-between items-center mb-6">
         <div>
           <Button onClick={onClose} className="mb-4">← Back</Button>
-          <Title>Pass Through Endpoint</Title>
-          <Text className="text-gray-500 font-mono">{endpointData.path}</Text>
+          <Title>Pass Through Endpoint: {endpointData.path}</Title>
+          <Text className="text-gray-500 font-mono">{endpointData.id}</Text>
         </div>
       </div>
 
@@ -203,6 +192,15 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                 </div>
               </Card>
             </Grid>
+
+            {/* Route Preview Section */}
+            <div className="mt-6">
+              <RoutePreview 
+                pathValue={endpointData.path}
+                targetValue={endpointData.target}
+                includeSubpath={endpointData.include_subpath || false}
+              />
+            </div>
 
             {endpointData.headers && Object.keys(endpointData.headers).length > 0 && (
               <Card className="mt-6">

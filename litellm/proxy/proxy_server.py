@@ -16,7 +16,9 @@ from typing import (
     TYPE_CHECKING,
     Any,
     List,
+    Literal,
     Optional,
+    Set,
     Tuple,
     Union,
     cast,
@@ -5531,6 +5533,139 @@ async def non_admin_all_models(
     return unique_models
 
 
+async def get_all_team_models(
+    user_teams: Union[List[str], Literal["*"]],
+    prisma_client: PrismaClient,
+    llm_router: Router,
+) -> Dict[str, List[str]]:
+    """
+    Get all models across all teams user is in.
+
+    1. Get all teams user is in
+    2. Get all models across all teams
+    3. Return {"model_id": ["team_id1", "team_id2"]}
+    """
+    team_models: Dict[str, Set[str]] = {}
+    team_db_objects_typed: List[LiteLLM_TeamTable] = []
+
+    if user_teams == "*":
+        team_db_objects = await prisma_client.db.litellm_teamtable.find_many()
+        team_db_objects_typed = [
+            LiteLLM_TeamTable(**team_db_object.model_dump())
+            for team_db_object in team_db_objects
+        ]
+    else:
+        team_db_objects = await prisma_client.db.litellm_teamtable.find_many(
+            where={"team_id": {"in": user_teams}}
+        )
+        team_db_objects_typed = [
+            LiteLLM_TeamTable(**team_db_object.model_dump())
+            for team_db_object in team_db_objects
+        ]
+
+    for team_object in team_db_objects_typed:
+        if (
+            len(team_object.models) == 0  # empty list = all model access
+            or SpecialModelNames.all_proxy_models.value in team_object.models
+        ):
+            _model_ids = llm_router.get_model_ids()
+            if _model_ids is not None:
+                for model_id in _model_ids:
+                    team_models.setdefault(model_id, set()).add(team_object.team_id)
+        else:
+            for model_name in team_object.models:
+                _models = llm_router.get_model_list(model_name=model_name)
+                if _models is not None:
+                    for model in _models:
+                        model_id = model.get("model_info", {}).get("id", None)
+                        if model_id is not None:
+                            team_models.setdefault(model_id, set()).add(
+                                team_object.team_id
+                            )
+
+    # convert set to list
+    returned_team_models: Dict[str, List[str]] = {}
+    for model_id, team_ids in team_models.items():
+        returned_team_models[model_id] = list(team_ids)
+
+    return returned_team_models
+
+
+def get_direct_access_models(
+    user_db_object: LiteLLM_UserTable,
+    llm_router: Router,
+) -> List[str]:
+    """
+    Get all models that user has direct access to
+    """
+
+    direct_access_models: List[str] = []
+    for model in user_db_object.models:
+        deployments = llm_router.get_model_list(model_name=model)
+        if deployments is not None:
+            for deployment in deployments:
+                model_id = deployment.get("model_info", {}).get("id", None)
+                if model_id is not None:
+                    direct_access_models.append(model_id)
+    return direct_access_models
+
+
+async def get_all_team_and_direct_access_models(
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+    llm_router: Router,
+    all_models: List[Dict],
+) -> List[Dict]:
+    """
+    Get all models across all teams user is in.
+    """
+
+    user_teams: Optional[Union[List[str], Literal["*"]]] = None
+    direct_access_models: List[str] = []
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        user_teams = "*"
+        direct_access_models = llm_router.get_model_ids()  # has access to all models
+    else:
+        user_db_object = await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": user_api_key_dict.user_id}
+        )
+        if user_db_object is not None:
+            user_object = LiteLLM_UserTable(**user_db_object.model_dump())
+            user_teams = user_object.teams or []
+            direct_access_models = get_direct_access_models(
+                user_db_object=user_object,
+                llm_router=llm_router,
+            )
+    ## ADD ACCESS_VIA_TEAM_IDS TO ALL MODELS
+    if user_teams is not None:
+        team_models = await get_all_team_models(
+            user_teams=user_teams,
+            prisma_client=prisma_client,
+            llm_router=llm_router,
+        )
+        for _model in all_models:
+            model_id = _model.get("model_info", {}).get("id", None)
+            if model_id is not None:
+                _model["model_info"]["access_via_team_ids"] = team_models.get(
+                    model_id, []
+                )
+
+    ## ADD DIRECT_ACCESS TO RELEVANT MODELS
+    for _model in all_models:
+        model_id = _model.get("model_info", {}).get("id", None)
+        if model_id is not None and model_id in direct_access_models:
+            _model["model_info"]["direct_access"] = True
+
+    ## FILTER OUT MODELS THAT ARE NOT IN DIRECT_ACCESS_MODELS OR ACCESS_VIA_TEAM_IDS - only show user models they can call
+    all_models = [
+        _model
+        for _model in all_models
+        if _model.get("model_info", {}).get("direct_access", False)
+        or _model.get("model_info", {}).get("access_via_team_ids", [])
+    ]
+    return all_models
+
+
 @router.get(
     "/v2/model/info",
     description="v2 - returns models available to the user based on their API key permissions. Shows model info from config.yaml (except api key and api base). Filter to just user-added models with ?user_models_only=true",
@@ -5545,6 +5680,9 @@ async def model_info_v2(
     ),
     user_models_only: Optional[bool] = fastapi.Query(
         False, description="Only return models added by this user"
+    ),
+    include_team_models: Optional[bool] = fastapi.Query(
+        False, description="Return all models across all teams user is in."
     ),
     debug: Optional[bool] = False,
 ):
@@ -5561,6 +5699,12 @@ async def model_info_v2(
             },
         )
 
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
     # Load existing config
     await proxy_config.get_config()
     all_models = copy.deepcopy(llm_router.model_list)
@@ -5568,10 +5712,6 @@ async def model_info_v2(
     if user_model is not None:
         # if user does not use a config.yaml, https://github.com/BerriAI/litellm/issues/2061
         all_models += [user_model]
-
-    # check all models user has access to in user_api_key_dict
-    if len(user_api_key_dict.models) > 0:
-        pass
 
     if model is not None:
         all_models = [m for m in all_models if m["model_name"] == model]
@@ -5584,6 +5724,13 @@ async def model_info_v2(
             prisma_client=prisma_client,
         )
 
+    if include_team_models:
+        all_models = await get_all_team_and_direct_access_models(
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+            llm_router=llm_router,
+            all_models=all_models,
+        )
     # fill in model info based on config.yaml and litellm model_prices_and_context_window.json
     for _model in all_models:
         # provided model_info in config.yaml
@@ -5635,10 +5782,7 @@ async def model_info_v2(
         _model["model_info"] = model_info
         # don't return the api key / vertex credentials
         # don't return the llm credentials
-        _model["litellm_params"].pop("api_key", None)
-        _model["litellm_params"].pop("vertex_credentials", None)
-        _model["litellm_params"].pop("aws_access_key_id", None)
-        _model["litellm_params"].pop("aws_secret_access_key", None)
+        _model = remove_sensitive_info_from_deployment(_model)
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}
@@ -8008,6 +8152,99 @@ async def delete_config_general_settings(
     )
 
     return response
+
+
+@router.post(
+    "/config/callback/delete",
+    tags=["config.yaml"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def delete_callback(
+    data: CallbackDelete,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Delete specific logging callback from configuration.
+    """
+    global prisma_client, proxy_config
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "{}, your role={}".format(
+                    CommonProxyErrors.not_allowed_access.value,
+                    user_api_key_dict.user_role,
+                )
+            },
+        )
+
+    if store_model_in_db is not True:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
+            },
+        )
+
+    try:
+        # Get current configuration
+        config = await proxy_config.get_config()
+        callback_name = data.callback_name.lower()
+
+        # Check if callback exists in current configuration
+        litellm_settings = config.get("litellm_settings", {})
+        success_callbacks = litellm_settings.get("success_callback", [])
+
+        if callback_name not in success_callbacks:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": f"Callback '{callback_name}' not found in active configuration"
+                },
+            )
+
+        # Remove callback from success_callback list
+        success_callbacks.remove(callback_name)
+        config.setdefault("litellm_settings", {})[
+            "success_callback"
+        ] = success_callbacks
+
+        # Save the updated configuration
+        await proxy_config.save_config(new_config=config)
+
+        # Restart the proxy to apply changes
+        await proxy_config.add_deployment(
+            prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+        )
+
+        return {
+            "message": f"Successfully deleted callback: {callback_name}",
+            "removed_callback": callback_name,
+            "remaining_callbacks": success_callbacks,
+            "deleted_at": datetime.now().isoformat(),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"litellm.proxy.proxy_server.delete_callback(): Exception occurred - {str(e)}"
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
+        raise ProxyException(
+            message="Error deleting callback: " + str(e),
+            type=ProxyErrorTypes.internal_server_error,
+            param="callback_name",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 
 @router.get(

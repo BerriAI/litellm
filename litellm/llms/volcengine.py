@@ -61,4 +61,5 @@ class VolcEngineConfig(OpenAILikeChatConfig):
             "functions",
             "max_retries",
             "extra_headers",
+            "thinking",
         ]  # works across all models
