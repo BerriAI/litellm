@@ -34,6 +34,26 @@ const TeamMembersComponent: React.FC<TeamMembersComponentProps> = ({
   setIsEditMemberModalVisible,
   setIsAddMemberModalVisible,
 }) => {
+  // Helper function to convert scientific notation to normal decimal format
+  const formatNumber = (value: number | null): string => {
+    if (value === null || value === undefined) return '0';
+    
+    if (typeof value === 'number') {
+      // Convert scientific notation to normal decimal
+      const normalNumber = Number(value);
+      
+      // If it's a whole number, return it without decimals
+      if (normalNumber === Math.floor(normalNumber)) {
+        return normalNumber.toString();
+      }
+      
+      // For decimal numbers, use toFixed and remove trailing zeros
+      return normalNumber.toFixed(8).replace(/\.?0+$/, '');
+    }
+    
+    return '0';
+  };
+
   // Helper function to get spend for a user
   const getUserSpend = (userId: string | null): number | null => {
     if (!userId) return 0;
@@ -41,11 +61,11 @@ const TeamMembersComponent: React.FC<TeamMembersComponentProps> = ({
     return membership?.spend || 0;
   };
 
-  const getUserBudget = (userId: string | null): number | null => {
+  const getUserBudget = (userId: string | null): string | null => {
     if (!userId) return null;
     const membership = teamData.team_memberships.find(tm => tm.user_id === userId);
     console.log(`membership=${membership}`);
-    return membership?.litellm_budget_table?.max_budget || null;
+    return formatNumber(membership?.litellm_budget_table?.max_budget || null);
   };
 
   return (
@@ -76,10 +96,9 @@ const TeamMembersComponent: React.FC<TeamMembersComponentProps> = ({
                   <Text className="font-mono">{member.role}</Text>
                 </TableCell>
                 <TableCell>
-                  <Text className="font-mono">{getUserSpend(member.user_id) ? `$${getUserSpend(member.user_id)}` : '$0'}</Text>
+                  <Text className="font-mono">${formatNumber(getUserSpend(member.user_id))}</Text>
                 </TableCell>
                 <TableCell>
-
                   <Text className="font-mono">{getUserBudget(member.user_id) ? `$${getUserBudget(member.user_id)}` : 'No Limit'}</Text>
                 </TableCell>
                 <TableCell>
