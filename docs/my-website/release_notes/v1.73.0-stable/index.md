@@ -72,30 +72,22 @@ pip install litellm==1.73.0
 
 ### Passthrough Endpoints v2
 
-This release brings major improvements to passthrough endpoints with support for subroutes and enhanced cost tracking capabilities.
+This release brings support for subroutes and custom cost tracking in passthrough endpoints. When teams use external APIs through LiteLLM, they can now add one passthrough route (e.g. `/bria`) and access multiple endpoints through subroutes like `/bria/text-to-image/base`, `/bria/enhance_image` - all with custom costs per request.
 
-**New Features:**
-- Support for subroutes in passthrough endpoints
-- Custom cost per passthrough request configuration
-- Cleaned up UI for better management
-- Enhanced request tracking and logging
+This is great for API providers like [Bria AI](https://platform.bria.ai/) with multiple endpoints where you want one unified route instead of managing separate passthrough endpoints.
 
-This enables teams to have more granular control over their passthrough endpoints and better visibility into costs associated with external API calls.
+For Proxy Admins, this means adding one passthrough route and having developers access all subroutes (image generation, editing, etc.). For developers, this means simplified endpoint access with transparent cost visibility.
 
 [Learn more about Passthrough Endpoints](../../docs/pass_through)
 
 
 ### Health Check Dashboard
 
-New comprehensive health check frontend UI components and dashboard integration for monitoring model status and performance.
+This release brings real-time health monitoring with a new dashboard for tracking model status. When models are configured, administrators can monitor health status and track success/failure patterns across endpoints.
 
-**Features:**
-- Real-time model health monitoring
-- Interactive dashboard with health status indicators
-- Success/failure tracking for model endpoints
-- Clickable model IDs for detailed information
+This is great for production deployments with multiple model providers where you need immediate visibility into model availability.
 
-This provides administrators with better visibility into the health and availability of their configured models.
+For Proxy Admins, this enables centralized monitoring with interactive health indicators. For developers, this means quick identification of model issues and reliability insights.
 
 
 ---
