@@ -19,6 +19,7 @@ import {
   deletePassThroughEndpointsCall 
 } from "./networking";
 import { Eye, EyeOff } from "lucide-react";
+import RoutePreview from "./route_preview";
 
 export interface PassThroughInfoProps {
   endpointData: PassThroughEndpoint;
@@ -192,6 +193,15 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                 </div>
               </Card>
             </Grid>
+
+            {/* Route Preview Section */}
+            <div className="mt-6">
+              <RoutePreview 
+                pathValue={endpointData.path}
+                targetValue={endpointData.target}
+                includeSubpath={endpointData.include_subpath || false}
+              />
+            </div>
 
             {endpointData.headers && Object.keys(endpointData.headers).length > 0 && (
               <Card className="mt-6">
