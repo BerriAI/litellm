@@ -76,7 +76,7 @@ This release brings support for adding billing and full URL forwarding for passt
 
 This means you as Proxy Admin can onboard third-party endpoints like Bria API and Mistral OCR, set a cost per request, and give your developers access to the complete API functionality.
 
-[Learn more about Passthrough Endpoints](../../docs/pass_through)
+[Learn more about Passthrough Endpoints](../../docs/proxy/pass_through)
 
 
 ### v2 Health Checks 
@@ -163,7 +163,7 @@ This means you as Proxy Admin can onboard third-party endpoints like Bria API an
     - Allow connecting to MCP with authentication headers - [PR](https://github.com/BerriAI/litellm/pull/11891), [Get Started](../../docs/mcp#using-your-mcp-with-client-side-credentials)
 - **[Speech API](../../docs/speech)**
     - Working Gemini TTS support via OpenAI's `/v1/speech` endpoint - [PR](https://github.com/BerriAI/litellm/pull/11832)
-- **[Passthrough Endpoints](../../docs/pass_through/custom_routes)**
+- **[Passthrough Endpoints](../../docs/proxy/pass_through)**
     - Add support for subroutes for passthrough endpoints - [PR](https://github.com/BerriAI/litellm/pull/11827)
     - Support for setting custom cost per passthrough request - [PR](https://github.com/BerriAI/litellm/pull/11870)
     - Ensure "Request" is tracked for passthrough requests on LiteLLM Proxy - [PR](https://github.com/BerriAI/litellm/pull/11873)
