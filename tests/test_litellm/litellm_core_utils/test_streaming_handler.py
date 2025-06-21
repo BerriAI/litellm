@@ -714,3 +714,49 @@ def test_streaming_handler_with_created_time_propagation(
             created = chunk.created
         else:
             assert created == chunk.created
+
+def test_optional_combine_thinking_block_with_none_content(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Test that _optional_combine_thinking_block_in_choices handles None content
+    without raising TypeError and correctly merges reasoning_content with <think> tags.
+    """
+    initialized_custom_stream_wrapper.merge_reasoning_content_in_choices = True
+    initialized_custom_stream_wrapper.sent_first_thinking_block = False
+    initialized_custom_stream_wrapper.sent_last_thinking_block = False
+
+    chunk = {
+        "id": "chunk1",
+        "object": "chat.completion.chunk",
+        "created": 1741037890,
+        "model": "gemini-2.5-flash",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "content": None,
+                    "reasoning_content": "Let me analyze this step by step",
+                },
+                "finish_reason": None,
+            }
+        ],
+    }
+
+    response = ModelResponseStream(**chunk)
+    initialized_custom_stream_wrapper._optional_combine_thinking_block_in_choices(
+        response
+    )
+
+    assert (
+        response.choices[0].delta.content == "<think>Let me analyze this step by step"
+    ), "Content should be initialized and merged with <think> tag"
+    assert not hasattr(
+        response.choices[0].delta, "reasoning_content"
+    ), "reasoning_content should be removed"
+    assert (
+        initialized_custom_stream_wrapper.sent_first_thinking_block is True
+    ), "sent_first_thinking_block should be True"
+    assert (
+        initialized_custom_stream_wrapper.sent_last_thinking_block is False
+    ), "sent_last_thinking_block should remain False"
