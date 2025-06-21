@@ -8,6 +8,14 @@ export interface ModelInfo {
   access_groups: string[] | null;
 }
 
+// Add new types for nested team structure
+export interface TeamGroup {
+  team_id: string;
+  team_name: string;
+  models: ModelData[];
+  isExpanded: boolean;
+}
+
 export interface LiteLLMParams {
   model: string;
   api_base?: string;
@@ -31,6 +39,15 @@ export interface ModelData {
   litellm_params: LiteLLMParams;
   cleanedLitellmParams: Record<string, any>;
   accessToken?: string;
+  accesss_via_team_ids?: string[]; // Note the typo - matches backend
+}
+
+export interface NestedTableRow {
+  type: "team" | "model";
+  team_id?: string;
+  team_name?: string;
+  model?: ModelData;
+  isExpanded?: boolean;
 }
 
 export interface ModelDashboardProps {
