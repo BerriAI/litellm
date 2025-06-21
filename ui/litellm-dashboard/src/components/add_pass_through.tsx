@@ -21,6 +21,7 @@ import {
   Divider,
   Collapse,
 } from "antd";
+import NumericalInput from "./shared/numerical_input";
 import { InfoCircleOutlined, ApiOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CopyOutlined } from "@ant-design/icons";
 import { keyCreateCall, slackBudgetAlertsHealthCheck, modelAvailableCall } from "./networking";
 import { list } from "postcss";
@@ -71,17 +72,12 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
     try {
       console.log(`formValues: ${JSON.stringify(formValues)}`);
 
-      const newPassThroughItem: passThroughItem = {
-        "headers": formValues["headers"],
-        "path": formValues["path"],
-        "target": formValues["target"],
-        "include_subpath": formValues["include_subpath"] || false,
-        "cost_per_request": formValues["cost_per_request"] || 0
-      }
+      const response = await createPassThroughEndpoint(accessToken, formValues);
       
-      await createPassThroughEndpoint(accessToken, formValues);
+      // Use the created endpoint from the API response (includes the generated ID)
+      const createdEndpoint = response.endpoints[0];
       
-      const updatedPassThroughSettings = [...passThroughItems, newPassThroughItem]
+      const updatedPassThroughSettings = [...passThroughItems, createdEndpoint]
       setPassThroughItems(updatedPassThroughSettings)
       
       message.success("Pass-through endpoint created successfully");
@@ -284,13 +280,12 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                   </div>
                 }
               >
-                <InputNumber 
+                <NumericalInput 
                   min={0} 
                   step={0.001} 
-                  precision={6}
-                  placeholder="2.000000"
+                  precision={4}
+                  placeholder="2.0000"
                   size="large"
-                  className="rounded-lg w-full"
                 />
               </Form.Item>
             </Card>

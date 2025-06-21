@@ -783,7 +783,7 @@ const Settings: React.FC<SettingsPageProps> = ({
       okButtonProps={{ danger: true }}
     >
       <p>
-        Are you sure you want to delete the callback "{callbackToDelete}"?
+        Are you sure you want to delete the callback - {callbackToDelete}?
         This action cannot be undone.
       </p>
     </Modal>
