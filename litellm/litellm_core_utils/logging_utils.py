@@ -89,6 +89,7 @@ def _assemble_complete_response_from_streaming_chunks(
                 messages=request_kwargs.get("messages", None),
                 start_time=start_time,
                 end_time=end_time,
+                usage=getattr(result, "usage"),
             )
         except Exception as e:
             log_message = (

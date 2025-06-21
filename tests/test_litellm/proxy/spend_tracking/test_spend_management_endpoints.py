@@ -29,6 +29,8 @@ ignored_keys = [
     "endTime",
     "metadata.model_map_information",
     "metadata.usage_object",
+    "metadata.additional_usage_values.is_byok",
+    "metadata.additional_usage_values.cost",
 ]
 
 
