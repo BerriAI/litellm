@@ -2645,9 +2645,13 @@ class OrganizationMemberUpdateResponse(MemberUpdateResponse):
 ##########################################
 
 
+class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
+    team_member_budget_table: Optional[LiteLLM_BudgetTable] = None
+
+
 class TeamInfoResponseObject(TypedDict):
     team_id: str
-    team_info: LiteLLM_TeamTable
+    team_info: TeamInfoResponseObjectTeamTable
     keys: List
     team_memberships: List[LiteLLM_TeamMembership]
 

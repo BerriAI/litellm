@@ -1606,6 +1606,7 @@ async def team_info(
     --header 'Authorization: Bearer your_api_key_here'
     ```
     """
+    from litellm.proxy._types import TeamInfoResponseObjectTeamTable
     from litellm.proxy.proxy_server import prisma_client
 
     try:
@@ -1674,11 +1675,28 @@ async def team_info(
         )
 
         if isinstance(team_info, dict):
-            _team_info = LiteLLM_TeamTable(**team_info)
+            _team_info = TeamInfoResponseObjectTeamTable(**team_info)
         elif isinstance(team_info, BaseModel):
-            _team_info = LiteLLM_TeamTable(**team_info.model_dump())
+            _team_info = TeamInfoResponseObjectTeamTable(**team_info.model_dump())
         else:
-            _team_info = LiteLLM_TeamTable()
+            _team_info = TeamInfoResponseObjectTeamTable()
+
+        ## GET TEAM BUDGET (if exists) ##
+        team_member_budget_id = (
+            _team_info.metadata.get("team_member_budget_id")
+            if _team_info.metadata is not None
+            else None
+        )
+        if team_member_budget_id is not None:
+            try:
+                team_budget = await prisma_client.db.litellm_budgettable.find_unique(
+                    where={"budget_id": team_member_budget_id}
+                )
+                _team_info.team_member_budget_table = team_budget
+            except Exception:
+                verbose_proxy_logger.info(
+                    f"Team member budget table not found, passed team_member_budget_id={team_member_budget_id}"
+                )
 
         # ## UNFURL 'all-proxy-models' into the team_info.models list ##
         # if llm_router is not None:
