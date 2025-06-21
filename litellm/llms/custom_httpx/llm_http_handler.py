@@ -1108,18 +1108,21 @@ class BaseLLMHTTPHandler:
             )
 
         # Prepare the request
-        headers, complete_url, binary_data, json_data = (
-            self._prepare_audio_transcription_request(
-                model=model,
-                audio_file=audio_file,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                logging_obj=logging_obj,
-                api_key=api_key,
-                api_base=api_base,
-                headers=headers,
-                provider_config=provider_config,
-            )
+        (
+            headers,
+            complete_url,
+            binary_data,
+            json_data,
+        ) = self._prepare_audio_transcription_request(
+            model=model,
+            audio_file=audio_file,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            logging_obj=logging_obj,
+            api_key=api_key,
+            api_base=api_base,
+            headers=headers,
+            provider_config=provider_config,
         )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -1170,18 +1173,21 @@ class BaseLLMHTTPHandler:
             )
 
         # Prepare the request
-        headers, complete_url, binary_data, json_data = (
-            self._prepare_audio_transcription_request(
-                model=model,
-                audio_file=audio_file,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                logging_obj=logging_obj,
-                api_key=api_key,
-                api_base=api_base,
-                headers=headers,
-                provider_config=provider_config,
-            )
+        (
+            headers,
+            complete_url,
+            binary_data,
+            json_data,
+        ) = self._prepare_audio_transcription_request(
+            model=model,
+            audio_file=audio_file,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            logging_obj=logging_obj,
+            api_key=api_key,
+            api_base=api_base,
+            headers=headers,
+            provider_config=provider_config,
         )
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
@@ -1437,9 +1443,9 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         headers = responses_api_provider_config.validate_environment(
-            api_key=litellm_params.api_key,
             headers=response_api_optional_request_params.get("extra_headers", {}) or {},
             model=model,
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -1557,9 +1563,9 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         headers = responses_api_provider_config.validate_environment(
-            api_key=litellm_params.api_key,
             headers=response_api_optional_request_params.get("extra_headers", {}) or {},
             model=model,
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -1678,9 +1684,7 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         headers = responses_api_provider_config.validate_environment(
-            api_key=litellm_params.api_key,
-            headers=extra_headers or {},
-            model="None",
+            headers=extra_headers or {}, model="None", litellm_params=litellm_params
         )
 
         if extra_headers:
@@ -1762,9 +1766,7 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         headers = responses_api_provider_config.validate_environment(
-            api_key=litellm_params.api_key,
-            headers=extra_headers or {},
-            model="None",
+            headers=extra_headers or {}, model="None", litellm_params=litellm_params
         )
 
         if extra_headers:
@@ -1847,9 +1849,7 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         headers = responses_api_provider_config.validate_environment(
-            api_key=litellm_params.api_key,
-            headers=extra_headers or {},
-            model="None",
+            headers=extra_headers or {}, model="None", litellm_params=litellm_params
         )
 
         if extra_headers:
@@ -1915,9 +1915,7 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         headers = responses_api_provider_config.validate_environment(
-            api_key=litellm_params.api_key,
-            headers=extra_headers or {},
-            model="None",
+            headers=extra_headers or {}, model="None", litellm_params=litellm_params
         )
 
         if extra_headers:
@@ -2008,9 +2006,7 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         headers = responses_api_provider_config.validate_environment(
-            api_key=litellm_params.api_key,
-            headers=extra_headers or {},
-            model="None",
+            headers=extra_headers or {}, model="None", litellm_params=litellm_params
         )
 
         if extra_headers:
@@ -2078,9 +2074,7 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         headers = responses_api_provider_config.validate_environment(
-            api_key=litellm_params.api_key,
-            headers=extra_headers or {},
-            model="None",
+            headers=extra_headers or {}, model="None", litellm_params=litellm_params
         )
 
         if extra_headers:
@@ -2447,10 +2441,7 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[
-        ImageResponse,
-        Coroutine[Any, Any, ImageResponse],
-    ]:
+    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
         """
 
         Handles image edit requests.

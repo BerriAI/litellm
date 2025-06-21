@@ -95,10 +95,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
+        litellm_params: GenericLiteLLMParams = GenericLiteLLMParams(),
     ) -> dict:
         api_key = (
-            api_key
+            litellm_params.api_key
             or litellm.api_key
             or litellm.openai_key
             or get_secret_str("OPENAI_API_KEY")

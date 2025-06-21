@@ -153,9 +153,9 @@ class TestOpenAIResponsesAPIConfig:
         # Test with provided API key
         headers = {}
         api_key = "test_api_key"
-
+        litellm_params = GenericLiteLLMParams(api_key=api_key)
         result = self.config.validate_environment(
-            headers=headers, model=self.model, api_key=api_key
+            headers=headers, model=self.model, litellm_params=litellm_params
         )
 
         assert "Authorization" in result
