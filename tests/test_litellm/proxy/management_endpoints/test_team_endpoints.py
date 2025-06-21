@@ -271,7 +271,7 @@ async def test_new_team_with_object_permission(mock_db_client, mock_admin_auth):
         return_value=MagicMock(id="model123")
     )
 
-    # 3. Capture team table creation
+    # 3. Capture team table creation and count
     team_create_result = MagicMock(
         team_id="team-456",
         object_permission_id="objperm123",
@@ -281,8 +281,10 @@ async def test_new_team_with_object_permission(mock_db_client, mock_admin_auth):
         "object_permission_id": "objperm123",
     }
     mock_team_create = AsyncMock(return_value=team_create_result)
+    mock_team_count = AsyncMock(return_value=0)  # Mock count to return 0 (no existing teams)
     mock_db_client.db.litellm_teamtable = MagicMock()
     mock_db_client.db.litellm_teamtable.create = mock_team_create
+    mock_db_client.db.litellm_teamtable.count = mock_team_count
 
     # 4. Mock user table update behaviour (called for each member)
     mock_db_client.db.litellm_usertable = MagicMock()
