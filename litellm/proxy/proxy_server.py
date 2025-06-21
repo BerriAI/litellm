@@ -5531,6 +5531,47 @@ async def non_admin_all_models(
     return unique_models
 
 
+async def get_all_team_models(
+    user_teams: Union[List[str], Literal["*"]],
+    prisma_client: PrismaClient,
+    llm_router: Router,
+) -> Dict[str, List[str]]:
+    """
+    Get all models across all teams user is in.
+
+    1. Get all teams user is in
+    2. Get all models across all teams
+    3. Return {"model_id": ["team_id1", "team_id2"]}
+    """
+    team_models: Dict[str, List[str]] = {}
+    team_db_objects_typed: List[LiteLLM_TeamTable] = []
+    if user_teams == "*":
+        team_db_objects = await prisma_client.db.litellm_teamtable.find_many()
+        team_db_objects_typed = [
+            LiteLLM_TeamTable(**team_db_object.model_dump())
+            for team_db_object in team_db_objects
+        ]
+    else:
+        team_db_objects = await prisma_client.db.litellm_teamtable.find_many(
+            where={"team_id": {"in": user_teams}}
+        )
+        team_db_objects_typed = [
+            LiteLLM_TeamTable(**team_db_object.model_dump())
+            for team_db_object in team_db_objects
+        ]
+
+    for team_object in team_db_objects_typed:
+        for model_name in team_object.models:
+            _models = llm_router.get_model_list(model_name=model_name)
+            if _models is not None:
+                for model in _models:
+                    model_id = model.get("model_info", {}).get("id", None)
+                    if model_id is not None:
+                        team_models.setdefault(model_id, []).append(team_object.team_id)
+
+    return team_models
+
+
 @router.get(
     "/v2/model/info",
     description="v2 - returns models available to the user based on their API key permissions. Shows model info from config.yaml (except api key and api base). Filter to just user-added models with ?user_models_only=true",
@@ -5546,6 +5587,9 @@ async def model_info_v2(
     user_models_only: Optional[bool] = fastapi.Query(
         False, description="Only return models added by this user"
     ),
+    include_team_models: Optional[bool] = fastapi.Query(
+        False, description="Return all models across all teams user is in."
+    ),
     debug: Optional[bool] = False,
 ):
     """
@@ -5559,6 +5603,12 @@ async def model_info_v2(
             detail={
                 "error": f"No model list passed, models router={llm_router}. You can add a model through the config.yaml or on the LiteLLM Admin UI."
             },
+        )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
     # Load existing config
@@ -5583,6 +5633,24 @@ async def model_info_v2(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
         )
+
+    if include_team_models:
+        user_teams: Optional[Union[List[str], Literal["*"]]] = None
+        if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+            user_teams = "*"
+        else:
+            user_db_object = await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_id": user_api_key_dict.user_id}
+            )
+            if user_db_object is not None:
+                user_object = LiteLLM_UserTable(**user_db_object)
+                user_teams = user_object.teams or []
+        if user_teams is not None:
+            team_models = await get_all_team_models(
+                user_teams=user_teams,
+                prisma_client=prisma_client,
+                llm_router=llm_router,
+            )
 
     # fill in model info based on config.yaml and litellm model_prices_and_context_window.json
     for _model in all_models:
@@ -8024,7 +8092,7 @@ async def delete_callback(
     Delete specific logging callback from configuration.
     """
     global prisma_client, proxy_config
-    
+
     if prisma_client is None:
         raise HTTPException(
             status_code=400,
@@ -8054,24 +8122,28 @@ async def delete_callback(
         # Get current configuration
         config = await proxy_config.get_config()
         callback_name = data.callback_name.lower()
-        
+
         # Check if callback exists in current configuration
         litellm_settings = config.get("litellm_settings", {})
         success_callbacks = litellm_settings.get("success_callback", [])
-        
+
         if callback_name not in success_callbacks:
             raise HTTPException(
                 status_code=404,
-                detail={"error": f"Callback '{callback_name}' not found in active configuration"},
+                detail={
+                    "error": f"Callback '{callback_name}' not found in active configuration"
+                },
             )
-        
+
         # Remove callback from success_callback list
         success_callbacks.remove(callback_name)
-        config.setdefault("litellm_settings", {})["success_callback"] = success_callbacks
-        
+        config.setdefault("litellm_settings", {})[
+            "success_callback"
+        ] = success_callbacks
+
         # Save the updated configuration
         await proxy_config.save_config(new_config=config)
-        
+
         # Restart the proxy to apply changes
         await proxy_config.add_deployment(
             prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
