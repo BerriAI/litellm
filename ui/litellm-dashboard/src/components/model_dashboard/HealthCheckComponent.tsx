@@ -261,6 +261,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
           [modelName]: {
             status: 'unhealthy',
             lastCheck: currentTime,
+            lastSuccess: prev[modelName]?.lastSuccess || 'None',
             loading: false,
             error: errorMessage,
             fullError: rawError
@@ -319,6 +320,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
         [modelName]: {
           status: 'unhealthy',
           lastCheck: currentTime,
+          lastSuccess: prev[modelName]?.lastSuccess || 'None',
           loading: false,
           error: errorMessage,
           fullError: rawError
@@ -365,6 +367,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
             [modelName]: {
               status: 'unhealthy',
               lastCheck: currentTime,
+              lastSuccess: prev[modelName]?.lastSuccess || 'None',
               loading: false,
               error: errorMessage,
               fullError: rawError
@@ -393,6 +396,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
           [modelName]: {
             status: 'unhealthy',
             lastCheck: currentTime,
+            lastSuccess: prev[modelName]?.lastSuccess || 'None',
             loading: false,
             error: errorMessage,
             fullError: rawError
@@ -562,6 +566,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
               litellm_model_name: model.litellm_model_name,
               health_status: healthStatus.status,
               last_check: healthStatus.lastCheck,
+              last_success: healthStatus.lastSuccess || 'None',
               health_loading: healthStatus.loading,
               health_error: healthStatus.error,
               health_full_error: healthStatus.fullError,

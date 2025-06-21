@@ -15,6 +15,7 @@ interface HealthCheckData {
   litellm_model_name?: string;
   health_status: string;
   last_check: string;
+  last_success: string;
   health_loading: boolean;
   health_error?: string;
   health_full_error?: string;
@@ -231,6 +232,47 @@ export const healthCheckColumns = (
       return (
         <Text className="text-gray-600 text-sm">
           {model.health_loading ? 'Check in progress...' : model.last_check}
+        </Text>
+      );
+    },
+  },
+  {
+    header: "Last Success",
+    accessorKey: "last_success",
+    enableSorting: true,
+    sortingFn: (rowA, rowB, columnId) => {
+      const lastSuccessA = rowA.getValue("last_success") as string || 'Never succeeded';
+      const lastSuccessB = rowB.getValue("last_success") as string || 'Never succeeded';
+      
+      // Handle special cases
+      if (lastSuccessA === 'Never succeeded' && lastSuccessB === 'Never succeeded') return 0;
+      if (lastSuccessA === 'Never succeeded') return 1; // Never succeeded goes to bottom
+      if (lastSuccessB === 'Never succeeded') return -1;
+      if (lastSuccessA === 'None' && lastSuccessB === 'None') return 0;
+      if (lastSuccessA === 'None') return 1; // None goes to bottom
+      if (lastSuccessB === 'None') return -1;
+      
+      // Parse dates for comparison
+      const dateA = new Date(lastSuccessA);
+      const dateB = new Date(lastSuccessB);
+      
+      // If dates are invalid, treat as never succeeded
+      if (isNaN(dateA.getTime()) && isNaN(dateB.getTime())) return 0;
+      if (isNaN(dateA.getTime())) return 1;
+      if (isNaN(dateB.getTime())) return -1;
+      
+      // Sort by date (most recent first)
+      return dateB.getTime() - dateA.getTime();
+    },
+    cell: ({ row }) => {
+      const model = row.original;
+      const modelName = model.model_name;
+      const healthStatus = modelHealthStatuses[modelName];
+      const lastSuccess = healthStatus?.lastSuccess || 'None';
+      
+      return (
+        <Text className="text-gray-600 text-sm">
+          {lastSuccess}
         </Text>
       );
     },
