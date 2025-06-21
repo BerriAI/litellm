@@ -179,6 +179,8 @@ class OllamaConfig(BaseConfig):
             if param == "response_format" and isinstance(value, dict):
                 if value["type"] == "json_object":
                     optional_params["format"] = "json"
+                elif value["type"] == "json_schema":
+                    optional_params["format"] = value["json_schema"]["schema"]
 
         return optional_params
 
