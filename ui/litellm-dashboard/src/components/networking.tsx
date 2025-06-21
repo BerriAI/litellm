@@ -1611,10 +1611,20 @@ export const modelInfoCall = async (
   try {
     console.log("modelInfoCall:", accessToken, userID, userRole);
     let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/model/info` : `/v2/model/info`;
-
+    
+    // Build query parameters
+    const params = new URLSearchParams();
+    
     if (!all_admin_roles.includes(userRole as string)) {
       // only show users models they've added
-      url += `?user_models_only=true`;
+      params.append('user_models_only', 'true');
+    }
+    
+    // Always include team models for nested view
+    params.append('include_team_models', 'true');
+    
+    if (params.toString()) {
+      url += `?${params.toString()}`;
     }
     //message.info("Requesting model data");
     const response = await fetch(url, {

@@ -112,6 +112,7 @@ import { Providers, provider_map, providerLogoMap, getProviderLogoAndName, getPl
 import ModelInfoView from "./model_info_view";
 import AddModelTab from "./add_model/add_model_tab";
 import { ModelDataTable } from "./model_dashboard/table";
+import { NestedModelTable } from "./model_dashboard/nested_table";
 import { columns } from "./model_dashboard/columns";
 import HealthCheckComponent from "./model_dashboard/HealthCheckComponent";
 import PassThroughSettings from "./pass_through_settings";
@@ -259,6 +260,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
   const [selectedTeamFilter, setSelectedTeamFilter] = useState<string | null>(null);
   const [selectedModelAccessGroupFilter, setSelectedModelAccessGroupFilter] = useState<string | null>(null);
+  
+  // Add state for nested team view
+  const [nestedView, setNestedView] = useState<boolean>(true); // Enable nested view by default
 
   const [showColumnDropdown, setShowColumnDropdown] = useState(false);
 
@@ -273,6 +277,41 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     const _providerModels = getProviderModels(provider, modelMap);
     setProviderModels(_providerModels);
     console.log(`providerModels: ${_providerModels}`);
+  };
+
+  // Transform flat model data into nested team structure
+  const transformToNestedData = (models: any[]) => {
+    const teamGroups: { [teamId: string]: { team_name: string; models: any[] } } = {};
+    
+    // Group models by their accessible team IDs
+    models.forEach(model => {
+      const accessibleTeamIds = model.model_info.accesss_via_team_ids || [];
+      
+      // If model has no team access, put it in a default group
+      if (accessibleTeamIds.length === 0) {
+        const defaultTeamId = "unassigned";
+        if (!teamGroups[defaultTeamId]) {
+          teamGroups[defaultTeamId] = {
+            team_name: "Unassigned Models",
+            models: []
+          };
+        }
+        teamGroups[defaultTeamId].models.push(model);
+      } else {
+        // Add model to each team it's accessible from
+        accessibleTeamIds.forEach((teamId: string) => {
+          if (!teamGroups[teamId]) {
+            teamGroups[teamId] = {
+              team_name: teamId, // You might want to fetch actual team names
+              models: []
+            };
+          }
+          teamGroups[teamId].models.push(model);
+        });
+      }
+    });
+
+    return teamGroups;
   };
 
   const updateModelMetrics = async (
@@ -1212,11 +1251,52 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           <Text className="text-sm text-gray-700">
                             Showing {modelData && modelData.data.length > 0 ? modelData.data.length : 0} results
                           </Text>
+                          <div className="flex items-center gap-2">
+                            <Text className="text-sm text-gray-600">View:</Text>
+                            <Button
+                              size="xs"
+                              className={nestedView ? "bg-blue-500 text-white" : "bg-gray-200 text-gray-700"}
+                              onClick={() => setNestedView(true)}
+                            >
+                              Nested
+                            </Button>
+                            <Button
+                              size="xs"
+                              className={!nestedView ? "bg-blue-500 text-white" : "bg-gray-200 text-gray-700"}
+                              onClick={() => setNestedView(false)}
+                            >
+                              Flat
+                            </Button>
+                          </div>
                         </div>
                       </div>
                     </div>
 
-                    <ModelDataTable
+                    {nestedView ? (
+                      <NestedModelTable
+                        modelData={modelData.data.filter(
+                          (model: any) => (
+                            (selectedModelGroup === "all" || model.model_name === selectedModelGroup || !selectedModelGroup) &&
+                            (selectedTeamFilter === "all" || model.model_info["team_id"] === selectedTeamFilter || !selectedTeamFilter) &&
+                            (selectedModelAccessGroupFilter === "all" || model.model_info["access_groups"]?.includes(selectedModelAccessGroupFilter) || !selectedModelAccessGroupFilter)
+                          )
+                        )}
+                        expandedTeams={expandedRows}
+                        setExpandedTeams={setExpandedRows}
+                        userRole={userRole}
+                        userID={userID}
+                        premiumUser={premiumUser}
+                        setSelectedModelId={setSelectedModelId}
+                        setSelectedTeamId={setSelectedTeamId}
+                        getDisplayModelName={getDisplayModelName}
+                        handleEditClick={handleEditClick}
+                        handleRefreshClick={handleRefreshClick}
+                        setEditModel={setEditModel}
+                        expandedRows={expandedRows}
+                        setExpandedRows={setExpandedRows}
+                      />
+                    ) : (
+                      <ModelDataTable
                         columns={columns(
                           userRole,
                           userID,
@@ -1230,16 +1310,17 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           expandedRows,
                           setExpandedRows,
                         )}
-                      data={modelData.data.filter(
-                        (model: any) => (
-                          (selectedModelGroup === "all" || model.model_name === selectedModelGroup || !selectedModelGroup) &&
-                          (selectedTeamFilter === "all" || model.model_info["team_id"] === selectedTeamFilter || !selectedTeamFilter) &&
-                          (selectedModelAccessGroupFilter === "all" || model.model_info["access_groups"]?.includes(selectedModelAccessGroupFilter) || !selectedModelAccessGroupFilter)
-                        )
-                      )}
-                      isLoading={false}
-                      table={tableRef}
-                    />
+                        data={modelData.data.filter(
+                          (model: any) => (
+                            (selectedModelGroup === "all" || model.model_name === selectedModelGroup || !selectedModelGroup) &&
+                            (selectedTeamFilter === "all" || model.model_info["team_id"] === selectedTeamFilter || !selectedTeamFilter) &&
+                            (selectedModelAccessGroupFilter === "all" || model.model_info["access_groups"]?.includes(selectedModelAccessGroupFilter) || !selectedModelAccessGroupFilter)
+                          )
+                        )}
+                        isLoading={false}
+                        table={tableRef}
+                      />
+                    )}
                   </div>
                 </div>
               </Grid>
