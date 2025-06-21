@@ -1141,7 +1141,67 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   <div className="bg-white rounded-lg shadow">
                     <div className="border-b px-6 py-4">
                       <div className="flex flex-col space-y-4">
-                        {/* Search and Filter Controls */}
+                        {/* Current Team Selector - Prominent */}
+                        <div className="flex items-center justify-between bg-gray-50 rounded-lg p-4 border-2 border-gray-200">
+                          <div className="flex items-center gap-4">
+                            <Text className="text-lg font-semibold text-gray-900">Current Team:</Text>
+                            <Select
+                              className="w-80"
+                              defaultValue="personal"
+                              value={currentTeam}
+                              onValueChange={(value) => setCurrentTeam(value)}
+                            >
+                              <SelectItem value="personal">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                                  <span className="font-medium">Personal</span>
+                                </div>
+                              </SelectItem>
+                              {teams?.filter(team => team.team_id).map((team) => (
+                                <SelectItem
+                                  key={team.team_id}
+                                  value={team.team_id}
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                                    <span className="font-medium">
+                                      {team.team_alias 
+                                        ? `${team.team_alias.slice(0, 30)}...`
+                                        : `Team ${team.team_id.slice(0, 30)}...`
+                                      }
+                                    </span>
+                                  </div>
+                                </SelectItem>
+                              ))}
+                            </Select>
+                          </div>
+                          
+                          {/* Model View Mode Toggle - Also prominent */}
+                          <div className="flex items-center gap-4">
+                            <Text className="text-lg font-semibold text-gray-900">View:</Text>
+                            <Select
+                              className="w-64"
+                              defaultValue="current_team"
+                              value={modelViewMode}
+                              onValueChange={(value) => setModelViewMode(value as 'current_team' | 'all')}
+                            >
+                              <SelectItem value="current_team">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
+                                  <span className="font-medium">Current Team Models</span>
+                                </div>
+                              </SelectItem>
+                              <SelectItem value="all">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-2 h-2 bg-gray-500 rounded-full"></div>
+                                  <span className="font-medium">All Available Models</span>
+                                </div>
+                              </SelectItem>
+                            </Select>
+                          </div>
+                        </div>
+
+                        {/* Other Filters */}
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
                             {/* Model Name Filter */}
@@ -1165,43 +1225,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               </Select>
                             </div>
 
-                            {/* Current Team Selector */}
-                            <div className="flex items-center gap-2">
-                              <Text>Current Team:</Text>
-                              <Select
-                                className="w-64"
-                                defaultValue="personal"
-                                value={currentTeam}
-                                onValueChange={(value) => setCurrentTeam(value)}
-                              >
-                                <SelectItem value="personal">Personal</SelectItem>
-                                {teams?.filter(team => team.team_id).map((team) => (
-                                  <SelectItem
-                                    key={team.team_id}
-                                    value={team.team_id}  // ← This is already the team ID
-                                  >
-                                    {team.team_alias 
-                                      ? `${team.team_alias}`
-                                      : `Team ${team.team_id.slice(0, 8)}...`
-                                    }
-                                  </SelectItem>
-                                ))}
-                              </Select>
-                            </div>
-
-                            {/* Model View Mode Toggle */}
-                            <div className="flex items-center gap-2">
-                              <Text>View:</Text>
-                              <Select
-                                className="w-64"
-                                defaultValue="current_team"
-                                value={modelViewMode}
-                                onValueChange={(value) => setModelViewMode(value as 'current_team' | 'all')}
-                              >
-                                <SelectItem value="current_team">Current Team Models</SelectItem>
-                                <SelectItem value="all">All Models</SelectItem>
-                              </Select>
-                            </div>
                             <div className="flex items-center gap-2">
                               <Text>Filter by Model Access Group:</Text>
                               <Select
