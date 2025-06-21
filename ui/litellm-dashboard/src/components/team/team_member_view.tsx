@@ -76,7 +76,7 @@ const TeamMembersComponent: React.FC<TeamMembersComponentProps> = ({
                   <Text className="font-mono">{member.role}</Text>
                 </TableCell>
                 <TableCell>
-                  <Text className="font-mono">{getUserSpend(member.user_id) ? `$${getUserSpend(member.user_id)}` : 'No Limit'}</Text>
+                  <Text className="font-mono">{getUserSpend(member.user_id) ? `$${getUserSpend(member.user_id)}` : '$0'}</Text>
                 </TableCell>
                 <TableCell>
 
