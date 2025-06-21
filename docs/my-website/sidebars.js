@@ -357,7 +357,7 @@ const sidebars = {
           label: "Vertex AI",
           items: [
             "providers/vertex",
-            "pass_through/vertex_image",
+            "providers/vertex_image",
           ]
         },
         {
