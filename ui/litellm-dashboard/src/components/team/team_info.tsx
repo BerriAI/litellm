@@ -38,6 +38,23 @@ import VectorStoreSelector from "../vector_store_management/VectorStoreSelector"
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import PremiumVectorStoreSelector from "../common_components/PremiumVectorStoreSelector";
 
+export interface TeamMembership {
+  user_id: string;
+  team_id: string;
+  budget_id: string;
+  spend: number;
+  litellm_budget_table: {
+    budget_id: string;
+    soft_budget: number | null;
+    max_budget: number | null;
+    max_parallel_requests: number | null;
+    tpm_limit: number | null;
+    rpm_limit: number | null;
+    model_max_budget: Record<string, number> | null;
+    budget_duration: string | null;
+  };
+}
+
 export interface TeamData {
   team_id: string;
   team_info: {
@@ -67,9 +84,13 @@ export interface TeamData {
       mcp_servers: string[];
       vector_stores: string[];
     };
+    team_member_budget_table: {
+      max_budget: number;
+      budget_duration: string;
+    } | null;
   };
   keys: any[];
-  team_memberships: any[];
+  team_memberships: TeamMembership[];
 }
 
 export interface TeamInfoProps {
@@ -235,6 +256,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         organization_id: values.organization_id,
       };
 
+      if (values.team_member_budget !== undefined) {
+        updateData.team_member_budget = Number(values.team_member_budget);
+      }
+
       // Handle object_permission updates
       if (values.vector_stores !== undefined || values.mcp_servers !== undefined) {
         updateData.object_permission = {
@@ -297,6 +322,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   <Text>of {info.max_budget === null ? "Unlimited" : `$${info.max_budget}`}</Text>
                   {info.budget_duration && (
                     <Text className="text-gray-500">Reset: {info.budget_duration}</Text>
+                  )}
+                  <br/>
+                  {info.team_member_budget_table && (
+                    <Text className="text-gray-500">Team Member Budget: ${info.team_member_budget_table.max_budget}</Text>
                   )}
                 </div>
               </Card>
@@ -417,6 +446,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </Form.Item>
 
                   <Form.Item label="Max Budget (USD)" name="max_budget">
+                    <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
+                  </Form.Item>
+
+                  <Form.Item label="Team Member Budget (USD)" name="team_member_budget" tooltip="This is the individual budget for a user in the team.">
                     <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
                   </Form.Item>
 
