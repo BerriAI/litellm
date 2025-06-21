@@ -272,7 +272,11 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                 )
 
         data = {
-            "model": model,
+            # watsonx: Deployment models do not support 'model_id' in their payload
+            # https://github.com/BerriAI/litellm/issues/11837
+            "model": None
+            if custom_llm_provider == "watsonx" and model.startswith("deployment/")
+            else model,
             "messages": messages,
             **optional_params,
             **extra_body,
