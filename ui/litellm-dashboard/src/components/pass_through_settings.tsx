@@ -221,13 +221,16 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
 
   // If a specific endpoint is selected, show the info view
   if (selectedEndpointId) {
-    // Find the endpoint by ID to get the path for the info view
+    // Find the endpoint by ID to get the endpoint data for the info view
     const selectedEndpoint = generalSettings.find(endpoint => endpoint.id === selectedEndpointId);
-    const endpointPath = selectedEndpoint?.path || selectedEndpointId;
+    
+    if (!selectedEndpoint) {
+      return <div>Endpoint not found</div>;
+    }
     
     return (
       <PassThroughInfoView
-        endpointPath={endpointPath}
+        endpointData={selectedEndpoint}
         onClose={() => setSelectedEndpointId(null)}
         accessToken={accessToken}
         isAdmin={userRole === "Admin" || userRole === "admin"}
