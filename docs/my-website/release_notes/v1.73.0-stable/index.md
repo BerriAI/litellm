@@ -72,20 +72,16 @@ pip install litellm==1.73.0.rc
 
 ### Passthrough Endpoints v2
 
-This release brings support for subroutes and custom cost tracking in passthrough endpoints. When teams use external APIs through LiteLLM, they can now add one passthrough route (e.g. `/bria`) and access multiple endpoints through subroutes like `/bria/text-to-image/base`, `/bria/enhance_image` - all with custom costs per request.
+This release brings support for adding billing and full URL forwarding for passthrough endpoints.
 
-This is great for API providers like [Bria AI](https://platform.bria.ai/) with multiple endpoints where you want one unified route instead of managing separate passthrough endpoints.
-
-For Proxy Admins, this means adding one passthrough route and having developers access all subroutes (image generation, editing, etc.). For developers, this means simplified endpoint access with transparent cost visibility.
+This means you as Proxy Admin can onboard third-party endpoints like Bria API and Mistral OCR, set a cost per request, and give your developers access to the complete API functionality.
 
 [Learn more about Passthrough Endpoints](../../docs/pass_through)
 
 
 ### v2 Health Checks 
 
-This release introduces v2 of the health check page with asynchronous result loading + storing the results of the last health check. Previously, we waited for all endpoints to respond before showing results. 
 
-Now Proxy Admins see incremental health check results in real-time, making it easier to identify problematic models while confirming that the overall system is functioning properly.
 
 
 
