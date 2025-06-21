@@ -1,5 +1,5 @@
 ---
-title: "v1.73.0-stable - Passthrough Endpoints v2 & Health Check Dashboard"
+title: "v1.73.0-stable"
 slug: "v1-73-0-stable"
 date: 2025-06-21T10:00:00
 authors:
