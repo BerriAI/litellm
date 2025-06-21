@@ -133,13 +133,13 @@ For Proxy Admins, this enables centralized monitoring with interactive health in
     - Update ollama_embeddings to work on sync API - [PR](https://github.com/BerriAI/litellm/pull/11746)
     - Fix response_format not working - [PR](https://github.com/BerriAI/litellm/pull/11880)
 - **[Mistral](../../docs/providers/mistral)**
-    - Add Mistral Small to BEDROCK_CONVERSE_MODELS - [PR](https://github.com/BerriAI/litellm/pull/11760)
     - Enhance Mistral API with parallel tool calls support - [PR](https://github.com/BerriAI/litellm/pull/11770)
 - **[AWS Bedrock](../../docs/providers/bedrock)**
     - AWS credentials no longer mandatory - [PR](https://github.com/BerriAI/litellm/pull/11765)
     - Add AWS Bedrock profiles for APAC region - [PR](https://github.com/BerriAI/litellm/pull/11883)
     - Fix AWS Bedrock Claude tool call index - [PR](https://github.com/BerriAI/litellm/pull/11842)
     - Handle base64 file data with `qs:..` prefix - [PR](https://github.com/BerriAI/litellm/pull/11908)
+    - Add Mistral Small to BEDROCK_CONVERSE_MODELS - [PR](https://github.com/BerriAI/litellm/pull/11760)
 - **[Meta Llama](../../docs/providers/openai_compatible)**
     - Enable tool calling for meta_llama models - [PR](https://github.com/BerriAI/litellm/pull/11895)
 - **[Volcengine](../../docs/providers/volcengine)**
