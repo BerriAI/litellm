@@ -238,6 +238,7 @@ LITELLM_CHAT_PROVIDERS = [
     "llamafile",
     "lm_studio",
     "galadriel",
+    "github_copilot",  # GitHub Copilot Chat API
     "novita",
     "meta_llama",
     "featherless_ai",
@@ -399,6 +400,7 @@ openai_compatible_providers: List = [
     "llamafile",
     "lm_studio",
     "galadriel",
+    "github_copilot",  # GitHub Copilot Chat API
     "novita",
     "meta_llama",
     "featherless_ai",
