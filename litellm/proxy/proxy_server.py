@@ -5696,7 +5696,7 @@ async def model_info_v2(
             for _model in all_models:
                 model_id = _model.get("model_info", {}).get("id", None)
                 if model_id is not None:
-                    _model["model_info"]["accesss_via_team_ids"] = team_models.get(
+                    _model["model_info"]["access_via_team_ids"] = team_models.get(
                         model_id, []
                     )
 
@@ -5711,7 +5711,7 @@ async def model_info_v2(
             _model
             for _model in all_models
             if _model.get("model_info", {}).get("direct_access", False)
-            or _model.get("model_info", {}).get("accesss_via_team_ids", [])
+            or _model.get("model_info", {}).get("access_via_team_ids", [])
         ]
     # fill in model info based on config.yaml and litellm model_prices_and_context_window.json
     for _model in all_models:

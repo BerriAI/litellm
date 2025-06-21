@@ -1178,7 +1178,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                 {teams?.filter(team => team.team_id).map((team) => (
                                   <SelectItem
                                     key={team.team_id}
-                                    value={team.team_id}
+                                    value={team.team_id}  // ← This is already the team ID
                                   >
                                     {team.team_alias 
                                       ? `${team.team_alias}`
@@ -1240,6 +1240,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                     teamAccessMatch = model.model_info?.access_via_team_ids?.includes(currentTeam) === true;
                                   }
                                 }
+
                                 return modelNameMatch && accessGroupMatch && teamAccessMatch;
                               }).length : 0} results
                           </Text>
