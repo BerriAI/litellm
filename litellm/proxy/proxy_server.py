@@ -5706,6 +5706,13 @@ async def model_info_v2(
             if model_id is not None and model_id in direct_access_models:
                 _model["model_info"]["direct_access"] = True
 
+        ## FILTER OUT MODELS THAT ARE NOT IN DIRECT_ACCESS_MODELS OR ACCESS_VIA_TEAM_IDS - only show user models they can call
+        all_models = [
+            _model
+            for _model in all_models
+            if _model.get("model_info", {}).get("direct_access", False)
+            or _model.get("model_info", {}).get("accesss_via_team_ids", [])
+        ]
     # fill in model info based on config.yaml and litellm model_prices_and_context_window.json
     for _model in all_models:
         # provided model_info in config.yaml
