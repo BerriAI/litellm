@@ -27,6 +27,7 @@ from litellm.proxy._types import (
     CommonProxyErrors,
     DeleteTeamRequest,
     LiteLLM_AuditLogs,
+    LiteLLM_BudgetTable,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLM_ModelTable,
     LiteLLM_OrganizationTable,
@@ -45,6 +46,7 @@ from litellm.proxy._types import (
     SpecialProxyStrings,
     TeamAddMemberResponse,
     TeamInfoResponseObject,
+    TeamInfoResponseObjectTeamTable,
     TeamListResponseObject,
     TeamMemberAddRequest,
     TeamMemberDeleteRequest,
@@ -1584,6 +1586,24 @@ def _unfurl_all_proxy_models(
     return team_info
 
 
+async def _add_team_member_budget_table(
+    team_member_budget_id: str,
+    prisma_client: PrismaClient,
+    team_info_response_object: TeamInfoResponseObjectTeamTable,
+) -> TeamInfoResponseObjectTeamTable:
+    try:
+        team_budget = await prisma_client.db.litellm_budgettable.find_unique(
+            where={"budget_id": team_member_budget_id}
+        )
+        team_info_response_object.team_member_budget_table = team_budget
+    except Exception:
+        verbose_proxy_logger.info(
+            f"Team member budget table not found, passed team_member_budget_id={team_member_budget_id}"
+        )
+
+    return team_info_response_object
+
+
 @router.get(
     "/team/info", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
@@ -1688,15 +1708,11 @@ async def team_info(
             else None
         )
         if team_member_budget_id is not None:
-            try:
-                team_budget = await prisma_client.db.litellm_budgettable.find_unique(
-                    where={"budget_id": team_member_budget_id}
-                )
-                _team_info.team_member_budget_table = team_budget
-            except Exception:
-                verbose_proxy_logger.info(
-                    f"Team member budget table not found, passed team_member_budget_id={team_member_budget_id}"
-                )
+            _team_info = await _add_team_member_budget_table(
+                team_member_budget_id=team_member_budget_id,
+                prisma_client=prisma_client,
+                team_info_response_object=_team_info,
+            )
 
         # ## UNFURL 'all-proxy-models' into the team_info.models list ##
         # if llm_router is not None:
