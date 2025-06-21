@@ -5,6 +5,7 @@ import traceback
 from typing import Any, AsyncIterator, Iterator, Optional
 
 from litellm import verbose_logger
+from litellm.types.llms.anthropic import UsageDelta
 from litellm.types.utils import AdapterCompletionStreamWrapper
 
 
@@ -37,7 +38,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         "model": "claude-3-5-sonnet-20240620",
                         "stop_reason": None,
                         "stop_sequence": None,
-                        "usage": {"input_tokens": 25, "output_tokens": 1},
+                        "usage": UsageDelta(input_tokens=0, output_tokens=0),
                     },
                 }
             if self.sent_content_block_start is False:
@@ -106,7 +107,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         "model": "claude-3-5-sonnet-20240620",
                         "stop_reason": None,
                         "stop_sequence": None,
-                        "usage": {"input_tokens": 25, "output_tokens": 1},
+                        "usage": UsageDelta(input_tokens=0, output_tokens=0),
                     },
                 }
             if self.sent_content_block_start is False:
