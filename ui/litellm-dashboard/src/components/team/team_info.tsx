@@ -67,6 +67,10 @@ export interface TeamData {
       mcp_servers: string[];
       vector_stores: string[];
     };
+    team_member_budget_table: {
+      max_budget: number;
+      budget_duration: string;
+    } | null;
   };
   keys: any[];
   team_memberships: any[];
@@ -301,6 +305,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   <Text>of {info.max_budget === null ? "Unlimited" : `$${info.max_budget}`}</Text>
                   {info.budget_duration && (
                     <Text className="text-gray-500">Reset: {info.budget_duration}</Text>
+                  )}
+                  <br/>
+                  {info.team_member_budget_table && (
+                    <Text className="text-gray-500">Team Member Budget: ${info.team_member_budget_table.max_budget}</Text>
                   )}
                 </div>
               </Card>
