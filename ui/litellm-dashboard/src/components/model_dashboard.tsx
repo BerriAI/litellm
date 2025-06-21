@@ -1191,7 +1191,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                   </span>
                                 ) : (
                                   <span>
-                                    To access these models: Create a Virtual Key and select Team as "{currentTeam}" on the {" "}
+                                    To access these models: Create a Virtual Key and select Team as &quot;{currentTeam}&quot; on the {" "}
                                     <a href="/?login=success&page=api-keys" className="text-gray-600 hover:text-gray-800 underline">
                                       Virtual Keys page
                                     </a>
