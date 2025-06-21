@@ -36,21 +36,11 @@ import {
   InputNumber,
 } from "antd";
 import {
-  InformationCircleIcon,
   PencilAltIcon,
-  PencilIcon,
-  StatusOnlineIcon,
   TrashIcon,
-  RefreshIcon,
-  CheckCircleIcon,
-  XCircleIcon,
-  QuestionMarkCircleIcon,
 } from "@heroicons/react/outline";
-import AddFallbacks from "./add_fallbacks";
 import AddPassThroughEndpoint from "./add_pass_through";
 import PassThroughInfoView from "./pass_through_info";
-import openai from "openai";
-import Paragraph from "antd/es/skeleton/Paragraph";
 import { DataTable } from "./view_logs/table";
 import { ColumnDef } from "@tanstack/react-table";
 import { Eye, EyeOff } from "lucide-react";
@@ -222,6 +212,8 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
   // If a specific endpoint is selected, show the info view
   if (selectedEndpointId) {
     // Find the endpoint by ID to get the endpoint data for the info view
+    console.log("selectedEndpointId", selectedEndpointId);
+    console.log("generalSettings", generalSettings);
     const selectedEndpoint = generalSettings.find(endpoint => endpoint.id === selectedEndpointId);
     
     if (!selectedEndpoint) {
