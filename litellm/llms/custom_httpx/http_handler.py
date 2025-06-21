@@ -568,28 +568,34 @@ class AsyncHTTPHandler:
 
     @staticmethod
     def _create_aiohttp_transport(
-        ssl_verify: Optional[bool] = None,
-        ssl_context: Optional[ssl.SSLContext] = None,
+            ssl_verify: Optional[bool] = None,
+            ssl_context: Optional[ssl.SSLContext] = None,
     ) -> LiteLLMAiohttpTransport:
         """
         Creates an AiohttpTransport with RequestNotRead error handling
 
-        Note: aiohttp TCPConnector ssl parameter accepts:
-        - SSLContext: custom SSL context
-        - False: disable SSL verification
-        - True: use default SSL verification (equivalent to ssl.create_default_context())
+        - If force_ipv4 is True, it will create an AiohttpTransport with local_addr set to "0.0.0.0"
+        - [Default] If force_ipv4 is False, it will create an AiohttpTransport with default settings
         """
         from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 
-        connector_kwargs = AsyncHTTPHandler._get_ssl_connector_kwargs(
-            ssl_verify=ssl_verify, ssl_context=ssl_context
-        )
+        #########################################################
+        # If ssl_verify is None, set it to True
+        # TCP Connector does not allow ssl_verify to be None
+        # by default aiohttp sets ssl_verify to True
+        #########################################################
+        if ssl_verify is None:
+            ssl_verify = True
 
         verbose_logger.debug("Creating AiohttpTransport...")
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
-                connector=TCPConnector(**connector_kwargs),
-                trust_env=True # Trust environment variables for proxy settings
+                connector=TCPConnector(
+                    verify_ssl=ssl_verify,
+                    ssl_context=ssl_context,
+                    local_addr=("0.0.0.0", 0) if litellm.force_ipv4 else None,
+                ),
+                trust_env=True,  # Trust environment variables for SSL settings
             ),
         )
 
