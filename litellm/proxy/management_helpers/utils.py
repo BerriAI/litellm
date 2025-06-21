@@ -135,7 +135,7 @@ async def add_new_member(
     else:
         _budget_id = default_team_budget_id
 
-    if returned_user is not None and returned_user.user_id is not None:
+    if _budget_id and returned_user is not None and returned_user.user_id is not None:
         _returned_team_membership = (
             await prisma_client.db.litellm_teammembership.create(
                 data={
