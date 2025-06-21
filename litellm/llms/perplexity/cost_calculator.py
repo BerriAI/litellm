@@ -44,7 +44,10 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
         completion_cost += reasoning_tokens * model_info["output_cost_per_reasoning_token"]
 
     ## ADD SEARCH QUERIES COST (if present)
-    num_search_queries = getattr(usage, "num_search_queries", 0) or 0
+    num_search_queries = 0
+    if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details:
+        num_search_queries = getattr(usage.prompt_tokens_details, "web_search_requests", 0) or 0
+    
     if num_search_queries > 0 and model_info.get("search_queries_cost_per_1000"):
         search_cost = (num_search_queries / 1000) * model_info["search_queries_cost_per_1000"]
         # Add search cost to completion cost (similar to how other providers handle it)

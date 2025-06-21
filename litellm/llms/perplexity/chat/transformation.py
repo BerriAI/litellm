@@ -9,7 +9,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import Usage
+from litellm.types.utils import Usage, PromptTokensDetailsWrapper
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.utils import ModelResponse
@@ -104,7 +104,7 @@ class PerplexityChatConfig(OpenAIGPTConfig):
     ) -> None:
         """
         Extract citation tokens and search queries from Perplexity API response
-        and add them to the usage object.
+        and add them to the usage object using standard LiteLLM fields.
         """
         if not hasattr(model_response, "usage") or model_response.usage is None:
             # Create a usage object if it doesn't exist (when usage was None)
@@ -118,6 +118,7 @@ class PerplexityChatConfig(OpenAIGPTConfig):
 
         # Extract citation tokens count
         citations = raw_response_json.get("citations", [])
+        citation_tokens = 0
         if citations:
             # Count total characters in citations as a proxy for citation tokens
             # This is an estimation - in practice, you might want to use proper tokenization
@@ -125,7 +126,6 @@ class PerplexityChatConfig(OpenAIGPTConfig):
             # Rough estimation: ~4 characters per token (OpenAI's general rule)
             if total_citation_chars > 0:
                 citation_tokens = max(1, total_citation_chars // 4)
-                setattr(usage, "citation_tokens", citation_tokens)
 
         # Extract search queries count from usage or response metadata
         # Perplexity might include this in the usage object or as separate metadata
@@ -140,5 +140,15 @@ class PerplexityChatConfig(OpenAIGPTConfig):
         if num_search_queries is None:
             num_search_queries = raw_response_json.get("search_queries")
         
-        if num_search_queries is not None and num_search_queries > 0:
-            setattr(usage, "num_search_queries", num_search_queries)
+        # Create or update prompt_tokens_details to include web search requests and citation tokens
+        if citation_tokens > 0 or (num_search_queries is not None and num_search_queries > 0):
+            if usage.prompt_tokens_details is None:
+                usage.prompt_tokens_details = PromptTokensDetailsWrapper()
+            
+            # Store citation tokens count for cost calculation
+            if citation_tokens > 0:
+                setattr(usage, "citation_tokens", citation_tokens)
+            
+            # Store search queries count in the standard web_search_requests field
+            if num_search_queries is not None and num_search_queries > 0:
+                usage.prompt_tokens_details.web_search_requests = num_search_queries
