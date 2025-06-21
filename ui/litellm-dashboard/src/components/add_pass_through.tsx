@@ -72,17 +72,12 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
     try {
       console.log(`formValues: ${JSON.stringify(formValues)}`);
 
-      const newPassThroughItem: passThroughItem = {
-        "headers": formValues["headers"],
-        "path": formValues["path"],
-        "target": formValues["target"],
-        "include_subpath": formValues["include_subpath"] || false,
-        "cost_per_request": formValues["cost_per_request"] || 0
-      }
+      const response = await createPassThroughEndpoint(accessToken, formValues);
       
-      await createPassThroughEndpoint(accessToken, formValues);
+      // Use the created endpoint from the API response (includes the generated ID)
+      const createdEndpoint = response.endpoints[0];
       
-      const updatedPassThroughSettings = [...passThroughItems, newPassThroughItem]
+      const updatedPassThroughSettings = [...passThroughItems, createdEndpoint]
       setPassThroughItems(updatedPassThroughSettings)
       
       message.success("Pass-through endpoint created successfully");
