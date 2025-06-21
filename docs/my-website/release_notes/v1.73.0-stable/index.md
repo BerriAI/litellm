@@ -129,19 +129,19 @@ For Proxy Admins, this enables centralized monitoring with interactive health in
     - Mark all gemini-2.5 models as supporting PDF input - [PR](https://github.com/BerriAI/litellm/pull/11907)
     - Add `gemini-2.5-pro` with reasoning support - [PR](https://github.com/BerriAI/litellm/pull/11927)
     - Fix web search error with responses API - [PR](https://github.com/BerriAI/litellm/pull/11894)
-- **[Ollama](../../docs/providers/ollama)**
-    - Update ollama_embeddings to work on sync API - [PR](https://github.com/BerriAI/litellm/pull/11746)
-    - Fix response_format not working - [PR](https://github.com/BerriAI/litellm/pull/11880)
-- **[Mistral](../../docs/providers/mistral)**
-    - Enhance Mistral API with parallel tool calls support - [PR](https://github.com/BerriAI/litellm/pull/11770)
 - **[AWS Bedrock](../../docs/providers/bedrock)**
     - AWS credentials no longer mandatory - [PR](https://github.com/BerriAI/litellm/pull/11765)
     - Add AWS Bedrock profiles for APAC region - [PR](https://github.com/BerriAI/litellm/pull/11883)
     - Fix AWS Bedrock Claude tool call index - [PR](https://github.com/BerriAI/litellm/pull/11842)
     - Handle base64 file data with `qs:..` prefix - [PR](https://github.com/BerriAI/litellm/pull/11908)
     - Add Mistral Small to BEDROCK_CONVERSE_MODELS - [PR](https://github.com/BerriAI/litellm/pull/11760)
-- **[Meta Llama](../../docs/providers/openai_compatible)**
+- **[Mistral](../../docs/providers/mistral)**
+    - Enhance Mistral API with parallel tool calls support - [PR](https://github.com/BerriAI/litellm/pull/11770)
+- **[Meta Llama API](../../docs/providers/openai_compatible)**
     - Enable tool calling for meta_llama models - [PR](https://github.com/BerriAI/litellm/pull/11895)
+- **[Ollama](../../docs/providers/ollama)**
+    - Update ollama_embeddings to work on sync API - [PR](https://github.com/BerriAI/litellm/pull/11746)
+    - Fix response_format not working - [PR](https://github.com/BerriAI/litellm/pull/11880)
 - **[Volcengine](../../docs/providers/volcengine)**
     - Add thinking parameter support - [PR](https://github.com/BerriAI/litellm/pull/11914)
 
