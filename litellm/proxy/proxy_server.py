@@ -5546,6 +5546,7 @@ async def get_all_team_models(
     """
     team_models: Dict[str, Set[str]] = {}
     team_db_objects_typed: List[LiteLLM_TeamTable] = []
+
     if user_teams == "*":
         team_db_objects = await prisma_client.db.litellm_teamtable.find_many()
         team_db_objects_typed = [
@@ -5562,14 +5563,16 @@ async def get_all_team_models(
         ]
 
     for team_object in team_db_objects_typed:
-        for model_name in team_object.models:
-            # handle special case where team has access to all proxy models
-            if model_name == SpecialModelNames.all_proxy_models.value:
-                _model_ids = llm_router.get_model_ids()
-                if _model_ids is not None:
-                    for model_id in _model_ids:
-                        team_models.setdefault(model_id, set()).add(team_object.team_id)
-            else:
+        if (
+            len(team_object.models) == 0  # empty list = all model access
+            or SpecialModelNames.all_proxy_models.value in team_object.models
+        ):
+            _model_ids = llm_router.get_model_ids()
+            if _model_ids is not None:
+                for model_id in _model_ids:
+                    team_models.setdefault(model_id, set()).add(team_object.team_id)
+        else:
+            for model_name in team_object.models:
                 _models = llm_router.get_model_list(model_name=model_name)
                 if _models is not None:
                     for model in _models:

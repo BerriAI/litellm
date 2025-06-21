@@ -1615,14 +1615,9 @@ export const modelInfoCall = async (
     // Build query parameters
     const params = new URLSearchParams();
     
-    if (!all_admin_roles.includes(userRole as string)) {
-      // only show users models they've added
-      params.append('user_models_only', 'true');
-    }
-    
     // Always include team models for nested view
-    params.append('include_team_models', 'true');
-    
+    params.append("include_team_models", "true");
+
     if (params.toString()) {
       url += `?${params.toString()}`;
     }
