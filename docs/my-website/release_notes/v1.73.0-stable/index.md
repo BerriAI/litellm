@@ -162,7 +162,6 @@ For Proxy Admins, this enables centralized monitoring with interactive health in
     - Support passing image URLs in Completion-to-Responses bridge - [PR](https://github.com/BerriAI/litellm/pull/11833)
 - **[Messages API](../../docs/completion/input)**
     - Allow testing `/v1/messages` on the Test Key Page - [PR](https://github.com/BerriAI/litellm/pull/11930)
-    - Fix `/v1/messages` endpoint always using us-central1 with vertex_ai-anthropic models - [PR](https://github.com/BerriAI/litellm/pull/11831)
 - **[Speech API](../../docs/speech)**
     - Working Gemini TTS support via OpenAI's `/v1/speech` endpoint - [PR](https://github.com/BerriAI/litellm/pull/11832)
 - **[Models API](../../docs/completion/model_alias)**
@@ -180,11 +179,13 @@ For Proxy Admins, this enables centralized monitoring with interactive health in
     - QA improvements for adding passthrough endpoints - [PR](https://github.com/BerriAI/litellm/pull/11909), [PR](https://github.com/BerriAI/litellm/pull/11939)
 
 #### Bugs
-- **[Completion API](../../docs/completion/input)**
-    - Allow dict for tool_choice argument in acompletion - [PR](https://github.com/BerriAI/litellm/pull/11860)
+
+- **[Messages API](../../docs/anthropic_unified)**
+    - Fix `/v1/messages` endpoint always using us-central1 with vertex_ai-anthropic models - [PR](https://github.com/BerriAI/litellm/pull/11831)
     - Fix model_group tracking for `/v1/messages` and `/moderations` - [PR](https://github.com/BerriAI/litellm/pull/11933)
     - Fix cost tracking and logging via `/v1/messages` API when using Claude Code - [PR](https://github.com/BerriAI/litellm/pull/11928)
-
+- **[Chat Completion API](../../docs/completion/input)**
+    - Allow dict for tool_choice argument in acompletion - [PR](https://github.com/BerriAI/litellm/pull/11860)
 - **[Passthrough Endpoints](../../docs/pass_through/langfuse)**
     - Don't log request to Langfuse passthrough on Langfuse - [PR](https://github.com/BerriAI/litellm/pull/11768)
 
@@ -217,8 +218,6 @@ For Proxy Admins, this enables centralized monitoring with interactive health in
 - **[SCIM](../../docs/proxy/scim)**
     - Add error handling for existing user on SCIM - [PR](https://github.com/BerriAI/litellm/pull/11862)
     - Add SCIM PATCH and PUT operations for users - [PR](https://github.com/BerriAI/litellm/pull/11863)
-
-#### Health Check & Monitoring
 - **Health Check Dashboard**
     - Implement health check backend API and storage functionality - [PR](https://github.com/BerriAI/litellm/pull/11852)
     - Add LiteLLM_HealthCheckTable to database schema - [PR](https://github.com/BerriAI/litellm/pull/11677)
