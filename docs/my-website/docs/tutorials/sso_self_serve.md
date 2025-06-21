@@ -40,10 +40,38 @@ Let's create a new user and test it out.
 
 #### a. Create a new user
 
-#### b. Login as user 
+Create a new user with email `test_default_team_user@xyz.com`.
 
-#### c. Verify you can see the team in the dropdown
+<Image img={require('../../img/create_user.png')}  style={{ width: '600px', height: 'auto' }} />
 
-#### d. Verify you can see models in `Models + Endpoints`
+Once you click `Create User`, you will get an invitation link, save it for later. 
 
-#### e. Create a key 
+#### b. Verify user is added to the team
+
+Click on the created user, and verify they are added to the team. 
+
+We can see the user is added to the team, and has no default models. 
+
+<Image img={require('../../img/user_info_with_default_team.png')}  style={{ width: '1000px', height: 'auto' }} />
+
+#### c. Login as user 
+
+Now use the invitation link from 4a. to login as the user. 
+
+<Image img={require('../../img/new_user_login.png')}  style={{ width: '600px', height: 'auto' }} />
+
+#### d. Verify you can't create keys without specifying a team
+
+You should see a message saying you need to select a team. 
+
+<Image img={require('../../img/create_key_no_team.png')}  style={{ width: '1000px', height: 'auto' }} />
+
+#### e. Verify you can create a key when specifying a team
+
+<Image img={require('../../img/create_key_with_default_team.png')}  style={{ width: '1000px', height: 'auto' }} />
+
+Success! 
+
+You should now see the created key
+
+<Image img={require('../../img/create_key_with_default_team_success.png')}  style={{ width: '600px', height: 'auto' }} />
