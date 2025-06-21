@@ -5,13 +5,14 @@ import os
 import random
 import subprocess
 import sys
+import urllib.parse
 import urllib.parse as urlparse
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 import click
 import httpx
 from dotenv import load_dotenv
-import urllib.parse
+
 if TYPE_CHECKING:
     from fastapi import FastAPI
 else:
@@ -539,6 +540,10 @@ def run_server(  # noqa: PLR0915
                 app,
                 save_worker_config,
             )
+        except ModuleNotFoundError as e:
+            raise ModuleNotFoundError(
+                f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`"
+            )
         except ImportError as e:
             if "litellm[proxy]" in str(e):
                 # user is missing a proxy dependency, ask them to pip install litellm[proxy]
@@ -788,7 +793,9 @@ def run_server(  # noqa: PLR0915
 
         # Skip server startup if requested (after all setup is done)
         if skip_server_startup:
-            print("LiteLLM: Setup complete. Skipping server startup as requested.")  # noqa
+            print(  # noqa
+                "LiteLLM: Setup complete. Skipping server startup as requested."
+            )
             return
 
         uvicorn_args = ProxyInitializationHelpers._get_default_unvicorn_init_args(

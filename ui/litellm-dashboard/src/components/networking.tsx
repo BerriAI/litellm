@@ -1611,11 +1611,12 @@ export const modelInfoCall = async (
   try {
     console.log("modelInfoCall:", accessToken, userID, userRole);
     let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/model/info` : `/v2/model/info`;
-
-    if (!all_admin_roles.includes(userRole as string)) {
-      // only show users models they've added
-      url += `?user_models_only=true`;
+    const params = new URLSearchParams();
+    params.append("include_team_models", "true");
+    if (params.toString()) {
+      url += `?${params.toString()}`;
     }
+
     //message.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
