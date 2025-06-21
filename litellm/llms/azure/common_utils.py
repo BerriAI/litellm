@@ -361,7 +361,7 @@ def get_azure_ad_token(
         )
         try:
             azure_ad_token_provider = get_azure_ad_token_provider(azure_scope=scope)
-        except ValueError as e:
+        except ValueError:
             verbose_logger.debug("Azure AD Token Provider could not be used.")
 
     # Execute the token provider to get the token if available
