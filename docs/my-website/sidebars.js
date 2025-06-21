@@ -519,7 +519,7 @@ const sidebars = {
         "tutorials/openweb_ui",
         "tutorials/openai_codex",
         "tutorials/anthropic_file_usage",
-        "tutorials/sso_self_serve",
+        "tutorials/default_team_self_serve",
         "tutorials/msft_sso",
         "tutorials/prompt_caching",
         "tutorials/tag_management",
