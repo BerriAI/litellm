@@ -147,8 +147,8 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
       <div className="flex justify-between items-center mb-6">
         <div>
           <Button onClick={onClose} className="mb-4">← Back</Button>
-          <Title>Pass Through Endpoint</Title>
-          <Text className="text-gray-500 font-mono">{endpointData.path}</Text>
+          <Title>Pass Through Endpoint: {endpointData.path}</Title>
+          <Text className="text-gray-500 font-mono">{endpointData.id}</Text>
         </div>
       </div>
 
