@@ -19,14 +19,6 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-
-:::info
-
-This is a pre-release version. 
-
-The production version will be released on Wednesday.
-
-:::
 ## Deploy this version
 
 <Tabs>
