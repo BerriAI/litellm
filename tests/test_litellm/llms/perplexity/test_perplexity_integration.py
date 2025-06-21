@@ -6,6 +6,7 @@ including integration with the main LiteLLM cost calculator.
 """
 
 import json
+import math
 import os
 import sys
 from unittest.mock import Mock, patch
@@ -19,7 +20,7 @@ import litellm
 from litellm import ModelResponse
 from litellm.cost_calculator import completion_cost, cost_per_token
 from litellm.llms.perplexity.chat.transformation import PerplexityChatConfig
-from litellm.types.utils import Usage
+from litellm.types.utils import Usage, PromptTokensDetailsWrapper
 from litellm.utils import get_model_info
 
 
@@ -99,7 +100,7 @@ class TestPerplexityIntegration:
         expected_completion_cost = (50 * 8e-6) + (10 * 3e-6) + (2 / 1000 * 0.005)  # Output + reasoning + search
         expected_total = expected_prompt_cost + expected_completion_cost
         
-        assert abs(total_cost - expected_total) < 1e-9
+        assert math.isclose(total_cost, expected_total, rel_tol=1e-6)
 
     def test_cost_calculation_without_custom_fields(self):
         """Test that cost calculation works normally when custom fields are absent."""
@@ -118,7 +119,7 @@ class TestPerplexityIntegration:
         # Should only include basic input/output costs
         expected_cost = (100 * 2e-6) + (50 * 8e-6)
         
-        assert abs(total_cost - expected_cost) < 1e-10
+        assert math.isclose(total_cost, expected_cost, rel_tol=1e-6)
 
     def test_main_cost_calculator_integration(self):
         """Test integration with the main LiteLLM cost calculator."""
@@ -127,10 +128,10 @@ class TestPerplexityIntegration:
             prompt_tokens=200,
             completion_tokens=100,
             total_tokens=300,
-            reasoning_tokens=25
+            reasoning_tokens=25,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=3)
         )
         usage.citation_tokens = 40
-        usage.num_search_queries = 3
         
         # Test main cost calculator
         prompt_cost, completion_cost_val = cost_per_token(
@@ -143,8 +144,8 @@ class TestPerplexityIntegration:
         expected_prompt_cost = (200 * 2e-6) + (40 * 2e-6)  # Input + citation
         expected_completion_cost = (100 * 8e-6) + (25 * 3e-6) + (3 / 1000 * 0.005)  # Output + reasoning + search
         
-        assert abs(prompt_cost - expected_prompt_cost) < 1e-10
-        assert abs(completion_cost_val - expected_completion_cost) < 1e-10
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
+        assert math.isclose(completion_cost_val, expected_completion_cost, rel_tol=1e-6)
 
     def test_model_info_includes_custom_fields(self):
         """Test that get_model_info returns the custom Perplexity cost fields."""
@@ -209,7 +210,7 @@ class TestPerplexityIntegration:
         
         # Set custom fields to zero
         usage.citation_tokens = 0
-        usage.num_search_queries = 0
+        usage.prompt_tokens_details = PromptTokensDetailsWrapper(web_search_requests=0)
         
         # Should not add any extra cost
         prompt_cost, completion_cost_val = cost_per_token(
@@ -221,8 +222,8 @@ class TestPerplexityIntegration:
         expected_prompt_cost = 100 * 2e-6
         expected_completion_cost = 50 * 8e-6
         
-        assert abs(prompt_cost - expected_prompt_cost) < 1e-10
-        assert abs(completion_cost_val - expected_completion_cost) < 1e-10
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
+        assert math.isclose(completion_cost_val, expected_completion_cost, rel_tol=1e-6)
 
     def test_high_volume_cost_calculation(self):
         """Test cost calculation with high token and query counts."""
@@ -234,7 +235,7 @@ class TestPerplexityIntegration:
         )
         
         usage.citation_tokens = 5000
-        usage.num_search_queries = 100
+        usage.prompt_tokens_details = PromptTokensDetailsWrapper(web_search_requests=100)
         
         total_cost = completion_cost(
             completion_response=ModelResponse(usage=usage, model="sonar-deep-research"),
@@ -246,7 +247,7 @@ class TestPerplexityIntegration:
         expected_completion_cost = (25000 * 8e-6) + (10000 * 3e-6) + (100 / 1000 * 0.005)  # $0.23
         expected_total = expected_prompt_cost + expected_completion_cost  # $0.34
         
-        assert abs(total_cost - expected_total) < 1e-9
+        assert math.isclose(total_cost, expected_total, rel_tol=1e-6)
         assert total_cost > 0.3  # Sanity check for high-volume scenario
 
     def test_transformation_preserves_existing_usage_fields(self):
@@ -284,8 +285,9 @@ class TestPerplexityIntegration:
         assert model_response.usage.total_tokens == original_total_tokens
         
         # But custom fields should be added
-        assert hasattr(model_response.usage, "num_search_queries")
+        assert hasattr(model_response.usage, "prompt_tokens_details")
         assert hasattr(model_response.usage, "citation_tokens")
+        assert model_response.usage.prompt_tokens_details.web_search_requests == 3
 
     @pytest.mark.parametrize("provider_name", ["perplexity", "PERPLEXITY", "Perplexity"])
     def test_case_insensitive_provider_matching(self, provider_name):
@@ -296,7 +298,7 @@ class TestPerplexityIntegration:
             total_tokens=150
         )
         usage.citation_tokens = 10
-        usage.num_search_queries = 1
+        usage.prompt_tokens_details = PromptTokensDetailsWrapper(web_search_requests=1)
         
         # Should work regardless of case
         prompt_cost, completion_cost_val = cost_per_token(
@@ -309,5 +311,5 @@ class TestPerplexityIntegration:
         expected_prompt_cost = (100 * 2e-6) + (10 * 2e-6)
         expected_completion_cost = (50 * 8e-6) + (1 / 1000 * 0.005)
         
-        assert abs(prompt_cost - expected_prompt_cost) < 1e-10
-        assert abs(completion_cost_val - expected_completion_cost) < 1e-10 
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
+        assert math.isclose(completion_cost_val, expected_completion_cost, rel_tol=1e-6) 

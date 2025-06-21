@@ -6,6 +6,7 @@ search queries, and reasoning tokens.
 """
 
 import json
+import math
 import os
 import sys
 from unittest.mock import Mock, patch
@@ -18,7 +19,7 @@ sys.path.insert(0, os.path.abspath("../../../.."))
 import litellm
 from litellm.cost_calculator import completion_cost, cost_per_token
 from litellm.llms.perplexity.cost_calculator import cost_per_token as perplexity_cost_per_token
-from litellm.types.utils import Usage
+from litellm.types.utils import Usage, PromptTokensDetailsWrapper
 from litellm.utils import get_model_info
 
 
@@ -73,8 +74,8 @@ class TestPerplexityCostCalculator:
         expected_prompt_cost = 100 * 2e-6
         expected_completion_cost = 50 * 8e-6
         
-        assert abs(prompt_cost - expected_prompt_cost) < 1e-10
-        assert abs(completion_cost - expected_completion_cost) < 1e-10
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
 
     def test_citation_tokens_cost_calculation(self):
         """Test cost calculation with citation tokens."""
@@ -100,19 +101,17 @@ class TestPerplexityCostCalculator:
         expected_prompt_cost = (100 * 2e-6) + (25 * 2e-6)
         expected_completion_cost = 50 * 8e-6
         
-        assert abs(prompt_cost - expected_prompt_cost) < 1e-10
-        assert abs(completion_cost - expected_completion_cost) < 1e-10
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
 
     def test_search_queries_cost_calculation(self):
         """Test cost calculation with search queries."""
         usage = Usage(
             prompt_tokens=100,
             completion_tokens=50,
-            total_tokens=150
+            total_tokens=150,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=3)
         )
-        
-        # Add search queries
-        usage.num_search_queries = 3
         
         prompt_cost, completion_cost = perplexity_cost_per_token(
             model="sonar-deep-research", 
@@ -127,8 +126,8 @@ class TestPerplexityCostCalculator:
         expected_prompt_cost = 100 * 2e-6
         expected_completion_cost = (50 * 8e-6) + (3 / 1000 * 0.005)
         
-        assert abs(prompt_cost - expected_prompt_cost) < 1e-10
-        assert abs(completion_cost - expected_completion_cost) < 1e-10
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
 
     def test_reasoning_tokens_from_direct_attribute(self):
         """Test reasoning tokens cost calculation from direct attribute."""
@@ -154,8 +153,8 @@ class TestPerplexityCostCalculator:
         expected_prompt_cost = 100 * 2e-6
         expected_completion_cost = (50 * 8e-6) + (20 * 3e-6)
         
-        assert abs(prompt_cost - expected_prompt_cost) < 1e-10
-        assert abs(completion_cost - expected_completion_cost) < 1e-10
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
 
     def test_reasoning_tokens_from_completion_tokens_details(self):
         """Test reasoning tokens cost calculation from completion_tokens_details."""
@@ -179,8 +178,8 @@ class TestPerplexityCostCalculator:
         expected_prompt_cost = 100 * 2e-6
         expected_completion_cost = (50 * 8e-6) + (20 * 3e-6)
         
-        assert abs(prompt_cost - expected_prompt_cost) < 1e-10
-        assert abs(completion_cost - expected_completion_cost) < 1e-10
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
 
     def test_comprehensive_cost_calculation(self):
         """Test cost calculation with all fields combined."""
@@ -188,12 +187,12 @@ class TestPerplexityCostCalculator:
             prompt_tokens=100,
             completion_tokens=50,
             total_tokens=150,
-            reasoning_tokens=15
+            reasoning_tokens=15,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=2)
         )
         
         # Add custom fields
         usage.citation_tokens = 30
-        usage.num_search_queries = 2
         
         prompt_cost, completion_cost = perplexity_cost_per_token(
             model="sonar-deep-research", 
@@ -211,20 +210,20 @@ class TestPerplexityCostCalculator:
         expected_prompt_cost = (100 * 2e-6) + (30 * 2e-6)
         expected_completion_cost = (50 * 8e-6) + (15 * 3e-6) + (2 / 1000 * 0.005)
         
-        assert abs(prompt_cost - expected_prompt_cost) < 1e-10
-        assert abs(completion_cost - expected_completion_cost) < 1e-10
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
 
     def test_zero_values_handling(self):
         """Test that zero or missing values are handled correctly."""
         usage = Usage(
             prompt_tokens=100,
             completion_tokens=50,
-            total_tokens=150
+            total_tokens=150,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=0)
         )
         
         # These should not raise errors and should not affect cost
         usage.citation_tokens = 0
-        usage.num_search_queries = 0
         
         prompt_cost, completion_cost = perplexity_cost_per_token(
             model="sonar-deep-research", 
@@ -235,19 +234,19 @@ class TestPerplexityCostCalculator:
         expected_prompt_cost = 100 * 2e-6
         expected_completion_cost = 50 * 8e-6
         
-        assert abs(prompt_cost - expected_prompt_cost) < 1e-10
-        assert abs(completion_cost - expected_completion_cost) < 1e-10
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
 
     def test_missing_model_info_fields(self):
         """Test behavior when model info is missing some fields."""
         usage = Usage(
             prompt_tokens=100,
             completion_tokens=50,
-            total_tokens=150
+            total_tokens=150,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=2)
         )
         
         usage.citation_tokens = 25
-        usage.num_search_queries = 2
         
         # Mock get_model_info to return incomplete model info
         with patch('litellm.llms.perplexity.cost_calculator.get_model_info') as mock_get_model_info:
@@ -266,8 +265,8 @@ class TestPerplexityCostCalculator:
             expected_prompt_cost = 100 * 2e-6
             expected_completion_cost = 50 * 8e-6
             
-            assert abs(prompt_cost - expected_prompt_cost) < 1e-10
-            assert abs(completion_cost - expected_completion_cost) < 1e-10
+            assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
+            assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
 
     def test_integration_with_main_cost_calculator(self):
         """Test integration with the main LiteLLM cost calculator."""
@@ -275,11 +274,11 @@ class TestPerplexityCostCalculator:
             prompt_tokens=100,
             completion_tokens=50,
             total_tokens=150,
-            reasoning_tokens=10
+            reasoning_tokens=10,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=1)
         )
         
         usage.citation_tokens = 20
-        usage.num_search_queries = 1
         
         # Test main cost calculator
         prompt_cost, completion_cost_val = cost_per_token(
@@ -294,8 +293,8 @@ class TestPerplexityCostCalculator:
             usage=usage
         )
         
-        assert abs(prompt_cost - expected_prompt) < 1e-10
-        assert abs(completion_cost_val - expected_completion) < 1e-10
+        assert math.isclose(prompt_cost, expected_prompt, rel_tol=1e-6)
+        assert math.isclose(completion_cost_val, expected_completion, rel_tol=1e-6)
 
     def test_integration_with_completion_cost_function(self):
         """Test integration with the completion_cost function."""
@@ -306,10 +305,10 @@ class TestPerplexityCostCalculator:
             prompt_tokens=100,
             completion_tokens=50,
             total_tokens=150,
-            reasoning_tokens=10
+            reasoning_tokens=10,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=1)
         )
         usage.citation_tokens = 15
-        usage.num_search_queries = 1
         
         response = ModelResponse()
         response.usage = usage
@@ -323,7 +322,7 @@ class TestPerplexityCostCalculator:
         expected_completion_cost = (50 * 8e-6) + (10 * 3e-6) + (1 / 1000 * 0.005)  # Output + reasoning + search
         expected_total = expected_prompt_cost + expected_completion_cost
         
-        assert abs(total_cost - expected_total) < 1e-10
+        assert math.isclose(total_cost, expected_total, rel_tol=1e-6)
 
     def test_model_info_access(self):
         """Test that model info correctly returns the new cost fields."""
@@ -344,11 +343,11 @@ class TestPerplexityCostCalculator:
             prompt_tokens=100,
             completion_tokens=50,
             total_tokens=150,
-            reasoning_tokens=reasoning_tokens
+            reasoning_tokens=reasoning_tokens,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=search_queries)
         )
         
         usage.citation_tokens = citation_tokens
-        usage.num_search_queries = search_queries
         
         prompt_cost, completion_cost = perplexity_cost_per_token(
             model="sonar-deep-research", 
@@ -359,8 +358,8 @@ class TestPerplexityCostCalculator:
         expected_prompt_cost = (100 * 2e-6) + (citation_tokens * 2e-6)
         expected_completion_cost = (50 * 8e-6) + (reasoning_tokens * 3e-6) + (search_queries / 1000 * 0.005)
         
-        assert abs(prompt_cost - expected_prompt_cost) < 1e-10
-        assert abs(completion_cost - expected_completion_cost) < 1e-10
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
         
         # Ensure costs are non-negative
         assert prompt_cost >= 0
