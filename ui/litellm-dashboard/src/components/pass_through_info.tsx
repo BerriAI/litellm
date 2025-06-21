@@ -101,8 +101,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
       };
       
       await updatePassThroughEndpoint(accessToken, endpointData.id, updateData);
-      message.success("Pass through endpoint updated successfully");
-      
+
       // Update local state with the new values
       setEndpointData({
         ...endpointData,
