@@ -81,13 +81,12 @@ For Proxy Admins, this means adding one passthrough route and having developers 
 [Learn more about Passthrough Endpoints](../../docs/pass_through)
 
 
-### Health Check Dashboard
+### v2 Health Checks 
 
-This release brings real-time health monitoring with a new dashboard for tracking model status. When models are configured, administrators can monitor health status and track success/failure patterns across endpoints.
+This release introduces v2 of the health check page with asynchronous result loading + storing the results of the last health check. Previously, we waited for all endpoints to respond before showing results. 
 
-This is great for production deployments with multiple model providers where you need immediate visibility into model availability.
+Now Proxy Admins see incremental health check results in real-time, making it easier to identify problematic models while confirming that the overall system is functioning properly.
 
-For Proxy Admins, this enables centralized monitoring with interactive health indicators. For developers, this means quick identification of model issues and reliability insights.
 
 
 ---
