@@ -226,9 +226,12 @@ For Proxy Admins, this enables centralized monitoring with interactive health in
     - Fix clickable model ID in health check table - [PR](https://github.com/BerriAI/litellm/pull/11898)
     - Fix health check UI table design - [PR](https://github.com/BerriAI/litellm/pull/11897)
 
+---
+
+### Logging / Guardrails Integrations
+
 #### Bugs
 - **[Prometheus](../../docs/observability/prometheus)**
-    - Fix PrometheusLogger label_filters initialization for non-premium users - [PR](https://github.com/BerriAI/litellm/pull/11764)
     - Fix bug for using prometheus metrics config - [PR](https://github.com/BerriAI/litellm/pull/11779)
 
 ---
