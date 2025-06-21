@@ -900,6 +900,10 @@ class CustomStreamWrapper:
             reasoning_content = getattr(
                 model_response.choices[0].delta, "reasoning_content", None
             )
+            # Initialize delta.content if None
+            if model_response.choices[0].delta.content is None:
+                model_response.choices[0].delta.content = ""
+                
             if reasoning_content:
                 if self.sent_first_thinking_block is False:
                     model_response.choices[0].delta.content += (
