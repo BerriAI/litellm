@@ -1404,6 +1404,32 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 ## DataDog
 
+### LLM Observability
+
+Datadog's [LLM Observability](https://www.datadoghq.com/product/llm-observability/) Python SDK provides autoinstrumentation for LiteLLM. Refer to the LLM Observability [documentation](https://docs.datadoghq.com/llm_observability/setup/auto_instrumentation?tab=python#litellm) for how to set this up.
+
+```python
+import os
+import litellm
+from litellm import completion
+from ddtrace.llmobs import LLMObs
+
+LLMObs.enable(
+    ml_app="my-test-app",
+)
+
+litellm.api_key = os.environ["ANTHROPIC_API_KEY"]
+
+messages = [{ "content": "What color is the sky?","role": "user"}]
+response = completion(model="claude-3-5-sonnet-20240620", messages=messages, stream=False)
+```
+
+Run the example script above with ``ddtrace-run python example.py``. You should then see traces appear in Datadog's LLM Observability product.
+
+<Image img={require('../../img/dd_llm_observability.png')} />
+
+### Other Integrations
+
 LiteLLM Supports logging to the following Datdog Integrations:
 - `datadog` [Datadog Logs](https://docs.datadoghq.com/logs/)
 - `datadog_llm_observability` [Datadog LLM Observability](https://www.datadoghq.com/product/llm-observability/)
@@ -1428,6 +1454,12 @@ litellm_settings:
 
 </TabItem>
 <TabItem value="datadog_llm_observability" label="Datadog LLM Observability">
+
+:::warning
+
+It is recommended to use Datadog's in-house instrumentation for LLM Observability. See [here](#llm-observability) for more details.
+
+:::
 
 ```yaml
 model_list:
