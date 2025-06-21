@@ -111,9 +111,9 @@ Now Proxy Admins see incremental health check results in real-time, making it ea
 
 #### Features
 - **[Azure](../../docs/providers/azure)**
+    - Support for new /v1 preview Azure OpenAI API - [PR](https://github.com/BerriAI/litellm/pull/11934), [Get Started](../../docs/providers/azure/azure_responses#azure-codex-models)
+    - Add Azure Codex Models support - [PR](https://github.com/BerriAI/litellm/pull/11934), [Get Started](../../docs/providers/azure/azure_responses#azure-codex-models)
     - Make Azure AD scope configurable - [PR](https://github.com/BerriAI/litellm/pull/11621)
-    - Support for new /v1 preview Azure OpenAI API - [PR](https://github.com/BerriAI/litellm/pull/11934)
-    - Add Azure Codex Models support - [PR](https://github.com/BerriAI/litellm/pull/11934)
     - Handle more GPT custom naming patterns - [PR](https://github.com/BerriAI/litellm/pull/11914)
     - Update o3 pricing to match OpenAI pricing - [PR](https://github.com/BerriAI/litellm/pull/11937)
 - **[VertexAI](../../docs/providers/vertex)**
@@ -133,7 +133,7 @@ Now Proxy Admins see incremental health check results in real-time, making it ea
     - Add Mistral Small to BEDROCK_CONVERSE_MODELS - [PR](https://github.com/BerriAI/litellm/pull/11760)
 - **[Mistral](../../docs/providers/mistral)**
     - Enhance Mistral API with parallel tool calls support - [PR](https://github.com/BerriAI/litellm/pull/11770)
-- **[Meta Llama API](../../docs/providers/openai_compatible)**
+- **[Meta Llama API](../../docs/providers/meta_llama)**
     - Enable tool calling for meta_llama models - [PR](https://github.com/BerriAI/litellm/pull/11895)
 - **[Volcengine](../../docs/providers/volcengine)**
     - Add thinking parameter support - [PR](https://github.com/BerriAI/litellm/pull/11914)
@@ -160,17 +160,13 @@ Now Proxy Admins see incremental health check results in real-time, making it ea
 
 #### Features
 - **[Responses API](../../docs/response_api)**
-    - Day-0 support for OpenAI re-usable prompts Responses API - [PR](https://github.com/BerriAI/litellm/pull/11782)
+    - Day-0 support for OpenAI re-usable prompts Responses API - [PR](https://github.com/BerriAI/litellm/pull/11782), [Get Started](../../docs/providers/openai/responses_api#reusable-prompts)
     - Support passing image URLs in Completion-to-Responses bridge - [PR](https://github.com/BerriAI/litellm/pull/11833)
-- **[Messages API](../../docs/completion/input)**
-    - Allow testing `/v1/messages` on the Test Key Page - [PR](https://github.com/BerriAI/litellm/pull/11930)
+- **[MCP Gateway](../../docs/mcp)**
+    - Add Allowed MCPs to Creating/Editing Organizations - [PR](https://github.com/BerriAI/litellm/pull/11893), [Get Started](../../docs/mcp#-mcp-permission-management)
+    - Allow connecting to MCP with authentication headers - [PR](https://github.com/BerriAI/litellm/pull/11891), [Get Started](../../docs/mcp#using-your-mcp-with-client-side-credentials)
 - **[Speech API](../../docs/speech)**
     - Working Gemini TTS support via OpenAI's `/v1/speech` endpoint - [PR](https://github.com/BerriAI/litellm/pull/11832)
-- **[Models API](../../docs/completion/model_alias)**
-    - Allow `/models` to return correct models for custom wildcard prefixes - [PR](https://github.com/BerriAI/litellm/pull/11784)
-- **[MCP Gateway](../../docs/mcp)**
-    - Add Allowed MCPs to Creating/Editing Organizations - [PR](https://github.com/BerriAI/litellm/pull/11893)
-    - Allow connecting to MCP with authentication headers - [PR](https://github.com/BerriAI/litellm/pull/11891)
 - **[Passthrough Endpoints](../../docs/pass_through/custom_routes)**
     - Add support for subroutes for passthrough endpoints - [PR](https://github.com/BerriAI/litellm/pull/11827)
     - Support for setting custom cost per passthrough request - [PR](https://github.com/BerriAI/litellm/pull/11870)
@@ -178,6 +174,8 @@ Now Proxy Admins see incremental health check results in real-time, making it ea
     - Add V2 Passthrough endpoints on UI - [PR](https://github.com/BerriAI/litellm/pull/11905)
     - Move passthrough endpoints under Models + Endpoints in UI - [PR](https://github.com/BerriAI/litellm/pull/11871)
     - QA improvements for adding passthrough endpoints - [PR](https://github.com/BerriAI/litellm/pull/11909), [PR](https://github.com/BerriAI/litellm/pull/11939)
+- **[Models API](../../docs/completion/model_alias)**
+    - Allow `/models` to return correct models for custom wildcard prefixes - [PR](https://github.com/BerriAI/litellm/pull/11784)
 
 #### Bugs
 
@@ -208,6 +206,8 @@ Now Proxy Admins see incremental health check results in real-time, making it ea
 ## Management Endpoints / UI
 
 #### Features
+- **Test Key Page**
+    - Allow testing `/v1/messages` on the Test Key Page - [PR](https://github.com/BerriAI/litellm/pull/11930)
 - **[SSO](../../docs/proxy/sso)**
     - Allow passing additional headers - [PR](https://github.com/BerriAI/litellm/pull/11781)
 - **[JWT Auth](../../docs/proxy/jwt_auth)**
