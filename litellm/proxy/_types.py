@@ -1472,6 +1472,7 @@ class ConfigFieldDelete(LiteLLMPydanticObjectBase):
     config_type: Literal["general_settings"]
     field_name: str
 
+
 class CallbackDelete(LiteLLMPydanticObjectBase):
     callback_name: str
 
@@ -3114,4 +3115,4 @@ class EnterpriseLicenseData(TypedDict, total=False):
     user_id: str
     allowed_features: List[str]
     max_users: int
-    max_teams: Optional[int]
+    max_teams: int
