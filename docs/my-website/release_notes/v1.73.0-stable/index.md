@@ -214,7 +214,6 @@ For Proxy Admins, this enables centralized monitoring with interactive health in
 - **[Team Management](../../docs/proxy/team_management)**
     - Allow setting default team for new users - [PR](https://github.com/BerriAI/litellm/pull/11874), [PR](https://github.com/BerriAI/litellm/pull/11877)
     - Fix default team settings - [PR](https://github.com/BerriAI/litellm/pull/11887)
-    - Check team counts on license when creating new team - [PR](https://github.com/BerriAI/litellm/pull/11943)
 - **[SCIM](../../docs/proxy/scim)**
     - Add error handling for existing user on SCIM - [PR](https://github.com/BerriAI/litellm/pull/11862)
     - Add SCIM PATCH and PUT operations for users - [PR](https://github.com/BerriAI/litellm/pull/11863)
