@@ -6,7 +6,11 @@ import TabItem from '@theme/TabItem';
 
 Route requests from your LiteLLM proxy to any external API. Perfect for custom models, image generation APIs, or any service you want to proxy through LiteLLM.
 
-Onboard third-party endpoints like Bria API and Mistral OCR, set a cost per request, and give your developers access.
+**Key Benefits:**
+- Onboard third-party endpoints like Bria API and Mistral OCR
+- Set custom pricing per request
+- Proxy Admins don't need to give developers api keys to upstream llm providers like Bria, Mistral OCR, etc.
+- Maintain centralized authentication, spend tracking, budgeting
 
 ## Quick Start with UI (Recommended)
 
@@ -14,33 +18,65 @@ The easiest way to create pass through endpoints is through the LiteLLM UI. In t
 
 ### Step 1: Create Route Mappings
 
-`path`: This is the route clients should use when calling LiteLLM Proxy.
-`target`: This is the URL the request will be forwarded to.
+To create a pass through endpoint:
+
+1. Navigate to the LiteLLM Proxy UI
+2. Go to the `Models + Endpoints` tab
+3. Click on `Pass Through Endpoints`
+4. Click "Add Pass Through Endpoint"
+5. Enter the following details:
+
+**Required Fields:**
+- `Path Prefix`: The route clients will use when calling LiteLLM Proxy (e.g., `/bria`, `/mistral-ocr`)
+- `Target URL`: The URL where requests will be forwarded
 
 <Image 
   img={require('../../img/pt_1.png')}
   style={{width: '60%', display: 'block', margin: '2rem auto'}}
 />
 
-This creates the following route mappings:
+**Route Mapping Example:**
 
-- `https://<litellm-proxy-base-url>/bria` → `https://engine.prod.bria-api.com`
-- `https://<litellm-proxy-base-url>/v1/text-to-image/base/model` → `https://engine.prod.bria-api.com/v1/text-to-image/base/model`
-- `https://<litellm-proxy-base-url>/v1/enhance_image` → `https://engine.prod.bria-api.com/v1/enhance_image`
+The above configuration creates these route mappings:
+
+| LiteLLM Proxy Route | Target URL |
+|-------------------|------------|
+| `/bria` | `https://engine.prod.bria-api.com` |
+| `/bria/v1/text-to-image/base/model` | `https://engine.prod.bria-api.com/v1/text-to-image/base/model` |
+| `/bria/v1/enhance_image` | `https://engine.prod.bria-api.com/v1/enhance_image` |
+| `/bria/<any-sub-path>` | `https://engine.prod.bria-api.com/<any-sub-path>` |
+
+:::info
+All routes are prefixed with your LiteLLM proxy base URL: `https://<litellm-proxy-base-url>`
+:::
 
 ### Step 2: Configure Headers and Pricing
+
+Configure the required authentication and pricing:
+
+**Authentication Setup:**
+- The Bria API requires an `api_token` header
+- Enter your Bria API key as the value for the `api_token` header
+
+**Pricing Configuration:**
+- Set a cost per request (e.g., $12.00 in this example)
+- This enables cost tracking and billing for your users
 
 <Image 
   img={require('../../img/pt_2.png')}
   style={{width: '60%', display: 'block', margin: '2rem auto'}}
 />
 
-For the Bria API, add the required header:
-- `api_token: string`
+### Step 3: Save Your Endpoint 
 
-### Step 3: Test Your Endpoint
+Once you've completed the configuration:
+1. Review your settings
+2. Click "Add Pass Through Endpoint"
+3. Your endpoint will be created and immediately available
 
-Make a request to the Bria API through your LiteLLM Proxy:
+### Step 4: Test Your Endpoint
+
+Verify your setup by making a test request to the Bria API through your LiteLLM Proxy:
 
 ```shell
 curl -i -X POST \
@@ -54,9 +90,12 @@ curl -i -X POST \
   }'
 ```
 
+**Expected Response:**
+If everything is configured correctly, you should receive a response from the Bria API containing the generated image data.
+
 ---
 
-## Config.yaml setup
+## Config.yaml Setup
 
 You can also create pass through endpoints using the `config.yaml` file. Here's how to add a `/v1/rerank` route that forwards to Cohere's API:
 
@@ -133,7 +172,7 @@ general_settings:
         content-type: application/json
 ```
 
-Test with LiteLLM key:
+**Test with LiteLLM key:**
 ```shell
 curl --request POST \
   --url http://localhost:4000/v1/rerank \
@@ -235,4 +274,30 @@ curl --location 'http://0.0.0.0:4000/v1/messages' \
 
 ---
 
-Need help? Check out our [provider-specific parameters guide](../completion/provider_specific_params.md) for more advanced configurations.
+## Troubleshooting
+
+### Common Issues
+
+**Authentication Errors:**
+- Verify API keys are correctly set in headers
+- Ensure the target API accepts the provided authentication method
+
+**Routing Issues:**
+- Confirm the path prefix matches your request URL
+- Verify the target URL is accessible
+- Check for trailing slashes in configuration
+
+**Response Errors:**
+- Enable detailed debugging with `--detailed_debug`
+- Check LiteLLM proxy logs for error details
+- Verify the target API's expected request format
+
+### Getting Help
+
+[Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
+
+[Community Discord 💭](https://discord.gg/wuPM9dRgDw)
+
+Our numbers 📞 +1 (770) 8783-106 / ‭+1 (412) 618-6238‬
+
+Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
