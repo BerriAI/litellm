@@ -90,7 +90,7 @@ const TeamMembersComponent: React.FC<TeamMembersComponentProps> = ({
                   <Text className="font-mono">{member.user_id}</Text>
                 </TableCell>
                 <TableCell>
-                  <Text className="font-mono">{member.user_email}</Text>
+                  <Text className="font-mono">{member.user_email ? member.user_email : 'No Email'}</Text>
                 </TableCell>
                 <TableCell>
                   <Text className="font-mono">{member.role}</Text>
