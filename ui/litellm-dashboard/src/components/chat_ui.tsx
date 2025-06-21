@@ -842,7 +842,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     : endpointType === EndpointType.IMAGE_EDITS
                     ? "Edit"
                     : "Generate"}
-                </Button>
+                </TremorButton>
               )}
             </div>
           </div>
