@@ -165,31 +165,6 @@ export const columns = (
     },
   },
   {
-    header: "Access Via Team IDs",
-    accessorKey: "model_info.access_via_team_ids",
-    cell: ({ row }) => {
-      const model = row.original;
-      return model.model_info.access_via_team_ids ? (
-        <div className="overflow-hidden">
-          <Tooltip title={model.model_info.access_via_team_ids}>
-            {model.model_info.access_via_team_ids.map((teamId: string) => (
-              <Badge
-                key={teamId}
-                size="xs"
-                color="blue"
-                className="text-xs px-1.5 py-0.5 h-5 leading-tight flex-shrink-0"
-              >
-                {teamId}
-              </Badge>
-            ))}
-          </Tooltip>
-        </div>
-      ) : (
-        "-"
-      );
-    },
-  },
-  {
     header: "Team ID",
     accessorKey: "model_info.team_id",
     cell: ({ row }) => {
