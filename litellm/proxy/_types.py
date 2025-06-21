@@ -1431,6 +1431,10 @@ class DynamoDBArgs(LiteLLMPydanticObjectBase):
 
 
 class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
+    id: Optional[str] = Field(
+        default=None,
+        description="Optional unique identifier for the pass-through endpoint. If not provided, endpoints will be identified by path for backwards compatibility.",
+    )
     path: str = Field(description="The route to be added to the LiteLLM Proxy Server.")
     target: str = Field(
         description="The URL to which requests for this path should be forwarded."
