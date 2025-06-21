@@ -17,7 +17,7 @@ from typing import List, Optional
 import litellm
 from litellm import verbose_logger
 from litellm.types.llms.openai import AllMessageValues
-from litellm.utils import get_model_info
+from litellm.utils import get_model_info, supports_reasoning
 
 from ...openai.chat.o_series_transformation import OpenAIOSeriesConfig
 
@@ -39,7 +39,7 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
         ]
 
         o_series_only_param = []
-        if model and model != "o1-mini":
+        if supports_reasoning(model):
             o_series_only_param.append("reasoning_effort")
         all_openai_params.extend(o_series_only_param)
         return [
