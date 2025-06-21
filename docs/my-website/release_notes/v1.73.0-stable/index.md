@@ -107,7 +107,7 @@ Now Proxy Admins see incremental health check results in real-time, making it ea
 | Azure | `azure/o3-pro` | 200k | $2.00 | $8.00 | Updated |
 | Azure OpenAI | Azure Codex Models | Various | Various | Various | New |
 
-### Updated Models
+## Updated Models
 
 #### Features
 - **[Azure](../../docs/providers/azure)**
@@ -119,15 +119,12 @@ Now Proxy Admins see incremental health check results in real-time, making it ea
 - **[VertexAI](../../docs/providers/vertex)**
     - Anthropic streaming passthrough cost tracking - [PR](https://github.com/BerriAI/litellm/pull/11734)
     - Add Vertex Imagen-4 models - [PR](https://github.com/BerriAI/litellm/pull/11767)
-    - Fix vertex AI claude thinking params - [PR](https://github.com/BerriAI/litellm/pull/11796)
-    - Handle missing tokenCount in promptTokensDetails - [PR](https://github.com/BerriAI/litellm/pull/11896)
 - **[Gemini](../../docs/providers/gemini)**
     - Working Gemini TTS support via `/v1/speech` endpoint - [PR](https://github.com/BerriAI/litellm/pull/11832)
     - Fix gemini 2.5 flash config - [PR](https://github.com/BerriAI/litellm/pull/11830)
     - Add missing `flash-2.5-flash-lite` model and fix pricing - [PR](https://github.com/BerriAI/litellm/pull/11901)
     - Mark all gemini-2.5 models as supporting PDF input - [PR](https://github.com/BerriAI/litellm/pull/11907)
     - Add `gemini-2.5-pro` with reasoning support - [PR](https://github.com/BerriAI/litellm/pull/11927)
-    - Fix web search error with responses API - [PR](https://github.com/BerriAI/litellm/pull/11894)
 - **[AWS Bedrock](../../docs/providers/bedrock)**
     - AWS credentials no longer mandatory - [PR](https://github.com/BerriAI/litellm/pull/11765)
     - Add AWS Bedrock profiles for APAC region - [PR](https://github.com/BerriAI/litellm/pull/11883)
@@ -138,18 +135,24 @@ Now Proxy Admins see incremental health check results in real-time, making it ea
     - Enhance Mistral API with parallel tool calls support - [PR](https://github.com/BerriAI/litellm/pull/11770)
 - **[Meta Llama API](../../docs/providers/openai_compatible)**
     - Enable tool calling for meta_llama models - [PR](https://github.com/BerriAI/litellm/pull/11895)
-- **[Ollama](../../docs/providers/ollama)**
-    - Update ollama_embeddings to work on sync API - [PR](https://github.com/BerriAI/litellm/pull/11746)
-    - Fix response_format not working - [PR](https://github.com/BerriAI/litellm/pull/11880)
 - **[Volcengine](../../docs/providers/volcengine)**
     - Add thinking parameter support - [PR](https://github.com/BerriAI/litellm/pull/11914)
 
 
-#### Bugs
+### Bugs
+
+- **[VertexAI](../../docs/providers/vertex)**
+    - Handle missing tokenCount in promptTokensDetails - [PR](https://github.com/BerriAI/litellm/pull/11896)
+    - Fix vertex AI claude thinking params - [PR](https://github.com/BerriAI/litellm/pull/11796)
+- **[Gemini](../../docs/providers/gemini)**
+    - Fix web search error with responses API - [PR](https://github.com/BerriAI/litellm/pull/11894), [Get Started](../../docs/completion/web_search#responses-litellmresponses)
 - **[Custom LLM](../../docs/providers/custom_llm_server)**
     - Set anthropic custom LLM provider property - [PR](https://github.com/BerriAI/litellm/pull/11907)
 - **[Anthropic](../../docs/providers/anthropic)**
     - Bump anthropic package version - [PR](https://github.com/BerriAI/litellm/pull/11851)
+- **[Ollama](../../docs/providers/ollama)**
+    - Update ollama_embeddings to work on sync API - [PR](https://github.com/BerriAI/litellm/pull/11746)
+    - Fix response_format not working - [PR](https://github.com/BerriAI/litellm/pull/11880)
 
 ---
 
@@ -165,10 +168,9 @@ Now Proxy Admins see incremental health check results in real-time, making it ea
     - Working Gemini TTS support via OpenAI's `/v1/speech` endpoint - [PR](https://github.com/BerriAI/litellm/pull/11832)
 - **[Models API](../../docs/completion/model_alias)**
     - Allow `/models` to return correct models for custom wildcard prefixes - [PR](https://github.com/BerriAI/litellm/pull/11784)
-- **[MCP Integration](../../docs/mcp)**
+- **[MCP Gateway](../../docs/mcp)**
     - Add Allowed MCPs to Creating/Editing Organizations - [PR](https://github.com/BerriAI/litellm/pull/11893)
     - Allow connecting to MCP with authentication headers - [PR](https://github.com/BerriAI/litellm/pull/11891)
-    - Fix using MCPs defined on config.yaml - [PR](https://github.com/BerriAI/litellm/pull/11824)
 - **[Passthrough Endpoints](../../docs/pass_through/custom_routes)**
     - Add support for subroutes for passthrough endpoints - [PR](https://github.com/BerriAI/litellm/pull/11827)
     - Support for setting custom cost per passthrough request - [PR](https://github.com/BerriAI/litellm/pull/11870)
@@ -183,6 +185,8 @@ Now Proxy Admins see incremental health check results in real-time, making it ea
     - Fix `/v1/messages` endpoint always using us-central1 with vertex_ai-anthropic models - [PR](https://github.com/BerriAI/litellm/pull/11831)
     - Fix model_group tracking for `/v1/messages` and `/moderations` - [PR](https://github.com/BerriAI/litellm/pull/11933)
     - Fix cost tracking and logging via `/v1/messages` API when using Claude Code - [PR](https://github.com/BerriAI/litellm/pull/11928)
+- **[MCP Gateway](../../docs/mcp)**
+    - Fix using MCPs defined on config.yaml - [PR](https://github.com/BerriAI/litellm/pull/11824)
 - **[Chat Completion API](../../docs/completion/input)**
     - Allow dict for tool_choice argument in acompletion - [PR](https://github.com/BerriAI/litellm/pull/11860)
 - **[Passthrough Endpoints](../../docs/pass_through/langfuse)**
