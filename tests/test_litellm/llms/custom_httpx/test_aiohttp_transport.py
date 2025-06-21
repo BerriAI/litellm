@@ -176,3 +176,46 @@ async def test_timeout_exception_gets_mapped():
 
     # Should have received the first chunk before the error
     assert received_chunks == [b"chunk1"]
+
+
+@pytest.mark.asyncio
+async def test_handle_async_request_uses_env_proxy(monkeypatch):
+    """Aiohttp transport should honor HTTP(S)_PROXY env vars"""
+    proxy_url = "http://proxy.local:3128"
+    monkeypatch.setenv("HTTP_PROXY", proxy_url)
+    monkeypatch.setenv("http_proxy", proxy_url)
+    monkeypatch.setenv("HTTPS_PROXY", proxy_url)
+    monkeypatch.setenv("https_proxy", proxy_url)
+    monkeypatch.delenv("DISABLE_AIOHTTP_TRUST_ENV", raising=False)
+
+    captured = {}
+
+    class FakeSession:
+        def request(self, *args, **kwargs):
+            captured["proxy"] = kwargs.get("proxy")
+
+            class Resp:
+                status = 200
+                headers = {}
+
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, exc_type, exc, tb):
+                    pass
+
+                @property
+                def content(self):
+                    class C:
+                        async def iter_chunked(self, size):
+                            yield b""
+
+                    return C()
+
+            return Resp()
+
+    transport = LiteLLMAiohttpTransport(client=lambda: FakeSession())
+    request = httpx.Request("GET", "http://example.com")
+    await transport.handle_async_request(request)
+
+    assert captured["proxy"] == proxy_url
