@@ -2679,7 +2679,7 @@
         "supports_prompt_caching": true,
         "supports_tool_choice": true
     },
-    "azure/codex-mini-latest": {
+    "azure/codex-mini": {
         "max_tokens": 100000,
         "max_input_tokens": 200000,
         "max_output_tokens": 100000,
