@@ -2493,6 +2493,7 @@ class LiteLLM_TeamMembership(LiteLLMPydanticObjectBase):
     user_id: str
     team_id: str
     budget_id: Optional[str] = None
+    spend: Optional[float] = 0.0
     litellm_budget_table: Optional[LiteLLM_BudgetTable]
 
 
