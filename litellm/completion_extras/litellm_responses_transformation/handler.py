@@ -1,6 +1,7 @@
 """
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
+
 from typing import TYPE_CHECKING, Any, Coroutine, TypedDict, Union
 
 if TYPE_CHECKING:
@@ -104,7 +105,9 @@ class ResponsesToCompletionBridgeHandler:
             optional_params=optional_params,
             litellm_params=litellm_params,
             headers=headers,
+            litellm_logging_obj=logging_obj,
         )
+
         result = responses(
             **request_data,
         )
@@ -154,13 +157,18 @@ class ResponsesToCompletionBridgeHandler:
         logging_obj = validated_kwargs["logging_obj"]
         custom_llm_provider = validated_kwargs["custom_llm_provider"]
 
-        request_data = self.transformation_handler.transform_request(
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            headers=headers,
-        )
+        try:
+            request_data = self.transformation_handler.transform_request(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=headers,
+                litellm_logging_obj=logging_obj,
+            )
+        except Exception as e:
+            raise e
+
         result = await aresponses(
             **request_data,
             aresponses=True,

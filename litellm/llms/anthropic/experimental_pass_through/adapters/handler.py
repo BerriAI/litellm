@@ -1,4 +1,14 @@
-from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Coroutine,
+    Dict,
+    List,
+    Optional,
+    Union,
+    cast,
+)
 
 import litellm
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
@@ -8,6 +18,9 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.utils import ModelResponse
+
+if TYPE_CHECKING:
+    pass
 
 ########################################################
 # init adapter
@@ -35,6 +48,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         extra_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Prepare kwargs for litellm.completion/acompletion"""
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObject,
+        )
 
         request_data = {
             "model": model,
@@ -73,9 +89,17 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if stream:
             completion_kwargs["stream"] = stream
 
-        excluded_keys = {"litellm_logging_obj", "anthropic_messages"}
+        excluded_keys = {"anthropic_messages"}
         extra_kwargs = extra_kwargs or {}
         for key, value in extra_kwargs.items():
+            if (
+                key == "litellm_logging_obj"
+                and value is not None
+                and isinstance(value, LiteLLMLoggingObject)
+            ):
+                from litellm.types.utils import CallTypes
+
+                setattr(value, "call_type", CallTypes.completion.value)
             if (
                 key not in excluded_keys
                 and key not in completion_kwargs
