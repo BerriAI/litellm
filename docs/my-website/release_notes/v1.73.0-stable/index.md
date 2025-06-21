@@ -72,7 +72,12 @@ pip install litellm==1.73.0.rc
 
 ### Passthrough Endpoints v2
 
-This release brings support for adding billing and full URL forwarding for passthrough endpoints.
+<Image img={require('../../img/release_notes/v2_pt.png')}/>
+
+
+<br/>
+
+This release brings support for adding billing and full URL forwarding for passthrough endpoints. 
 
 This means you as Proxy Admin can onboard third-party endpoints like Bria API and Mistral OCR, set a cost per request, and give your developers access to the complete API functionality.
 
@@ -81,8 +86,13 @@ This means you as Proxy Admin can onboard third-party endpoints like Bria API an
 
 ### v2 Health Checks 
 
+<Image img={require('../../img/release_notes/v2_health.png')}/>
 
+<br/>
 
+This release brings support for Proxy Admins to select which specific models to health check and see the health status as soon as its individual check completes, along with last check times.
+
+This allows Proxy Admins to immediately identify which specific models are in a bad state and view the full error stack trace for faster troubleshooting.
 
 
 ---
