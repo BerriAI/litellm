@@ -1,8 +1,73 @@
 import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
 # Create Pass Through Endpoints 
 
-Add pass through routes to LiteLLM Proxy
+Route requests from your LiteLLM proxy to any external API. Perfect for custom models, image generation APIs, or any service you want to proxy through LiteLLM.
+
+Onboard third-party endpoints like Bria API and Mistral OCR, set a cost per request, and give your developers access
+
+## Usage 
+
+In this example we will onboard the [Bria API](https://docs.bria.ai/image-generation/endpoints/text-to-image-base) and set a cost per request.
+
+### 1. Create a pass through route on LiteLLM 
+
+### Add route mappings 
+
+`path`: This is the route clients shoudl use when calling LiteLLM Proxy.
+`target`: This is the URL the request will be forwarded to.
+
+<Image 
+  img={require('../../img/pt_1.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+This allows for the following route mappings:
+
+- `https://<litellm-proxy-base-url>/bria` will forward requests to `https://engine.prod.bria-api.com`
+- `https://<litellm-proxy-base-url>/v1/text-to-image/base/model` will forward requests to `https://engine.prod.bria-api.com/v1/text-to-image/base/model`
+- `https://<litellm-proxy-base-url>/v1/enhance_image` will forward requests to `https://engine.prod.bria-api.com/v1/enhance_image`
+
+
+### 2. Add custom headers and cost per request
+
+<Image 
+  img={require('../../img/pt_2.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+For making requests to the Bria API, we need to add the following headers:
+
+- `'api_token: string'`
+
+### 3. Test it! 
+
+Make the following request to the Bria API through LiteLLM Proxy
+
+```shell
+curl -i -X POST \
+  'http://localhost:4000/bria/v1/text-to-image/base/2.3' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <your litellm api key>' \
+  -d '{
+    "prompt": "a book",
+    "num_results": 2,
+    "sync": true
+  }'
+```
+
+
+
+
+
+
+
+### 4. View Request/Response Logs
+
+
+
 
 **Example:** Add a route `/v1/rerank` that forwards requests to `https://api.cohere.com/v1/rerank` through LiteLLM Proxy
 
@@ -21,7 +86,7 @@ curl --request POST \
   }'
 ```
 
-## Tutorial - Pass through Cohere Re-Rank Endpoint
+## Tutorial - Create Pass Through on Proxy config.yaml
 
 **Step 1** Define pass through routes on [litellm config.yaml](configs.md)
 
@@ -97,61 +162,6 @@ This request got forwarded from LiteLLM Proxy -> Defined Target URL (with header
 }
 ```
 
-## Tutorial - Pass Through Langfuse Requests
-
-
-**Step 1** Define pass through routes on [litellm config.yaml](configs.md)
-
-```yaml
-general_settings:
-  master_key: sk-1234
-  pass_through_endpoints:
-    - path: "/api/public/ingestion"                                # route you want to add to LiteLLM Proxy Server
-      target: "https://us.cloud.langfuse.com/api/public/ingestion" # URL this route should forward 
-      headers:
-        LANGFUSE_PUBLIC_KEY: "os.environ/LANGFUSE_DEV_PUBLIC_KEY" # your langfuse account public key
-        LANGFUSE_SECRET_KEY: "os.environ/LANGFUSE_DEV_SK_KEY"     # your langfuse account secret key
-```
-
-**Step 2** Start Proxy Server in detailed_debug mode
-
-```shell
-litellm --config config.yaml --detailed_debug
-```
-**Step 3** Make Request to pass through endpoint
-
-Run this code to make a sample trace 
-```python
-from langfuse import Langfuse
-
-langfuse = Langfuse(
-    host="http://localhost:4000", # your litellm proxy endpoint
-    public_key="anything",        # no key required since this is a pass through
-    secret_key="anything",        # no key required since this is a pass through
-)
-
-print("sending langfuse trace request")
-trace = langfuse.trace(name="test-trace-litellm-proxy-passthrough")
-print("flushing langfuse request")
-langfuse.flush()
-
-print("flushed langfuse request")
-```
-
-
-🎉 **Expected Response**
-
-On success
-Expect to see the following Trace Generated on your Langfuse Dashboard
-
-<Image img={require('../../img/proxy_langfuse.png')} />
-
-You will see the following endpoint called on your litellm proxy server logs
-
-```shell
-POST /api/public/ingestion HTTP/1.1" 207 Multi-Status
-```
-
 
 ## ✨ [Enterprise] - Use LiteLLM keys/authentication on Pass Through Endpoints
 
@@ -192,53 +202,6 @@ curl --request POST \
                   "Capital punishment (the death penalty) has existed in the United States since beforethe United States was a country. As of 2017, capital punishment is legal in 30 of the 50 states."]
   }'
 ```
-
-### Use Langfuse client sdk w/ LiteLLM Key 
-
-**Usage** 
-
-1. Set-up yaml to pass-through langfuse /api/public/ingestion
-
-```yaml
-general_settings:
-  master_key: sk-1234
-  pass_through_endpoints:
-    - path: "/api/public/ingestion"                                # route you want to add to LiteLLM Proxy Server
-      target: "https://us.cloud.langfuse.com/api/public/ingestion" # URL this route should forward 
-      auth: true # 👈 KEY CHANGE
-      custom_auth_parser: "langfuse" # 👈 KEY CHANGE
-      headers:
-        LANGFUSE_PUBLIC_KEY: "os.environ/LANGFUSE_DEV_PUBLIC_KEY" # your langfuse account public key
-        LANGFUSE_SECRET_KEY: "os.environ/LANGFUSE_DEV_SK_KEY"     # your langfuse account secret key
-```
-
-2. Start proxy
-
-```bash
-litellm --config /path/to/config.yaml
-```
-
-3. Test with langfuse sdk
-
-
-```python
-
-from langfuse import Langfuse
-
-langfuse = Langfuse(
-    host="http://localhost:4000", # your litellm proxy endpoint
-    public_key="sk-1234",        # your litellm proxy api key 
-    secret_key="anything",        # no key required since this is a pass through
-)
-
-print("sending langfuse trace request")
-trace = langfuse.trace(name="test-trace-litellm-proxy-passthrough")
-print("flushing langfuse request")
-langfuse.flush()
-
-print("flushed langfuse request")
-```
-
 
 ## `pass_through_endpoints` Spec on config.yaml
 
