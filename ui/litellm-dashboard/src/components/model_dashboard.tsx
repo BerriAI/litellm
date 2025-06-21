@@ -1176,6 +1176,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               ))}
                             </Select>
                             </div>
+                            {
+                              modelViewMode === "current_team" && (
+
                             <div className="flex items-start gap-2 mt-2 bg-gray-50 rounded">
                               <InfoCircleOutlined className="text-gray-400 mt-0.5 flex-shrink-0 text-xs" />
                               <div className="text-xs text-gray-500">
@@ -1196,6 +1199,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                 )}
                               </div>
                             </div>
+                            )
+                          }
                           </div>
                           
                           
