@@ -147,11 +147,13 @@ class LicenseCheck:
         """
         if self.airgapped_license_data is None:
             return False
+
+        _max_teams_in_license: Optional[int] = self.airgapped_license_data.get("max_teams")
         if "max_teams" not in self.airgapped_license_data or not isinstance(
-            self.airgapped_license_data["max_teams"], int
+            _max_teams_in_license, int
         ):
             return False
-        return team_count > self.airgapped_license_data["max_teams"]
+        return team_count > _max_teams_in_license
 
     def verify_license_without_api_request(self, public_key, license_key):
         try:
