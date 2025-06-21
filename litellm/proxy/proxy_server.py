@@ -17,6 +17,7 @@ from typing import (
     Any,
     List,
     Optional,
+    Set,
     Tuple,
     Union,
     cast,
@@ -5543,7 +5544,7 @@ async def get_all_team_models(
     2. Get all models across all teams
     3. Return {"model_id": ["team_id1", "team_id2"]}
     """
-    team_models: Dict[str, List[str]] = {}
+    team_models: Dict[str, Set[str]] = {}
     team_db_objects_typed: List[LiteLLM_TeamTable] = []
     if user_teams == "*":
         team_db_objects = await prisma_client.db.litellm_teamtable.find_many()
@@ -5562,14 +5563,28 @@ async def get_all_team_models(
 
     for team_object in team_db_objects_typed:
         for model_name in team_object.models:
-            _models = llm_router.get_model_list(model_name=model_name)
-            if _models is not None:
-                for model in _models:
-                    model_id = model.get("model_info", {}).get("id", None)
-                    if model_id is not None:
-                        team_models.setdefault(model_id, []).append(team_object.team_id)
+            # handle special case where team has access to all proxy models
+            if model_name == SpecialModelNames.all_proxy_models.value:
+                _model_ids = llm_router.get_model_ids()
+                if _model_ids is not None:
+                    for model_id in _model_ids:
+                        team_models.setdefault(model_id, set()).add(team_object.team_id)
+            else:
+                _models = llm_router.get_model_list(model_name=model_name)
+                if _models is not None:
+                    for model in _models:
+                        model_id = model.get("model_info", {}).get("id", None)
+                        if model_id is not None:
+                            team_models.setdefault(model_id, set()).add(
+                                team_object.team_id
+                            )
 
-    return team_models
+    # convert set to list
+    returned_team_models: Dict[str, List[str]] = {}
+    for model_id, team_ids in team_models.items():
+        returned_team_models[model_id] = list(team_ids)
+
+    return returned_team_models
 
 
 @router.get(
@@ -5651,6 +5666,10 @@ async def model_info_v2(
                 prisma_client=prisma_client,
                 llm_router=llm_router,
             )
+            for _model in all_models:
+                model_id = _model.get("model_info", {}).get("id", None)
+                if model_id is not None:
+                    _model["accesss_via_team_ids"] = team_models.get(model_id, [])
 
     # fill in model info based on config.yaml and litellm model_prices_and_context_window.json
     for _model in all_models:
