@@ -193,7 +193,7 @@ async def _upsert_team_member_budget_table(
         team_table.metadata = {}
 
     team_member_budget_id = team_table.metadata.get("team_member_budget_id")
-    if team_member_budget_id is None and isinstance(team_member_budget_id, str):
+    if team_member_budget_id is not None and isinstance(team_member_budget_id, str):
         # Budget exists
         budget_row = await update_budget(
             budget_obj=BudgetNewRequest(
@@ -202,9 +202,13 @@ async def _upsert_team_member_budget_table(
             ),
             user_api_key_dict=user_api_key_dict,
         )
+        verbose_proxy_logger.info(
+            f"Updated team member budget table: {budget_row.budget_id}, with team_member_budget={team_member_budget}"
+        )
         if updated_kv.get("metadata") is None:
             updated_kv["metadata"] = {}
         updated_kv["metadata"]["team_member_budget_id"] = budget_row.budget_id
+        updated_kv.pop("team_member_budget", None)
     else:  # budget does not exist
         updated_kv = await _create_team_member_budget_table(
             data=team_table,

@@ -235,6 +235,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         organization_id: values.organization_id,
       };
 
+      if (values.team_member_budget !== undefined) {
+        updateData.team_member_budget = Number(values.team_member_budget);
+      }
+
       // Handle object_permission updates
       if (values.vector_stores !== undefined || values.mcp_servers !== undefined) {
         updateData.object_permission = {
@@ -417,6 +421,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </Form.Item>
 
                   <Form.Item label="Max Budget (USD)" name="max_budget">
+                    <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
+                  </Form.Item>
+
+                  <Form.Item label="Team Member Budget (USD)" name="team_member_budget">
                     <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
                   </Form.Item>
 
