@@ -38,6 +38,23 @@ import VectorStoreSelector from "../vector_store_management/VectorStoreSelector"
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import PremiumVectorStoreSelector from "../common_components/PremiumVectorStoreSelector";
 
+export interface TeamMembership {
+  user_id: string;
+  team_id: string;
+  budget_id: string;
+  spend: number;
+  litellm_budget_table: {
+    budget_id: string;
+    soft_budget: number | null;
+    max_budget: number | null;
+    max_parallel_requests: number | null;
+    tpm_limit: number | null;
+    rpm_limit: number | null;
+    model_max_budget: Record<string, number> | null;
+    budget_duration: string | null;
+  };
+}
+
 export interface TeamData {
   team_id: string;
   team_info: {
@@ -73,7 +90,7 @@ export interface TeamData {
     } | null;
   };
   keys: any[];
-  team_memberships: any[];
+  team_memberships: TeamMembership[];
 }
 
 export interface TeamInfoProps {
