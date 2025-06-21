@@ -79,6 +79,8 @@ pip install litellm==1.73.0.rc
 
 This release brings support for adding billing and full URL forwarding for passthrough endpoints. 
 
+Previously, you could only map simple endpoints, but now you can add just `/bria` and all subroutes automatically get forwarded - for example, `/bria/v1/text-to-image/base/model` and `/bria/v1/enhance_image` will both be forwarded to the target URL with the same path structure.
+
 This means you as Proxy Admin can onboard third-party endpoints like Bria API and Mistral OCR, set a cost per request, and give your developers access to the complete API functionality.
 
 [Learn more about Passthrough Endpoints](../../docs/proxy/pass_through)
