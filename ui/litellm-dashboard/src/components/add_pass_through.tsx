@@ -21,6 +21,7 @@ import {
   Divider,
   Collapse,
 } from "antd";
+import NumericalInput from "./shared/numerical_input";
 import { InfoCircleOutlined, ApiOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CopyOutlined } from "@ant-design/icons";
 import { keyCreateCall, slackBudgetAlertsHealthCheck, modelAvailableCall } from "./networking";
 import { list } from "postcss";
@@ -284,13 +285,12 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                   </div>
                 }
               >
-                <InputNumber 
+                <NumericalInput 
                   min={0} 
                   step={0.001} 
-                  precision={6}
-                  placeholder="2.000000"
+                  precision={4}
+                  placeholder="2.0000"
                   size="large"
-                  className="rounded-lg w-full"
                 />
               </Form.Item>
             </Card>
