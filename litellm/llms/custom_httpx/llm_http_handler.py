@@ -1485,8 +1485,10 @@ class BaseLLMHTTPHandler:
                     url=api_base,
                     headers=headers,
                     json=data,
-                    timeout=timeout
-                    or response_api_optional_request_params.get("timeout"),
+                    timeout=self._get_timeout(
+                        timeout=timeout,
+                        optional_params=response_api_optional_request_params,
+                    ),
                     stream=stream,
                 )
                 if fake_stream is True:
@@ -1513,8 +1515,10 @@ class BaseLLMHTTPHandler:
                     url=api_base,
                     headers=headers,
                     json=data,
-                    timeout=timeout
-                    or response_api_optional_request_params.get("timeout"),
+                    timeout=self._get_timeout(
+                        timeout=timeout,
+                        optional_params=response_api_optional_request_params,
+                    ),
                 )
         except Exception as e:
             raise self._handle_error(
@@ -1606,8 +1610,10 @@ class BaseLLMHTTPHandler:
                     url=api_base,
                     headers=headers,
                     json=data,
-                    timeout=timeout
-                    or response_api_optional_request_params.get("timeout"),
+                    timeout=self._get_timeout(
+                        timeout=timeout,
+                        optional_params=response_api_optional_request_params,
+                    ),
                     stream=stream,
                 )
 
@@ -1636,8 +1642,10 @@ class BaseLLMHTTPHandler:
                     url=api_base,
                     headers=headers,
                     json=data,
-                    timeout=timeout
-                    or response_api_optional_request_params.get("timeout"),
+                    timeout=self._get_timeout(
+                        timeout=timeout,
+                        optional_params=response_api_optional_request_params,
+                    ),
                 )
 
         except Exception as e:
@@ -1651,7 +1659,6 @@ class BaseLLMHTTPHandler:
             raw_response=response,
             logging_obj=logging_obj,
         )
-
     async def async_delete_response_api_handler(
         self,
         response_id: str,
@@ -1711,7 +1718,10 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.delete(
-                url=url, headers=headers, json=data, timeout=timeout
+                url=url,
+                headers=headers,
+                json=data,
+                timeout=self._get_timeout(timeout=timeout),
             )
 
         except Exception as e:
@@ -1795,7 +1805,10 @@ class BaseLLMHTTPHandler:
 
         try:
             response = sync_httpx_client.delete(
-                url=url, headers=headers, json=data, timeout=timeout
+                url=url,
+                headers=headers,
+                json=data,
+                timeout=self._get_timeout(timeout=timeout),
             )
 
         except Exception as e:
@@ -1879,7 +1892,12 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = sync_httpx_client.get(url=url, headers=headers, params=data)
+            response = sync_httpx_client.get(
+                url=url,
+                headers=headers,
+                params=data,
+                timeout=self._get_timeout(timeout=timeout),
+            )
         except Exception as e:
             raise self._handle_error(
                 e=e,
@@ -1948,7 +1966,10 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.get(
-                url=url, headers=headers, params=data
+                url=url,
+                headers=headers,
+                params=data,
+                timeout=self._get_timeout(timeout=timeout),
             )
 
         except Exception as e:
@@ -2044,7 +2065,12 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = sync_httpx_client.get(url=url, headers=headers, params=params)
+            response = sync_httpx_client.get(
+                url=url,
+                headers=headers,
+                params=params,
+                timeout=self._get_timeout(timeout=timeout),
+            )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=responses_api_provider_config)
 
@@ -2115,7 +2141,10 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.get(
-                url=url, headers=headers, params=params
+                url=url,
+                headers=headers,
+                params=params,
+                timeout=self._get_timeout(timeout=timeout),
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=responses_api_provider_config)
@@ -2343,6 +2372,18 @@ class BaseLLMHTTPHandler:
             data.pop("stream", None)
             return stream, data
         return stream, data
+
+    def _get_timeout(
+        self,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        optional_params: Optional[Dict[str, Any]] = None,
+    ) -> Union[float, httpx.Timeout]:
+        """Helper to get the timeout value from either the timeout parameter or the optional_params."""
+        if timeout is not None:
+            return timeout
+        if optional_params and "timeout" in optional_params:
+            return optional_params["timeout"]
+        return litellm.request_timeout
 
     def _handle_error(
         self,
