@@ -63,7 +63,10 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
             "user"  # only create a user, don't create key if 'auto_create_key' set to False
         )
 
-    if litellm.default_internal_user_params:
+    if litellm.default_internal_user_params and (
+        data.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and data.user_role != LitellmUserRoles.PROXY_ADMIN
+    ):
         for key, value in litellm.default_internal_user_params.items():
             if key == "available_teams":
                 continue

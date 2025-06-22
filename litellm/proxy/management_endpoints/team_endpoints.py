@@ -304,11 +304,12 @@ async def new_team(  # noqa: PLR0915
 
         if prisma_client is None:
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
-        
 
         # Check if license is over limit
         total_teams = await prisma_client.db.litellm_teamtable.count()
-        if total_teams and _license_check.is_team_count_over_limit(team_count=total_teams):
+        if total_teams and _license_check.is_team_count_over_limit(
+            team_count=total_teams
+        ):
             raise HTTPException(
                 status_code=403,
                 detail="License is over limit. Please contact support@berri.ai to upgrade your license.",
@@ -2297,6 +2298,23 @@ async def ui_view_teams(
         raise HTTPException(status_code=500, detail=f"Error searching teams: {str(e)}")
 
 
+def add_new_models_to_team(
+    team_obj: LiteLLM_TeamTable, new_models: List[str]
+) -> List[str]:
+    """
+    Add new models to a team's allowed model list.
+    """
+    current_models = team_obj.models
+    if (
+        current_models is not None and len(current_models) == 0
+    ):  # implies all model access
+        current_models = [SpecialModelNames.all_proxy_models.value]
+    else:
+        current_models = []
+    updated_models = list(set(current_models + new_models))
+    return updated_models
+
+
 @router.post(
     "/team/model/add",
     tags=["team management"],
@@ -2356,12 +2374,7 @@ async def team_model_add(
             detail={"error": "Only proxy admin or team admin can modify team models"},
         )
 
-    # Get current models list
-    current_models = team_obj.models or []
-
-    # Add new models (avoid duplicates)
-    updated_models = list(set(current_models + data.models))
-
+    updated_models = add_new_models_to_team(team_obj=team_obj, new_models=data.models)
     # Update team
     updated_team = await prisma_client.db.litellm_teamtable.update(
         where={"team_id": data.team_id}, data={"models": updated_models}

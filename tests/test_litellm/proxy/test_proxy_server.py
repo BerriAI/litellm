@@ -434,3 +434,27 @@ async def test_get_all_team_models():
         assert isinstance(result, dict)
         print("result: ", result)
         assert result == {"gpt-4-model-1": ["team1"], "gpt-4-model-2": ["team1"]}
+
+
+def test_add_team_models_to_all_models():
+    """
+    Test add_team_models_to_all_models function
+    """
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.proxy_server import _add_team_models_to_all_models
+
+    team_db_objects_typed = MagicMock(spec=LiteLLM_TeamTable)
+    team_db_objects_typed.team_id = "team1"
+    team_db_objects_typed.models = ["all-proxy-models"]
+
+    llm_router = MagicMock()
+    llm_router.get_model_list.return_value = [
+        {"model_info": {"id": "gpt-4-model-1", "team_id": "team2"}},
+        {"model_info": {"id": "gpt-4-model-2"}},
+    ]
+
+    result = _add_team_models_to_all_models(
+        team_db_objects_typed=[team_db_objects_typed],
+        llm_router=llm_router,
+    )
+    assert result == {"gpt-4-model-2": {"team1"}}
