@@ -78,7 +78,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # Add api_version if needed
         if "api-version" not in query_params and api_version:
             query_params["api-version"] = api_version
-
+        
         # Add the path to the base URL
         if "/openai/responses" not in api_base:
             new_url = _add_path_to_api_base(
