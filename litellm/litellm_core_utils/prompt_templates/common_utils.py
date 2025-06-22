@@ -625,7 +625,7 @@ def unpack_defs(schema):
     if properties is None:
         return schema
 
-    # Use jsonref to resolve all references
+    # Resolve all references
     resolved_schema = resolve_refs(schema)
 
     # Clean up by removing $defs and definitions sections since they're no longer needed
