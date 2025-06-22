@@ -207,7 +207,7 @@ print(delete_response)
 |----------|---------------------|
 | `openai` | [All Responses API parameters are supported](https://github.com/BerriAI/litellm/blob/7c3df984da8e4dff9201e4c5353fdc7a2b441831/litellm/llms/openai/responses/transformation.py#L23) |
 
-### Reusable Prompts
+## Reusable Prompts
 
 Use the `prompt` parameter to reference a stored prompt template and optionally supply variables.
 

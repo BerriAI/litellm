@@ -60,6 +60,7 @@ async def add_new_member(
     team_id: str,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
+    default_team_budget_id: Optional[str] = None,
 ) -> Tuple[LiteLLM_UserTable, Optional[LiteLLM_TeamMembership]]:
     """
     Add a new member to a team
@@ -119,11 +120,8 @@ async def add_new_member(
             )
 
     # Check if trying to set a budget for team member
-    if (
-        max_budget_in_team is not None
-        and returned_user is not None
-        and returned_user.user_id is not None
-    ):
+
+    if max_budget_in_team is not None:
         # create a new budget item for this member
         response = await prisma_client.db.litellm_budgettable.create(
             data={
@@ -134,6 +132,10 @@ async def add_new_member(
         )
 
         _budget_id = response.budget_id
+    else:
+        _budget_id = default_team_budget_id
+
+    if _budget_id and returned_user is not None and returned_user.user_id is not None:
         _returned_team_membership = (
             await prisma_client.db.litellm_teammembership.create(
                 data={

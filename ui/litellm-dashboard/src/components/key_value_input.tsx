@@ -32,7 +32,7 @@ const KeyValueInput: React.FC<KeyValueInputProps> = ({ value = {}, onChange }) =
   return (
     <div>
       {pairs.map(([key, val], index) => (
-        <Space key={index} style={{ display: 'flex', marginBottom: 8 }} align="start">
+        <Space key={index} style={{ display: 'flex', marginBottom: 8 }} align="center">
           <TextInput
             placeholder="Header Name"
             value={key}
@@ -43,7 +43,12 @@ const KeyValueInput: React.FC<KeyValueInputProps> = ({ value = {}, onChange }) =
             value={val}
             onChange={(e) => handleChange(index, key, e.target.value)}
           />
-          <MinusCircleOutlined onClick={() => handleRemove(index)} />
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+            <MinusCircleOutlined 
+              onClick={() => handleRemove(index)} 
+              style={{ cursor: 'pointer' }}
+            />
+          </div>
         </Space>
       ))}
       <Button type="dashed" onClick={handleAdd} icon={<PlusOutlined />}>

@@ -694,6 +694,7 @@ def function_setup(  # noqa: PLR0915
         if (
             call_type == CallTypes.completion.value
             or call_type == CallTypes.acompletion.value
+            or call_type == CallTypes.anthropic_messages.value
         ):
             messages = None
             if len(args) > 1:

@@ -271,7 +271,7 @@ async def test_new_team_with_object_permission(mock_db_client, mock_admin_auth):
         return_value=MagicMock(id="model123")
     )
 
-    # 3. Capture team table creation
+    # 3. Capture team table creation and count
     team_create_result = MagicMock(
         team_id="team-456",
         object_permission_id="objperm123",
@@ -281,8 +281,12 @@ async def test_new_team_with_object_permission(mock_db_client, mock_admin_auth):
         "object_permission_id": "objperm123",
     }
     mock_team_create = AsyncMock(return_value=team_create_result)
+    mock_team_count = AsyncMock(
+        return_value=0
+    )  # Mock count to return 0 (no existing teams)
     mock_db_client.db.litellm_teamtable = MagicMock()
     mock_db_client.db.litellm_teamtable.create = mock_team_create
+    mock_db_client.db.litellm_teamtable.count = mock_team_count
 
     # 4. Mock user table update behaviour (called for each member)
     mock_db_client.db.litellm_usertable = MagicMock()
@@ -581,3 +585,156 @@ def test_team_member_add_duplication_check_allows_new_member():
     except ProxyException:
         # If a ProxyException is raised, the test should fail
         pytest.fail("ProxyException should not be raised for a new member")
+
+
+@pytest.mark.asyncio
+async def test_add_team_member_budget_table_success():
+    """
+    Test _add_team_member_budget_table when budget is found successfully
+    """
+    from litellm.proxy._types import TeamInfoResponseObjectTeamTable
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _add_team_member_budget_table,
+    )
+
+    # Mock prisma client
+    mock_prisma_client = MagicMock()
+
+    # Mock budget record
+    mock_budget_record = MagicMock()
+    mock_budget_record.budget_id = "budget-123"
+    mock_budget_record.max_budget = 1000.0
+
+    mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
+        return_value=mock_budget_record
+    )
+
+    # Create team info response object
+    team_info_response = TeamInfoResponseObjectTeamTable(
+        team_id="test-team-123", team_alias="Test Team"
+    )
+
+    # Call the function
+    result = await _add_team_member_budget_table(
+        team_member_budget_id="budget-123",
+        prisma_client=mock_prisma_client,
+        team_info_response_object=team_info_response,
+    )
+
+    # Verify the result
+    assert result == team_info_response
+    assert result.team_member_budget_table == mock_budget_record
+
+    # Verify database call was made correctly
+    mock_prisma_client.db.litellm_budgettable.find_unique.assert_called_once_with(
+        where={"budget_id": "budget-123"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_add_team_member_budget_table_exception_handling():
+    """
+    Test _add_team_member_budget_table when an exception occurs during budget lookup
+    """
+    from litellm.proxy._types import TeamInfoResponseObjectTeamTable
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _add_team_member_budget_table,
+    )
+
+    # Mock prisma client to raise an exception
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
+        side_effect=Exception("Database connection failed")
+    )
+
+    # Create team info response object
+    team_info_response = TeamInfoResponseObjectTeamTable(
+        team_id="test-team-456", team_alias="Test Team 2"
+    )
+
+    # Mock the verbose_proxy_logger to capture log calls
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints.verbose_proxy_logger"
+    ) as mock_logger:
+        # Call the function
+        result = await _add_team_member_budget_table(
+            team_member_budget_id="nonexistent-budget-456",
+            prisma_client=mock_prisma_client,
+            team_info_response_object=team_info_response,
+        )
+
+        # Verify the result is returned even when exception occurs
+        assert result == team_info_response
+
+        # Verify team_member_budget_table is not set when exception occurs
+        assert (
+            not hasattr(result, "team_member_budget_table")
+            or result.team_member_budget_table is None
+        )
+
+        # Verify the error was logged
+        mock_logger.info.assert_called_once_with(
+            "Team member budget table not found, passed team_member_budget_id=nonexistent-budget-456"
+        )
+
+        # Verify database call was attempted
+        mock_prisma_client.db.litellm_budgettable.find_unique.assert_called_once_with(
+            where={"budget_id": "nonexistent-budget-456"}
+        )
+
+
+@pytest.mark.asyncio
+async def test_add_team_member_budget_table_budget_not_found():
+    """
+    Test _add_team_member_budget_table when budget record is not found (returns None)
+    """
+    from litellm.proxy._types import TeamInfoResponseObjectTeamTable
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _add_team_member_budget_table,
+    )
+
+    # Mock prisma client to return None (budget not found)
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
+
+    # Create team info response object
+    team_info_response = TeamInfoResponseObjectTeamTable(
+        team_id="test-team-789", team_alias="Test Team 3"
+    )
+
+    # Call the function
+    result = await _add_team_member_budget_table(
+        team_member_budget_id="nonexistent-budget-789",
+        prisma_client=mock_prisma_client,
+        team_info_response_object=team_info_response,
+    )
+
+    # Verify the result
+    assert result == team_info_response
+    assert result.team_member_budget_table is None
+
+    # Verify database call was made correctly
+    mock_prisma_client.db.litellm_budgettable.find_unique.assert_called_once_with(
+        where={"budget_id": "nonexistent-budget-789"}
+    )
+
+
+def test_add_new_models_to_team():
+    """
+    Test add_new_models_to_team function
+    """
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.management_endpoints.team_endpoints import add_new_models_to_team
+
+    team_obj = MagicMock(spec=LiteLLM_TeamTable)
+    team_obj.models = []
+    new_models = ["model4", "model5"]
+    updated_models = add_new_models_to_team(team_obj=team_obj, new_models=new_models)
+    assert (
+        updated_models.sort()
+        == [
+            SpecialModelNames.all_proxy_models.value,
+            "model4",
+            "model5",
+        ].sort()
+    )

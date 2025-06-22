@@ -69,7 +69,13 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles,
     
     setSaving(true);
     try {
-      const updatedSettings = await updateInternalUserSettings(accessToken, editedValues);
+      // Convert empty strings to null
+      const processedValues = Object.entries(editedValues).reduce((acc, [key, value]) => {
+        acc[key] = value === "" ? null : value;
+        return acc;
+      }, {} as Record<string, any>);
+      
+      const updatedSettings = await updateInternalUserSettings(accessToken, processedValues);
       setSettings({...settings, values: updatedSettings.settings});
       setIsEditing(false);
     } catch (error) {
@@ -273,6 +279,7 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles,
           onChange={(value) => handleTextInputChange(key, value)}
           className="mt-2"
         >
+          <Option value="no-default-models">No Default Models</Option>
           {availableModels.map((model: string) => (
             <Option key={model} value={model}>
               {getModelDisplayName(model)}

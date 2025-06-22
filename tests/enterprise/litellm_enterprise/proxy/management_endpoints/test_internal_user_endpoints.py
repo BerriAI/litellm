@@ -40,6 +40,7 @@ class TestAvailableEnterpriseUsers:
         ):
             # Mock database count
             mock_prisma.db.litellm_usertable.count = AsyncMock(return_value=5)
+            mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=2)
 
             # Override the dependency
             client.app.dependency_overrides[mock_user_api_key_auth] = lambda: {
@@ -54,6 +55,9 @@ class TestAvailableEnterpriseUsers:
             assert data["total_users"] == 10
             assert data["total_users_used"] == 5
             assert data["total_users_remaining"] == 5
+            assert data["total_teams"] is None
+            assert data["total_teams_used"] == 2
+            assert data["total_teams_remaining"] is None
             # Ensure no negative values
             assert data["total_users_remaining"] >= 0
 
@@ -71,6 +75,7 @@ class TestAvailableEnterpriseUsers:
         ):
             # Mock database count
             mock_prisma.db.litellm_usertable.count = AsyncMock(return_value=3)
+            mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=1)
 
             # Override the dependency
             client.app.dependency_overrides[mock_user_api_key_auth] = lambda: {
@@ -85,6 +90,9 @@ class TestAvailableEnterpriseUsers:
             assert data["total_users"] is None
             assert data["total_users_used"] == 3
             assert data["total_users_remaining"] is None
+            assert data["total_teams"] is None
+            assert data["total_teams_used"] == 1
+            assert data["total_teams_remaining"] is None
 
     @pytest.mark.asyncio
     async def test_available_users_negative_remaining_bug(
@@ -100,6 +108,7 @@ class TestAvailableEnterpriseUsers:
         ):
             # Mock database count higher than max_users to trigger the bug
             mock_prisma.db.litellm_usertable.count = AsyncMock(return_value=8)
+            mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=3)
 
             # Override the dependency
             client.app.dependency_overrides[mock_user_api_key_auth] = lambda: {
@@ -115,9 +124,12 @@ class TestAvailableEnterpriseUsers:
 
             assert data["total_users"] == None
             assert data["total_users_used"] == 8
+            assert data["total_teams"] == None
+            assert data["total_teams_used"] == 3
             # This assertion will fail due to the current bug - remaining is -3
             # TODO: Fix the bug to ensure remaining is never negative
             assert data["total_users_remaining"] == None  # Current buggy behavior
+            assert data["total_teams_remaining"] == None  # Current buggy behavior
             # The following assertion would be the correct behavior:
             # assert data["total_users_remaining"] >= 0
 

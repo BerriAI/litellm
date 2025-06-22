@@ -29,6 +29,7 @@ import { makeOpenAIChatCompletionRequest } from "./chat_ui/llm_calls/chat_comple
 import { makeOpenAIImageGenerationRequest } from "./chat_ui/llm_calls/image_generation";
 import { makeOpenAIImageEditsRequest } from "./chat_ui/llm_calls/image_edits";
 import { makeOpenAIResponsesRequest } from "./chat_ui/llm_calls/responses_api";
+import { makeAnthropicMessagesRequest } from "./chat_ui/llm_calls/anthropic_messages";
 import { fetchAvailableModels, ModelGroup  } from "./chat_ui/llm_calls/fetch_models";
 import { litellmModeMapping, ModelMode, EndpointType, getEndpointType } from "./chat_ui/mode_endpoint_mapping";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -123,12 +124,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
         if (uniqueModels.length > 0) {
           setModelInfo(uniqueModels);
           setSelectedModel(uniqueModels[0].model_group);
-          
-          // Auto-set endpoint based on the first model's mode
-          if (uniqueModels[0].mode) {
-            const initialEndpointType = determineEndpointType(uniqueModels[0].model_group, uniqueModels);
-            setEndpointType(initialEndpointType);
-          }
+        
         }
       } catch (error) {
         console.error("Error fetching model info:", error);
@@ -407,6 +403,23 @@ const ChatUI: React.FC<ChatUIProps> = ({
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined
           );
+        } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
+          const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
+
+          await makeAnthropicMessagesRequest(
+            apiChatHistory,
+            (role, delta, model) => updateTextUI(role, delta, model),
+            selectedModel,
+            effectiveApiKey,
+            selectedTags,
+            signal,
+            updateReasoningContent,
+            updateTimingData,
+            updateUsageData,
+            traceId,
+            selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
+            selectedGuardrails.length > 0 ? selectedGuardrails : undefined
+          );
         }
       }
     } catch (error) {
@@ -449,18 +462,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
     console.log(`selected ${value}`);
     setSelectedModel(value);
     
-    // Use the utility function to determine the endpoint type
-    if (value !== 'custom') {
-      const newEndpointType = determineEndpointType(value, modelInfo);
-      setEndpointType(newEndpointType);
-    }
     
     setShowCustomModelInput(value === 'custom');
   };
 
-  const handleEndpointChange = (value: string) => {
-    setEndpointType(value);
-  };
 
   const antIcon = <LoadingOutlined style={{ fontSize: 24 }} spin />;
 
@@ -543,7 +548,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 </Text>
                 <EndpointSelector 
                   endpointType={endpointType}
-                  onEndpointChange={handleEndpointChange}
+                  onEndpointChange={setEndpointType}
                   className="mb-4"
                 />  
               </div>
@@ -762,8 +767,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 onChange={(e) => setInputMessage(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder={
-                  endpointType === EndpointType.CHAT || endpointType === EndpointType.RESPONSES
-                    ? "Type your message... (Shift+Enter for new line)" 
+                  endpointType === EndpointType.CHAT ||
+                  endpointType === EndpointType.RESPONSES ||
+                  endpointType === EndpointType.ANTHROPIC_MESSAGES
+                    ? "Type your message... (Shift+Enter for new line)"
                     : endpointType === EndpointType.IMAGE_EDITS
                     ? "Describe how you want to edit the image..."
                     : "Describe the image you want to generate..."
@@ -785,10 +792,21 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 <Button
                   onClick={handleSendMessage}
                   className="ml-2 text-white"
-                  icon={endpointType === EndpointType.CHAT ? SendOutlined : RobotOutlined}
+                  icon={
+                    endpointType === EndpointType.CHAT ||
+                    endpointType === EndpointType.RESPONSES ||
+                    endpointType === EndpointType.ANTHROPIC_MESSAGES
+                      ? SendOutlined
+                      : RobotOutlined
+                  }
                 >
-                  {endpointType === EndpointType.CHAT ? "Send" : 
-                   endpointType === EndpointType.IMAGE_EDITS ? "Edit" : "Generate"}
+                  {endpointType === EndpointType.CHAT ||
+                  endpointType === EndpointType.RESPONSES ||
+                  endpointType === EndpointType.ANTHROPIC_MESSAGES
+                    ? "Send"
+                    : endpointType === EndpointType.IMAGE_EDITS
+                    ? "Edit"
+                    : "Generate"}
                 </Button>
               )}
             </div>

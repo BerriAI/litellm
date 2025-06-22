@@ -474,3 +474,141 @@ async def test_new_user_default_teams_flow(mocker):
         else:
             if hasattr(litellm, "default_internal_user_params"):
                 delattr(litellm, "default_internal_user_params")
+
+
+def test_update_internal_new_user_params_proxy_admin_role():
+    """
+    Test that default_internal_user_params are NOT applied when user_role is PROXY_ADMIN
+    """
+    import litellm
+    from litellm.proxy._types import LitellmUserRoles, NewUserRequest
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_internal_new_user_params,
+    )
+
+    # Set up default_internal_user_params
+    original_default_params = getattr(litellm, "default_internal_user_params", None)
+    litellm.default_internal_user_params = {
+        "max_budget": 1000,
+        "models": ["gpt-3.5-turbo", "gpt-4"],
+        "tpm_limit": 5000,
+    }
+
+    try:
+        # Create test data with PROXY_ADMIN role
+        data = NewUserRequest(
+            user_email="admin@example.com", user_role=LitellmUserRoles.PROXY_ADMIN.value
+        )
+        data_json = data.model_dump(exclude_unset=True)
+
+        # Call the function
+        result = _update_internal_new_user_params(data_json=data_json, data=data)
+
+        # Assertions - default params should NOT be applied for PROXY_ADMIN
+        assert (
+            "max_budget" not in result
+        ), "Default max_budget should NOT be applied to PROXY_ADMIN"
+        assert (
+            "models" not in result
+        ), "Default models should NOT be applied to PROXY_ADMIN"
+        assert (
+            "tpm_limit" not in result
+        ), "Default tpm_limit should NOT be applied to PROXY_ADMIN"
+
+        # These should still work
+        assert result["user_email"] == "admin@example.com"
+        assert result["user_role"] == LitellmUserRoles.PROXY_ADMIN.value
+
+    finally:
+        # Restore original default params
+        if original_default_params is not None:
+            litellm.default_internal_user_params = original_default_params
+        else:
+            if hasattr(litellm, "default_internal_user_params"):
+                delattr(litellm, "default_internal_user_params")
+
+
+def test_update_internal_new_user_params_no_role_specified():
+    """
+    Test that default_internal_user_params ARE applied when user_role is not set
+    """
+    import litellm
+    from litellm.proxy._types import NewUserRequest
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_internal_new_user_params,
+    )
+
+    # Set up default_internal_user_params
+    original_default_params = getattr(litellm, "default_internal_user_params", None)
+    litellm.default_internal_user_params = {
+        "max_budget": 1000,
+        "models": ["gpt-3.5-turbo", "gpt-4"],
+        "tpm_limit": 5000,
+    }
+
+    try:
+        # Create test data without specifying user_role
+        data = NewUserRequest(user_email="user@example.com")  # No user_role specified
+        data_json = data.model_dump(exclude_unset=True)
+
+        # Call the function
+        result = _update_internal_new_user_params(data_json=data_json, data=data)
+
+        # Assertions - default params should be applied when no role is specified
+        assert result.get("max_budget") == 1000
+        assert result.get("models") == ["gpt-3.5-turbo", "gpt-4"]
+        assert result.get("tpm_limit") == 5000
+        assert result["user_email"] == "user@example.com"
+
+    finally:
+        # Restore original default params
+        if original_default_params is not None:
+            litellm.default_internal_user_params = original_default_params
+        else:
+            if hasattr(litellm, "default_internal_user_params"):
+                delattr(litellm, "default_internal_user_params")
+
+
+def test_update_internal_new_user_params_internal_user_role():
+    """
+    Test that default_internal_user_params ARE applied when user_role is INTERNAL_USER
+    """
+    import litellm
+    from litellm.proxy._types import LitellmUserRoles, NewUserRequest
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_internal_new_user_params,
+    )
+
+    # Set up default_internal_user_params
+    original_default_params = getattr(litellm, "default_internal_user_params", None)
+    litellm.default_internal_user_params = {
+        "max_budget": 1000,
+        "models": ["gpt-3.5-turbo", "gpt-4"],
+        "tpm_limit": 5000,
+    }
+
+    try:
+        # Create test data with INTERNAL_USER role
+        data = NewUserRequest(
+            user_email="internaluser@example.com",
+            user_role=LitellmUserRoles.INTERNAL_USER.value,
+        )
+        data_json = data.model_dump(exclude_unset=True)
+
+        # Call the function
+        result = _update_internal_new_user_params(data_json=data_json, data=data)
+
+        # Assertions - default params should be applied for INTERNAL_USER
+        assert result.get("max_budget") == 1000
+        assert result.get("models") == ["gpt-3.5-turbo", "gpt-4"]
+        assert result.get("tpm_limit") == 5000
+        assert result["user_email"] == "internaluser@example.com"
+        assert result["user_role"] == LitellmUserRoles.INTERNAL_USER.value
+
+    finally:
+        # Restore original default params
+        if original_default_params is not None:
+            litellm.default_internal_user_params = original_default_params
+        else:
+            if hasattr(litellm, "default_internal_user_params"):
+                delattr(litellm, "default_internal_user_params")

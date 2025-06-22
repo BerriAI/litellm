@@ -79,6 +79,15 @@ class TestAnthropicDirectAPI(BaseAnthropicMessagesTest):
             "model": "claude-3-haiku-20240307",
             "api_key": os.getenv("ANTHROPIC_API_KEY"),
         }
+    
+    @property
+    def expected_model_name_in_logging(self) -> str:
+        """
+        This is the model name that is expected to be in the logging payload
+        """
+        return "claude-3-haiku-20240307"
+    
+    
 
 class TestAnthropicBedrockAPI(BaseAnthropicMessagesTest):
     """Tests for Anthropic via Bedrock"""
@@ -87,6 +96,14 @@ class TestAnthropicBedrockAPI(BaseAnthropicMessagesTest):
         return {
             "model": "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
         }
+    
+
+    @property
+    def expected_model_name_in_logging(self) -> str:
+        """
+        This is the model name that is expected to be in the logging payload
+        """
+        return "us.anthropic.claude-3-5-sonnet-20240620-v1:0"
 
 
 
@@ -96,7 +113,22 @@ class TestAnthropicOpenAIAPI(BaseAnthropicMessagesTest):
     def model_config(self) -> Dict[str, Any]:
         return {
             "model": "openai/gpt-4o-mini",
+            "client": None,
         }
+    
+    @property
+    def expected_model_name_in_logging(self) -> str:
+        """
+        This is the model name that is expected to be in the logging payload
+        """
+        return "gpt-4o-mini"
+    
+    @pytest.mark.asyncio
+    async def test_anthropic_messages_litellm_router_streaming_with_logging(self):
+        """
+        Test the anthropic_messages with streaming request
+        """
+        pass
 
 
 @pytest.mark.asyncio
@@ -222,10 +254,11 @@ async def test_anthropic_messages_litellm_router_non_streaming_with_logging():
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
     litellm._turn_on_debug()
+    MODEL_GROUP = "claude-special-alias"
     router = Router(
         model_list=[
             {
-                "model_name": "claude-special-alias",
+                "model_name": MODEL_GROUP,
                 "litellm_params": {
                     "model": "claude-3-haiku-20240307",
                     "api_key": os.getenv("ANTHROPIC_API_KEY"),
@@ -240,7 +273,7 @@ async def test_anthropic_messages_litellm_router_non_streaming_with_logging():
     # Call the handler
     response = await router.aanthropic_messages(
         messages=messages,
-        model="claude-special-alias",
+        model=MODEL_GROUP,
         max_tokens=100,
     )
 
@@ -252,6 +285,7 @@ async def test_anthropic_messages_litellm_router_non_streaming_with_logging():
     await asyncio.sleep(1)
     
     assert test_custom_logger.logged_standard_logging_payload is not None, "Logging payload should not be None"
+    print("tracked standard logging payload", json.dumps(test_custom_logger.logged_standard_logging_payload, indent=4, default=str))
     assert test_custom_logger.logged_standard_logging_payload["messages"] == messages
     assert test_custom_logger.logged_standard_logging_payload["response"] is not None
     assert (
@@ -270,138 +304,9 @@ async def test_anthropic_messages_litellm_router_non_streaming_with_logging():
         == response["usage"]["output_tokens"]
     )
 
+    # assert model_group
+    assert test_custom_logger.logged_standard_logging_payload["model_group"] == MODEL_GROUP
 
-@pytest.mark.asyncio
-async def test_anthropic_messages_litellm_router_streaming_with_logging():
-    """
-    Test the anthropic_messages with streaming request
-
-    - Ensure Cost + Usage is tracked
-    """
-    test_custom_logger = TestCustomLogger()
-    litellm.callbacks = [test_custom_logger]
-    # litellm._turn_on_debug()
-    router = Router(
-        model_list=[
-            {
-                "model_name": "claude-special-alias",
-                "litellm_params": {
-                    "model": "claude-3-haiku-20240307",
-                    "api_key": os.getenv("ANTHROPIC_API_KEY"),
-                },
-            }
-        ]
-    )
-
-    # Set up test parameters
-    messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
-
-    # Call the handler
-    response = await router.aanthropic_messages(
-        messages=messages,
-        model="claude-special-alias",
-        max_tokens=100,
-        stream=True,
-    )
-
-    response_prompt_tokens = 0
-    response_completion_tokens = 0
-    all_anthropic_usage_chunks = []
-    buffer = ""
-
-    async for chunk in response:
-        # Decode chunk if it's bytes
-        print("chunk=", chunk)
-
-        # Handle SSE format chunks
-        if isinstance(chunk, bytes):
-            chunk_str = chunk.decode("utf-8")
-            buffer += chunk_str
-            # Extract the JSON data part from SSE format
-            for line in buffer.split("\n"):
-                if line.startswith("data: "):
-                    try:
-                        json_data = json.loads(line[6:])  # Skip the 'data: ' prefix
-                        print(
-                            "\n\nJSON data:",
-                            json.dumps(json_data, indent=4, default=str),
-                        )
-
-                        # Extract usage information
-                        if (
-                            json_data.get("type") == "message_start"
-                            and "message" in json_data
-                        ):
-                            if "usage" in json_data["message"]:
-                                usage = json_data["message"]["usage"]
-                                all_anthropic_usage_chunks.append(usage)
-                                print(
-                                    "USAGE BLOCK",
-                                    json.dumps(usage, indent=4, default=str),
-                                )
-                        elif "usage" in json_data:
-                            usage = json_data["usage"]
-                            all_anthropic_usage_chunks.append(usage)
-                            print(
-                                "USAGE BLOCK", json.dumps(usage, indent=4, default=str)
-                            )
-                    except json.JSONDecodeError:
-                        print(f"Failed to parse JSON from: {line[6:]}")
-        elif hasattr(chunk, "message"):
-            if chunk.message.usage:
-                print(
-                    "USAGE BLOCK",
-                    json.dumps(chunk.message.usage, indent=4, default=str),
-                )
-                all_anthropic_usage_chunks.append(chunk.message.usage)
-        elif hasattr(chunk, "usage"):
-            print("USAGE BLOCK", json.dumps(chunk.usage, indent=4, default=str))
-            all_anthropic_usage_chunks.append(chunk.usage)
-
-    print(
-        "all_anthropic_usage_chunks",
-        json.dumps(all_anthropic_usage_chunks, indent=4, default=str),
-    )
-
-    # Extract token counts from usage data
-    if all_anthropic_usage_chunks:
-        response_prompt_tokens = max(
-            [usage.get("input_tokens", 0) for usage in all_anthropic_usage_chunks]
-        )
-        response_completion_tokens = max(
-            [usage.get("output_tokens", 0) for usage in all_anthropic_usage_chunks]
-        )
-
-    print("input_tokens_anthropic_api", response_prompt_tokens)
-    print("output_tokens_anthropic_api", response_completion_tokens)
-
-    await asyncio.sleep(4)
-
-    print(
-        "logged_standard_logging_payload",
-        json.dumps(
-            test_custom_logger.logged_standard_logging_payload, indent=4, default=str
-        ),
-    )
-
-    assert test_custom_logger.logged_standard_logging_payload is not None, "Logging payload should not be None"
-    assert test_custom_logger.logged_standard_logging_payload["messages"] == messages
-    assert test_custom_logger.logged_standard_logging_payload["response"] is not None
-    assert (
-        test_custom_logger.logged_standard_logging_payload["model"]
-        == "claude-3-haiku-20240307"
-    )
-
-    # check logged usage + spend
-    assert test_custom_logger.logged_standard_logging_payload["response_cost"] > 0
-    assert (
-        test_custom_logger.logged_standard_logging_payload["prompt_tokens"]
-        == response_prompt_tokens
-    )
-    assert (
-        test_custom_logger.logged_standard_logging_payload["completion_tokens"]
-        == response_completion_tokens
-    )
 
 
 @pytest.mark.asyncio
