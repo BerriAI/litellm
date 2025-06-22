@@ -119,6 +119,7 @@ const handleError = async (errorData: string) => {
 
 // Global variable for the header name
 let globalLitellmHeaderName: string  = "Authorization";
+const MCP_AUTH_HEADER: string  = "x-mcp-auth";
 
 // Function to set the global header name
 export function setGlobalLitellmHeaderName(headerName: string = "Authorization") {
@@ -4667,7 +4668,7 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
 };
 
 
-export const callMCPTool = async (accessToken: string, toolName: string, toolArguments: Record<string, any>) => {
+export const callMCPTool = async (accessToken: string, toolName: string, toolArguments: Record<string, any>, authValue: string) => {
   try {
     // Construct base URL
     let url = proxyBaseUrl 
@@ -4675,11 +4676,12 @@ export const callMCPTool = async (accessToken: string, toolName: string, toolArg
       : `/mcp-rest/tools/call`;
 
     console.log("Calling MCP tool:", toolName, "with arguments:", toolArguments);
-    
+
     const response = await fetch(url, {
       method: "POST",
       headers: {
         [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        [MCP_AUTH_HEADER]: authValue,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
