@@ -5625,7 +5625,7 @@ async def get_all_team_and_direct_access_models(
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
         user_teams = "*"
         direct_access_models = llm_router.get_model_ids()  # has access to all models
-    else:
+    elif user_api_key_dict.user_id is not None:
         user_db_object = await prisma_client.db.litellm_usertable.find_unique(
             where={"user_id": user_api_key_dict.user_id}
         )
