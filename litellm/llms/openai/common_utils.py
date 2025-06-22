@@ -199,7 +199,7 @@ class BaseOpenAILLM:
         return httpx.AsyncClient(
             limits=httpx.Limits(max_connections=1000, max_keepalive_connections=100),
             verify=litellm.ssl_verify,
-            transport=AsyncHTTPHandler._create_async_transport(),
+            transport=AsyncHTTPHandler._create_async_transport(verify=litellm.ssl_verify),
         )
 
     @staticmethod
