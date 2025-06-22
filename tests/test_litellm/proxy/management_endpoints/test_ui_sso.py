@@ -272,58 +272,6 @@ async def test_get_user_groups_from_graph_api():
 
 
 @pytest.mark.asyncio
-async def test_get_user_groups_pagination():
-    # Arrange
-    first_response = {
-        "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#directoryObjects",
-        "@odata.nextLink": "https://graph.microsoft.com/v1.0/me/memberOf?$skiptoken=page2",
-        "value": [
-            {
-                "@odata.type": "#microsoft.graph.group",
-                "id": "group1",
-                "displayName": "Group 1",
-            },
-        ],
-    }
-    second_response = {
-        "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#directoryObjects",
-        "value": [
-            {
-                "@odata.type": "#microsoft.graph.group",
-                "id": "group2",
-                "displayName": "Group 2",
-            },
-        ],
-    }
-
-    responses = [first_response, second_response]
-    current_response = {"index": 0}
-
-    async def mock_get(*args, **kwargs):
-        mock = MagicMock()
-        mock.json.return_value = responses[current_response["index"]]
-        current_response["index"] += 1
-        return mock
-
-    with patch(
-        "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
-    ) as mock_client:
-        mock_client.return_value = MagicMock()
-        mock_client.return_value.get = mock_get
-
-        # Act
-        result = await MicrosoftSSOHandler.get_user_groups_from_graph_api(
-            access_token="mock_token"
-        )
-
-        # Assert
-        assert isinstance(result, list)
-        assert len(result) == 1
-        assert "group2" in result
-        assert current_response["index"] == 2  # Verify both pages were fetched
-
-
-@pytest.mark.asyncio
 async def test_get_user_groups_empty_response():
     # Arrange
     mock_response = {

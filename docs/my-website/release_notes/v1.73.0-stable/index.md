@@ -43,7 +43,7 @@ ghcr.io/berriai/litellm:main-v1.73.0.rc
 <TabItem value="pip" label="Pip">
 
 ``` showLineNumbers title="pip install litellm"
-pip install litellm==1.73.0.rc
+pip install litellm==1.73.0
 ```
 
 </TabItem>
@@ -56,8 +56,10 @@ pip install litellm==1.73.0.rc
 * **Why Upgrade**
     - Passthrough Endpoints v2: Enhanced support for subroutes and custom cost tracking for passthrough endpoints.
     - Health Check Dashboard: New frontend UI for monitoring model health and status.
+    - User Management: Set default team for new users - enables giving all users $10 API keys for exploration.
 * **Who Should Read**
     - Teams using **Passthrough Endpoints**
+    - Teams using **User Management** on LiteLLM
     - Teams using **Health Check Dashboard** for models
     - Teams using **Claude Code** with LiteLLM
 * **Risk of Upgrade**
@@ -72,7 +74,14 @@ pip install litellm==1.73.0.rc
 
 ### Passthrough Endpoints v2
 
-This release brings support for adding billing and full URL forwarding for passthrough endpoints.
+<Image img={require('../../img/release_notes/v2_pt.png')}/>
+
+
+<br/>
+
+This release brings support for adding billing and full URL forwarding for passthrough endpoints. 
+
+Previously, you could only map simple endpoints, but now you can add just `/bria` and all subroutes automatically get forwarded - for example, `/bria/v1/text-to-image/base/model` and `/bria/v1/enhance_image` will both be forwarded to the target URL with the same path structure.
 
 This means you as Proxy Admin can onboard third-party endpoints like Bria API and Mistral OCR, set a cost per request, and give your developers access to the complete API functionality.
 
@@ -81,9 +90,32 @@ This means you as Proxy Admin can onboard third-party endpoints like Bria API an
 
 ### v2 Health Checks 
 
+<Image img={require('../../img/release_notes/v2_health.png')}/>
+
+<br/>
+
+This release brings support for Proxy Admins to select which specific models to health check and see the health status as soon as its individual check completes, along with last check times.
+
+This allows Proxy Admins to immediately identify which specific models are in a bad state and view the full error stack trace for faster troubleshooting.
 
 
+### Set Default Team for New Users
 
+<Image img={require('../../img/default_teams_product_ss.jpg')}/>
+
+<br/>
+
+v1.73.0 introduces the ability to assign new users to Default Teams. This makes it much easier to enable experimentation with LLMs within your company, while also **ensuring spend for exploration is tracked correctly.** 
+ 
+What this means for **Proxy Admins**:
+- Set a max budget per team member: This sets a max amount an individual can spend within a team. 
+- Set a default team for new users: When a new user signs in via SSO / invitation link, they will be automatically added to this team. 
+
+What this means for **Developers**: 
+- View models across teams: You can now go to `Models + Endpoints` and view the models you have access to, across all teams you're a member of. 
+- Safe create key modal: If you have no model access outside of a team (default behaviour), you are now nudged to select a team on the Create Key modal. This resolves a common confusion point for new users onboarding to the proxy. 
+
+[Get Started](https://docs.litellm.ai/docs/tutorials/default_team_self_serve)
 
 ---
 
