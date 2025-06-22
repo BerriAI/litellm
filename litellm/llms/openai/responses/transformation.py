@@ -92,11 +92,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return ResponsesAPIResponse(**raw_response_json)
 
     def validate_environment(
-        self,
-        headers: dict,
-        model: str,
-        litellm_params: GenericLiteLLMParams = GenericLiteLLMParams(),
+        self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
     ) -> dict:
+        litellm_params = litellm_params or GenericLiteLLMParams()
         api_key = (
             litellm_params.api_key
             or litellm.api_key
