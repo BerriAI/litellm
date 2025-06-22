@@ -400,7 +400,7 @@ def test_unpack_defs_circular_refs_handling():
         }
     }
     
-    # This should not raise an error (jsonref handles circular refs)
+    # This should not raise an error (handles circular refs)
     result = unpack_defs(schema)
     
     # The structure should be resolved
