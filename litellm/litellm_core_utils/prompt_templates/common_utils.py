@@ -555,7 +555,7 @@ def resolve_refs(
                     _cache[ref_uri] = resolved
                     return resolved
 
-                except (KeyError, TypeError, ValueError) as e:
+                except (KeyError, TypeError, ValueError):
                     # Clean up cache on error
                     _cache.pop(ref_uri, None)
                     # If reference can't be resolved, return original object
