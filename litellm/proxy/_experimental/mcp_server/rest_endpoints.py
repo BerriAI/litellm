@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Query, Request
 
 from litellm._logging import verbose_logger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth, mcp_auth_header
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 MCP_AVAILABLE: bool = True
 try:
@@ -37,7 +37,6 @@ if MCP_AVAILABLE:
         server_id: Optional[str] = Query(
             None, description="The server id to list tools for"
         ),
-        mcp_auth: Optional[str] = mcp_auth_header,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ) -> List[ListMCPToolsRestAPIResponseObject]:
         """
@@ -89,7 +88,6 @@ if MCP_AVAILABLE:
     @router.post("/tools/call", dependencies=[Depends(user_api_key_auth)])
     async def call_tool_rest_api(
         request: Request,
-        mcp_auth: Optional[str] = mcp_auth_header,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """

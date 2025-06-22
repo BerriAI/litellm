@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import List, Optional, Tuple, cast
 
 import fastapi
-from fastapi import HTTPException, Request, WebSocket, status, Header
+from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security.api_key import APIKeyHeader
 
 import litellm
@@ -100,11 +100,6 @@ azure_apim_header = APIKeyHeader(
     name=SpecialHeaders.azure_apim_authorization.value,
     auto_error=False,
     description="The default name of the subscription key header of Azure",
-)
-mcp_auth_header: Optional[str] = Header(
-    name=SpecialHeaders.mcp_auth.value,
-    default=None,
-    description="MCP Auth header to be passed to the mcp servers",
 )
 
 
