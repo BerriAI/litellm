@@ -490,36 +490,50 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
 
 
 def unpack_defs(schema, defs):
-    properties = schema.get("properties", None)
-    if properties is None:
-        return
-
-    for name, value in properties.items():
-        ref_key = value.get("$ref", None)
-        if ref_key is not None:
-            ref = defs[ref_key.split("defs/")[-1]]
-            unpack_defs(ref, defs)
-            properties[name] = ref
-            continue
-
-        anyof = value.get("anyOf", None)
-        if anyof is not None:
-            for i, atype in enumerate(anyof):
-                ref_key = atype.get("$ref", None)
-                if ref_key is not None:
-                    ref = defs[ref_key.split("defs/")[-1]]
-                    unpack_defs(ref, defs)
-                    anyof[i] = ref
-            continue
-
-        items = value.get("items", None)
-        if items is not None:
-            ref_key = items.get("$ref", None)
+    # Handle top-level `properties` (if present)
+    properties = schema.get("properties")
+    if properties is not None:
+        for name, value in properties.items():
+            # Resolve direct $ref on the property
+            ref_key = value.get("$ref") if isinstance(value, dict) else None
             if ref_key is not None:
                 ref = defs[ref_key.split("defs/")[-1]]
                 unpack_defs(ref, defs)
-                value["items"] = ref
+                properties[name] = ref
                 continue
+
+            # Recurse into nested schema structures
+            unpack_defs(value, defs)
+
+    # Handle `anyOf` at the current schema level
+    anyof = schema.get("anyOf")
+    if anyof is not None:
+        for i, atype in enumerate(anyof):
+            if not isinstance(atype, dict):
+                continue
+
+            # Direct $ref inside the anyOf branch
+            ref_key = atype.get("$ref")
+            if ref_key is not None:
+                ref = defs[ref_key.split("defs/")[-1]]
+                unpack_defs(ref, defs)
+                anyof[i] = ref
+                continue
+
+            # Recurse into the branch to handle nested structures (e.g. items)
+            unpack_defs(atype, defs)
+
+    # Handle `items` at the current schema level (for array schemas)
+    items = schema.get("items")
+    if items is not None and isinstance(items, dict):
+        ref_key = items.get("$ref")
+        if ref_key is not None:
+            ref = defs[ref_key.split("defs/")[-1]]
+            unpack_defs(ref, defs)
+            schema["items"] = ref
+        else:
+            # If `items` itself is a schema without $ref, recurse into it.
+            unpack_defs(items, defs)
 
 
 def _get_image_mime_type_from_url(url: str) -> Optional[str]:
