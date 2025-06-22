@@ -271,7 +271,7 @@ async def test_new_team_with_object_permission(mock_db_client, mock_admin_auth):
         return_value=MagicMock(id="model123")
     )
 
-    # 3. Capture team table creation
+    # 3. Capture team table creation and count
     team_create_result = MagicMock(
         team_id="team-456",
         object_permission_id="objperm123",
@@ -281,8 +281,12 @@ async def test_new_team_with_object_permission(mock_db_client, mock_admin_auth):
         "object_permission_id": "objperm123",
     }
     mock_team_create = AsyncMock(return_value=team_create_result)
+    mock_team_count = AsyncMock(
+        return_value=0
+    )  # Mock count to return 0 (no existing teams)
     mock_db_client.db.litellm_teamtable = MagicMock()
     mock_db_client.db.litellm_teamtable.create = mock_team_create
+    mock_db_client.db.litellm_teamtable.count = mock_team_count
 
     # 4. Mock user table update behaviour (called for each member)
     mock_db_client.db.litellm_usertable = MagicMock()
@@ -712,4 +716,25 @@ async def test_add_team_member_budget_table_budget_not_found():
     # Verify database call was made correctly
     mock_prisma_client.db.litellm_budgettable.find_unique.assert_called_once_with(
         where={"budget_id": "nonexistent-budget-789"}
+    )
+
+
+def test_add_new_models_to_team():
+    """
+    Test add_new_models_to_team function
+    """
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.management_endpoints.team_endpoints import add_new_models_to_team
+
+    team_obj = MagicMock(spec=LiteLLM_TeamTable)
+    team_obj.models = []
+    new_models = ["model4", "model5"]
+    updated_models = add_new_models_to_team(team_obj=team_obj, new_models=new_models)
+    assert (
+        updated_models.sort()
+        == [
+            SpecialModelNames.all_proxy_models.value,
+            "model4",
+            "model5",
+        ].sort()
     )
