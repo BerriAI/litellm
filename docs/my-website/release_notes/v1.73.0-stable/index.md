@@ -36,7 +36,7 @@ The production version will be released on Wednesday.
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:main-v1.73.0.rc1
+ghcr.io/berriai/litellm:v1.73.0.rc.1
 ```
 </TabItem>
 
