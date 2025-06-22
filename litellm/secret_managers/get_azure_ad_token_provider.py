@@ -32,9 +32,14 @@ def get_azure_ad_token_provider(azure_scope: Optional[str] = None) -> Callable[[
     )
 
     if azure_scope is None:
-        azure_scope = os.environ.get("AZURE_SCOPE", "https://cognitiveservices.azure.com/.default")
+        azure_scope = (
+            os.environ.get("AZURE_SCOPE")
+            or "https://cognitiveservices.azure.com/.default"
+        )
 
-    cred: str = os.environ.get("AZURE_CREDENTIAL", AzureCredentialType.ClientSecretCredential)
+    cred: str = os.environ.get(
+        "AZURE_CREDENTIAL", AzureCredentialType.ClientSecretCredential
+    )
     credential: Optional[
         Union[
             ClientSecretCredential,
