@@ -1052,6 +1052,14 @@ const Teams: React.FC<TeamProps> = ({
                               }} 
                             />
                           </Form.Item>
+                          <Form.Item 
+                            label="Team Member Budget (USD)" 
+                            name="team_member_budget"
+                            normalize={(value) => value ? Number(value) : undefined}
+                            tooltip="This is the individual budget for a user in the team."
+                          >  
+                            <NumericalInput step={0.01} precision={2} width={200} />
+                          </Form.Item>
                           <Form.Item label="Metadata" name="metadata" help="Additional team metadata. Enter metadata as JSON object.">
                             <Input.TextArea rows={4} />
                           </Form.Item>
