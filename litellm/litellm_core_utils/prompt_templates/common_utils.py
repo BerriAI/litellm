@@ -604,14 +604,18 @@ def _resolve_pointer(document: Any, pointer: str) -> Any:
         if isinstance(current, list):
             # Try to convert to array index
             try:
-                part = int(part)
+                index = int(part)
+                current = current[index]
             except ValueError:
                 raise KeyError(f"Invalid array index: {part}")
-
-        try:
-            current = current[part]
-        except (KeyError, IndexError, TypeError) as e:
-            raise KeyError(f"Cannot resolve pointer {pointer}: {e}")
+            except IndexError as e:
+                raise KeyError(f"Cannot resolve pointer {pointer}: {e}")
+        else:
+            # Handle dictionary/object access
+            try:
+                current = current[part]
+            except (KeyError, TypeError) as e:
+                raise KeyError(f"Cannot resolve pointer {pointer}: {e}")
 
     return current
 
