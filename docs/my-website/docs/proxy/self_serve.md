@@ -339,3 +339,7 @@ litellm_settings:
     personal_key_generation: # maps to 'Default Team' on UI 
       allowed_user_roles: ["proxy_admin"]
 ```
+
+## Further Reading
+
+- [Onboard Users for AI Exploration](../tutorials/default_team_self_serve)
