@@ -1307,6 +1307,74 @@ def test_bedrock_tools_transformation_valid_params():
     assert "test" in result[0]["toolSpec"]["inputSchema"]["json"]["required"]
 
 
+def test_bedrock_tools_transformation_with_refs():
+    from litellm.types.llms.bedrock import ToolJsonSchemaBlock
+    tools = [
+        {
+        "type": "function",
+        "function": {
+            "name": "now",
+            "description": "Returns the current datetime.",
+            "parameters": {
+            "type": "object",
+            "properties": {
+                "timezone": {
+                "description": "The timezone to use for the datetime.",
+                "allOf": [
+                    {
+                    "$ref": "#/definitions/Timezone"
+                    }
+                ]
+                }
+            },
+            "required": ["timezone"],
+            "additionalProperties": "false",
+            "definitions": {
+                "Timezone": {
+                "oneOf": [
+                    {
+                    "type": "string",
+                    "enum": ["utc"],
+                    "description": "Use UTC for the datetime."
+                    },
+                    {
+                    "type": "string", 
+                    "enum": ["local"],
+                    "description": "Use local time for the datetime."
+                    }
+                ]
+                }
+            }
+            }
+        }
+        }
+    ]
+
+    result = _bedrock_tools_pt(tools)
+
+    print("bedrock tools after prompt formatting=", result)
+     # Ensure the keys for properties in the response is a subset of keys in ToolJsonSchemaBlock
+    toolJsonSchema = result[0]["toolSpec"]["inputSchema"]["json"]
+    assert toolJsonSchema is not None
+    print("transformed toolJsonSchema keys=", toolJsonSchema.keys())
+    print("allowed ToolJsonSchemaBlock keys=", ToolJsonSchemaBlock.__annotations__.keys())
+    assert set(toolJsonSchema.keys()).issubset(set(ToolJsonSchemaBlock.__annotations__.keys()))
+
+    
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert result[0]["toolSpec"]["name"] == "now"
+    assert result[0]["toolSpec"]["description"] == "Returns the current datetime."
+    assert "inputSchema" in result[0]["toolSpec"]
+    assert "json" in result[0]["toolSpec"]["inputSchema"]
+    assert "properties" in result[0]["toolSpec"]["inputSchema"]["json"]
+    assert "timezone" in result[0]["toolSpec"]["inputSchema"]["json"]["properties"]
+    assert "allOf" in result[0]["toolSpec"]["inputSchema"]["json"]["properties"]["timezone"]
+    assert len(result[0]["toolSpec"]["inputSchema"]["json"]["properties"]["timezone"]["allOf"]) == 1
+    # Validate defintion moved to $ref
+    assert "oneOf" in result[0]["toolSpec"]["inputSchema"]["json"]["properties"]["timezone"]["allOf"][0]
+    
+
 
 def test_not_found_error():
     with pytest.raises(litellm.NotFoundError):
