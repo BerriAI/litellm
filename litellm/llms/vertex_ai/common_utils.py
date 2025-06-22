@@ -28,9 +28,7 @@ def get_supports_system_message(
         _custom_llm_provider = custom_llm_provider
         if custom_llm_provider == "vertex_ai_beta":
             _custom_llm_provider = "vertex_ai"
-        supports_system_message = supports_system_messages(
-            model=model, custom_llm_provider=_custom_llm_provider
-        )
+        supports_system_message = supports_system_messages(model=model, custom_llm_provider=_custom_llm_provider)
 
         # Vertex Models called in the `/gemini` request/response format also support system messages
         if litellm.VertexGeminiConfig._is_model_gemini_spec_model(model):
@@ -53,18 +51,14 @@ def get_supports_response_schema(
     if custom_llm_provider == "vertex_ai_beta":
         _custom_llm_provider = "vertex_ai"
 
-    _supports_response_schema = supports_response_schema(
-        model=model, custom_llm_provider=_custom_llm_provider
-    )
+    _supports_response_schema = supports_response_schema(model=model, custom_llm_provider=_custom_llm_provider)
 
     return _supports_response_schema
 
 
 from typing import Literal, Optional
 
-all_gemini_url_modes = Literal[
-    "chat", "embedding", "batch_embedding", "image_generation"
-]
+all_gemini_url_modes = Literal["chat", "embedding", "batch_embedding", "image_generation"]
 
 
 def _get_vertex_url(
@@ -133,10 +127,8 @@ def _get_gemini_url(
                 _gemini_model_name, endpoint, gemini_api_key
             )
         else:
-            url = (
-                "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
-                    _gemini_model_name, endpoint, gemini_api_key
-                )
+            url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
+                _gemini_model_name, endpoint, gemini_api_key
             )
     elif mode == "embedding":
         endpoint = "embedContent"
@@ -187,11 +179,7 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     # Get valid fields from Schema TypedDict
     valid_schema_fields = set(get_type_hints(Schema).keys())
 
-    defs = parameters.pop("$defs", {})
-    # flatten the defs
-    for name, value in defs.items():
-        unpack_defs(value, defs)
-    unpack_defs(parameters, defs)
+    parameters = unpack_defs(parameters)
 
     # 5. Nullable fields:
     #     * https://github.com/pydantic/pydantic/issues/1270
@@ -227,11 +215,7 @@ def _filter_anyof_fields(schema_dict: Dict[str, Any]) -> Dict[str, Any]:
 
     if isinstance(schema_dict, dict) and schema_dict.get("anyOf"):
         any_of = schema_dict["anyOf"]
-        if (
-            (title or description)
-            and isinstance(any_of, list)
-            and all(isinstance(item, dict) for item in any_of)
-        ):
+        if (title or description) and isinstance(any_of, list) and all(isinstance(item, dict) for item in any_of):
             for item in any_of:
                 if title:
                     item["title"] = title
@@ -260,9 +244,7 @@ def process_items(schema, depth=0):
                         process_items(item, depth + 1)
 
 
-def set_schema_property_ordering(
-    schema: Dict[str, Any], depth: int = 0
-) -> Dict[str, Any]:
+def set_schema_property_ordering(schema: Dict[str, Any], depth: int = 0) -> Dict[str, Any]:
     """
     vertex ai and generativeai apis order output of fields alphabetically, unless you specify the order.
     python dicts retain order, so we just use that. Note that this field only applies to structured outputs, and not tools.
@@ -289,9 +271,7 @@ def set_schema_property_ordering(
     return schema
 
 
-def filter_schema_fields(
-    schema_dict: Dict[str, Any], valid_fields: Set[str], processed=None
-) -> Dict[str, Any]:
+def filter_schema_fields(schema_dict: Dict[str, Any], valid_fields: Set[str], processed=None) -> Dict[str, Any]:
     """
     Recursively filter a schema dictionary to keep only valid fields.
     """
@@ -314,15 +294,13 @@ def filter_schema_fields(
             continue
 
         if key == "properties" and isinstance(value, dict):
-            result[key] = {
-                k: filter_schema_fields(v, valid_fields, processed)
-                for k, v in value.items()
-            }
+            result[key] = {k: filter_schema_fields(v, valid_fields, processed) for k, v in value.items()}
         elif key == "items" and isinstance(value, dict):
             result[key] = filter_schema_fields(value, valid_fields, processed)
         elif key == "anyOf" and isinstance(value, list):
             result[key] = [
-                filter_schema_fields(item, valid_fields, processed) for item in value  # type: ignore
+                filter_schema_fields(item, valid_fields, processed)
+                for item in value  # type: ignore
             ]
         else:
             result[key] = value
@@ -351,19 +329,14 @@ def convert_anyof_null_to_nullable(schema, depth=0):
         if len(anyof) == 0:
             # Edge case: response schema with only null type present is invalid in Vertex AI
             raise ValueError(
-                "Invalid input: AnyOf schema with only null type is not supported. "
-                "Please provide a non-null type."
+                "Invalid input: AnyOf schema with only null type is not supported. Please provide a non-null type."
             )
 
         if contains_null:
             # set all types to nullable following guidance found here: https://cloud.google.com/vertex-ai/generative-ai/docs/samples/generativeaionvertexai-gemini-controlled-generation-response-schema-3#generativeaionvertexai_gemini_controlled_generation_response_schema_3-python
             for atype in anyof:
                 # Remove items field if type is array and items is empty
-                if (
-                    atype.get("type") == "array"
-                    and "items" in atype
-                    and not atype["items"]
-                ):
+                if atype.get("type") == "array" and "items" in atype and not atype["items"]:
                     atype.pop("items")
                 atype["nullable"] = True
 
@@ -439,9 +412,7 @@ def get_vertex_location_from_url(url: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
-def replace_project_and_location_in_route(
-    requested_route: str, vertex_project: str, vertex_location: str
-) -> str:
+def replace_project_and_location_in_route(requested_route: str, vertex_project: str, vertex_location: str) -> str:
     """
     Replace project and location values in the route with the provided values
     """
@@ -474,9 +445,7 @@ def construct_target_url(
     new_base_url = httpx.URL(base_url)
     if "locations" in requested_route:  # contains the target project id + location
         if vertex_project and vertex_location:
-            requested_route = replace_project_and_location_in_route(
-                requested_route, vertex_project, vertex_location
-            )
+            requested_route = replace_project_and_location_in_route(requested_route, vertex_project, vertex_location)
         return new_base_url.copy_with(path=requested_route)
 
     """
@@ -488,9 +457,7 @@ def construct_target_url(
     if "cachedContent" in requested_route:
         vertex_version = "v1beta1"
 
-    base_requested_route = "{}/projects/{}/locations/{}".format(
-        vertex_version, vertex_project, vertex_location
-    )
+    base_requested_route = "{}/projects/{}/locations/{}".format(vertex_version, vertex_project, vertex_location)
 
     updated_requested_route = "/" + base_requested_route + requested_route
 
@@ -510,9 +477,7 @@ def is_global_only_vertex_model(model: str) -> bool:
     """
     from litellm.utils import get_supported_regions
 
-    supported_regions = get_supported_regions(
-        model=model, custom_llm_provider="vertex_ai"
-    )
+    supported_regions = get_supported_regions(model=model, custom_llm_provider="vertex_ai")
     if supported_regions is None:
         return False
     return "global" in supported_regions
