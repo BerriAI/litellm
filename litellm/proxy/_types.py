@@ -17,6 +17,13 @@ from typing_extensions import Required, TypedDict
 
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.openai import AllMessageValues, OpenAIFileObject
+from litellm.types.mcp import (
+    MCPAuthType,
+    MCPSpecVersion,
+    MCPSpecVersionType,
+    MCPTransport,
+    MCPTransportType,
+)
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.utils import (
     CallTypes,
@@ -831,31 +838,6 @@ class SpecialMCPServerName(str, enum.Enum):
     all_proxy_servers = "all-proxy-mcpservers"
 
 
-class MCPTransport(str, enum.Enum):
-    sse = "sse"
-    http = "http"
-
-
-class MCPSpecVersion(str, enum.Enum):
-    nov_2024 = "2024-11-05"
-    mar_2025 = "2025-03-26"
-
-
-class MCPAuth(str, enum.Enum):
-    none = "none"
-    api_key = "api_key"
-    bearer_token = "bearer_token"
-    basic = "basic"
-
-
-# MCP Literals
-MCPTransportType = Literal[MCPTransport.sse, MCPTransport.http]
-MCPSpecVersionType = Literal[MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025]
-MCPAuthType = Optional[
-    Literal[MCPAuth.none, MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.basic]
-]
-
-
 # MCP Proxy Request Types
 class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: Optional[str] = None
@@ -1130,6 +1112,9 @@ class NewTeamRequest(TeamBase):
     tags: Optional[list] = None
     guardrails: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+    team_member_budget: Optional[float] = (
+        None  # allow user to set a budget for all team members
+    )
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1171,6 +1156,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     model_aliases: Optional[dict] = None
     guardrails: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+    team_member_budget: Optional[float] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
@@ -1450,6 +1436,10 @@ class DynamoDBArgs(LiteLLMPydanticObjectBase):
 
 
 class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
+    id: Optional[str] = Field(
+        default=None,
+        description="Optional unique identifier for the pass-through endpoint. If not provided, endpoints will be identified by path for backwards compatibility.",
+    )
     path: str = Field(description="The route to be added to the LiteLLM Proxy Server.")
     target: str = Field(
         description="The URL to which requests for this path should be forwarded."
@@ -1481,6 +1471,10 @@ class ConfigFieldUpdate(LiteLLMPydanticObjectBase):
 class ConfigFieldDelete(LiteLLMPydanticObjectBase):
     config_type: Literal["general_settings"]
     field_name: str
+
+
+class CallbackDelete(LiteLLMPydanticObjectBase):
+    callback_name: str
 
 
 class FieldDetail(BaseModel):
@@ -2507,6 +2501,7 @@ class LiteLLM_TeamMembership(LiteLLMPydanticObjectBase):
     user_id: str
     team_id: str
     budget_id: Optional[str] = None
+    spend: Optional[float] = 0.0
     litellm_budget_table: Optional[LiteLLM_BudgetTable]
 
 
@@ -2658,9 +2653,13 @@ class OrganizationMemberUpdateResponse(MemberUpdateResponse):
 ##########################################
 
 
+class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
+    team_member_budget_table: Optional[LiteLLM_BudgetTable] = None
+
+
 class TeamInfoResponseObject(TypedDict):
     team_id: str
-    team_info: LiteLLM_TeamTable
+    team_info: TeamInfoResponseObjectTeamTable
     keys: List
     team_memberships: List[LiteLLM_TeamMembership]
 
@@ -2703,6 +2702,7 @@ class SpecialHeaders(enum.Enum):
     google_ai_studio_authorization = "x-goog-api-key"
     azure_apim_authorization = "Ocp-Apim-Subscription-Key"
     custom_litellm_api_key = "x-litellm-api-key"
+    mcp_auth = "x-mcp-auth"
 
 
 class LitellmDataForBackendLLMCall(TypedDict, total=False):
@@ -3115,3 +3115,4 @@ class EnterpriseLicenseData(TypedDict, total=False):
     user_id: str
     allowed_features: List[str]
     max_users: int
+    max_teams: int

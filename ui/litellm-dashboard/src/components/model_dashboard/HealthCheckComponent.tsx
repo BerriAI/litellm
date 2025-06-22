@@ -506,8 +506,8 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
   };
 
   return (
-    <div className="bg-white rounded-lg shadow">
-      <div className="border-b px-6 py-4">
+    <div>
+      <div className="mb-6">
         <div className="flex justify-between items-center">
           <div>
             <Title>Model Health Status</Title>
@@ -541,7 +541,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
         </div>
       </div>
 
-      <div className="p-6">
+      <div>
         <ModelDataTable
           columns={healthCheckColumns(
             modelHealthStatuses,

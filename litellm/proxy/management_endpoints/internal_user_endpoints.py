@@ -63,7 +63,10 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
             "user"  # only create a user, don't create key if 'auto_create_key' set to False
         )
 
-    if litellm.default_internal_user_params:
+    if litellm.default_internal_user_params and (
+        data.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and data.user_role != LitellmUserRoles.PROXY_ADMIN
+    ):
         for key, value in litellm.default_internal_user_params.items():
             if key == "available_teams":
                 continue
@@ -199,14 +202,17 @@ async def _add_user_to_team(
                     str(e)
                 )
             )
-    except ProxyException as e:
+    except Exception as e:
         if "already exists" in str(e) or "doesn't exist" in str(e):
             verbose_proxy_logger.debug(
                 "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
                     str(e)
                 )
             )
-        elif ProxyErrorTypes.team_member_already_in_team in e.type:
+        elif (
+            isinstance(e, ProxyException)
+            and ProxyErrorTypes.team_member_already_in_team in e.type
+        ):
             verbose_proxy_logger.debug(
                 "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
                     str(e)
