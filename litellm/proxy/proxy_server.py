@@ -5533,6 +5533,51 @@ async def non_admin_all_models(
     return unique_models
 
 
+def _add_team_models_to_all_models(
+    team_db_objects_typed: List[LiteLLM_TeamTable],
+    llm_router: Router,
+) -> Dict[str, Set[str]]:
+    """
+    Add team models to all models
+    """
+    team_models: Dict[str, Set[str]] = {}
+
+    for team_object in team_db_objects_typed:
+
+        if (
+            len(team_object.models) == 0  # empty list = all model access
+            or SpecialModelNames.all_proxy_models.value in team_object.models
+        ):
+
+            model_list = llm_router.get_model_list()
+            if model_list is not None:
+                for model in model_list:
+                    model_id = model.get("model_info", {}).get("id", None)
+                    if model_id is None:
+                        continue
+                    # if team model id set, check if team id in user_teams
+                    team_model_id = model.get("model_info", {}).get("team_id", None)
+                    can_add_model = False
+                    if team_model_id is None:
+                        can_add_model = True
+                    elif team_model_id in team_object.team_id:
+                        can_add_model = True
+
+                    if can_add_model:
+                        team_models.setdefault(model_id, set()).add(team_object.team_id)
+        else:
+            for model_name in team_object.models:
+                _models = llm_router.get_model_list(model_name=model_name)
+                if _models is not None:
+                    for model in _models:
+                        model_id = model.get("model_info", {}).get("id", None)
+                        if model_id is not None:
+                            team_models.setdefault(model_id, set()).add(
+                                team_object.team_id
+                            )
+    return team_models
+
+
 async def get_all_team_models(
     user_teams: Union[List[str], Literal["*"]],
     prisma_client: PrismaClient,
@@ -5545,7 +5590,7 @@ async def get_all_team_models(
     2. Get all models across all teams
     3. Return {"model_id": ["team_id1", "team_id2"]}
     """
-    team_models: Dict[str, Set[str]] = {}
+
     team_db_objects_typed: List[LiteLLM_TeamTable] = []
 
     if user_teams == "*":
@@ -5563,25 +5608,10 @@ async def get_all_team_models(
             for team_db_object in team_db_objects
         ]
 
-    for team_object in team_db_objects_typed:
-        if (
-            len(team_object.models) == 0  # empty list = all model access
-            or SpecialModelNames.all_proxy_models.value in team_object.models
-        ):
-            _model_ids = llm_router.get_model_ids()
-            if _model_ids is not None:
-                for model_id in _model_ids:
-                    team_models.setdefault(model_id, set()).add(team_object.team_id)
-        else:
-            for model_name in team_object.models:
-                _models = llm_router.get_model_list(model_name=model_name)
-                if _models is not None:
-                    for model in _models:
-                        model_id = model.get("model_info", {}).get("id", None)
-                        if model_id is not None:
-                            team_models.setdefault(model_id, set()).add(
-                                team_object.team_id
-                            )
+    team_models = _add_team_models_to_all_models(
+        team_db_objects_typed=team_db_objects_typed,
+        llm_router=llm_router,
+    )
 
     # convert set to list
     returned_team_models: Dict[str, List[str]] = {}
@@ -5645,10 +5675,17 @@ async def get_all_team_and_direct_access_models(
         )
         for _model in all_models:
             model_id = _model.get("model_info", {}).get("id", None)
+            team_only_model_id = _model.get("model_info", {}).get("team_id", None)
             if model_id is not None:
-                _model["model_info"]["access_via_team_ids"] = team_models.get(
-                    model_id, []
-                )
+                can_use_model = False
+                if team_only_model_id is not None:
+                    pass
+                else:
+                    can_use_model = True
+                if can_use_model:
+                    _model["model_info"]["access_via_team_ids"] = team_models.get(
+                        model_id, []
+                    )
 
     ## ADD DIRECT_ACCESS TO RELEVANT MODELS
     for _model in all_models:
