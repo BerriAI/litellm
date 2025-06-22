@@ -2,6 +2,7 @@
 Common utility functions used for translating messages across providers
 """
 
+import copy
 import io
 import mimetypes
 import re
@@ -17,8 +18,6 @@ from typing import (
     Union,
     cast,
 )
-
-import jsonref
 
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -491,15 +490,139 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
     )
 
 
+def resolve_refs(
+    obj: Any, root_doc: Any = None, _cache: Optional[Dict[str, Any]] = None
+) -> Any:
+    """
+    Simple JSON reference resolver for internal references.
+    Resolves all $ref pointers starting with #/ within the same document.
+    Handles circular references by caching resolved references.
+
+    Args:
+        obj: The object to process (can be dict, list, or primitive)
+        root_doc: The root document containing the reference targets (defaults to obj)
+        _cache: Internal cache to prevent infinite recursion on circular refs
+
+    Returns:
+        A deep copy of obj with all internal references resolved
+    """
+    if root_doc is None:
+        root_doc = obj
+    if _cache is None:
+        _cache = {}
+
+    # Handle different object types
+    if isinstance(obj, dict):
+        # Check if this is a reference object
+        if "$ref" in obj and isinstance(obj["$ref"], str):
+            ref_uri = obj["$ref"]
+
+            # Handle all internal references (starting with #/)
+            if ref_uri.startswith("#/"):
+                # Check cache first to handle circular references
+                if ref_uri in _cache:
+                    return _cache[ref_uri]
+
+                try:
+                    # Resolve the reference
+                    resolved = _resolve_pointer(root_doc, ref_uri)
+
+                    # Check for direct self-reference
+                    if resolved is obj:
+                        raise ValueError(
+                            f"Reference {ref_uri} refers directly to itself"
+                        )
+
+                    # Cache a placeholder to prevent infinite recursion
+                    # Use a sentinel object that we'll replace
+                    sentinel = {"__resolving__": ref_uri}
+                    _cache[ref_uri] = sentinel
+
+                    # Recursively resolve any references in the resolved content
+                    resolved = resolve_refs(resolved, root_doc, _cache)
+
+                    # Handle additional properties
+                    if len(obj) > 1:
+                        # Merge additional properties with resolved content
+                        if isinstance(resolved, dict):
+                            merged = copy.deepcopy(resolved)
+                            for key, value in obj.items():
+                                if key != "$ref":
+                                    merged[key] = resolve_refs(value, root_doc, _cache)
+                            resolved = merged
+
+                    # Update cache with final resolved value
+                    _cache[ref_uri] = resolved
+                    return resolved
+
+                except (KeyError, TypeError, ValueError) as e:
+                    # Clean up cache on error
+                    _cache.pop(ref_uri, None)
+                    # If reference can't be resolved, return original object
+                    pass
+
+        # Process all dictionary values recursively
+        return {
+            key: resolve_refs(value, root_doc, _cache) for key, value in obj.items()
+        }
+
+    elif isinstance(obj, list):
+        # Process all list items recursively
+        return [resolve_refs(item, root_doc, _cache) for item in obj]
+
+    else:
+        # Return primitives as-is
+        return obj
+
+
+def _resolve_pointer(document: Any, pointer: str) -> Any:
+    """
+    Resolve a JSON pointer within a document.
+
+    Args:
+        document: The document to resolve the pointer in
+        pointer: JSON pointer string (e.g., "#/$defs/User")
+
+    Returns:
+        The resolved value
+
+    Raises:
+        KeyError: If the pointer cannot be resolved
+        ValueError: If the pointer format is invalid
+    """
+    if not pointer.startswith("#/"):
+        raise ValueError(f"Only fragment pointers supported: {pointer}")
+
+    # Remove the "#/" prefix and split into parts
+    path_parts = pointer[2:].split("/")
+
+    current = document
+    for part in path_parts:
+        # Handle JSON Pointer escaping
+        part = part.replace("~1", "/").replace("~0", "~")
+
+        if isinstance(current, list):
+            # Try to convert to array index
+            try:
+                part = int(part)
+            except ValueError:
+                raise KeyError(f"Invalid array index: {part}")
+
+        try:
+            current = current[part]
+        except (KeyError, IndexError, TypeError) as e:
+            raise KeyError(f"Cannot resolve pointer {pointer}: {e}")
+
+    return current
+
+
 def unpack_defs(schema):
     properties = schema.get("properties", None)
     if properties is None:
         return schema
 
     # Use jsonref to resolve all references
-    resolved_schema = jsonref.replace_refs(
-        schema, jsonschema=True, proxies=False, lazy_load=False
-    )
+    resolved_schema = resolve_refs(schema)
 
     # Clean up by removing $defs and definitions sections since they're no longer needed
     if isinstance(resolved_schema, dict):
