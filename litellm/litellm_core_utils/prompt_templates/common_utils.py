@@ -18,6 +18,8 @@ from typing import (
     cast,
 )
 
+import jsonref
+
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -489,37 +491,25 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
     )
 
 
-def unpack_defs(schema, defs):
+def unpack_defs(schema):
     properties = schema.get("properties", None)
     if properties is None:
-        return
+        return schema
 
-    for name, value in properties.items():
-        ref_key = value.get("$ref", None)
-        if ref_key is not None:
-            ref = defs[ref_key.split("defs/")[-1]]
-            unpack_defs(ref, defs)
-            properties[name] = ref
-            continue
+    # Use jsonref to resolve all references
+    resolved_schema = jsonref.replace_refs(
+        schema, jsonschema=True, proxies=False, lazy_load=False
+    )
 
-        anyof = value.get("anyOf", None)
-        if anyof is not None:
-            for i, atype in enumerate(anyof):
-                ref_key = atype.get("$ref", None)
-                if ref_key is not None:
-                    ref = defs[ref_key.split("defs/")[-1]]
-                    unpack_defs(ref, defs)
-                    anyof[i] = ref
-            continue
+    # Clean up by removing $defs and definitions sections since they're no longer needed
+    if isinstance(resolved_schema, dict):
+        resolved_schema = {
+            k: v
+            for k, v in resolved_schema.items()
+            if k not in ("$defs", "definitions")
+        }
 
-        items = value.get("items", None)
-        if items is not None:
-            ref_key = items.get("$ref", None)
-            if ref_key is not None:
-                ref = defs[ref_key.split("defs/")[-1]]
-                unpack_defs(ref, defs)
-                value["items"] = ref
-                continue
+    return resolved_schema
 
 
 def _get_image_mime_type_from_url(url: str) -> Optional[str]:
