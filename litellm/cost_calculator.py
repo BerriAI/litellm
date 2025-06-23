@@ -1100,13 +1100,12 @@ def default_image_cost_calculator(
     Raises:
         Exception: If model pricing not found in cost map
     """
-    # Standardize size format to use "-x-"
-    size_str: str = size or "1024-x-1024"
-    size_str = (
-        size_str.replace("x", "-x-")
-        if "x" in size_str and "-x-" not in size_str
-        else size_str
-    )
+    # Ensure size_str is always a concrete `str` (mypy: avoid Optional[str])
+    size_str: str = size if size is not None else "1024-x-1024"
+
+    # Standardize the dimension delimiter to "-x-" (e.g., "1024x1024" -> "1024-x-1024")
+    if "x" in size_str and "-x-" not in size_str:
+        size_str = size_str.replace("x", "-x-")
 
     # Parse dimensions
     height, width = map(int, size_str.split("-x-"))
