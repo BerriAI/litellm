@@ -116,8 +116,6 @@ from .caching.caching import disable_cache, enable_cache, update_cache
 from .litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
     completion_with_fallbacks,
-    async_transcription_with_fallbacks,
-    transcription_with_fallbacks,
 )
 from .litellm_core_utils.prompt_templates.common_utils import (
     get_completion_messages,
@@ -4719,27 +4717,8 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
 
     Allows router to load balance between them
     """
-    # Extract fallbacks early so we can delegate to fallback utility if set
-    fallbacks = kwargs.get("fallbacks", None)
-    model = args[0] if len(args) > 0 else kwargs["model"]
-
-    # Use global model_fallbacks if individual fallbacks not provided
-    fallbacks = fallbacks or litellm.model_fallbacks  # type: ignore
-
-    # If fallbacks defined, delegate handling to async_transcription_with_fallbacks
-    if fallbacks is not None:
-        # Ensure we don't forward `fallbacks` again in nested kwargs to avoid recursion
-        nested_kwargs = {**kwargs}
-        # Remove fallbacks so internal calls don't recurse
-        nested_kwargs.pop("fallbacks", None)
-
-        return await async_transcription_with_fallbacks(
-            model=model,
-            file=nested_kwargs.pop("file", args[1] if len(args) > 1 else None),
-            kwargs={"fallbacks": fallbacks, **nested_kwargs},
-        )
-
     loop = asyncio.get_event_loop()
+    model = args[0] if len(args) > 0 else kwargs["model"]
     ### PASS ARGS TO Image Generation ###
     kwargs["atranscription"] = True
     custom_llm_provider = None
@@ -4809,20 +4788,6 @@ def transcription(
 
     Allows router to load balance between them
     """
-    # Handle client-side fallbacks similar to completion()
-    fallbacks_local = kwargs.get("fallbacks", None) or litellm.model_fallbacks  # type: ignore
-
-    if fallbacks_local is not None:
-        # Remove to prevent recursion in deeper calls
-        nested_kwargs = {**kwargs}
-        nested_kwargs.pop("fallbacks", None)
-
-        return transcription_with_fallbacks(
-            model=model,
-            file=file,
-            kwargs={"fallbacks": fallbacks_local, **nested_kwargs},
-        )
-
     litellm_call_id = kwargs.get("litellm_call_id", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
     model_info = kwargs.get("model_info", None)
