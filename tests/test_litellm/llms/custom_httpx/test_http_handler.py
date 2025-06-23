@@ -5,6 +5,7 @@ import ssl
 import sys
 from unittest.mock import MagicMock, patch
 
+import certifi
 import httpx
 import pytest
 from aiohttp import ClientSession, TCPConnector
@@ -122,68 +123,32 @@ async def test_ssl_verification_with_aiohttp_transport():
     assert transport_connector._ssl == aiohttp_session.connector._ssl
 
 
-@pytest.mark.asyncio
-async def test_disable_aiohttp_trust_env_with_env_variable(monkeypatch):
-    """Test aiohttp transport respects DISABLE_AIOHTTP_TRUST_ENV environment variable"""
-    # Set environment variable to disable trust env
-    monkeypatch.setenv("DISABLE_AIOHTTP_TRUST_ENV", "True")
-    
-    # Ensure aiohttp transport is enabled
-    litellm.disable_aiohttp_transport = False
-    
-    # Create async client
-    client = AsyncHTTPHandler()
-    
-    # Get the transport (should be LiteLLMAiohttpTransport)
-    transport = client.client._transport
-    assert isinstance(transport, LiteLLMAiohttpTransport)
-    
-    # Get the aiohttp ClientSession
-    client_session = transport._get_valid_client_session()
-    
-    # Verify that trust_env is False when DISABLE_AIOHTTP_TRUST_ENV is True
-    assert client_session._trust_env is False
+def test_get_ssl_context():
+    """Test that _get_ssl_context() returns a proper SSL context with certifi CA bundle"""
+    with patch('ssl.create_default_context') as mock_create_context:
+        # Mock the return value
+        mock_ssl_context = MagicMock(spec=ssl.SSLContext)
+        mock_create_context.return_value = mock_ssl_context
+        
+        # Call the static method
+        result = AsyncHTTPHandler._get_ssl_context()
+        
+        # Verify ssl.create_default_context was called with certifi's CA file
+        expected_ca_file = certifi.where()
+        mock_create_context.assert_called_once_with(cafile=expected_ca_file)
+        
+        # Verify it returns the mocked SSL context
+        assert result == mock_ssl_context
 
 
-@pytest.mark.asyncio
-async def test_disable_aiohttp_trust_env_with_litellm_setting():
-    """Test aiohttp transport respects litellm.disable_aiohttp_trust_env setting"""
-    # Set litellm setting to disable trust env
-    litellm.disable_aiohttp_trust_env = True
+def test_get_ssl_context_integration():
+    """Integration test that _get_ssl_context() returns a working SSL context"""
+    # Call the static method without mocking
+    ssl_context = AsyncHTTPHandler._get_ssl_context()
     
-    # Ensure aiohttp transport is enabled
-    litellm.disable_aiohttp_transport = False
+    # Verify it returns an SSLContext instance
+    assert isinstance(ssl_context, ssl.SSLContext)
     
-    # Create async client
-    client = AsyncHTTPHandler()
-    
-    # Get the transport (should be LiteLLMAiohttpTransport)
-    transport = client.client._transport
-    assert isinstance(transport, LiteLLMAiohttpTransport)
-    
-    # Get the aiohttp ClientSession
-    client_session = transport._get_valid_client_session()
-    
-    # Verify that trust_env is False when litellm.disable_aiohttp_trust_env is True
-    assert client_session._trust_env is False
-
-
-@pytest.mark.asyncio
-async def test_enable_aiohttp_trust_env_default():
-    """Test aiohttp transport enables trust_env by default"""
-    # Ensure both settings are disabled/default
-    litellm.disable_aiohttp_trust_env = False
-    litellm.disable_aiohttp_transport = False
-    
-    # Create async client
-    client = AsyncHTTPHandler()
-    
-    # Get the transport (should be LiteLLMAiohttpTransport)
-    transport = client.client._transport
-    assert isinstance(transport, LiteLLMAiohttpTransport)
-    
-    # Get the aiohttp ClientSession
-    client_session = transport._get_valid_client_session()
-    
-    # Verify that trust_env is True by default
-    assert client_session._trust_env is True
+    # Verify it has basic SSL context properties
+    assert ssl_context.protocol is not None
+    assert ssl_context.verify_mode is not None

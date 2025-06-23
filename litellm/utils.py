@@ -694,6 +694,7 @@ def function_setup(  # noqa: PLR0915
         if (
             call_type == CallTypes.completion.value
             or call_type == CallTypes.acompletion.value
+            or call_type == CallTypes.anthropic_messages.value
         ):
             messages = None
             if len(args) > 1:
@@ -7146,6 +7147,16 @@ def add_openai_metadata(metadata: dict) -> dict:
         for k, v in metadata.items()
         if k != "hidden_params" and isinstance(v, (str))
     }
+
+    # max 16 keys allowed by openai - trim down to 16
+    if len(visible_metadata) > 16:
+        filtered_metadata = {}
+        idx = 0
+        for k, v in visible_metadata.items():
+            if idx < 16:
+                filtered_metadata[k] = v
+            idx += 1
+        visible_metadata = filtered_metadata
 
     return visible_metadata.copy()
 

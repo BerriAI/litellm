@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 
 import {
   Title,
@@ -16,6 +16,7 @@ import {
 import { MCPServer, handleTransport, handleAuth } from "./types";
 // TODO: Move Tools viewer from index file
 import { MCPToolsViewer } from ".";
+import MCPServerEdit from "./mcp_server_edit";
 
 interface MCPServerViewProps {
   mcpServer: MCPServer;
@@ -36,6 +37,13 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   userRole,
   userID,
 }) => {
+  const [editing, setEditing] = useState(isEditing);
+
+  const handleSuccess = (updated: MCPServer) => {
+    setEditing(false);
+    onBack();
+  };
+
   return (
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
@@ -49,7 +57,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
       </div>
 
       {/* TODO: magic number for index */}
-      <TabGroup defaultIndex={isEditing ? 2 : 0}>
+      <TabGroup defaultIndex={editing ? 2 : 0}>
         <TabList className="mb-4">
           {[
             <Tab key="overview">Overview</Tab>,
@@ -88,6 +96,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
             <MCPToolsViewer
               serverId={mcpServer.server_id}
               accessToken={accessToken}
+              auth_type={mcpServer.auth_type}
               userRole={userRole}
               userID={userID}
             />
@@ -97,8 +106,48 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
           <TabPanel>
             <Card>
               <div className="flex justify-between items-center mb-4">
-                <Title>Editing MCP Servers coming soon!</Title>
+                <Title>MCP Server Settings</Title>
+                {editing ? null : (
+                  <Button variant="light" onClick={() => setEditing(true)}>
+                    Edit Settings
+                  </Button>
+                )}
               </div>
+              {editing ? (
+                <MCPServerEdit
+                  mcpServer={mcpServer}
+                  accessToken={accessToken}
+                  onCancel={() => setEditing(false)}
+                  onSuccess={handleSuccess}
+                />
+              ) : (
+                <div className="space-y-4">
+                  <div>
+                    <Text className="font-medium">Server Name</Text>
+                    <div>{mcpServer.alias}</div>
+                  </div>
+                  <div>
+                    <Text className="font-medium">Description</Text>
+                    <div>{mcpServer.description}</div>
+                  </div>
+                  <div>
+                    <Text className="font-medium">URL</Text>
+                    <div className="font-mono">{mcpServer.url}</div>
+                  </div>
+                  <div>
+                    <Text className="font-medium">Transport</Text>
+                    <div>{handleTransport(mcpServer.transport)}</div>
+                  </div>
+                  <div>
+                    <Text className="font-medium">Auth Type</Text>
+                    <div>{handleAuth(mcpServer.auth_type)}</div>
+                  </div>
+                  <div>
+                    <Text className="font-medium">Spec Version</Text>
+                    <div>{mcpServer.spec_version}</div>
+                  </div>
+                </div>
+              )}
             </Card>
           </TabPanel>
         </TabPanels>

@@ -122,29 +122,17 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         litellm_logging_obj: LiteLLMLoggingObj,
     ) -> AsyncIterator:
         """Helper function to handle Anthropic streaming responses using the existing logging handlers"""
-        from datetime import datetime
-
-        from litellm.proxy.pass_through_endpoints.streaming_handler import (
-            PassThroughStreamingHandler,
-        )
-        from litellm.proxy.pass_through_endpoints.success_handler import (
-            PassThroughEndpointLogging,
-        )
-        from litellm.types.passthrough_endpoints.pass_through_endpoints import (
-            EndpointType,
+        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+            BaseAnthropicMessagesStreamingIterator,
         )
 
-        # Create success handler object
-        passthrough_success_handler_obj = PassThroughEndpointLogging()
-
-        # Use the existing streaming handler for Anthropic
-        start_time = datetime.now()
-        return PassThroughStreamingHandler.chunk_processor(
-            response=httpx_response,
+        # Use the shared streaming handler for Anthropic
+        handler = BaseAnthropicMessagesStreamingIterator(
+            litellm_logging_obj=litellm_logging_obj,
+            request_body=request_body,
+        )
+        return handler.get_async_streaming_response_iterator(
+            httpx_response=httpx_response,
             request_body=request_body,
             litellm_logging_obj=litellm_logging_obj,
-            endpoint_type=EndpointType.ANTHROPIC,
-            start_time=start_time,
-            passthrough_success_handler_obj=passthrough_success_handler_obj,
-            url_route="/v1/messages",
         )

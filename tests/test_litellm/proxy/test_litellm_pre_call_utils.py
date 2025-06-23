@@ -10,6 +10,7 @@ from fastapi import Request
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import (
+    LiteLLMProxyRequestSetup,
     _get_enforced_params,
     add_litellm_data_to_request,
     check_if_token_is_service_account,
