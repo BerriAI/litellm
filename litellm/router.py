@@ -349,9 +349,9 @@ class Router:
         )  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self.deployment_latency_map = {}
         ### CACHING ###
-        cache_type: Literal[
-            "local", "redis", "redis-semantic", "s3", "disk"
-        ] = "local"  # default to an in-memory cache
+        cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = (
+            "local"  # default to an in-memory cache
+        )
         redis_cache = None
         cache_config: Dict[str, Any] = {}
 
@@ -573,9 +573,9 @@ class Router:
                 )
             )
 
-        self.model_group_retry_policy: Optional[
-            Dict[str, RetryPolicy]
-        ] = model_group_retry_policy
+        self.model_group_retry_policy: Optional[Dict[str, RetryPolicy]] = (
+            model_group_retry_policy
+        )
 
         self.allowed_fails_policy: Optional[AllowedFailsPolicy] = None
         if allowed_fails_policy is not None:
@@ -752,6 +752,9 @@ class Router:
         )
         self.adelete_responses = self.factory_function(
             litellm.adelete_responses, call_type="adelete_responses"
+        )
+        self.alist_input_items = self.factory_function(
+            litellm.alist_input_items, call_type="alist_input_items"
         )
         self._arealtime = self.factory_function(
             litellm._arealtime, call_type="_arealtime"
@@ -2451,6 +2454,14 @@ class Router:
             The response from the handler function
         """
         handler_name = original_function.__name__
+        function_name = "_ageneric_api_call_with_fallbacks"
+        self._update_kwargs_before_fallbacks(
+            model=model,
+            kwargs=kwargs,
+            metadata_variable_name = _get_router_metadata_variable_name(
+                function_name=function_name
+            )
+        )
         try:
             verbose_router_logger.debug(
                 f"Inside _ageneric_api_call() - handler: {handler_name}, model: {model}; kwargs: {kwargs}"
@@ -2464,7 +2475,7 @@ class Router:
             )
 
             self._update_kwargs_with_deployment(
-                deployment=deployment, kwargs=kwargs, function_name="generic_api_call"
+                deployment=deployment, kwargs=kwargs, function_name=function_name
             )
 
             data = deployment["litellm_params"].copy()
@@ -3035,15 +3046,18 @@ class Router:
             async def try_retrieve_batch(model_name: DeploymentTypedDict):
                 try:
                     model = model_name["litellm_params"].get("model")
+                    data = model_name["litellm_params"].copy()
+                    custom_llm_provider = data.get("custom_llm_provider")
                     if model is None:
                         raise Exception(
                             f"Model not found in litellm_params for deployment: {model_name}"
                         )
                     # Update kwargs with the current model name or any other model-specific adjustments
                     ## SET CUSTOM PROVIDER TO SELECTED DEPLOYMENT ##
-                    _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
-                        model=model
-                    )
+                    if not custom_llm_provider:
+                        _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
+                            model=model
+                        )
                     new_kwargs = copy.deepcopy(kwargs)
                     self._update_kwargs_with_deployment(
                         deployment=cast(dict, model_name),
@@ -3051,10 +3065,18 @@ class Router:
                         function_name="aretrieve_batch",
                     )
                     new_kwargs.pop("custom_llm_provider", None)
+                    data.pop("custom_llm_provider", None)
                     return await litellm.aretrieve_batch(
-                        custom_llm_provider=custom_llm_provider, **new_kwargs  # type: ignore
+                        **{
+                            **data,
+                            "custom_llm_provider": custom_llm_provider,
+                            **new_kwargs,  # type: ignore
+                        },
                     )
                 except Exception as e:
+                    import traceback
+
+                    traceback.print_exc()
                     receieved_exceptions.append(e)
                     return None
 
@@ -3166,6 +3188,11 @@ class Router:
         original_function: Callable,
         **kwargs,
     ):
+        # update kwargs with model_group
+        self._update_kwargs_before_fallbacks(
+            model=kwargs.get("model", ""),
+            kwargs=kwargs,
+        )
         if kwargs.get("model") and self.get_model_list(model_name=kwargs["model"]):
             deployment = await self.async_get_available_deployment(
                 model=kwargs["model"],
@@ -3202,6 +3229,7 @@ class Router:
             "alist_files",
             "aimage_edit",
             "allm_passthrough_route",
+            "alist_input_items",
         ] = "assistants",
     ):
         """
@@ -3262,7 +3290,11 @@ class Router:
                     original_function=original_function,
                     **kwargs,
                 )
-            elif call_type in ("aget_responses", "adelete_responses"):
+            elif call_type in (
+                "aget_responses",
+                "adelete_responses",
+                "alist_input_items",
+            ):
                 return await self._init_responses_api_endpoints(
                     original_function=original_function,
                     **kwargs,
@@ -3406,11 +3438,11 @@ class Router:
 
                 if isinstance(e, litellm.ContextWindowExceededError):
                     if context_window_fallbacks is not None:
-                        fallback_model_group: Optional[
-                            List[str]
-                        ] = self._get_fallback_model_group_from_fallbacks(
-                            fallbacks=context_window_fallbacks,
-                            model_group=model_group,
+                        fallback_model_group: Optional[List[str]] = (
+                            self._get_fallback_model_group_from_fallbacks(
+                                fallbacks=context_window_fallbacks,
+                                model_group=model_group,
+                            )
                         )
                         if fallback_model_group is None:
                             raise original_exception
@@ -3442,11 +3474,11 @@ class Router:
                         e.message += "\n{}".format(error_message)
                 elif isinstance(e, litellm.ContentPolicyViolationError):
                     if content_policy_fallbacks is not None:
-                        fallback_model_group: Optional[
-                            List[str]
-                        ] = self._get_fallback_model_group_from_fallbacks(
-                            fallbacks=content_policy_fallbacks,
-                            model_group=model_group,
+                        fallback_model_group: Optional[List[str]] = (
+                            self._get_fallback_model_group_from_fallbacks(
+                                fallbacks=content_policy_fallbacks,
+                                model_group=model_group,
+                            )
                         )
                         if fallback_model_group is None:
                             raise original_exception

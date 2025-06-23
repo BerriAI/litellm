@@ -13,7 +13,12 @@ from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES, VertexPartnerProvider
 
-from .common_utils import _get_gemini_url, _get_vertex_url, all_gemini_url_modes
+from .common_utils import (
+    _get_gemini_url,
+    _get_vertex_url,
+    all_gemini_url_modes,
+    is_global_only_vertex_model,
+)
 
 if TYPE_CHECKING:
     from google.auth.credentials import Credentials as GoogleCredentialsObject
@@ -34,7 +39,9 @@ class VertexBase:
         self.project_id: Optional[str] = None
         self.async_handler: Optional[AsyncHTTPHandler] = None
 
-    def get_vertex_region(self, vertex_region: Optional[str]) -> str:
+    def get_vertex_region(self, vertex_region: Optional[str], model: str) -> str:
+        if is_global_only_vertex_model(model):
+            return "global"
         return vertex_region or "us-central1"
 
     def load_auth(
@@ -72,7 +79,15 @@ class VertexBase:
 
             # Check if the JSON object contains Workload Identity Federation configuration
             if "type" in json_obj and json_obj["type"] == "external_account":
-                creds = self._credentials_from_identity_pool(json_obj)
+                # If environment_id key contains "aws" value it corresponds to an AWS config file
+                if (
+                    "credential_source" in json_obj
+                    and "environment_id" in json_obj["credential_source"]
+                    and "aws" in json_obj["credential_source"]["environment_id"]
+                ):
+                    creds = self._credentials_from_identity_pool_with_aws(json_obj)
+                else:
+                    creds = self._credentials_from_identity_pool(json_obj)
             # Check if the JSON object contains Authorized User configuration (via gcloud auth application-default login)
             elif "type" in json_obj and json_obj["type"] == "authorized_user":
                 creds = self._credentials_from_authorized_user(
@@ -115,6 +130,11 @@ class VertexBase:
         from google.auth import identity_pool
 
         return identity_pool.Credentials.from_info(json_obj)
+    
+    def _credentials_from_identity_pool_with_aws(self, json_obj):
+        from google.auth import aws
+
+        return aws.Credentials.from_info(json_obj)
 
     def _credentials_from_authorized_user(self, json_obj, scopes):
         import google.oauth2.credentials
@@ -323,7 +343,10 @@ class VertexBase:
             )
             auth_header = None  # this field is not used for gemin
         else:
-            vertex_location = self.get_vertex_region(vertex_region=vertex_location)
+            vertex_location = self.get_vertex_region(
+                vertex_region=vertex_location,
+                model=model,
+            )
 
             ### SET RUNTIME ENDPOINT ###
             version: Literal["v1beta1", "v1"] = (

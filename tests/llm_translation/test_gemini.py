@@ -194,7 +194,7 @@ def test_gemini_url_context():
     assert urlMetadata['urlRetrievalStatus'] == 'URL_RETRIEVAL_STATUS_SUCCESS'
 
 
-
+@pytest.mark.flaky(retries=3, delay=2)
 def test_gemini_with_grounding():
     from litellm import completion, Usage, stream_chunk_builder
     litellm._turn_on_debug()
@@ -222,3 +222,20 @@ def test_gemini_with_grounding():
     usage: Usage = complete_response.usage
     assert usage.prompt_tokens_details.web_search_requests is not None
     assert usage.prompt_tokens_details.web_search_requests > 0
+
+
+def test_gemini_with_empty_function_call_arguments():
+    from litellm import completion
+    litellm._turn_on_debug()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "parameters": "",
+            },
+        }
+    ]
+    response = completion(model="gemini/gemini-2.0-flash", messages=[{"role": "user", "content": "What is the capital of France?"}], tools=tools)
+    print(response)
+    assert response.choices[0].message.content is not None

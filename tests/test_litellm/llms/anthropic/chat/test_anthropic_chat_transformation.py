@@ -207,3 +207,64 @@ def test_add_code_execution_tool():
     assert tools is not None
     assert len(tools) == 1
     assert tools[0]["type"] == "code_execution_20250522"
+
+
+def test_map_tool_choice():
+    config = AnthropicConfig()
+
+    tool_choice = "none"
+    result = config._map_tool_choice(tool_choice=tool_choice, parallel_tool_use=True)
+    assert result is not None
+    assert result["type"] == "none"
+    print(result)
+
+
+def test_transform_response_with_prefix_prompt():
+    import httpx
+
+    from litellm.types.utils import ModelResponse
+
+    config = AnthropicConfig()
+
+    completion_response = {
+        "id": "msg_01XrAv7gc5tQNDuoADra7vB4",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-3-5-sonnet-20241022",
+        "content": [{"type": "text", "text": " The grass is green."}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 610,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 51,
+        },
+    }
+
+    raw_response = httpx.Response(
+        status_code=200,
+        headers={},
+    )
+
+    model_response = ModelResponse()
+
+    result = config.transform_parsed_response(
+        completion_response=completion_response,
+        raw_response=raw_response,
+        model_response=model_response,
+        json_mode=False,
+        prefix_prompt="You are a helpful assistant.",
+    )
+
+    assert result is not None
+    assert (
+        result.choices[0].message.content
+        == "You are a helpful assistant. The grass is green."
+    )
+
+
+def test_get_supported_params_thinking():
+    config = AnthropicConfig()
+    params = config.get_supported_openai_params(model="claude-sonnet-4-20250514")
+    assert "thinking" in params

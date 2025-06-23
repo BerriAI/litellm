@@ -35,6 +35,8 @@ class PassThroughEndpointLogging:
             "generateContent",
             "streamGenerateContent",
             "predict",
+            "rawPredict",
+            "streamRawPredict",
         ]
 
         # Anthropic
@@ -45,6 +47,9 @@ class PassThroughEndpointLogging:
         self.assemblyai_passthrough_logging_handler = (
             AssemblyAIPassthroughLoggingHandler()
         )
+
+        # Langfuse
+        self.TRACKED_LANGFUSE_ROUTES = ["/langfuse/"]
 
     async def _handle_logging(
         self,
@@ -83,6 +88,8 @@ class PassThroughEndpointLogging:
             cache_hit=False,
             **kwargs,
         )
+    
+
 
     async def pass_through_async_success_handler(
         self,
@@ -179,11 +186,21 @@ class PassThroughEndpointLogging:
                 **kwargs,
             )
             return
+        elif self.is_langfuse_route(url_route):
+            # Don't log langfuse pass-through requests
+            return
 
         if standard_logging_response_object is None:
             standard_logging_response_object = StandardPassThroughResponseObject(
                 response=httpx_response.text
             )
+        
+        kwargs = self._set_cost_per_request(
+            logging_obj=logging_obj,
+            passthrough_logging_payload=passthrough_logging_payload,
+            kwargs=kwargs,
+        )
+        
 
         await self._handle_logging(
             logging_obj=logging_obj,
@@ -192,6 +209,7 @@ class PassThroughEndpointLogging:
             start_time=start_time,
             end_time=end_time,
             cache_hit=cache_hit,
+            standard_pass_through_logging_payload=passthrough_logging_payload,
             **kwargs,
         )
 
@@ -219,3 +237,36 @@ class PassThroughEndpointLogging:
         elif "/transcript" in parsed_url.path:
             return True
         return False
+
+    def is_langfuse_route(self, url_route: str):
+        parsed_url = urlparse(url_route)
+        for route in self.TRACKED_LANGFUSE_ROUTES:
+            if route in parsed_url.path:
+                return True
+        return False
+    
+
+    def _set_cost_per_request(
+        self, 
+        logging_obj: LiteLLMLoggingObj, 
+        passthrough_logging_payload: PassthroughStandardLoggingPayload,
+        kwargs: dict,
+    ):
+        """
+        Helper function to set the cost per request in the logging object
+
+        Only set the cost per request if it's set in the passthrough logging payload.
+        If it's not set, don't set it in the logging object.
+        """
+        #########################################################
+        # Check if cost per request is set
+        #########################################################
+        if passthrough_logging_payload.get("cost_per_request") is not None:
+            kwargs["response_cost"] = passthrough_logging_payload.get(
+                "cost_per_request"
+            )
+            logging_obj.model_call_details["response_cost"] = passthrough_logging_payload.get(
+                "cost_per_request"
+            )
+        
+        return kwargs

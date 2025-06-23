@@ -598,3 +598,146 @@ def test_vertex_ai_streaming_usage_web_search_calculation():
     usage: Usage = completed_response.usage
     assert usage.prompt_tokens_details.web_search_requests is not None
     assert usage.prompt_tokens_details.web_search_requests == 1
+
+
+def test_vertex_ai_transform_parts():
+    """
+    Test the _transform_parts method for converting Vertex AI function calls
+    to OpenAI-compatible tool calls and function calls.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    from litellm.types.llms.vertex_ai import HttpxPartType
+
+    # Test case 1: Function call mode (is_function_call=True)
+    parts_with_function = [
+        HttpxPartType(
+            functionCall={
+                "name": "get_current_weather",
+                "args": {"location": "Boston", "unit": "celsius"},
+            }
+        ),
+        HttpxPartType(text="Some text content"),
+    ]
+
+    function, tools = VertexGeminiConfig._transform_parts(
+        parts=parts_with_function, is_function_call=True
+    )
+
+    # Should return function, no tools
+    assert function is not None
+    assert function["name"] == "get_current_weather"
+    assert function["arguments"] == '{"location": "Boston", "unit": "celsius"}'
+    assert tools is None
+
+    # Test case 2: Tool call mode (is_function_call=False)
+    function, tools = VertexGeminiConfig._transform_parts(
+        parts=parts_with_function, is_function_call=False
+    )
+
+    # Should return tools, no function
+    assert function is None
+    assert tools is not None
+    assert len(tools) == 1
+    assert tools[0]["type"] == "function"
+    assert tools[0]["function"]["name"] == "get_current_weather"
+    assert (
+        tools[0]["function"]["arguments"] == '{"location": "Boston", "unit": "celsius"}'
+    )
+    assert tools[0]["id"].startswith("call_")
+    assert tools[0]["index"] == 0
+
+    # Test case 3: Multiple function calls
+    parts_with_multiple_functions = [
+        HttpxPartType(
+            functionCall={"name": "get_current_weather", "args": {"location": "Boston"}}
+        ),
+        HttpxPartType(
+            functionCall={
+                "name": "get_forecast",
+                "args": {"location": "New York", "days": 3},
+            }
+        ),
+        HttpxPartType(text="Some text content"),
+    ]
+
+    function, tools = VertexGeminiConfig._transform_parts(
+        parts=parts_with_multiple_functions, is_function_call=False
+    )
+
+    # Should return multiple tools
+    assert function is None
+    assert tools is not None
+    assert len(tools) == 2
+    assert tools[0]["function"]["name"] == "get_current_weather"
+    assert tools[0]["index"] == 0
+    assert tools[1]["function"]["name"] == "get_forecast"
+    assert tools[1]["index"] == 1
+    assert tools[1]["function"]["arguments"] == '{"location": "New York", "days": 3}'
+
+    # Test case 4: No function calls
+    parts_without_functions = [
+        HttpxPartType(text="Just some text content"),
+        HttpxPartType(text="More text"),
+    ]
+
+    function, tools = VertexGeminiConfig._transform_parts(
+        parts=parts_without_functions, is_function_call=False
+    )
+
+    # Should return nothing
+    assert function is None
+    assert tools is None
+
+    # Test case 5: Empty parts list
+    function, tools = VertexGeminiConfig._transform_parts(
+        parts=[], is_function_call=False
+    )
+
+    # Should return nothing
+    assert function is None
+    assert tools is None
+
+    # Test case 6: Function call with empty args
+    parts_with_empty_args = [
+        HttpxPartType(functionCall={"name": "simple_function", "args": {}})
+    ]
+
+    function, tools = VertexGeminiConfig._transform_parts(
+        parts=parts_with_empty_args, is_function_call=True
+    )
+
+    # Should handle empty args correctly
+    assert function is not None
+    assert function["name"] == "simple_function"
+    assert function["arguments"] == "{}"
+    assert tools is None
+
+
+def test_vertex_ai_usage_metadata_missing_token_count():
+    """Test that missing tokenCount in responseTokensDetails defaults to 0"""
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    v = VertexGeminiConfig()
+    usage_metadata = {
+        "promptTokenCount": 57,
+        "responseTokenCount": 74,
+        "totalTokenCount": 131,
+        "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 57}],
+        "responseTokensDetails": [
+            {"modality": "TEXT"},  # Missing tokenCount
+            {"modality": "AUDIO"},  # Missing tokenCount
+        ],
+    }
+    usage_metadata = UsageMetadata(**usage_metadata)
+    result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+    
+    # Should not crash and should default missing tokenCount to 0
+    assert result.prompt_tokens == 57
+    assert result.completion_tokens == 74
+    assert result.total_tokens == 131
+    assert result.completion_tokens_details.text_tokens == 0  # Default value for missing tokenCount
+    assert result.completion_tokens_details.audio_tokens == 0  # Default value for missing tokenCount
+
+

@@ -78,7 +78,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # Add api_version if needed
         if "api-version" not in query_params and api_version:
             query_params["api-version"] = api_version
-
+        
         # Add the path to the base URL
         if "/openai/responses" not in api_base:
             new_url = _add_path_to_api_base(
@@ -86,11 +86,23 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             )
         else:
             new_url = api_base
+        
+        if self._is_azure_v1_api_version(api_version):
+            # ensure the request go to /openai/v1 and not just /openai
+            if "/openai/v1" not in new_url:
+                parsed_url = httpx.URL(new_url)
+                new_url = str(parsed_url.copy_with(path=parsed_url.path.replace("/openai", "/openai/v1")))
+
 
         # Use the new query_params dictionary
         final_url = httpx.URL(new_url).copy_with(params=query_params)
 
         return str(final_url)
+    
+    def _is_azure_v1_api_version(self, api_version: Optional[str]) -> bool:
+        if api_version is None:
+            return False
+        return api_version == "preview" or api_version == "latest"
 
     #########################################################
     ########## DELETE RESPONSE API TRANSFORMATION ##############
@@ -170,3 +182,35 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         data: Dict = {}
         verbose_logger.debug(f"get response url={get_url}")
         return get_url, data
+
+    def transform_list_input_items_request(
+        self,
+        response_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+        after: Optional[str] = None,
+        before: Optional[str] = None,
+        include: Optional[List[str]] = None,
+        limit: int = 20,
+        order: Literal["asc", "desc"] = "desc",
+    ) -> Tuple[str, Dict]:
+        url = (
+            self._construct_url_for_response_id_in_path(
+                api_base=api_base, response_id=response_id
+            )
+            + "/input_items"
+        )
+        params: Dict[str, Any] = {}
+        if after is not None:
+            params["after"] = after
+        if before is not None:
+            params["before"] = before
+        if include:
+            params["include"] = ",".join(include)
+        if limit is not None:
+            params["limit"] = limit
+        if order is not None:
+            params["order"] = order
+        verbose_logger.debug(f"list input items url={url}")
+        return url, params
