@@ -2489,3 +2489,8 @@ class DynamicPromptManagementParamLiteral(str, Enum):
     @classmethod
     def list_all_params(cls):
         return [param.value for param in cls]
+
+class CallbacksByType(TypedDict):
+    success: List[str]
+    failure: List[str]
+    success_and_failure: List[str]
