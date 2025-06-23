@@ -29,13 +29,11 @@ from litellm.integrations.braintrust_logging import BraintrustLogger
 from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
 from litellm.integrations.deepeval import DeepEvalLogger
-from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.galileo import GalileoObserve
 from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from litellm.integrations.gcs_pubsub.pub_sub import GcsPubSubLogger
 from litellm.integrations.humanloop import HumanloopLogger
 from litellm.integrations.lago import LagoLogger
-from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from litellm.integrations.langfuse.langfuse_prompt_management import (
     LangfusePromptManagement,
 )
@@ -90,7 +88,7 @@ class CustomLoggerRegistry:
         "smtp_email": SMTPEmailLogger,
         "deepeval": DeepEvalLogger,
         "s3_v2": S3Logger,
-        "langfuse_otel": OpenTelemetry,
+        "dynamic_rate_limiter": _PROXY_DynamicRateLimitHandler,
     }
 
     @classmethod
