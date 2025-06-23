@@ -59,6 +59,9 @@ from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
+from litellm.litellm_core_utils.llm_request_utils import (
+    get_proxy_server_request_headers,
+)
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
@@ -1241,9 +1244,18 @@ class Logging(LiteLLMLoggingBaseClass):
             bool: True if the callback should be disabled, False otherwise
         """
         try:
+            request_headers = get_proxy_server_request_headers(litellm_params)
             # Extract headers from proxy server request
-            return True
-            
+            disabled_callbacks = request_headers.get("x-litellm-disable-callbacks", None)
+            if disabled_callbacks is not None:
+                disabled_callbacks = set([cb.strip().lower() for cb in disabled_callbacks.split(",")])
+                if isinstance(callback, str):
+                    if callback.lower() in disabled_callbacks:
+                        return True
+                elif isinstance(callback, CustomLogger):
+                    if callback.__class__.__name__.lower() in disabled_callbacks:
+                        return True
+            return False
         except Exception as e:
             verbose_logger.debug(
                 f"Error checking disabled callbacks header: {str(e)}"
