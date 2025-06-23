@@ -36,14 +36,14 @@ The production version will be released on Wednesday.
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:main-v1.73.0.rc
+ghcr.io/berriai/litellm:v1.73.0.rc.1
 ```
 </TabItem>
 
 <TabItem value="pip" label="Pip">
 
 ``` showLineNumbers title="pip install litellm"
-pip install litellm==1.73.0.rc
+pip install litellm==1.73.0rc1
 ```
 
 </TabItem>
@@ -56,8 +56,10 @@ pip install litellm==1.73.0.rc
 * **Why Upgrade**
     - Passthrough Endpoints v2: Enhanced support for subroutes and custom cost tracking for passthrough endpoints.
     - Health Check Dashboard: New frontend UI for monitoring model health and status.
+    - User Management: Set default team for new users - enables giving all users $10 API keys for exploration.
 * **Who Should Read**
     - Teams using **Passthrough Endpoints**
+    - Teams using **User Management** on LiteLLM
     - Teams using **Health Check Dashboard** for models
     - Teams using **Claude Code** with LiteLLM
 * **Risk of Upgrade**
@@ -96,6 +98,24 @@ This release brings support for Proxy Admins to select which specific models to 
 
 This allows Proxy Admins to immediately identify which specific models are in a bad state and view the full error stack trace for faster troubleshooting.
 
+
+### Set Default Team for New Users
+
+<Image img={require('../../img/default_teams_product_ss.jpg')}/>
+
+<br/>
+
+v1.73.0 introduces the ability to assign new users to Default Teams. This makes it much easier to enable experimentation with LLMs within your company, while also **ensuring spend for exploration is tracked correctly.** 
+ 
+What this means for **Proxy Admins**:
+- Set a max budget per team member: This sets a max amount an individual can spend within a team. 
+- Set a default team for new users: When a new user signs in via SSO / invitation link, they will be automatically added to this team. 
+
+What this means for **Developers**: 
+- View models across teams: You can now go to `Models + Endpoints` and view the models you have access to, across all teams you're a member of. 
+- Safe create key modal: If you have no model access outside of a team (default behaviour), you are now nudged to select a team on the Create Key modal. This resolves a common confusion point for new users onboarding to the proxy. 
+
+[Get Started](https://docs.litellm.ai/docs/tutorials/default_team_self_serve)
 
 ---
 
