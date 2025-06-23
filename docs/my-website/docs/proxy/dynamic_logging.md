@@ -22,13 +22,46 @@ You can disable callbacks by passing the `x-litellm-disable-callbacks` header wi
 
 ## Quick Start
 
-```bash
-# Disable a single callback
-curl -H "x-litellm-disable-callbacks: langfuse" ...
+<Tabs>
+<TabItem value="disable-single" label="Disable a single callback">
 
-# Disable multiple callbacks
-curl -H "x-litellm-disable-callbacks: langfuse,datadog" ...
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'x-litellm-disable-callbacks: langfuse' \
+    --data '{
+    "model": "claude-sonnet-4-20250514",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+}'
 ```
+
+</TabItem>
+<TabItem value="disable-multiple" label="Disable multiple callbacks">
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'x-litellm-disable-callbacks: langfuse,datadog' \
+    --data '{
+    "model": "claude-sonnet-4-20250514",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+}'
+```
+
+</TabItem>
+</Tabs>
 
 ## 1. View Active Logging Callbacks
 
