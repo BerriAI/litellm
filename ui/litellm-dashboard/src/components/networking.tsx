@@ -136,7 +136,8 @@ const handleError = async (errorData: string) => {
 };
 
 // Global variable for the header name
-let globalLitellmHeaderName: string = "Authorization";
+let globalLitellmHeaderName: string  = "Authorization";
+const MCP_AUTH_HEADER: string  = "x-mcp-auth";
 
 // Function to set the global header name
 export function setGlobalLitellmHeaderName(
@@ -1611,11 +1612,12 @@ export const modelInfoCall = async (
   try {
     console.log("modelInfoCall:", accessToken, userID, userRole);
     let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/model/info` : `/v2/model/info`;
-
-    if (!all_admin_roles.includes(userRole as string)) {
-      // only show users models they've added
-      url += `?user_models_only=true`;
+    const params = new URLSearchParams();
+    params.append("include_team_models", "true");
+    if (params.toString()) {
+      url += `?${params.toString()}`;
     }
+
     //message.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
@@ -4881,10 +4883,12 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
   }
 };
 
+
 export const callMCPTool = async (
   accessToken: string,
   toolName: string,
-  toolArguments: Record<string, any>
+  toolArguments: Record<string, any>,
+  authValue: string,
 ) => {
   try {
     // Construct base URL
@@ -4903,6 +4907,7 @@ export const callMCPTool = async (
       method: "POST",
       headers: {
         [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        [MCP_AUTH_HEADER]: authValue,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -5740,9 +5745,12 @@ export const uiAuditLogsCall = async (
 export const getRemainingUsers = async (
   accessToken: string
 ): Promise<{
-  total_users: number;
+  total_users: number | null;
   total_users_used: number;
-  total_users_remaining: number;
+  total_users_remaining: number | null;
+  total_teams: number | null;
+  total_teams_used: number;
+  total_teams_remaining: number | null;
 } | null> => {
   try {
     const url = proxyBaseUrl

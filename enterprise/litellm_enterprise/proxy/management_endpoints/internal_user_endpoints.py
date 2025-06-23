@@ -41,6 +41,7 @@ async def available_enterprise_users(
 
     # Count number of rows in LiteLLM_UserTable
     user_count = await prisma_client.db.litellm_usertable.count()
+    team_count = await prisma_client.db.litellm_teamtable.count()
 
     if (
         not premium_user_data
@@ -51,8 +52,16 @@ async def available_enterprise_users(
     else:
         max_users = premium_user_data.get("max_users")
 
+    if premium_user_data and "max_teams" in premium_user_data:
+        max_teams = premium_user_data.get("max_teams")
+    else:
+        max_teams = None
+
     return {
         "total_users": max_users,
+        "total_teams": max_teams,
         "total_users_used": user_count,
+        "total_teams_used": team_count,
+        "total_teams_remaining": (max_teams - team_count if max_teams else None),
         "total_users_remaining": (max_users - user_count if max_users else None),
     }
