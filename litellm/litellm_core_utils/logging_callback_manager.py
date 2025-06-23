@@ -4,7 +4,6 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.additional_logging_utils import AdditionalLoggingUtils
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 from litellm.types.utils import CallbacksByType
 
 
@@ -326,13 +325,16 @@ class LoggingCallbackManager:
         self,
         callback: Union[CustomLogger, Callable, str]
     ) -> str:
-            """Convert a callback to its string representation"""
-            if isinstance(callback, str):
-                return callback
-            elif isinstance(callback, CustomLogger):
-                # Try to get the string representation from the registry
-                callback_str = CustomLoggerRegistry.get_callback_str_from_class_type(type(callback))
-                return callback_str if callback_str is not None else type(callback).__name__
-            elif callable(callback):
-                return getattr(callback, '__name__', str(callback))
-            return str(callback)
+        from litellm.litellm_core_utils.custom_logger_registry import (
+            CustomLoggerRegistry,
+        )
+        """Convert a callback to its string representation"""
+        if isinstance(callback, str):
+            return callback
+        elif isinstance(callback, CustomLogger):
+            # Try to get the string representation from the registry
+            callback_str = CustomLoggerRegistry.get_callback_str_from_class_type(type(callback))
+            return callback_str if callback_str is not None else type(callback).__name__
+        elif callable(callback):
+            return getattr(callback, '__name__', str(callback))
+        return str(callback)
