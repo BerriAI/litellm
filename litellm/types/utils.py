@@ -596,8 +596,8 @@ def add_provider_specific_fields(
 class Message(OpenAIObject):
     content: Optional[str] = None
     role: Literal["assistant", "user", "system", "tool", "function"] = "assistant"
-    tool_calls: Optional[List[ChatCompletionMessageToolCall]] = None
-    function_call: Optional[FunctionCall] = None
+    tool_calls: Optional[List[Any]] = None
+    function_call: Optional[Any] = None
     audio: Optional[ChatCompletionAudioResponse] = Field(default=None, exclude=True)
     reasoning_content: Optional[str] = Field(default=None, exclude=True) 
     thinking_blocks: Optional[
@@ -607,6 +607,7 @@ class Message(OpenAIObject):
         default=None, exclude=True
     )
     annotations: Optional[List[ChatCompletionAnnotation]] = Field(default=None, exclude=True)
+    logprobs: Optional[float] = Field(default=None, exclude=True)
 
     @model_validator(mode='before')
     @classmethod
