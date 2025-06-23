@@ -655,6 +655,16 @@ class Message(OpenAIObject):
         except Exception:
             # if using pydantic v1
             return self.dict()
+        
+    def model_dump(self, **kwargs):
+        # Override to exclude None values for specific fields
+        kwargs.setdefault('exclude_none', True)
+        return super().model_dump(**kwargs)
+    
+    def model_dump_json(self, **kwargs):
+        # Override to exclude None values for specific fields
+        kwargs.setdefault('exclude_none', True)
+        return super().model_dump_json(**kwargs)
 
 
 class Delta(OpenAIObject):
@@ -747,9 +757,9 @@ class Choices(OpenAIObject):
     finish_reason: Optional[str] = "stop"
     index: int = 0
     message: Message = Field(default_factory=Message)
-    logprobs: Optional[Union[ChoiceLogprobs, Any]] = Field(default=None, exclude=True)
-    provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None, exclude=True)
-    enhancements: Optional[Any] = Field(default=None, exclude=True)
+    logprobs: Optional[Union[ChoiceLogprobs, Any]] = Field(default=None)
+    provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
+    enhancements: Optional[Any] = Field(default=None)
 
     @model_validator(mode='before')
     @classmethod
@@ -797,7 +807,16 @@ class Choices(OpenAIObject):
     def __setitem__(self, key, value):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
+    
+    def model_dump(self, **kwargs):
+        # Override to exclude None values for specific fields
+        kwargs.setdefault('exclude_none', True)
+        return super().model_dump(**kwargs)
 
+    def model_dump_json(self, **kwargs):
+        # Override to exclude None values for specific fields
+        kwargs.setdefault('exclude_none', True)
+        return super().model_dump_json(**kwargs)
 
 class CompletionTokensDetailsWrapper(
     CompletionTokensDetails
