@@ -598,16 +598,16 @@ class Message(OpenAIObject):
     role: Literal["assistant", "user", "system", "tool", "function"] = "assistant"
     tool_calls: Optional[List[Any]] = None
     function_call: Optional[Any] = None
-    audio: Optional[ChatCompletionAudioResponse] = Field(default=None, exclude=True)
-    reasoning_content: Optional[str] = Field(default=None, exclude=True) 
+    audio: Optional[ChatCompletionAudioResponse] = Field(default=None)
+    reasoning_content: Optional[str] = Field(default=None) 
     thinking_blocks: Optional[
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
-    ] = Field(default=None, exclude=True)
+    ] = Field(default=None)
     provider_specific_fields: Optional[Dict[str, Any]] = Field(
-        default=None, exclude=True
+        default=None
     )
-    annotations: Optional[List[ChatCompletionAnnotation]] = Field(default=None, exclude=True)
-    logprobs: Optional[float] = Field(default=None, exclude=True)
+    annotations: Optional[List[ChatCompletionAnnotation]] = Field(default=None)
+    logprobs: Optional[float] = Field(default=None)
 
     @model_validator(mode='before')
     @classmethod
