@@ -3,6 +3,8 @@ Unified /v1/messages endpoint - (Anthropic Spec)
 """
 
 import asyncio
+import collections.abc
+import inspect
 import json
 import time
 import traceback
@@ -93,6 +95,19 @@ async def async_data_generator_anthropic(
         )
         error_returned = json.dumps({"error": proxy_exception.to_dict()})
         yield f"{STREAM_SSE_DATA_PREFIX}{error_returned}\n\n"
+
+
+def is_async_generator_or_iterable(obj: Any) -> bool:
+    """
+    Check if an object is an async generator or async iterable
+    
+    Args:
+        obj: Any Python object to check
+    
+    Returns:
+        bool: True if the object is an async generator or async iterable, False otherwise
+    """
+    return inspect.isasyncgen(obj) or isinstance(obj, collections.abc.AsyncIterable)
 
 
 @router.post(
@@ -240,9 +255,17 @@ async def anthropic_response(  # noqa: PLR0915
             )
         )
 
-        if (
-            "stream" in data and data["stream"] is True
-        ):  # use generate_responses to stream responses
+        # Check if response is an async generator/iterable even if stream=False
+        # This handles cases where Claude models return async generators unexpectedly
+        is_streaming_requested = "stream" in data and data["stream"] is True
+        is_response_async_iterable = is_async_generator_or_iterable(response)
+        
+        if is_streaming_requested or is_response_async_iterable:
+            if is_response_async_iterable and not is_streaming_requested:
+                verbose_proxy_logger.warning(
+                    "Response is an async generator but stream=False. Forcing streaming mode to prevent serialization errors."
+                )
+            
             selected_data_generator = async_data_generator_anthropic(
                 response=response,
                 user_api_key_dict=user_api_key_dict,
