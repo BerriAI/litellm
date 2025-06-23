@@ -67,23 +67,31 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 Before disabling callbacks, you can view all currently enabled callbacks on your proxy.
 
-### Request
+#### Request
 
 ```bash
-curl --location 'http://0.0.0.0:4000/callbacks/list' \
-    --header 'Authorization: Bearer sk-1234'
+curl -X 'GET' \
+  'http://localhost:4000/callbacks/list' \
+  -H 'accept: application/json' \
+  -H 'x-litellm-api-key: sk-1234'
 ```
 
-### Response
+#### Response
 
 ```json
 {
-    "callbacks": [
-        "langfuse",
-        "datadog", 
-        "prometheus",
-        "slack_alerting"
-    ]
+  "success": [
+    "deployment_callback_on_success",
+    "sync_deployment_callback_on_success"
+  ],
+  "failure": [
+    "async_deployment_callback_on_failure",
+    "deployment_callback_on_failure"
+  ],
+  "success_and_failure": [
+    "langfuse",
+    "datadog"
+  ]
 }
 ```
 
