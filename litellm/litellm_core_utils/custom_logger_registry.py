@@ -8,19 +8,6 @@ Example:
     "prometheus" -> PrometheusLogger
 """
 
-from litellm_enterprise.enterprise_callbacks.generic_api_callback import (
-    GenericAPILogger,
-)
-from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import (
-    PagerDutyAlerting,
-)
-from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
-    ResendEmailLogger,
-)
-from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
-    SMTPEmailLogger,
-)
-
 from litellm.integrations.agentops import AgentOps
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.argilla import ArgillaLogger
@@ -78,18 +65,38 @@ class CustomLoggerRegistry:
         "mlflow": MlflowLogger,
         "langfuse": LangfusePromptManagement,
         "otel": OpenTelemetry,
-        "pagerduty": PagerDutyAlerting,
         "gcs_pubsub": GcsPubSubLogger,
         "anthropic_cache_control_hook": AnthropicCacheControlHook,
         "agentops": AgentOps,
         "bedrock_vector_store": BedrockVectorStore,
-        "generic_api": GenericAPILogger,
-        "resend_email": ResendEmailLogger,
-        "smtp_email": SMTPEmailLogger,
         "deepeval": DeepEvalLogger,
         "s3_v2": S3Logger,
         "dynamic_rate_limiter": _PROXY_DynamicRateLimitHandler,
     }
+
+    try:
+        from litellm_enterprise.enterprise_callbacks.generic_api_callback import (
+            GenericAPILogger,
+        )
+        from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import (
+            PagerDutyAlerting,
+        )
+        from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
+            ResendEmailLogger,
+        )
+        from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
+            SMTPEmailLogger,
+        )
+
+        enterprise_loggers = {
+            "pagerduty": PagerDutyAlerting,
+            "generic_api": GenericAPILogger,
+            "resend_email": ResendEmailLogger,
+            "smtp_email": SMTPEmailLogger,
+        }
+        CALLBACK_CLASS_STR_TO_CLASS_TYPE.update(enterprise_loggers)
+    except ImportError:
+        pass  # enterprise not installed
 
     @classmethod
     def get_callback_str_from_class_type(cls, class_type: type) -> str | None:
