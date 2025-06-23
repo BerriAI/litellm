@@ -1163,12 +1163,14 @@ def default_image_cost_calculator(
         models_to_check.extend([azure_model_with_quality, azure_base_model_name])
 
         for _model in [azure_model_with_quality, azure_base_model_name]:
-            if _model in litellm.model_cost:
+            if _model is not None and _model in litellm.model_cost:
+                assert _model is not None  # mypy narrowing
                 cost_info = litellm.model_cost[_model]
                 break
 
     for _model in models_to_check:
         if _model is not None and _model in litellm.model_cost:
+            assert _model is not None  # mypy narrowing
             cost_info = litellm.model_cost[_model]
             break
 
