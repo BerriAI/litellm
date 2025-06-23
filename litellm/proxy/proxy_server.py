@@ -845,17 +845,17 @@ swagger_path = os.path.join(current_dir, "swagger")
 router.mount("/swagger", StaticFiles(directory=swagger_path), name="swagger")
 
 
-# def swagger_monkey_patch(*args, **kwargs):
-#     return get_swagger_ui_html(
-#         *args,
-#         **kwargs,
-#         swagger_js_url="/swagger/swagger-ui-bundle.js",
-#         swagger_css_url="/swagger/custom.css",
-#         swagger_favicon_url="/swagger/favicon.png",
-#     )
+def swagger_monkey_patch(*args, **kwargs):
+    return get_swagger_ui_html(
+        *args,
+        **kwargs,
+        swagger_js_url="/swagger/swagger-ui-bundle.js",
+        swagger_css_url="/swagger/custom.css",
+        swagger_favicon_url="/swagger/favicon.png",
+    )
 
 
-# applications.get_swagger_ui_html = swagger_monkey_patch
+applications.get_swagger_ui_html = swagger_monkey_patch
 
 from typing import Dict
 
