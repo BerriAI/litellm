@@ -177,7 +177,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     search_context_cost_per_query: Optional[
         SearchContextCostPerQuery
     ]  # Cost for using web search tool
-
+    citation_cost_per_token: Optional[float]  # Cost per citation token for Perplexity
     litellm_provider: Required[str]
     mode: Required[
         Literal[

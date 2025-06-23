@@ -45,6 +45,9 @@ from litellm.llms.openai.cost_calculation import (
     cost_per_second as openai_cost_per_second,
 )
 from litellm.llms.openai.cost_calculation import cost_per_token as openai_cost_per_token
+from litellm.llms.perplexity.cost_calculator import (
+    cost_per_token as perplexity_cost_per_token,
+)
 from litellm.llms.together_ai.cost_calculator import get_model_params_and_category
 from litellm.llms.vertex_ai.cost_calculator import (
     cost_per_character as google_cost_per_character,
@@ -329,6 +332,8 @@ def cost_per_token(  # noqa: PLR0915
         return gemini_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "deepseek":
         return deepseek_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "perplexity":
+        return perplexity_cost_per_token(model=model, usage=usage_block)
     else:
         model_info = _cached_get_model_info_helper(
             model=model, custom_llm_provider=custom_llm_provider

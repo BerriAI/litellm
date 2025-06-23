@@ -4650,6 +4650,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 output_cost_per_second=_model_info.get("output_cost_per_second", None),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
                 output_vector_size=_model_info.get("output_vector_size", None),
+                citation_cost_per_token=_model_info.get("citation_cost_per_token", None),
                 litellm_provider=_model_info.get(
                     "litellm_provider", custom_llm_provider
                 ),
