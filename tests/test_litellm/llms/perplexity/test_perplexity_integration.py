@@ -158,7 +158,7 @@ class TestPerplexityIntegration:
         # Verify custom fields are included
         required_fields = [
             "citation_cost_per_token",
-            "search_queries_cost_per_query",
+            "search_context_cost_per_query",
             "input_cost_per_token",
             "output_cost_per_token",
             "output_cost_per_reasoning_token"
