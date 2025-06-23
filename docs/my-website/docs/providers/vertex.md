@@ -11,7 +11,7 @@ import TabItem from '@theme/TabItem';
 | Description | Vertex AI is a fully-managed AI development platform for building and using generative AI. |
 | Provider Route on LiteLLM | `vertex_ai/` |
 | Link to Provider Doc | [Vertex AI ↗](https://cloud.google.com/vertex-ai) |
-| Base URL | 1. Regional endpoints<br/>[https://{vertex_location}-aiplatform.googleapis.com/](https://{vertex_location}-aiplatform.googleapis.com/)<br/>2. Global endpoints (limited availability)<br/>[https://aiplatform.googleapis.com/](https://{aiplatform.googleapis.com/)|
+| Base URL | 1. Regional endpoints<br/>`https://{vertex_location}-aiplatform.googleapis.com/`<br/>2. Global endpoints (limited availability)<br/>`https://aiplatform.googleapis.com/`|
 | Supported Operations | [`/chat/completions`](#sample-usage), `/completions`, [`/embeddings`](#embedding-models), [`/audio/speech`](#text-to-speech-apis), [`/fine_tuning`](#fine-tuning-apis), [`/batches`](#batch-apis), [`/files`](#batch-apis), [`/images`](#image-generation-models) |
 
 
@@ -2800,45 +2800,6 @@ print(response)
 
 </TabItem>
 </Tabs>
-
-
-## **Image Generation Models**
-
-Usage 
-
-```python
-response = await litellm.aimage_generation(
-    prompt="An olympic size swimming pool",
-    model="vertex_ai/imagegeneration@006",
-    vertex_ai_project="adroit-crow-413218",
-    vertex_ai_location="us-central1",
-)
-```
-
-**Generating multiple images**
-
-Use the `n` parameter to pass how many images you want generated
-```python
-response = await litellm.aimage_generation(
-    prompt="An olympic size swimming pool",
-    model="vertex_ai/imagegeneration@006",
-    vertex_ai_project="adroit-crow-413218",
-    vertex_ai_location="us-central1",
-    n=1,
-)
-```
-
-### Supported Image Generation Models
-
-| Model Name                   | FUsage                                            |
-|------------------------------|--------------------------------------------------------------|
-| `imagen-3.0-generate-001`      | `litellm.image_generation('vertex_ai/imagen-3.0-generate-001', prompt)` |
-| `imagen-3.0-fast-generate-001` | `litellm.image_generation('vertex_ai/imagen-3.0-fast-generate-001', prompt)` |
-| `imagegeneration@006`          | `litellm.image_generation('vertex_ai/imagegeneration@006', prompt)`  |
-| `imagegeneration@005`          | `litellm.image_generation('vertex_ai/imagegeneration@005', prompt)`  |
-| `imagegeneration@002`          | `litellm.image_generation('vertex_ai/imagegeneration@002', prompt)`  |
-
-
 
 
 ## **Gemini TTS (Text-to-Speech) Audio Output**

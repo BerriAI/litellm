@@ -218,6 +218,7 @@ def test_map_tool_choice():
     assert result["type"] == "none"
     print(result)
 
+
 def test_transform_response_with_prefix_prompt():
     import httpx
 
@@ -262,3 +263,8 @@ def test_transform_response_with_prefix_prompt():
         == "You are a helpful assistant. The grass is green."
     )
 
+
+def test_get_supported_params_thinking():
+    config = AnthropicConfig()
+    params = config.get_supported_openai_params(model="claude-sonnet-4-20250514")
+    assert "thinking" in params

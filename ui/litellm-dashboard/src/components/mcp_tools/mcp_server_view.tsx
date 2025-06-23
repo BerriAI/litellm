@@ -96,6 +96,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
             <MCPToolsViewer
               serverId={mcpServer.server_id}
               accessToken={accessToken}
+              auth_type={mcpServer.auth_type}
               userRole={userRole}
               userID={userID}
             />

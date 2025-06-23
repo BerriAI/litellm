@@ -16,9 +16,9 @@ class MCPServer(BaseModel):
     server_id: str
     name: str
     url: str
-    # TODO: alter the types to be the Literal explicit
     transport: MCPTransportType
     spec_version: MCPSpecVersionType
     auth_type: Optional[MCPAuthType] = None
+    authentication_token: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
     model_config = ConfigDict(arbitrary_types_allowed=True)

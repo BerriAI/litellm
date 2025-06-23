@@ -153,9 +153,9 @@ class TestOpenAIResponsesAPIConfig:
         # Test with provided API key
         headers = {}
         api_key = "test_api_key"
-
+        litellm_params = GenericLiteLLMParams(api_key=api_key)
         result = self.config.validate_environment(
-            headers=headers, model=self.model, api_key=api_key
+            headers=headers, model=self.model, litellm_params=litellm_params
         )
 
         assert "Authorization" in result
@@ -165,7 +165,10 @@ class TestOpenAIResponsesAPIConfig:
         headers = {}
 
         with patch("litellm.api_key", "litellm_api_key"):
-            result = self.config.validate_environment(headers=headers, model=self.model)
+            litellm_params = GenericLiteLLMParams()
+            result = self.config.validate_environment(
+                headers=headers, model=self.model, litellm_params=litellm_params
+            )
 
             assert "Authorization" in result
             assert result["Authorization"] == "Bearer litellm_api_key"
@@ -175,8 +178,9 @@ class TestOpenAIResponsesAPIConfig:
 
         with patch("litellm.openai_key", "openai_key"):
             with patch("litellm.api_key", None):
+                litellm_params = GenericLiteLLMParams()
                 result = self.config.validate_environment(
-                    headers=headers, model=self.model
+                    headers=headers, model=self.model, litellm_params=litellm_params
                 )
 
                 assert "Authorization" in result
@@ -193,8 +197,9 @@ class TestOpenAIResponsesAPIConfig:
                     "litellm.llms.openai.responses.transformation.get_secret_str",
                     return_value="env_api_key",
                 ):
+                    litellm_params = GenericLiteLLMParams()
                     result = self.config.validate_environment(
-                        headers=headers, model=self.model
+                        headers=headers, model=self.model, litellm_params=litellm_params
                     )
 
                     assert "Authorization" in result
@@ -275,6 +280,38 @@ class TestOpenAIResponsesAPIConfig:
         )
         assert isinstance(result, GenericEvent)
         assert result.type == "test"
+
+
+class TestAzureResponsesAPIConfig:
+    def setup_method(self):
+        self.config = AzureOpenAIResponsesAPIConfig()
+        self.model = "gpt-4o"
+        self.logging_obj = MagicMock()
+
+    def test_azure_get_complete_url_with_version_types(self):
+        """Test Azure get_complete_url with different API version types"""
+        base_url = "https://litellm8397336933.openai.azure.com"
+        
+        # Test with preview version - should use openai/v1/responses
+        result_preview = self.config.get_complete_url(
+            api_base=base_url,
+            litellm_params={"api_version": "preview"},
+        )
+        assert result_preview == "https://litellm8397336933.openai.azure.com/openai/v1/responses?api-version=preview"
+        
+        # Test with latest version - should use openai/v1/responses  
+        result_latest = self.config.get_complete_url(
+            api_base=base_url,
+            litellm_params={"api_version": "latest"},
+        )
+        assert result_latest == "https://litellm8397336933.openai.azure.com/openai/v1/responses?api-version=latest"
+        
+        # Test with date-based version - should use openai/responses
+        result_date = self.config.get_complete_url(
+            api_base=base_url,
+            litellm_params={"api_version": "2025-01-01"},
+        )
+        assert result_date == "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2025-01-01"
 
 
 class TestTransformListInputItemsRequest:

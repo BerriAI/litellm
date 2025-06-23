@@ -1,5 +1,5 @@
 ---
-title: "[PRE-RELEASE] v1.72.6-stable"
+title: "v1.72.6-stable - MCP Gateway Permission Management"
 slug: "v1-72-6-stable"
 date: 2025-06-14T10:00:00
 authors:
@@ -19,14 +19,6 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-
-:::info
-
-This is a pre-release version. 
-
-The production version will be released on Wednesday.
-
-:::
 ## Deploy this version
 
 <Tabs>
@@ -36,15 +28,15 @@ The production version will be released on Wednesday.
 docker run
 -e STORE_MODEL_IN_DB=True
 -p 4000:4000
-ghcr.io/berriai/litellm:main-v1.72.6.rc
+ghcr.io/berriai/litellm:main-v1.72.6-stable
 ```
 </TabItem>
 
 <TabItem value="pip" label="Pip">
 
-:::info
-This version is not out yet. 
-:::
+``` showLineNumbers title="pip install litellm"
+pip install litellm==1.72.6.post2
+```
 
 </TabItem>
 </Tabs>

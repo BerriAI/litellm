@@ -267,3 +267,194 @@ def test_embedding_input_array_of_tokens(mock_aembedding, client_no_auth):
         assert len(result["data"][0]["embedding"]) > 10  # this usually has len==1536 so
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
+
+
+@pytest.mark.asyncio
+async def test_get_all_team_models():
+    """
+    Test get_all_team_models function with both "*" and specific team IDs
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.proxy_server import get_all_team_models
+
+    # Mock team data
+    mock_team1 = MagicMock()
+    mock_team1.model_dump.return_value = {
+        "team_id": "team1",
+        "models": ["gpt-4", "gpt-3.5-turbo"],
+        "team_alias": "Team 1",
+    }
+
+    mock_team2 = MagicMock()
+    mock_team2.model_dump.return_value = {
+        "team_id": "team2",
+        "models": ["claude-3", "gpt-4"],
+        "team_alias": "Team 2",
+    }
+
+    # Mock model data returned by router
+    mock_models_gpt4 = [
+        {"model_info": {"id": "gpt-4-model-1"}},
+        {"model_info": {"id": "gpt-4-model-2"}},
+    ]
+    mock_models_gpt35 = [
+        {"model_info": {"id": "gpt-3.5-turbo-model-1"}},
+    ]
+    mock_models_claude = [
+        {"model_info": {"id": "claude-3-model-1"}},
+    ]
+
+    # Mock prisma client
+    mock_prisma_client = MagicMock()
+    mock_db = MagicMock()
+    mock_litellm_teamtable = MagicMock()
+
+    mock_prisma_client.db = mock_db
+    mock_db.litellm_teamtable = mock_litellm_teamtable
+
+    # Make find_many async
+    mock_litellm_teamtable.find_many = AsyncMock()
+
+    # Mock router
+    mock_router = MagicMock()
+
+    def mock_get_model_list(model_name):
+        if model_name == "gpt-4":
+            return mock_models_gpt4
+        elif model_name == "gpt-3.5-turbo":
+            return mock_models_gpt35
+        elif model_name == "claude-3":
+            return mock_models_claude
+        return None
+
+    mock_router.get_model_list.side_effect = mock_get_model_list
+
+    # Test Case 1: user_teams = "*" (all teams)
+    mock_litellm_teamtable.find_many.return_value = [mock_team1, mock_team2]
+
+    with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_team_table_class:
+        # Configure the mock class to return proper instances
+        def mock_team_table_constructor(**kwargs):
+            mock_instance = MagicMock()
+            mock_instance.team_id = kwargs["team_id"]
+            mock_instance.models = kwargs["models"]
+            return mock_instance
+
+        mock_team_table_class.side_effect = mock_team_table_constructor
+
+        result = await get_all_team_models(
+            user_teams="*",
+            prisma_client=mock_prisma_client,
+            llm_router=mock_router,
+        )
+
+        # Verify find_many was called without where clause for "*"
+        mock_litellm_teamtable.find_many.assert_called_with()
+
+        # Verify router.get_model_list was called for each model
+        expected_calls = [
+            mock.call(model_name="gpt-4"),
+            mock.call(model_name="gpt-3.5-turbo"),
+            mock.call(model_name="claude-3"),
+            mock.call(model_name="gpt-4"),  # Called again for team2
+        ]
+        mock_router.get_model_list.assert_has_calls(expected_calls, any_order=True)
+
+    # Test Case 2: user_teams = specific list
+    mock_litellm_teamtable.reset_mock()
+    mock_router.reset_mock()
+    mock_router.get_model_list.side_effect = mock_get_model_list
+
+    # Only return team1 for specific team query
+    mock_litellm_teamtable.find_many.return_value = [mock_team1]
+
+    with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_team_table_class:
+        mock_team_table_class.side_effect = mock_team_table_constructor
+
+        result = await get_all_team_models(
+            user_teams=["team1"],
+            prisma_client=mock_prisma_client,
+            llm_router=mock_router,
+        )
+
+        # Verify find_many was called with where clause for specific teams
+        mock_litellm_teamtable.find_many.assert_called_with(
+            where={"team_id": {"in": ["team1"]}}
+        )
+
+        # Verify router.get_model_list was called only for team1 models
+        expected_calls = [
+            mock.call(model_name="gpt-4"),
+            mock.call(model_name="gpt-3.5-turbo"),
+        ]
+        mock_router.get_model_list.assert_has_calls(expected_calls, any_order=True)
+
+    # Test Case 3: Empty teams list
+    mock_litellm_teamtable.reset_mock()
+    mock_router.reset_mock()
+    mock_litellm_teamtable.find_many.return_value = []
+
+    result = await get_all_team_models(
+        user_teams=[],
+        prisma_client=mock_prisma_client,
+        llm_router=mock_router,
+    )
+
+    # Verify find_many was called with empty list
+    mock_litellm_teamtable.find_many.assert_called_with(where={"team_id": {"in": []}})
+
+    # Should return empty list when no teams
+    assert result == {}
+
+    # Test Case 4: Router returns None for some models
+    mock_litellm_teamtable.reset_mock()
+    mock_router.reset_mock()
+    mock_litellm_teamtable.find_many.return_value = [mock_team1]
+
+    def mock_get_model_list_with_none(model_name):
+        if model_name == "gpt-4":
+            return mock_models_gpt4
+        # Return None for gpt-3.5-turbo to test None handling
+        return None
+
+    mock_router.get_model_list.side_effect = mock_get_model_list_with_none
+
+    with patch("litellm.proxy.proxy_server.LiteLLM_TeamTable") as mock_team_table_class:
+        mock_team_table_class.side_effect = mock_team_table_constructor
+
+        result = await get_all_team_models(
+            user_teams=["team1"],
+            prisma_client=mock_prisma_client,
+            llm_router=mock_router,
+        )
+
+        # Should handle None return gracefully
+        assert isinstance(result, dict)
+        print("result: ", result)
+        assert result == {"gpt-4-model-1": ["team1"], "gpt-4-model-2": ["team1"]}
+
+
+def test_add_team_models_to_all_models():
+    """
+    Test add_team_models_to_all_models function
+    """
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.proxy_server import _add_team_models_to_all_models
+
+    team_db_objects_typed = MagicMock(spec=LiteLLM_TeamTable)
+    team_db_objects_typed.team_id = "team1"
+    team_db_objects_typed.models = ["all-proxy-models"]
+
+    llm_router = MagicMock()
+    llm_router.get_model_list.return_value = [
+        {"model_info": {"id": "gpt-4-model-1", "team_id": "team2"}},
+        {"model_info": {"id": "gpt-4-model-2"}},
+    ]
+
+    result = _add_team_models_to_all_models(
+        team_db_objects_typed=[team_db_objects_typed],
+        llm_router=llm_router,
+    )
+    assert result == {"gpt-4-model-2": {"team1"}}
