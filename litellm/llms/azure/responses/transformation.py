@@ -4,6 +4,7 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.llms.azure.common_utils import get_azure_ad_token
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import *
@@ -21,24 +22,27 @@ else:
 
 class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def validate_environment(
-        self,
-        headers: dict,
-        model: str,
-        api_key: Optional[str] = None,
+        self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
     ) -> dict:
+        litellm_params = litellm_params or GenericLiteLLMParams()
         api_key = (
-            api_key
+            litellm_params.api_key
             or litellm.api_key
             or litellm.azure_key
             or get_secret_str("AZURE_OPENAI_API_KEY")
             or get_secret_str("AZURE_API_KEY")
         )
 
-        headers.update(
-            {
-                "Authorization": f"Bearer {api_key}",
-            }
-        )
+        if api_key:
+            headers["api-key"] = api_key
+            return headers
+
+        ### Fallback to Azure AD token-based authentication if no API key is available
+        ### Retrieves Azure AD token and adds it to the Authorization header
+        azure_ad_token = get_azure_ad_token(litellm_params)
+        if azure_ad_token:
+            headers["Authorization"] = f"Bearer {azure_ad_token}"
+
         return headers
 
     def get_complete_url(
