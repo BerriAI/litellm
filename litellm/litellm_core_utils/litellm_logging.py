@@ -147,6 +147,9 @@ from .initialize_dynamic_callback_params import (
 from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 
 try:
+    from litellm_enterprise.enterprise_callbacks.callback_controls import (
+        EnterpriseCallbackControls,
+    )
     from litellm_enterprise.enterprise_callbacks.generic_api_callback import (
         GenericAPILogger,
     )
@@ -174,6 +177,7 @@ except Exception as e:
     ResendEmailLogger = CustomLogger  # type: ignore
     SMTPEmailLogger = CustomLogger  # type: ignore
     PagerDutyAlerting = CustomLogger  # type: ignore
+    EnterpriseCallbackControls = None  # type: ignore
     EnterpriseStandardLoggingPayloadSetupVAR = None
 _in_memory_loggers: List[Any] = []
 
@@ -1217,6 +1221,14 @@ class Logging(LiteLLMLoggingBaseClass):
                     f"no-log request, skipping logging for {event_hook} event"
                 )
                 return False
+
+        # Check for dynamically disabled callbacks via headers
+        if EnterpriseCallbackControls is not None and EnterpriseCallbackControls.is_callback_disabled_via_headers(callback, litellm_params):
+            verbose_logger.debug(
+                f"Callback {callback} disabled via x-litellm-disable-callbacks header for {event_hook} event"
+            )
+            return False
+
         return True
 
     def _update_completion_start_time(self, completion_start_time: datetime.datetime):
@@ -2246,6 +2258,14 @@ class Logging(LiteLLMLoggingBaseClass):
             self.has_run_logging(event_type="sync_failure")
             for callback in callbacks:
                 try:
+                    litellm_params = self.model_call_details.get("litellm_params", {})
+                    should_run = self.should_run_callback(
+                        callback=callback,
+                        litellm_params=litellm_params,
+                        event_hook="failure_handler",
+                    )
+                    if not should_run:
+                        continue
                     if callback == "lunary" and lunaryLogger is not None:
                         print_verbose("reaches lunary for logging error!")
 
@@ -2427,6 +2447,14 @@ class Logging(LiteLLMLoggingBaseClass):
         self.has_run_logging(event_type="async_failure")
         for callback in callbacks:
             try:
+                litellm_params = self.model_call_details.get("litellm_params", {})
+                should_run = self.should_run_callback(
+                    callback=callback,
+                    litellm_params=litellm_params,
+                    event_hook="async_failure_handler",
+                )
+                if not should_run:
+                    continue
                 if isinstance(callback, CustomLogger):  # custom logger class
                     await callback.async_log_failure_event(
                         kwargs=self.model_call_details,
