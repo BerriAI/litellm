@@ -1079,6 +1079,18 @@ class Logging(LiteLLMLoggingBaseClass):
         used for consistent cost calculation across response headers + logging integrations.
         """
 
+        if isinstance(result, BaseModel) and hasattr(result, "_hidden_params"):
+            hidden_params = getattr(result, "_hidden_params", {})
+            if (
+                "response_cost" in hidden_params
+                and hidden_params["response_cost"] is not None
+            ):  # use cost if already calculated
+                return hidden_params["response_cost"]
+            elif (
+                router_model_id is None and "model_id" in hidden_params
+            ):  # use model_id if not already set
+                router_model_id = hidden_params["model_id"]
+
         ## RESPONSE COST ##
         custom_pricing = use_custom_pricing_for_model(
             litellm_params=(
