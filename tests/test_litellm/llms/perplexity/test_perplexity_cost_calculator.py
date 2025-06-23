@@ -47,7 +47,11 @@ class TestPerplexityCostCalculator:
                     "output_cost_per_token": 8e-06,
                     "output_cost_per_reasoning_token": 3e-06,
                     "citation_cost_per_token": 2e-06,
-                    "search_queries_cost_per_1000": 0.005,
+                    "search_queries_cost_per_query": {
+                        "search_queries_size_low": 0.005,
+                        "search_queries_size_medium": 0.005,
+                        "search_queries_size_high": 0.005
+                    },
                     "litellm_provider": "perplexity",
                     "mode": "chat",
                     "supports_reasoning": True,
@@ -253,7 +257,7 @@ class TestPerplexityCostCalculator:
             mock_get_model_info.return_value = {
                 "input_cost_per_token": 2e-6,
                 "output_cost_per_token": 8e-6,
-                # Missing citation_cost_per_token and search_queries_cost_per_1000
+                # Missing search_queries_cost_per_query
             }
             
             prompt_cost, completion_cost = perplexity_cost_per_token(
@@ -330,9 +334,12 @@ class TestPerplexityCostCalculator:
         
         # Check that the new fields are accessible
         assert "citation_cost_per_token" in model_info
-        assert "search_queries_cost_per_1000" in model_info
         assert model_info["citation_cost_per_token"] == 2e-6
-        assert model_info["search_queries_cost_per_1000"] == 0.005
+        assert model_info["search_queries_cost_per_query"] == {
+            "search_queries_size_low": 0.005,
+            "search_queries_size_medium": 0.005,
+            "search_queries_size_high": 0.005
+        }
 
     @pytest.mark.parametrize("citation_tokens", [0, 10, 25, 100])
     @pytest.mark.parametrize("search_queries", [0, 1, 5, 10])

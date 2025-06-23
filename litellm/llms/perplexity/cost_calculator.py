@@ -48,8 +48,8 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
     if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details:
         num_search_queries = getattr(usage.prompt_tokens_details, "web_search_requests", 0) or 0
     
-    if num_search_queries > 0 and model_info.get("search_queries_cost_per_1000"):
-        search_cost = (num_search_queries / 1000) * (model_info.get("search_queries_cost_per_1000") or 0)
+    if num_search_queries > 0 and model_info.get("search_queries_cost_per_query"):
+        search_cost = num_search_queries * (model_info.get("search_queries_cost_per_query") or 0)
         # Add search cost to completion cost (similar to how other providers handle it)
         completion_cost += search_cost
 
