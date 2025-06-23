@@ -1113,7 +1113,7 @@ def default_image_cost_calculator(
     # Build model names for cost lookup
     base_model_name = f"{size_str}/{model}"
     model_name_without_custom_llm_provider: Optional[str] = None
-    if custom_llm_provider and model.startswith(f"{custom_llm_provider}/"):
+    if custom_llm_provider is not None and model.startswith(f"{custom_llm_provider}/"):
         model_name_without_custom_llm_provider = model.replace(
             f"{custom_llm_provider}/", ""
         )
