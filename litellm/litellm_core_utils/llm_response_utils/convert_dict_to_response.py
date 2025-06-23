@@ -55,28 +55,17 @@ def _safe_convert_created_field(created_value) -> int:
     """
     if created_value is None:
         return int(time.time())
-    
-    if isinstance(created_value, int):
+    elif isinstance(created_value, int):
         return created_value
-    
-    if isinstance(created_value, float):
-        # Convert float timestamp to int (truncate fractional seconds)
+    elif isinstance(created_value, float):
         return int(created_value)
-    
-    if isinstance(created_value, str):
+    else:
+        # for strings, etc
         try:
-            # Try to parse as float first, then convert to int
             return int(float(created_value))
         except (ValueError, TypeError):
             # Fallback to current time if conversion fails
             return int(time.time())
-    
-    # For any other type, try to convert directly
-    try:
-        return int(created_value)
-    except (ValueError, TypeError):
-        # Fallback to current time if conversion fails
-        return int(time.time())
 
 
 def convert_tool_call_to_json_mode(
