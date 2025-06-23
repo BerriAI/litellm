@@ -744,56 +744,43 @@ class Delta(OpenAIObject):
 
 
 class Choices(OpenAIObject):
-    finish_reason: str
-    index: int
-    message: Message
-    logprobs: Optional[Union[ChoiceLogprobs, Any]] = None
+    finish_reason: Optional[str] = "stop"
+    index: int = 0
+    message: Message = Field(default_factory=Message)
+    logprobs: Optional[Union[ChoiceLogprobs, Any]] = Field(default=None, exclude=True)
+    provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None, exclude=True)
+    enhancements: Optional[Any] = Field(default=None, exclude=True)
 
-    provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
-
-    def __init__(
-        self,
-        finish_reason=None,
-        index=0,
-        message: Optional[Union[Message, dict]] = None,
-        logprobs: Optional[Union[ChoiceLogprobs, dict, Any]] = None,
-        enhancements=None,
-        provider_specific_fields: Optional[Dict[str, Any]] = None,
-        **params,
-    ):
-        if finish_reason is not None:
-            params["finish_reason"] = map_finish_reason(finish_reason)
-        else:
-            params["finish_reason"] = "stop"
-        if index is not None:
-            params["index"] = index
-        else:
-            params["index"] = 0
-        if message is None:
-            params["message"] = Message()
-        else:
-            if isinstance(message, Message):
-                params["message"] = message
+    @model_validator(mode='before')
+    @classmethod
+    def _process_choice_data(cls, values):
+        """Process choice data and handle conversions"""
+        if isinstance(values, dict):
+            # Handle finish_reason mapping - can be None for some providers
+            finish_reason = values.get('finish_reason')
+            if finish_reason is not None:
+                values['finish_reason'] = map_finish_reason(finish_reason)
+            # If finish_reason is None, keep it as None (don't force to "stop")
+            
+            # Handle index
+            if values.get('index') is None:
+                values['index'] = 0
+            
+            # Handle message conversion
+            message = values.get('message')
+            if message is None:
+                values['message'] = Message()
             elif isinstance(message, dict):
-                params["message"] = Message(**message)
-        if logprobs is not None:
-            if isinstance(logprobs, dict):
-                params["logprobs"] = ChoiceLogprobs(**logprobs)
-            else:
-                params["logprobs"] = logprobs
-        else:
-            params["logprobs"] = None
-        super(Choices, self).__init__(**params)
-
-        if enhancements is not None:
-            self.enhancements = enhancements
-
-        self.provider_specific_fields = provider_specific_fields
-
-        if self.logprobs is None:
-            del self.logprobs
-        if self.provider_specific_fields is None:
-            del self.provider_specific_fields
+                values['message'] = Message(**message)
+            elif not isinstance(message, Message):
+                values['message'] = Message()
+            
+            # Handle logprobs conversion
+            logprobs = values.get('logprobs')
+            if logprobs is not None and isinstance(logprobs, dict):
+                values['logprobs'] = ChoiceLogprobs(**logprobs)
+                
+        return values
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -977,38 +964,42 @@ class Usage(CompletionUsage):
 
 
 class StreamingChoices(OpenAIObject):
-    def __init__(
-        self,
-        finish_reason=None,
-        index=0,
-        delta: Optional[Delta] = None,
-        logprobs=None,
-        enhancements=None,
-        **params,
-    ):
-        # Fix Perplexity return both delta and message cause OpenWebUI repect text
-        # https://github.com/BerriAI/litellm/issues/8455
-        params.pop("message", None)
-        super(StreamingChoices, self).__init__(**params)
-        if finish_reason:
-            self.finish_reason = map_finish_reason(finish_reason)
-        else:
-            self.finish_reason = None
-        self.index = index
-        if delta is not None:
-            if isinstance(delta, Delta):
-                self.delta = delta
-            elif isinstance(delta, dict):
-                self.delta = Delta(**delta)
-        else:
-            self.delta = Delta()
-        if enhancements is not None:
-            self.enhancements = enhancements
+    finish_reason: Optional[str] = None
+    index: int = 0
+    delta: Delta = Field(default_factory=Delta)
+    logprobs: Optional[Union[ChoiceLogprobs, Any]] = None
+    enhancements: Optional[Any] = None
 
-        if logprobs is not None and isinstance(logprobs, dict):
-            self.logprobs = ChoiceLogprobs(**logprobs)
-        else:
-            self.logprobs = logprobs  # type: ignore
+    @model_validator(mode='before')
+    @classmethod
+    def _process_streaming_choice_data(cls, values):
+        """Process streaming choice data and handle conversions"""
+        if isinstance(values, dict):
+            # Fix Perplexity return both delta and message cause OpenWebUI respect text
+            # https://github.com/BerriAI/litellm/issues/8455
+            values.pop("message", None)
+            
+            # Handle finish_reason mapping
+            finish_reason = values.get('finish_reason')
+            if finish_reason:
+                values['finish_reason'] = map_finish_reason(finish_reason)
+            
+            # Handle delta conversion
+            delta = values.get('delta')
+            if delta is not None:
+                if isinstance(delta, dict):
+                    values['delta'] = Delta(**delta)
+                elif not isinstance(delta, Delta):
+                    values['delta'] = Delta()
+            else:
+                values['delta'] = Delta()
+            
+            # Handle logprobs conversion
+            logprobs = values.get('logprobs')
+            if logprobs is not None and isinstance(logprobs, dict):
+                values['logprobs'] = ChoiceLogprobs(**logprobs)
+                
+        return values
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -1028,14 +1019,28 @@ class StreamingChoices(OpenAIObject):
 
 
 class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
-    def __init__(self, **kwargs):
-        new_choices = []
-        for choice in kwargs["choices"]:
-            new_choice = StreamingChoices(**choice).model_dump()
-            new_choices.append(new_choice)
-        kwargs["choices"] = new_choices
-
-        super().__init__(**kwargs)
+    @model_validator(mode='before')
+    @classmethod
+    def _process_streaming_chunk_data(cls, values):
+        """Process streaming chunk data and convert choices to StreamingChoices"""
+        if isinstance(values, dict):
+            # Handle choices conversion
+            choices = values.get('choices', [])
+            if choices:
+                new_choices = []
+                for choice in choices:
+                    if isinstance(choice, dict):
+                        # Convert to StreamingChoices and then back to dict for OpenAI compatibility
+                        streaming_choice = StreamingChoices(**choice)
+                        new_choices.append(streaming_choice.model_dump())
+                    elif isinstance(choice, StreamingChoices):
+                        new_choices.append(choice.model_dump())
+                    else:
+                        # Keep as-is if it's already in the right format
+                        new_choices.append(choice)
+                values['choices'] = new_choices
+                
+        return values
 
 
 from openai.types.chat import ChatCompletionChunk
