@@ -95,6 +95,14 @@ curl -X 'GET' \
 }
 ```
 
+#### Response Fields
+
+The response contains three arrays that categorize your active callbacks:
+- **`success`** - Callbacks that only execute when requests complete successfully. These callbacks receive data from successful LLM responses.
+- **`failure`** - Callbacks that only execute when requests fail or encounter errors. These callbacks receive error information and failed request data.
+- **`success_and_failure`** - Callbacks that execute for both successful and failed requests. These are typically logging/observability tools that need to capture all request data regardless of outcome.
+
+
 ## 2. Disable a Single Callback
 
 Use the `x-litellm-disable-callbacks` header to disable specific callbacks for individual requests.
