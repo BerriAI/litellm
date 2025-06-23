@@ -1242,27 +1242,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         try:
             # Extract headers from proxy server request
-            proxy_server_request = litellm_params.get("proxy_server_request", {})
-            headers = proxy_server_request.get("headers", {})
-            
-            # Check for the disable callbacks header (case-insensitive)
-            disable_header = None
-            for header_name, header_value in headers.items():
-                if header_name.lower() == "x-litellm-disable-callbacks":
-                    disable_header = header_value
-                    break
-            
-            if not disable_header:
-                return False
-            
-            # Parse comma-separated list of disabled callbacks
-            disabled_callbacks = [cb.strip().lower() for cb in disable_header.split(",")]
-            
-            # Get callback name for comparison
-            callback_name = self._get_callback_name_for_disable_check(callback)
-            
-            # Check if this callback is in the disabled list
-            return callback_name.lower() in disabled_callbacks
+            return True
             
         except Exception as e:
             verbose_logger.debug(
@@ -1270,68 +1250,6 @@ class Logging(LiteLLMLoggingBaseClass):
             )
             return False
 
-    def _get_callback_name_for_disable_check(
-        self, callback: litellm.CALLBACK_TYPES
-    ) -> str:
-        """
-        Get the name of a callback for comparison with disabled callbacks list.
-        
-        Args:
-            callback: The callback to get the name for
-            
-        Returns:
-            str: The callback name
-        """
-        if isinstance(callback, str):
-            return callback
-        
-        if isinstance(callback, CustomLogger):
-            # For CustomLogger instances, try to get a meaningful name
-            class_name = callback.__class__.__name__
-            
-            # Map common CustomLogger class names to their callback names
-            class_name_mapping = {
-                "LangFuseLogger": "langfuse",
-                "DataDogLogger": "datadog",
-                "DataDogLLMObsLogger": "datadog_llm_observability", 
-                "PrometheusLogger": "prometheus",
-                "OpenMeterLogger": "openmeter",
-                "ArizeLogger": "arize",
-                "OpikLogger": "opik",
-                "BraintrustLogger": "braintrust",
-                "LangsmithLogger": "langsmith",
-                "ArgillaLogger": "argilla",
-                "LiteralAILogger": "literalai",
-                "GCSBucketLogger": "gcs_bucket",
-                "S3V2Logger": "s3_v2",
-                "AzureBlobStorageLogger": "azure_storage",
-                "GalileoObserve": "galileo",
-                "DeepEvalLogger": "deepeval",
-                "MlflowLogger": "mlflow",
-                "HumanloopLogger": "humanloop",
-                "GcsPubSubLogger": "gcs_pubsub",
-                "GenericAPILogger": "generic_api",
-                "ResendEmailLogger": "resend_email",
-                "SMTPEmailLogger": "smtp_email",
-                "PagerDutyAlerting": "pagerduty",
-                "AnthropicCacheControlHook": "anthropic_cache_control_hook",
-                "BedrockVectorStore": "bedrock_vector_store",
-                "OpenTelemetry": "otel",
-                "AgentOps": "agentops",
-                "LagoLogger": "lago",
-            }
-            
-            return class_name_mapping.get(class_name, class_name.lower())
-        
-        if callable(callback):
-            # For callable functions, try to get the function name
-            if hasattr(callback, "__name__"):
-                return callback.__name__
-            if hasattr(callback, "__func__") and hasattr(callback.__func__, "__name__"):
-                return callback.__func__.__name__
-            return "custom_function"
-        
-        return str(callback)
 
     def _update_completion_start_time(self, completion_start_time: datetime.datetime):
         self.completion_start_time = completion_start_time
