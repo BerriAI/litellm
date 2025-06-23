@@ -23,9 +23,15 @@ class EnterpriseCallbackControls:
             Returns:
                 bool: True if the callback should be disabled, False otherwise
             """
+            from litellm.litellm_core_utils.custom_logger_registry import (
+                CustomLoggerRegistry,
+            )
+
             try:
                 request_headers = get_proxy_server_request_headers(litellm_params)
                 disabled_callbacks = request_headers.get(X_LITELLM_DISABLE_CALLBACKS, None)
+                verbose_logger.debug(f"Dynamically disabled callbacks from {X_LITELLM_DISABLE_CALLBACKS}: {disabled_callbacks}")
+                verbose_logger.debug(f"Checking if {callback} is disabled via headers. Disable callbacks from headers: {disabled_callbacks}")
                 if disabled_callbacks is not None:
                     #########################################################
                     # premium user check
@@ -36,9 +42,13 @@ class EnterpriseCallbackControls:
                     disabled_callbacks = set([cb.strip().lower() for cb in disabled_callbacks.split(",")])
                     if isinstance(callback, str):
                         if callback.lower() in disabled_callbacks:
+                            verbose_logger.debug(f"Not logging to {callback} because it is disabled via {X_LITELLM_DISABLE_CALLBACKS}")
                             return True
                     elif isinstance(callback, CustomLogger):
-                        if callback.__class__.__name__.lower() in disabled_callbacks:
+                        # get the string name of the callback
+                        callback_str = CustomLoggerRegistry.get_callback_str_from_class_type(callback.__class__)
+                        if callback_str is not None and callback_str.lower() in disabled_callbacks:
+                            verbose_logger.debug(f"Not logging to {callback_str} because it is disabled via {X_LITELLM_DISABLE_CALLBACKS}")
                             return True
                 return False
             except Exception as e:
