@@ -40,6 +40,34 @@ from litellm.types.utils import (
 from .get_headers import get_response_headers
 
 
+def _safe_convert_created_field(created_value) -> int:
+    """
+    Safely convert a 'created' field value to an integer.
+    
+    Some providers (like SambaNova) return the 'created' field as a float 
+    (Unix timestamp with fractional seconds), but LiteLLM expects an integer.
+    
+    Args:
+        created_value: The value from response_object["created"]
+        
+    Returns:
+        int: Unix timestamp as integer
+    """
+    if created_value is None:
+        return int(time.time())
+    elif isinstance(created_value, int):
+        return created_value
+    elif isinstance(created_value, float):
+        return int(created_value)
+    else:
+        # for strings, etc
+        try:
+            return int(float(created_value))
+        except (ValueError, TypeError):
+            # Fallback to current time if conversion fails
+            return int(time.time())
+
+
 def convert_tool_call_to_json_mode(
     tool_calls: List[ChatCompletionMessageToolCall],
     convert_tool_call_to_json_mode: bool,
@@ -133,7 +161,7 @@ async def convert_to_streaming_response_async(response_object: Optional[dict] = 
         model_response_object.id = response_object["id"]
 
     if "created" in response_object:
-        model_response_object.created = response_object["created"]
+        model_response_object.created = _safe_convert_created_field(response_object["created"])
 
     if "system_fingerprint" in response_object:
         model_response_object.system_fingerprint = response_object["system_fingerprint"]
@@ -181,7 +209,7 @@ def convert_to_streaming_response(response_object: Optional[dict] = None):
         model_response_object.id = response_object["id"]
 
     if "created" in response_object:
-        model_response_object.created = response_object["created"]
+        model_response_object.created = _safe_convert_created_field(response_object["created"])
 
     if "system_fingerprint" in response_object:
         model_response_object.system_fingerprint = response_object["system_fingerprint"]
@@ -578,9 +606,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
                 usage_object = litellm.Usage(**response_object["usage"])
                 setattr(model_response_object, "usage", usage_object)
             if "created" in response_object:
-                model_response_object.created = response_object["created"] or int(
-                    time.time()
-                )
+                model_response_object.created = _safe_convert_created_field(response_object["created"])
 
             if "id" in response_object:
                 model_response_object.id = response_object["id"] or str(uuid.uuid4())
