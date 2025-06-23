@@ -458,3 +458,29 @@ def test_add_team_models_to_all_models():
         llm_router=llm_router,
     )
     assert result == {"gpt-4-model-2": {"team1"}}
+    
+@pytest.mark.asyncio
+async def test_initialize_with_model_no_config():
+    from litellm.proxy.proxy_server import cleanup_router_config_variables, initialize
+    import litellm
+    
+    cleanup_router_config_variables()
+
+    test_model = "gpt-3.5-turbo"
+    
+    await initialize(model=test_model, config=None)
+    
+    from litellm.proxy.proxy_server import llm_router, llm_model_list
+    
+    assert llm_router is not None, "llm_router should be created when model is provided without config"
+    assert isinstance(llm_router, litellm.Router), "llm_router should be a Router instance"
+    
+    assert llm_model_list is not None, "llm_model_list should be set"
+    assert len(llm_model_list) == 1, "llm_model_list should contain exactly one model"
+    
+    model_config = llm_model_list[0]
+    assert model_config["model_name"] == test_model, f"Model name should be {test_model}"
+    assert model_config["litellm_params"]["model"] == test_model, f"litellm_params model should be {test_model}"
+    
+    router_models = llm_router.get_model_names()
+    assert test_model in router_models, f"Router should contain model {test_model}"

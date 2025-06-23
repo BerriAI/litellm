@@ -3021,6 +3021,15 @@ async def initialize(  # noqa: PLR0915
             llm_model_list,
             general_settings,
         ) = await proxy_config.load_config(router=llm_router, config_file_path=config)
+    elif model:  # Create router when model is provided via CLI rather than config file
+        model_list = [{
+            "model_name": model,
+            "litellm_params": {
+                "model": model
+            }
+        }]
+        llm_router = litellm.Router(model_list=model_list)
+        llm_model_list = llm_router.get_model_list()
     if headers:  # model-specific param
         user_headers = headers
         dynamic_config[user_model]["headers"] = headers
