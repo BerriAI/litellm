@@ -594,97 +594,47 @@ def add_provider_specific_fields(
 
 
 class Message(OpenAIObject):
-    content: Optional[str]
-    role: Literal["assistant", "user", "system", "tool", "function"]
-    tool_calls: Optional[List[ChatCompletionMessageToolCall]]
-    function_call: Optional[FunctionCall]
-    audio: Optional[ChatCompletionAudioResponse] = None
-    reasoning_content: Optional[str] = None
+    content: Optional[str] = None
+    role: Literal["assistant", "user", "system", "tool", "function"] = "assistant"
+    tool_calls: Optional[List[ChatCompletionMessageToolCall]] = None
+    function_call: Optional[FunctionCall] = None
+    audio: Optional[ChatCompletionAudioResponse] = Field(default=None, exclude=True)
+    reasoning_content: Optional[str] = Field(default=None, exclude=True) 
     thinking_blocks: Optional[
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
-    ] = None
+    ] = Field(default=None, exclude=True)
     provider_specific_fields: Optional[Dict[str, Any]] = Field(
         default=None, exclude=True
     )
-    annotations: Optional[List[ChatCompletionAnnotation]] = None
+    annotations: Optional[List[ChatCompletionAnnotation]] = Field(default=None, exclude=True)
 
-    def __init__(
-        self,
-        content: Optional[str] = None,
-        role: Literal["assistant"] = "assistant",
-        function_call=None,
-        tool_calls: Optional[list] = None,
-        audio: Optional[ChatCompletionAudioResponse] = None,
-        provider_specific_fields: Optional[Dict[str, Any]] = None,
-        reasoning_content: Optional[str] = None,
-        thinking_blocks: Optional[
-            List[
-                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
-            ]
-        ] = None,
-        annotations: Optional[List[ChatCompletionAnnotation]] = None,
-        **params,
-    ):
-        init_values: Dict[str, Any] = {
-            "content": content,
-            "role": role or "assistant",  # handle null input
-            "function_call": (
-                FunctionCall(**function_call) if function_call is not None else None
-            ),
-            "tool_calls": (
-                [
-                    (
-                        ChatCompletionMessageToolCall(**tool_call)
-                        if isinstance(tool_call, dict)
-                        else tool_call
-                    )
-                    for tool_call in tool_calls
-                ]
-                if tool_calls is not None and len(tool_calls) > 0
-                else None
-            ),
-        }
-
-        if audio is not None:
-            init_values["audio"] = audio
-
-        if thinking_blocks is not None:
-            init_values["thinking_blocks"] = thinking_blocks
-
-        if annotations is not None:
-            init_values["annotations"] = annotations
-
-        if reasoning_content is not None:
-            init_values["reasoning_content"] = reasoning_content
-
-        super(Message, self).__init__(
-            **init_values,  # type: ignore
-            **params,
-        )
-
-        if audio is None:
-            # delete audio from self
-            # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
-            if hasattr(self, "audio"):
-                del self.audio
-
-        if annotations is None:
-            # ensure default response matches OpenAI spec
-            # Some OpenAI compatible APIs raise an error if annotations are passed in
-            if hasattr(self, "annotations"):
-                del self.annotations
-
-        if reasoning_content is None:
-            # ensure default response matches OpenAI spec
-            if hasattr(self, "reasoning_content"):
-                del self.reasoning_content
-
-        if thinking_blocks is None:
-            # ensure default response matches OpenAI spec
-            if hasattr(self, "thinking_blocks"):
-                del self.thinking_blocks
-
-        add_provider_specific_fields(self, provider_specific_fields)
+    @model_validator(mode='before')
+    @classmethod
+    def _convert_tool_calls(cls, values):
+        """Convert tool_calls to proper format and handle provider_specific_fields"""
+        if isinstance(values, dict):
+            # Handle tool_calls conversion
+            tool_calls = values.get('tool_calls')
+            if tool_calls is not None and isinstance(tool_calls, list) and len(tool_calls) > 0:
+                converted_tool_calls = []
+                for tool_call in tool_calls:
+                    if isinstance(tool_call, dict):
+                        converted_tool_calls.append(ChatCompletionMessageToolCall(**tool_call))
+                    else:
+                        converted_tool_calls.append(tool_call)
+                values['tool_calls'] = converted_tool_calls
+            
+            # Handle function_call conversion
+            function_call = values.get('function_call')
+            if function_call is not None and isinstance(function_call, dict):
+                values['function_call'] = FunctionCall(**function_call)
+                
+        return values
+    
+    def model_post_init(self, __context):
+        """Handle provider_specific_fields after model initialization"""
+        if self.provider_specific_fields:
+            add_provider_specific_fields(self, self.provider_specific_fields)
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
