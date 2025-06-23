@@ -208,3 +208,36 @@ print(response)
 
 </TabItem>
 </Tabs>
+
+## Header Format and Case Sensitivity
+
+### Expected Header Format
+
+The `x-litellm-disable-callbacks` header accepts callback names in the following formats:
+
+- **Single callback**: `x-litellm-disable-callbacks: langfuse`
+- **Multiple callbacks**: `x-litellm-disable-callbacks: langfuse,datadog,prometheus`
+
+When specifying multiple callbacks, use comma-separated values without spaces around the commas.
+
+### Case Sensitivity
+
+**Callback name checks are case insensitive.** This means all of the following are equivalent:
+
+```bash
+# These are all equivalent
+x-litellm-disable-callbacks: langfuse
+x-litellm-disable-callbacks: LANGFUSE  
+x-litellm-disable-callbacks: LangFuse
+x-litellm-disable-callbacks: langFUSE
+```
+
+This applies to both single and multiple callback specifications:
+
+```bash
+# Case insensitive for multiple callbacks
+x-litellm-disable-callbacks: LANGFUSE,datadog,PROMETHEUS
+x-litellm-disable-callbacks: langfuse,DATADOG,prometheus
+```
+
+
