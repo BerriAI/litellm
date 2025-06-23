@@ -1,10 +1,7 @@
 """
 Endpoints for managing callbacks
 """
-from typing import List, Literal
-
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends
 
 from litellm.litellm_core_utils.logging_callback_manager import CallbacksByType
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
