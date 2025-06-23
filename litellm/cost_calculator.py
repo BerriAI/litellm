@@ -1156,10 +1156,14 @@ def default_image_cost_calculator(
     # tracking works even when users set `model="<custom-deployment-name>"` in
     # their Azure portal.
     if cost_info is None and custom_llm_provider == "azure":
-        azure_base_model_name = f"{custom_llm_provider}/{size_str}/gpt-image-1"
-        azure_model_with_quality = (
-            f"{quality}/{azure_base_model_name}" if quality else azure_base_model_name
-        )
+        # Within this block, custom_llm_provider is guaranteed to be "azure" (not None)
+        assert custom_llm_provider is not None
+        azure_base_model_name: str = f"{custom_llm_provider}/{size_str}/gpt-image-1"
+        azure_model_with_quality: str
+        if quality:
+            azure_model_with_quality = f"{quality}/{azure_base_model_name}"
+        else:
+            azure_model_with_quality = azure_base_model_name
         models_to_check.extend([azure_model_with_quality, azure_base_model_name])
 
         for _model in [azure_model_with_quality, azure_base_model_name]:
