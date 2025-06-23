@@ -299,7 +299,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         model_response.choices[0].finish_reason = map_finish_reason(
             json_resp["results"][0]["stop_reason"]
         )
-        if json_resp["results"][0]["moderations"]:
+        if len(json_resp["results"]) > 0 and json_resp["results"][0].get("moderations"):
             if hasattr(model_response.choices[0], "message"):
                 model_response.choices[0].message.provider_specific_fields = {
                     "moderations": json_resp["results"][0]["moderations"]
@@ -377,7 +377,7 @@ class WatsonxTextCompletionResponseIterator(BaseModelResponseIterator):
                 is_finished = finish_reason != "not_finished"
 
                 provider_specific_fields = None
-                if results[0]["moderations"]:
+                if len(results) > 0 and results[0].get("moderations"):
                     provider_specific_fields = {
                         "moderations": results[0]["moderations"]
                     }
