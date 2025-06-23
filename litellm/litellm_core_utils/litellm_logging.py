@@ -150,6 +150,9 @@ from .initialize_dynamic_callback_params import (
 from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 
 try:
+    from litellm_enterprise.enterprise_callbacks.callback_controls import (
+        EnterpriseCallbackControls,
+    )
     from litellm_enterprise.enterprise_callbacks.generic_api_callback import (
         GenericAPILogger,
     )
@@ -177,6 +180,7 @@ except Exception as e:
     ResendEmailLogger = CustomLogger  # type: ignore
     SMTPEmailLogger = CustomLogger  # type: ignore
     PagerDutyAlerting = CustomLogger  # type: ignore
+    EnterpriseCallbackControls = None  # type: ignore
     EnterpriseStandardLoggingPayloadSetupVAR = None
 _in_memory_loggers: List[Any] = []
 
@@ -1222,46 +1226,13 @@ class Logging(LiteLLMLoggingBaseClass):
                 return False
 
         # Check for dynamically disabled callbacks via headers
-        if self._is_callback_disabled_via_headers(callback, litellm_params):
+        if EnterpriseCallbackControls is not None and EnterpriseCallbackControls.is_callback_disabled_via_headers(callback, litellm_params):
             verbose_logger.debug(
                 f"Callback {callback} disabled via x-litellm-disable-callbacks header for {event_hook} event"
             )
             return False
 
         return True
-
-    def _is_callback_disabled_via_headers(
-        self, callback: litellm.CALLBACK_TYPES, litellm_params: dict
-    ) -> bool:
-        """
-        Check if a callback is disabled via the x-litellm-disable-callbacks header.
-        
-        Args:
-            callback: The callback to check (can be string, CustomLogger instance, or callable)
-            litellm_params: Parameters containing proxy server request info
-            
-        Returns:
-            bool: True if the callback should be disabled, False otherwise
-        """
-        try:
-            request_headers = get_proxy_server_request_headers(litellm_params)
-            # Extract headers from proxy server request
-            disabled_callbacks = request_headers.get("x-litellm-disable-callbacks", None)
-            if disabled_callbacks is not None:
-                disabled_callbacks = set([cb.strip().lower() for cb in disabled_callbacks.split(",")])
-                if isinstance(callback, str):
-                    if callback.lower() in disabled_callbacks:
-                        return True
-                elif isinstance(callback, CustomLogger):
-                    if callback.__class__.__name__.lower() in disabled_callbacks:
-                        return True
-            return False
-        except Exception as e:
-            verbose_logger.debug(
-                f"Error checking disabled callbacks header: {str(e)}"
-            )
-            return False
-
 
     def _update_completion_start_time(self, completion_start_time: datetime.datetime):
         self.completion_start_time = completion_start_time
