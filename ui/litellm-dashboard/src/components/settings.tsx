@@ -218,8 +218,16 @@ const Settings: React.FC<SettingsPageProps> = ({
       return;
     }
 
+    // Filter out null or empty values from formValues
+    const filteredFormValues: Record<string, any> = {};
+    for (const key in formValues) {
+      if (formValues[key] !== null && formValues[key] !== "") {
+        filteredFormValues[key] = formValues[key];
+      }
+    }
+
     let payload = {
-      environment_variables: formValues,
+      environment_variables: filteredFormValues,
       litellm_settings: {
         "success_callback": [selectedEditCallback.name]
       }
@@ -230,7 +238,6 @@ const Settings: React.FC<SettingsPageProps> = ({
       await setCallbacksCall(accessToken, payload);
       message.success(`Callback updated successfully`);
       setShowEditCallback(false);
-      form.resetFields();
       setSelectedEditCallback(null);
       
       // Refresh the callbacks list
@@ -272,7 +279,6 @@ const Settings: React.FC<SettingsPageProps> = ({
       await setCallbacksCall(accessToken, payload);
       message.success(`Callback ${new_callback} added successfully`);
       setShowAddCallbacksModal(false);
-      form.resetFields();
       setSelectedCallback(null);
       setSelectedCallbackParams([]);
       
@@ -680,8 +686,13 @@ const Settings: React.FC<SettingsPageProps> = ({
       title="Add Logging Callback"
       visible={showAddCallbacksModal}
       width={800}
-      onCancel= {() => setShowAddCallbacksModal(false)}
+      onCancel= {() => {
+        setShowAddCallbacksModal(false)
+        setSelectedCallback(null);
+        setSelectedCallbackParams([]);
+      }}
       footer={null}
+      destroyOnClose={true}
       >
         
       <a href="https://docs.litellm.ai/docs/proxy/logging" className="mb-8 mt-4" target="_blank" style={{ color: "blue" }}> LiteLLM Docs: Logging</a>
@@ -748,8 +759,12 @@ const Settings: React.FC<SettingsPageProps> = ({
     visible={showEditCallback}
     width={800}
     title={`Edit ${selectedEditCallback?.name } Settings`}
-    onCancel= {() => setShowEditCallback(false)}
+    onCancel= {() => {
+      setShowEditCallback(false);
+      setSelectedEditCallback(null);
+    }}
     footer={null}
+    destroyOnClose={true}
     >
 
       <Form 
