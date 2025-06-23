@@ -12,6 +12,7 @@ class SupportedVectorStoreIntegrations(str, Enum):
     """Supported vector store integrations."""
 
     BEDROCK = "bedrock"
+    QDRANT = "qdrant"
 
 
 class LiteLLM_VectorStoreConfig(TypedDict, total=False):
