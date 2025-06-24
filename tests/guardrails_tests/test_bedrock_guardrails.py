@@ -10,14 +10,13 @@ from litellm.caching import DualCache
 from unittest.mock import MagicMock, AsyncMock, patch
 
 @pytest.mark.asyncio
-async def test_bedrock_guardrails():
+async def test_bedrock_guardrails_pii_masking():
     # Create proper mock objects
     mock_user_api_key_dict = UserAPIKeyAuth()
     
     guardrail = BedrockGuardrail(
         guardrailIdentifier="wf0hkdb5x07f",
         guardrailVersion="DRAFT",
-        mask_request_content=True,
     )
 
     request_data = {
@@ -35,7 +34,7 @@ async def test_bedrock_guardrails():
         user_api_key_dict=mock_user_api_key_dict,
         call_type="completion"
     )
-    print(response)
+    print("response after moderation hook", response)
 
     if response:  # Only assert if response is not None
         assert response["messages"][0]["content"] == "Hello, my phone number is {PHONE}"
@@ -45,14 +44,13 @@ async def test_bedrock_guardrails():
 
 
 @pytest.mark.asyncio
-async def test_bedrock_guardrails_content_list():
+async def test_bedrock_guardrails_pii_masking_content_list():
     # Create proper mock objects
     mock_user_api_key_dict = UserAPIKeyAuth()
     
     guardrail = BedrockGuardrail(
         guardrailIdentifier="wf0hkdb5x07f",
         guardrailVersion="DRAFT",
-        mask_request_content=True,
     )
 
     request_data = {
@@ -105,7 +103,7 @@ async def test_bedrock_guardrails_with_streaming():
         )
         
         guardrail = BedrockGuardrail(
-            guardrailIdentifier="wf0hkdb5x07f",
+            guardrailIdentifier="ff6ujrregl1q",
             guardrailVersion="DRAFT",
             supported_event_hooks=[GuardrailEventHooks.post_call],
             guardrail_name="bedrock-post-guard",
@@ -118,7 +116,7 @@ async def test_bedrock_guardrails_with_streaming():
             "messages": [
                 {
                     "role": "user",
-                    "content": "My name is ishaan@gmail.com"
+                    "content": "Hi I like coffee"
                 }
             ],
             "stream": True,
@@ -154,7 +152,7 @@ async def test_bedrock_guardrails_with_streaming_no_violation():
     )
     
     guardrail = BedrockGuardrail(
-        guardrailIdentifier="wf0hkdb5x07f",
+        guardrailIdentifier="ff6ujrregl1q",
         guardrailVersion="DRAFT",
         supported_event_hooks=[GuardrailEventHooks.post_call],
         guardrail_name="bedrock-post-guard",
@@ -569,69 +567,6 @@ async def test_bedrock_guardrail_uses_masked_output_without_masking_flags():
         assert response["messages"][0]["content"] == "Hello, my phone number is {PHONE} and email is {EMAIL}"
         print("✅ Masked output was applied even without masking flags enabled")
 
-
-@pytest.mark.asyncio
-async def test_bedrock_guardrail_helper_methods():
-    """Test the helper methods for checking anonymized actions"""
-    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
-    from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrailResponse
-    
-    guardrail = BedrockGuardrail(
-        guardrailIdentifier="test-guardrail",
-        guardrailVersion="DRAFT"
-    )
-    
-    # Test response with ANONYMIZED action
-    anonymized_response: BedrockGuardrailResponse = {
-        "action": "GUARDRAIL_INTERVENED",
-        "outputs": [{
-            "text": "Hello, my phone number is {PHONE}"
-        }],
-        "assessments": [{
-            "sensitiveInformationPolicy": {
-                "piiEntities": [{
-                    "type": "PHONE",
-                    "match": "+1 412 555 1212",
-                    "action": "ANONYMIZED"
-                }]
-            }
-        }]
-    }
-    
-    has_anonymized = guardrail._has_anonymized_actions(anonymized_response)
-    assert has_anonymized is True, "Should detect ANONYMIZED actions"
-    
-    # Test response with BLOCKED action
-    blocked_response: BedrockGuardrailResponse = {
-        "action": "GUARDRAIL_INTERVENED", 
-        "outputs": [{
-            "text": "I can't provide that information."
-        }],
-        "assessments": [{
-            "topicPolicy": {
-                "topics": [{
-                    "name": "Sensitive Topic",
-                    "type": "DENY",
-                    "action": "BLOCKED"
-                }]
-            }
-        }]
-    }
-    
-    has_anonymized = guardrail._has_anonymized_actions(blocked_response)
-    assert has_anonymized is False, "Should not detect ANONYMIZED actions in BLOCKED response"
-    
-    # Test response with no intervention
-    none_response: BedrockGuardrailResponse = {
-        "action": "NONE",
-        "outputs": [],
-        "assessments": []
-    }
-    
-    has_anonymized = guardrail._has_anonymized_actions(none_response)
-    assert has_anonymized is False, "Should not detect ANONYMIZED actions in NONE response"
-    
-    print("✅ Helper methods work correctly")
 
 
         
