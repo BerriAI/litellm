@@ -453,6 +453,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
                   </Form.Item>
 
+                  <Form.Item label="Team Member Key Duration" name="team_member_key_duration" tooltip="Set a limit to the duration of a team member's key.">
+                    <Select placeholder="n/a">
+                      <Select.Option value="1d">1 day</Select.Option>
+                      <Select.Option value="1w">1 week</Select.Option>
+                      <Select.Option value="1mo">1 month</Select.Option>
+                    </Select>
+                  </Form.Item>
+
+
                   <Form.Item label="Reset Budget" name="budget_duration">
                     <Select placeholder="n/a">
                       <Select.Option value="24h">daily</Select.Option>
@@ -561,9 +570,19 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <div>RPM: {info.rpm_limit || 'Unlimited'}</div>
                   </div>
                   <div>
-                    <Text className="font-medium">Budget</Text>
-                      <div>Max: {info.max_budget !== null ? `$${info.max_budget}` : 'No Limit'}</div>
-                    <div>Reset: {info.budget_duration || 'Never'}</div>
+                    <Text className="font-medium">Team Budget</Text>
+                      <div>Max Budget: {info.max_budget !== null ? `$${info.max_budget}` : 'No Limit'}</div>
+                    <div>Budget Reset: {info.budget_duration || 'Never'}</div>
+                  </div>
+                  <div>
+                    <Text className="font-medium">
+                      Team Member Settings{' '}
+                      <Tooltip title="These are limits on individual team members">
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </Tooltip>
+                    </Text>
+                    <div>Max Budget: {info.team_member_budget_table?.max_budget || 'No Limit'}</div>
+                    <div>Key Duration: {info.metadata?.team_member_key_duration || 'No Limit'}</div>
                   </div>
                   <div>
                     <Text className="font-medium">Organization ID</Text>
