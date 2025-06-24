@@ -1,5 +1,5 @@
 """
-Transformation logic from OpenAI format to Gemini format. 
+Transformation logic from OpenAI format to Gemini format.
 
 Why separate file? Make it easy to see how transformation works
 """
@@ -446,9 +446,11 @@ async def async_transform_request_body(
     if gemini_api_key is not None:
         (
             messages,
+            optional_params,
             cached_content,
         ) = await context_caching_endpoints.async_check_and_create_cache(
             messages=messages,
+            optional_params=optional_params,
             api_key=gemini_api_key,
             api_base=api_base,
             model=model,
