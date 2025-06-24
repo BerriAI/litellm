@@ -612,6 +612,11 @@ async def auth_callback(request: Request):  # noqa: PLR0915
             budget_duration=internal_user_budget_duration,
         )
 
+    # (IF SET) Verify user is in restricted SSO group
+    SSOAuthenticationHandler.verify_user_in_restricted_sso_group(
+        general_settings=general_settings, result=result
+    )
+
     user_info = await get_user_info_from_db(
         result=result,
         prisma_client=prisma_client,
@@ -1054,6 +1059,40 @@ class SSOAuthenticationHandler:
             return
         sso_teams = getattr(result, "team_ids", [])
         await add_missing_team_member(user_info=user_info, sso_teams=sso_teams)
+
+    @staticmethod
+    def verify_user_in_restricted_sso_group(
+        general_settings: Dict,
+        result: Optional[Union[CustomOpenID, OpenID, dict]],
+    ) -> Literal[True]:
+        """
+        when ui_access_mode.type == "restricted_sso_group":
+
+        - result.team_ids should contain the restricted_sso_group
+        - if not, raise a ProxyException
+        - if so, return True
+        - if result.team_ids is None, return False
+        - if result.team_ids is an empty list, return False
+        - if result.team_ids is a list, return True if the restricted_sso_group is in the list, otherwise return False
+        """
+        ui_access_mode = cast(
+            Optional[Union[Dict, str]], general_settings.get("ui_access_mode")
+        )
+        if ui_access_mode is None:
+            return True
+        if isinstance(ui_access_mode, str):
+            return True
+        team_ids = getattr(result, "team_ids", [])
+        if ui_access_mode.get("type") == "restricted_sso_group":
+            restricted_sso_group = ui_access_mode.get("restricted_sso_group")
+            if restricted_sso_group not in team_ids:
+                raise ProxyException(
+                    message=f"User is not in the restricted SSO group: {restricted_sso_group}. User groups: {team_ids}",
+                    type=ProxyErrorTypes.auth_error,
+                    param="restricted_sso_group",
+                    code=status.HTTP_403_FORBIDDEN,
+                )
+        return True
 
     @staticmethod
     async def create_litellm_team_from_sso_group(
