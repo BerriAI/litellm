@@ -2878,6 +2878,11 @@ class RoleMapping(BaseModel):
     internal_role: RBAC_ROLES
 
 
+class JWTLiteLLMRoleMap(BaseModel):
+    jwt_role: str
+    litellm_role: LitellmUserRoles
+
+
 class ScopeMapping(OIDCPermissions):
     scope: str
 
@@ -2942,6 +2947,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     enforce_rbac: bool = False
     roles_jwt_field: Optional[str] = None  # v2 on role mappings
     role_mappings: Optional[List[RoleMapping]] = None
+    jwt_litellm_role_map: Optional[List[JWTLiteLLMRoleMap]] = None
     object_id_jwt_field: Optional[str] = (
         None  # can be either user / team, inferred from the role mapping
     )
