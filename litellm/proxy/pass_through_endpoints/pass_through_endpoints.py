@@ -454,7 +454,6 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             if k in _parsed_body:
                 litellm_params_in_body[k] = _parsed_body.pop(k, None)
 
-        _litellm_metadata: Optional[dict] = _parsed_body.pop("litellm_metadata", None)
         _metadata = dict(
             StandardLoggingUserAPIKeyMetadata(
                 user_api_key_hash=user_api_key_dict.api_key,
@@ -470,8 +469,13 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         )
 
         _metadata["user_api_key"] = user_api_key_dict.api_key
-        if _litellm_metadata:
-            _metadata.update(_litellm_metadata)
+
+        litellm_metadata = litellm_params_in_body.pop("litellm_metadata", None)
+        metadata = litellm_params_in_body.pop("metadata", None)
+        if litellm_metadata:
+            _metadata.update(litellm_metadata)
+        if metadata:
+            _metadata.update(metadata)
 
         _metadata = _update_metadata_with_tags_in_header(
             request=request,
