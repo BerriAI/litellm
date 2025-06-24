@@ -1177,10 +1177,9 @@ def default_image_cost_calculator(
                 cost_info = litellm.model_cost[_model]
                 break
 
-    for _model in models_to_check:
-        if _model is not None and _model in litellm.model_cost:
-            assert _model is not None  # mypy narrowing
-            cost_info = litellm.model_cost[_model]
+    for _model_candidate in models_to_check:
+        if _model_candidate is not None and _model_candidate in litellm.model_cost:
+            cost_info = litellm.model_cost[_model_candidate]
             break
 
     if cost_info is None:
