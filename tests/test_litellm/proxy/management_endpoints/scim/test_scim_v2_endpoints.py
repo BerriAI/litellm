@@ -101,6 +101,52 @@ async def test_create_user_defaults_to_viewer(mocker, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_create_user_uses_default_internal_user_params_role(mocker, monkeypatch):
+    """If role is set in default_internal_user_params, new user should use that role"""
+
+    scim_user = SCIMUser(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+        userName="new-user",
+        name=SCIMUserName(familyName="User", givenName="New"),
+        emails=[SCIMUserEmail(value="new@example.com")],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+
+    # Set default_internal_user_params with a specific role
+    default_params = {
+        "user_role": LitellmUserRoles.PROXY_ADMIN,
+    }
+    monkeypatch.setattr(
+        "litellm.default_internal_user_params", default_params, raising=False
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+
+    new_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.new_user",
+        AsyncMock(return_value=NewUserRequest(user_id="new-user")),
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=scim_user),
+    )
+
+    await create_user(user=scim_user)
+
+    called_args = new_user_mock.call_args.kwargs["data"]
+    assert called_args.user_role == LitellmUserRoles.PROXY_ADMIN
+
+
+@pytest.mark.asyncio
 async def test_handle_existing_user_by_email_no_email(mocker):
     """Should return None when new_user_request has no email"""
     mock_prisma_client = mocker.MagicMock()
