@@ -508,6 +508,7 @@ def unpack_defs(schema: dict, defs: dict) -> None:
     """
 
     import copy
+    from collections import deque
 
     # Combine the defs handed down by the caller with defs/definitions found on
     # the current node.  Local keys shadow parent keys to match JSON-schema
@@ -518,14 +519,17 @@ def unpack_defs(schema: dict, defs: dict) -> None:
         **schema.get("definitions", {}),
     }
 
-    def _walk_and_resolve(node: Any, active_defs: dict, seen: Set[int]):  # type: ignore[name-defined]
-        """Depth-first resolver that replaces ``{"$ref": "#/defs/Foo"}`` with
-        the *actual* ``Foo`` schema.
-        """
-
-        # Avoid infinite recursion on self-referential schemas
+    # Use iterative approach with queue to avoid recursion
+    # Each item in queue is (node, parent_container, key/index, active_defs, seen_ids)
+    queue = deque([(schema, None, None, root_defs, set())])
+    
+    while queue:
+        node, parent, key, active_defs, seen = queue.popleft()
+        
+        # Avoid infinite loops on self-referential schemas
         if id(node) in seen:
-            return node
+            continue
+        seen = seen.copy()  # Create new set for this branch
         seen.add(id(node))
 
         # ----------------------------- dict -----------------------------
@@ -536,7 +540,7 @@ def unpack_defs(schema: dict, defs: dict) -> None:
                 target_schema = active_defs.get(ref_name)
                 # Unknown reference – leave untouched
                 if target_schema is None:
-                    return node
+                    continue
 
                 # Merge defs from the target to capture nested definitions
                 child_defs = {
@@ -545,12 +549,21 @@ def unpack_defs(schema: dict, defs: dict) -> None:
                     **target_schema.get("definitions", {}),
                 }
 
-                # Recursively resolve the target *copy* to avoid mutating the
-                # shared definition map.
-                resolved = _walk_and_resolve(copy.deepcopy(target_schema), child_defs, seen)
-                return resolved
+                # Replace the reference with resolved copy
+                resolved = copy.deepcopy(target_schema)
+                if parent is not None:
+                    parent[key] = resolved
+                else:
+                    # This is the root schema itself
+                    schema.clear()
+                    schema.update(resolved)
+                    resolved = schema
+                
+                # Add resolved node to queue for further processing
+                queue.append((resolved, parent, key, child_defs, seen))
+                continue
 
-            # --- Case 2: regular dict – recurse into its values ---
+            # --- Case 2: regular dict – process its values ---
             # Update defs with any nested $defs/definitions present *here*.
             current_defs = {
                 **active_defs,
@@ -558,32 +571,15 @@ def unpack_defs(schema: dict, defs: dict) -> None:
                 **node.get("definitions", {}),
             }
 
-            for key, val in list(node.items()):
-                node[key] = _walk_and_resolve(val, current_defs, seen)
-            return node
+            # Add all dict values to queue
+            for k, v in node.items():
+                queue.append((v, node, k, current_defs, seen))
 
         # ---------------------------- list ------------------------------
-        if isinstance(node, list):
+        elif isinstance(node, list):
+            # Add all list items to queue
             for idx, item in enumerate(node):
-                node[idx] = _walk_and_resolve(item, active_defs, seen)
-            return node
-
-        # -------------------------- primitive ---------------------------
-        return node
-
-    # Kick off traversal
-    resolved_root = _walk_and_resolve(schema, root_defs, set())
-    # If the resolver returned a *different* dict (e.g., the root itself was a
-    # $ref), mirror the changes back into the original object so that callers
-    # holding a reference to ``schema`` see the updated structure.
-    if resolved_root is not schema:
-        schema.clear()
-        if isinstance(resolved_root, dict):
-            schema.update(resolved_root)
-        else:
-            # In the very unlikely case the root was resolved to a non-dict
-            # (e.g., a primitive), replace in-place via a sentinel key.
-            schema["__resolved_value__"] = resolved_root  # type: ignore
+                queue.append((item, node, idx, active_defs, seen))
 
 
 def _get_image_mime_type_from_url(url: str) -> Optional[str]:
