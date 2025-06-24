@@ -306,14 +306,18 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       selected_customer = null;
     }
 
-    // make startTime and endTime to last hour of the day
-    startTime.setHours(0);
-    startTime.setMinutes(0);
-    startTime.setSeconds(0);
+    // Create new Date objects to avoid mutating the original dates
+    const adjustedStartTime = new Date(startTime);
+    const adjustedEndTime = new Date(endTime);
 
-    endTime.setHours(23);
-    endTime.setMinutes(59);
-    endTime.setSeconds(59);
+    // make startTime and endTime to last hour of the day
+    adjustedStartTime.setHours(0);
+    adjustedStartTime.setMinutes(0);
+    adjustedStartTime.setSeconds(0);
+
+    adjustedEndTime.setHours(23);
+    adjustedEndTime.setMinutes(59);
+    adjustedEndTime.setSeconds(59);
 
     try {
       const modelMetricsResponse = await modelMetricsCall(
@@ -321,8 +325,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         userID,
         userRole,
         modelGroup,
-        startTime.toISOString(),
-        endTime.toISOString(),
+        adjustedStartTime.toISOString(),
+        adjustedEndTime.toISOString(),
         selected_token,
         selected_customer
       );
@@ -335,8 +339,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       const streamingModelMetricsResponse = await streamingModelMetricsCall(
         accessToken,
         modelGroup,
-        startTime.toISOString(),
-        endTime.toISOString()
+        adjustedStartTime.toISOString(),
+        adjustedEndTime.toISOString()
       );
 
       // Assuming modelMetricsResponse now contains the metric data for the specified model group
@@ -350,8 +354,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         userID,
         userRole,
         modelGroup,
-        startTime.toISOString(),
-        endTime.toISOString(),
+        adjustedStartTime.toISOString(),
+        adjustedEndTime.toISOString(),
         selected_token,
         selected_customer
       );
@@ -364,8 +368,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         userID,
         userRole,
         modelGroup,
-        startTime.toISOString(),
-        endTime.toISOString(),
+        adjustedStartTime.toISOString(),
+        adjustedEndTime.toISOString(),
         selected_token,
         selected_customer
       );
@@ -378,8 +382,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       if (modelGroup) {
         const dailyExceptions = await adminGlobalActivityExceptions(
           accessToken,
-          startTime?.toISOString().split('T')[0],
-          endTime?.toISOString().split('T')[0],
+          adjustedStartTime?.toISOString().split('T')[0],
+          adjustedEndTime?.toISOString().split('T')[0],
           modelGroup,
         );
 
@@ -387,8 +391,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
         const dailyExceptionsPerDeplyment = await adminGlobalActivityExceptionsPerDeployment(
           accessToken,
-          startTime?.toISOString().split('T')[0],
-          endTime?.toISOString().split('T')[0],
+          adjustedStartTime?.toISOString().split('T')[0],
+          adjustedEndTime?.toISOString().split('T')[0],
           modelGroup,
         )
 

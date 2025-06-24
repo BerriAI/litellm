@@ -213,19 +213,23 @@ const UsagePage: React.FC<UsagePageProps> = ({
       return;
     }
 
+    // Create new Date objects to avoid mutating the original dates
+    const adjustedStartTime = new Date(startTime);
+    const adjustedEndTime = new Date(endTime);
+
     // the endTime put it to the last hour of the selected date
-    endTime.setHours(23, 59, 59, 999);
+    adjustedEndTime.setHours(23, 59, 59, 999);
 
     // startTime put it to the first hour of the selected date
-    startTime.setHours(0, 0, 0, 0);
+    adjustedStartTime.setHours(0, 0, 0, 0);
 
     console.log("uiSelectedKey", uiSelectedKey);
 
     let newTopUserData = await adminTopEndUsersCall(
       accessToken,
       uiSelectedKey,
-      startTime.toISOString(),
-      endTime.toISOString()
+      adjustedStartTime.toISOString(),
+      adjustedEndTime.toISOString()
     )
     console.log("End user data updated successfully", newTopUserData);
     setTopUsers(newTopUserData);
@@ -245,16 +249,20 @@ const UsagePage: React.FC<UsagePageProps> = ({
       return;  // Don't run expensive DB queries - return out when SpendLogs has more than 1M rows
     }
 
+    // Create new Date objects to avoid mutating the original dates
+    const adjustedStartTime = new Date(startTime);
+    const adjustedEndTime = new Date(endTime);
+
     // the endTime put it to the last hour of the selected date
-    endTime.setHours(23, 59, 59, 999);
+    adjustedEndTime.setHours(23, 59, 59, 999);
 
     // startTime put it to the first hour of the selected date
-    startTime.setHours(0, 0, 0, 0);
+    adjustedStartTime.setHours(0, 0, 0, 0);
 
     let top_tags = await tagsSpendLogsCall(
       accessToken, 
-      startTime.toISOString(), 
-      endTime.toISOString(),
+      adjustedStartTime.toISOString(), 
+      adjustedEndTime.toISOString(),
       selectedTags.length === 0 ? undefined : selectedTags
     );
     setTopTagsData(top_tags.spend_per_tag);
