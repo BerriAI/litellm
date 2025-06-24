@@ -1115,6 +1115,7 @@ class NewTeamRequest(TeamBase):
     team_member_budget: Optional[float] = (
         None  # allow user to set a budget for all team members
     )
+    team_member_key_expiry: Optional[str] = None  # e.g. "1d", "1w", "1m"
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -2792,6 +2793,7 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
 LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
     "guardrails",
     "tags",
+    "team_member_key_expiry",
 ]
 
 
