@@ -89,12 +89,18 @@ export const AuthModal = ({
   );
 };
 
-const AuthSection = ({ authType, onAuthSubmit }) => {
+const AuthSection = ({ 
+  authType, 
+  onAuthSubmit 
+}: {
+  authType: string | null | undefined;
+  onAuthSubmit: (value: string) => void;
+}) => {
   const [modalVisible, setModalVisible] = useState(false);
 
   const handleAddAuth = () => setModalVisible(true);
 
-  const handleModalOk = (authValue) => {
+  const handleModalOk = (authValue: string) => {
     onAuthSubmit(authValue);
     setModalVisible(false);
   };
@@ -239,7 +245,7 @@ const MCPToolsViewer = ({
       {mcpServerHasAuth(auth_type) && (
             <AuthSection
               authType={auth_type}
-              onAuthSubmit={(value) => {
+              onAuthSubmit={(value: string) => {
                 setMcpAuthValue(value);
               }}
             />
