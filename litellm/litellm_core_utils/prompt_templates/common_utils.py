@@ -16,6 +16,7 @@ from typing import (
     Optional,
     Union,
     cast,
+    Set,
 )
 
 from litellm.types.llms.openai import (
@@ -489,37 +490,100 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
     )
 
 
-def unpack_defs(schema, defs):
-    properties = schema.get("properties", None)
-    if properties is None:
-        return
+# ---------------------------------------------------------------------------
+# Generic, dependency-free implementation of `unpack_defs`
+# ---------------------------------------------------------------------------
 
-    for name, value in properties.items():
-        ref_key = value.get("$ref", None)
-        if ref_key is not None:
-            ref = defs[ref_key.split("defs/")[-1]]
-            unpack_defs(ref, defs)
-            properties[name] = ref
-            continue
 
-        anyof = value.get("anyOf", None)
-        if anyof is not None:
-            for i, atype in enumerate(anyof):
-                ref_key = atype.get("$ref", None)
-                if ref_key is not None:
-                    ref = defs[ref_key.split("defs/")[-1]]
-                    unpack_defs(ref, defs)
-                    anyof[i] = ref
-            continue
+def unpack_defs(schema: dict, defs: dict) -> None:
+    """Expand *all* ``$ref`` entries pointing into ``$defs`` / ``definitions``.
 
-        items = value.get("items", None)
-        if items is not None:
-            ref_key = items.get("$ref", None)
-            if ref_key is not None:
-                ref = defs[ref_key.split("defs/")[-1]]
-                unpack_defs(ref, defs)
-                value["items"] = ref
-                continue
+    This utility walks the entire schema tree (dicts and lists) so it naturally
+    resolves references hidden under any keyword – ``items``, ``allOf``,
+    ``anyOf``, ``oneOf``, ``additionalProperties``, etc.
+
+    It mutates *schema* in-place and does **not** return anything.  The helper
+    keeps memory overhead low by resolving nodes as it encounters them rather
+    than materialising a fully dereferenced copy first.
+    """
+
+    import copy
+
+    # Combine the defs handed down by the caller with defs/definitions found on
+    # the current node.  Local keys shadow parent keys to match JSON-schema
+    # scoping rules.
+    root_defs: dict = {
+        **defs,
+        **schema.get("$defs", {}),
+        **schema.get("definitions", {}),
+    }
+
+    def _walk_and_resolve(node: Any, active_defs: dict, seen: Set[int]):  # type: ignore[name-defined]
+        """Depth-first resolver that replaces ``{"$ref": "#/defs/Foo"}`` with
+        the *actual* ``Foo`` schema.
+        """
+
+        # Avoid infinite recursion on self-referential schemas
+        if id(node) in seen:
+            return node
+        seen.add(id(node))
+
+        # ----------------------------- dict -----------------------------
+        if isinstance(node, dict):
+            # --- Case 1: this node *is* a reference ---
+            if "$ref" in node:
+                ref_name = node["$ref"].split("/")[-1]
+                target_schema = active_defs.get(ref_name)
+                # Unknown reference – leave untouched
+                if target_schema is None:
+                    return node
+
+                # Merge defs from the target to capture nested definitions
+                child_defs = {
+                    **active_defs,
+                    **target_schema.get("$defs", {}),
+                    **target_schema.get("definitions", {}),
+                }
+
+                # Recursively resolve the target *copy* to avoid mutating the
+                # shared definition map.
+                resolved = _walk_and_resolve(copy.deepcopy(target_schema), child_defs, seen)
+                return resolved
+
+            # --- Case 2: regular dict – recurse into its values ---
+            # Update defs with any nested $defs/definitions present *here*.
+            current_defs = {
+                **active_defs,
+                **node.get("$defs", {}),
+                **node.get("definitions", {}),
+            }
+
+            for key, val in list(node.items()):
+                node[key] = _walk_and_resolve(val, current_defs, seen)
+            return node
+
+        # ---------------------------- list ------------------------------
+        if isinstance(node, list):
+            for idx, item in enumerate(node):
+                node[idx] = _walk_and_resolve(item, active_defs, seen)
+            return node
+
+        # -------------------------- primitive ---------------------------
+        return node
+
+    # Kick off traversal
+    resolved_root = _walk_and_resolve(schema, root_defs, set())
+    # If the resolver returned a *different* dict (e.g., the root itself was a
+    # $ref), mirror the changes back into the original object so that callers
+    # holding a reference to ``schema`` see the updated structure.
+    if resolved_root is not schema:
+        schema.clear()
+        if isinstance(resolved_root, dict):
+            schema.update(resolved_root)
+        else:
+            # In the very unlikely case the root was resolved to a non-dict
+            # (e.g., a primitive), replace in-place via a sentinel key.
+            schema["__resolved_value__"] = resolved_root  # type: ignore
 
 
 def _get_image_mime_type_from_url(url: str) -> Optional[str]:
