@@ -1,12 +1,17 @@
 from abc import abstractmethod
-from typing import Optional
+from typing import Dict, Optional, Tuple
 
 from litellm.types.router import GenericLiteLLMParams
 
 
 class BaseVectorStoreTransformation:
     @abstractmethod
-    def transform_query_vector_store_request(self):
+    def transform_search_vector_store_request(
+        self,
+        vector_store_id: str,
+        query: str,
+        api_base: str,
+    ) -> Tuple[str, Dict]:
         pass
 
     @abstractmethod
