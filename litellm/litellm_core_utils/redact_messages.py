@@ -14,6 +14,7 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.types.llms.openai import ResponsesAPIResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -53,11 +54,23 @@ def perform_redaction(model_call_details: dict, result):
         and "complete_streaming_response" in model_call_details
     ):
         _streaming_response = model_call_details["complete_streaming_response"]
-        for choice in _streaming_response.choices:
-            if isinstance(choice, litellm.Choices):
-                choice.message.content = "redacted-by-litellm"
-            elif isinstance(choice, litellm.utils.StreamingChoices):
-                choice.delta.content = "redacted-by-litellm"
+        
+        # Check if it's a ResponsesAPIResponse or ModelResponse
+        if isinstance(_streaming_response, ResponsesAPIResponse):
+            # Handle ResponsesAPIResponse - redact output field
+            if hasattr(_streaming_response, "output") and _streaming_response.output is not None:
+                for output_item in _streaming_response.output:
+                    if hasattr(output_item, "content") and output_item.content is not None:
+                        for content_item in output_item.content:
+                            if hasattr(content_item, "text"):
+                                content_item.text = "redacted-by-litellm"
+        elif hasattr(_streaming_response, "choices") and _streaming_response.choices is not None:
+            # Handle ModelResponse - redact choices field (existing logic)
+            for choice in _streaming_response.choices:
+                if isinstance(choice, litellm.Choices):
+                    choice.message.content = "redacted-by-litellm"
+                elif isinstance(choice, litellm.utils.StreamingChoices):
+                    choice.delta.content = "redacted-by-litellm"
 
     # Redact result
     if result is not None and isinstance(result, litellm.ModelResponse):
@@ -68,6 +81,16 @@ def perform_redaction(model_call_details: dict, result):
                     choice.message.content = "redacted-by-litellm"
                 elif isinstance(choice, litellm.utils.StreamingChoices):
                     choice.delta.content = "redacted-by-litellm"
+        return _result
+    elif result is not None and isinstance(result, ResponsesAPIResponse):
+        # Handle ResponsesAPIResponse result
+        _result = copy.deepcopy(result)
+        if hasattr(_result, "output") and _result.output is not None:
+            for output_item in _result.output:
+                if hasattr(output_item, "content") and output_item.content is not None:
+                    for content_item in output_item.content:
+                        if hasattr(content_item, "text"):
+                            content_item.text = "redacted-by-litellm"
         return _result
     else:
         return {"text": "redacted-by-litellm"}
