@@ -100,7 +100,7 @@ import {
 } from "@heroicons/react/outline";
 import DeleteModelButton from "./delete_model_button";
 const { Title: Title2, Link } = Typography;
-import { UploadOutlined } from "@ant-design/icons";
+import { InfoCircleOutlined, UploadOutlined } from "@ant-design/icons";
 import type { UploadProps } from "antd";
 import { Upload } from "antd";
 import TimeToFirstToken from "./model_metrics/time_to_first_token";
@@ -259,6 +259,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
   const [selectedTeamFilter, setSelectedTeamFilter] = useState<string | null>(null);
   const [selectedModelAccessGroupFilter, setSelectedModelAccessGroupFilter] = useState<string | null>(null);
+
+  // Add new state for current team and model view mode
+  const [currentTeam, setCurrentTeam] = useState<string>('personal'); // 'personal' or team_id
+  const [modelViewMode, setModelViewMode] = useState<'current_team' | 'all'>('current_team');
 
   const [showColumnDropdown, setShowColumnDropdown] = useState(false);
 
@@ -1137,7 +1141,97 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   <div className="bg-white rounded-lg shadow">
                     <div className="border-b px-6 py-4">
                       <div className="flex flex-col space-y-4">
-                        {/* Search and Filter Controls */}
+                        {/* Current Team Selector - Prominent */}
+                        <div className="flex items-center justify-between bg-gray-50 rounded-lg p-4 border-2 border-gray-200">
+                          <div>
+                          <div className="flex items-center gap-4">
+                            <Text className="text-lg font-semibold text-gray-900">Current Team:</Text>
+                            <Select
+                              className="w-80"
+                              defaultValue="personal"
+                              value={currentTeam}
+                              onValueChange={(value) => setCurrentTeam(value)}
+                            >
+                              <SelectItem value="personal">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                                  <span className="font-medium">Personal</span>
+                                </div>
+                              </SelectItem>
+                              {teams?.filter(team => team.team_id).map((team) => (
+                                <SelectItem
+                                  key={team.team_id}
+                                  value={team.team_id}
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                                    <span className="font-medium">
+                                      {team.team_alias 
+                                        ? `${team.team_alias.slice(0, 30)}...`
+                                        : `Team ${team.team_id.slice(0, 30)}...`
+                                      }
+                                    </span>
+                                  </div>
+                                </SelectItem>
+                              ))}
+                            </Select>
+                            </div>
+                            {
+                              modelViewMode === "current_team" && (
+
+                            <div className="flex items-start gap-2 mt-2 bg-gray-50 rounded">
+                              <InfoCircleOutlined className="text-gray-400 mt-0.5 flex-shrink-0 text-xs" />
+                              <div className="text-xs text-gray-500">
+                                {currentTeam === "personal" ? (
+                                  <span>
+                                    To access these models: Create a Virtual Key without selecting a team on the {" "}
+                                    <a href="/?login=success&page=api-keys" className="text-gray-600 hover:text-gray-800 underline">
+                                      Virtual Keys page
+                                    </a>
+                                  </span>
+                                ) : (
+                                  <span>
+                                    To access these models: Create a Virtual Key and select Team as &quot;{currentTeam}&quot; on the {" "}
+                                    <a href="/?login=success&page=api-keys" className="text-gray-600 hover:text-gray-800 underline">
+                                      Virtual Keys page
+                                    </a>
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            )
+                          }
+                          </div>
+                          
+                          
+                          {/* Model View Mode Toggle - Also prominent */}
+                          <div className="flex items-center gap-4">
+                            <Text className="text-lg font-semibold text-gray-900">View:</Text>
+                            <Select
+                              className="w-64"
+                              defaultValue="current_team"
+                              value={modelViewMode}
+                              onValueChange={(value) => setModelViewMode(value as 'current_team' | 'all')}
+                            >
+                              <SelectItem value="current_team">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
+                                  <span className="font-medium">Current Team Models</span>
+                                </div>
+                              </SelectItem>
+                              <SelectItem value="all">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-2 h-2 bg-gray-500 rounded-full"></div>
+                                  <span className="font-medium">All Available Models</span>
+                                </div>
+                              </SelectItem>
+                            </Select>
+                          </div>
+                          
+                        </div>
+
+                        
+                        {/* Other Filters */}
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
                             {/* Model Name Filter */}
@@ -1161,29 +1255,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               </Select>
                             </div>
 
-                            {/* Team Filter */}
-                            <div className="flex items-center gap-2">
-                              <Text>Filter by Team:</Text>
-                              <Select
-                                className="w-64"
-                                defaultValue="all"
-                                value={selectedTeamFilter ?? "all"}
-                                onValueChange={(value) => setSelectedTeamFilter(value === "all" ? null : value)}
-                              >
-                                <SelectItem value="all">All Teams</SelectItem>
-                                {teams?.filter(team => team.team_id).map((team) => (
-                                  <SelectItem
-                                    key={team.team_id}
-                                    value={team.team_id}
-                                  >
-                                    {team.team_alias 
-                                      ? `${team.team_alias} (${team.team_id.slice(0, 8)}...)`
-                                      : `Team ${team.team_id.slice(0, 8)}...`
-                                    }
-                                  </SelectItem>
-                                ))}
-                              </Select>
-                            </div>
                             <div className="flex items-center gap-2">
                               <Text>Filter by Model Access Group:</Text>
                               <Select
@@ -1210,7 +1281,21 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                         {/* Results Count */}
                         <div className="flex justify-between items-center">
                           <Text className="text-sm text-gray-700">
-                            Showing {modelData && modelData.data.length > 0 ? modelData.data.length : 0} results
+                            Showing {modelData && modelData.data.length > 0 ? 
+                              modelData.data.filter((model: any) => {
+                                const modelNameMatch = selectedModelGroup === "all" || model.model_name === selectedModelGroup || !selectedModelGroup;
+                                const accessGroupMatch = selectedModelAccessGroupFilter === "all" || model.model_info["access_groups"]?.includes(selectedModelAccessGroupFilter) || !selectedModelAccessGroupFilter;
+                                let teamAccessMatch = true;
+                                if (modelViewMode === 'current_team') {
+                                  if (currentTeam === 'personal') {
+                                    teamAccessMatch = model.model_info?.direct_access === true;
+                                  } else {
+                                    teamAccessMatch = model.model_info?.access_via_team_ids?.includes(currentTeam) === true;
+                                  }
+                                }
+
+                                return modelNameMatch && accessGroupMatch && teamAccessMatch;
+                              }).length : 0} results
                           </Text>
                         </div>
                       </div>
@@ -1231,11 +1316,28 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           setExpandedRows,
                         )}
                       data={modelData.data.filter(
-                        (model: any) => (
-                          (selectedModelGroup === "all" || model.model_name === selectedModelGroup || !selectedModelGroup) &&
-                          (selectedTeamFilter === "all" || model.model_info["team_id"] === selectedTeamFilter || !selectedTeamFilter) &&
-                          (selectedModelAccessGroupFilter === "all" || model.model_info["access_groups"]?.includes(selectedModelAccessGroupFilter) || !selectedModelAccessGroupFilter)
-                        )
+                        (model: any) => {
+                          // Model name filter
+                          const modelNameMatch = selectedModelGroup === "all" || model.model_name === selectedModelGroup || !selectedModelGroup;
+                          
+                          // Model access group filter
+                          const accessGroupMatch = selectedModelAccessGroupFilter === "all" || model.model_info["access_groups"]?.includes(selectedModelAccessGroupFilter) || !selectedModelAccessGroupFilter;
+                          
+                          // Team access filter based on current team and view mode
+                          let teamAccessMatch = true;
+                          if (modelViewMode === 'current_team') {
+                            if (currentTeam === 'personal') {
+                              // Show only models with direct access
+                              teamAccessMatch = model.model_info?.direct_access === true;
+                            } else {
+                              // Show only models accessible by the current team
+                              teamAccessMatch = model.model_info?.access_via_team_ids?.includes(currentTeam) === true;
+                            }
+                          }
+                          // For 'all' mode, show all models (teamAccessMatch remains true)
+                          
+                          return modelNameMatch && accessGroupMatch && teamAccessMatch;
+                        }
                       )}
                       isLoading={false}
                       table={tableRef}
@@ -1279,6 +1381,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 modelData={modelData}
                 all_models_on_proxy={all_models_on_proxy}
                 getDisplayModelName={getDisplayModelName}
+                setSelectedModelId={setSelectedModelId}
               />
             </TabPanel>
             <TabPanel>
