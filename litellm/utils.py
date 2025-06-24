@@ -242,6 +242,7 @@ from litellm.llms.base_llm.image_variations.transformation import (
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 
 from ._logging import _is_debugging_on, verbose_logger
 from .caching.caching import (
@@ -6908,6 +6909,21 @@ class ProviderConfigManager:
 
         if LlmProviders.BEDROCK == provider:
             return BedrockVectorStore.get_initialized_custom_logger()
+        return None
+    
+
+    @staticmethod
+    def get_provider_vector_stores_config(
+        provider: LlmProviders,
+    ) -> Optional[BaseVectorStoreConfig]:
+        """
+        v2 vector store config, use this for new vector store integrations
+        """
+        if litellm.LlmProviders.OPENAI == provider:
+            from litellm.llms.openai.vector_stores.transformation import (
+                OpenAIVectorStoreConfig,
+            )
+            return OpenAIVectorStoreConfig()
         return None
 
     @staticmethod

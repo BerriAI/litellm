@@ -1,14 +1,12 @@
 from typing import Dict, Optional, Tuple
 
 import litellm
-from litellm.llms.base_llm.vector_store.transformation import (
-    BaseVectorStoreTransformation,
-)
+from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils.secrets import get_secret_str
 
 
-class OpenAIVectorStoreTransformation(BaseVectorStoreTransformation):
+class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
     ASSISTANTS_HEADER_KEY = "OpenAI-Beta"
     ASSISTANTS_HEADER_VALUE = "assistants=v2"
 
