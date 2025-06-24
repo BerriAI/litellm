@@ -237,11 +237,7 @@ def test_build_vertex_schema():
                     },
                     "recursion_limit": {"type": "integer"},
                     "configurable": {"type": "object"},
-                    "run_id": {
-                        "anyOf": [
-                            {"format": "uuid", "type": "string", "nullable": True}
-                        ]
-                    },
+                    "run_id": {"anyOf": [{"type": "string", "nullable": True}]},
                 },
                 "type": "object",
             },
