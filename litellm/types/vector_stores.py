@@ -85,3 +85,14 @@ class VectorStoreSearchResponse(TypedDict, total=False):
     ]  # Always "vector_store.search_results.page"
     search_query: Optional[str]
     data: Optional[List[VectorStoreSearchResult]]
+
+class VectorStoreSearchOptionalRequestParams(TypedDict, total=False):
+    """TypedDict for Optional parameters supported by the vector store search API."""
+    filters: Optional[Dict]
+    max_num_results: Optional[int]  
+    ranking_options: Optional[Dict]
+    rewrite_query: Optional[bool]
+
+class VectorStoreSearchRequest(VectorStoreSearchOptionalRequestParams, total=False):
+    """Request body for searching a vector store"""
+    query: Union[str, List[str]]
