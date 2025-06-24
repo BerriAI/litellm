@@ -6926,6 +6926,11 @@ class ProviderConfigManager:
                 OpenAIVectorStoreConfig,
             )
             return OpenAIVectorStoreConfig()
+        elif litellm.LlmProviders.AZURE == provider:
+            from litellm.llms.azure.vector_stores.transformation import (
+                AzureOpenAIVectorStoreConfig,
+            )
+            return AzureOpenAIVectorStoreConfig()
         return None
 
     @staticmethod
