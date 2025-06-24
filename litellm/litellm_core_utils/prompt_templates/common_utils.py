@@ -550,8 +550,11 @@ def unpack_defs(schema: dict, defs: dict) -> None:
 
                 # Replace the reference with resolved copy
                 resolved = copy.deepcopy(target_schema)
-                if parent is not None:
-                    parent[key] = resolved
+                if parent is not None and key is not None:
+                    if isinstance(parent, dict) and isinstance(key, str):
+                        parent[key] = resolved
+                    elif isinstance(parent, list) and isinstance(key, int):
+                        parent[key] = resolved
                 else:
                     # This is the root schema itself
                     schema.clear()
