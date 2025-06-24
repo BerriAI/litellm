@@ -297,12 +297,13 @@ Team must be created before setting it as the default team.
 :::
 
 ```yaml
-default_internal_user_params:    # Default Params used when a new user signs in Via SSO
-    user_role: "internal_user"     # one of "internal_user", "internal_user_viewer", 
-    models: ["no-default-models"] # Optional[List[str]], optional): models to be used by the user
-    teams: # Optional[List[NewUserRequestTeam]], optional): teams to be used by the user
-      - team_id: "team_id_1" # Required[str]: team_id to be used by the user
-        user_role: "user" # Optional[str], optional): Default role in the team. Values: "user" or "admin". Defaults to "user"
+litellm_settings:
+  default_internal_user_params:    # Default Params used when a new user signs in Via SSO
+      user_role: "internal_user"     # one of "internal_user", "internal_user_viewer", 
+      models: ["no-default-models"] # Optional[List[str]], optional): models to be used by the user
+      teams: # Optional[List[NewUserRequestTeam]], optional): teams to be used by the user
+        - team_id: "team_id_1" # Required[str]: team_id to be used by the user
+          user_role: "user" # Optional[str], optional): Default role in the team. Values: "user" or "admin". Defaults to "user"
 ```
 
 </TabItem>
