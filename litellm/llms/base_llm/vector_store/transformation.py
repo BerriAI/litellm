@@ -1,7 +1,11 @@
 from abc import abstractmethod
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.vector_stores import (
+    VectorStoreSearchOptionalRequestParams,
+    VectorStoreSearchResponse,
+)
 
 
 class BaseVectorStoreConfig:
@@ -9,19 +13,20 @@ class BaseVectorStoreConfig:
     def transform_search_vector_store_request(
         self,
         vector_store_id: str,
-        query: str,
+        query: Union[str, List[str]],
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
     ) -> Tuple[str, Dict]:
         pass
 
     @abstractmethod
-    def transform_query_vector_store_response(self):
+    def transform_search_vector_store_response(self) -> VectorStoreSearchResponse:
         pass
 
 
     @abstractmethod
     def validate_environment(
-        self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
+        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
     ) -> dict:
         return {}
 
