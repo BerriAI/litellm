@@ -3305,6 +3305,22 @@
         "mode": "chat",
         "supports_function_calling": true
     },
+    "azure/Mistral-Large-2411": {
+        "max_tokens": 4096,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 1.5e-05,
+        "litellm_provider": "azure",
+        "mode": "chat",
+        "supports_pdf_input": false,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": false,
+        "supports_vision": false,
+        "supports_prompt_caching": false,
+        "supports_system_messages": true,
+        "supports_tool_choice": false
+    },
     "azure/command-r-plus": {
         "max_tokens": 4096,
         "max_input_tokens": 128000,
