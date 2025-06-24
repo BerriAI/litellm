@@ -9995,7 +9995,15 @@
         "mode": "chat",
         "supports_tool_choice": true
     },
-    "mistralai/mistral-small-3.1-24b-instruct": {
+    "openrouter/mistralai/mistral-small-3.1-24b-instruct": {
+        "max_tokens": 32000,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 3e-07,
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
+    "openrouter/mistralai/mistral-small-3.2-24b-instruct": {
         "max_tokens": 32000,
         "input_cost_per_token": 1e-07,
         "output_cost_per_token": 3e-07,
@@ -13647,13 +13655,14 @@
         "input_cost_per_token": 2e-06,
         "output_cost_per_token": 8e-06,
         "output_cost_per_reasoning_token": 3e-06,
-        "litellm_provider": "perplexity",
-        "mode": "chat",
+        "citation_cost_per_token": 2e-06,
         "search_context_cost_per_query": {
             "search_context_size_low": 0.005,
             "search_context_size_medium": 0.005,
             "search_context_size_high": 0.005
         },
+        "litellm_provider": "perplexity",
+        "mode": "chat",
         "supports_reasoning": true,
         "supports_web_search": true
     },

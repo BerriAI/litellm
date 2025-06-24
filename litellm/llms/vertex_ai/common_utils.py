@@ -204,6 +204,7 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     add_object_type(parameters)
     # Postprocessing
     # Filter out fields that don't exist in Schema
+
     parameters = filter_schema_fields(parameters, valid_schema_fields)
 
     if add_property_ordering:
@@ -318,6 +319,11 @@ def filter_schema_fields(
                 k: filter_schema_fields(v, valid_fields, processed)
                 for k, v in value.items()
             }
+        elif key == "format":
+            if value in {"enum", "date-time"}:
+                result[key] = value
+            else:
+                continue
         elif key == "items" and isinstance(value, dict):
             result[key] = filter_schema_fields(value, valid_fields, processed)
         elif key == "anyOf" and isinstance(value, list):
