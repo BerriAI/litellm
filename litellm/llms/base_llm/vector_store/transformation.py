@@ -1,5 +1,7 @@
 from abc import abstractmethod
-from typing import Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+
+import httpx
 
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
@@ -7,6 +9,16 @@ from litellm.types.vector_stores import (
     VectorStoreSearchResponse,
 )
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+
+    from ..chat.transformation import BaseLLMException as _BaseLLMException
+
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
+    BaseLLMException = _BaseLLMException
+else:
+    LiteLLMLoggingObj = Any
+    BaseLLMException = Any
 
 class BaseVectorStoreConfig:
     @abstractmethod
@@ -20,7 +32,7 @@ class BaseVectorStoreConfig:
         pass
 
     @abstractmethod
-    def transform_search_vector_store_response(self) -> VectorStoreSearchResponse:
+    def transform_search_vector_store_response(self, response: httpx.Response) -> VectorStoreSearchResponse:
         pass
 
 
@@ -46,4 +58,16 @@ class BaseVectorStoreConfig:
         if api_base is None:
             raise ValueError("api_base is required")
         return api_base
+    
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
+        from ..chat.transformation import BaseLLMException
+
+        raise BaseLLMException(
+            status_code=status_code,
+            message=error_message,
+            headers=headers,
+        )
 
