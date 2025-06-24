@@ -92,3 +92,7 @@ class VectorStoreSearchOptionalRequestParams(TypedDict, total=False):
     max_num_results: Optional[int]  
     ranking_options: Optional[Dict]
     rewrite_query: Optional[bool]
+
+class VectorStoreSearchRequest(VectorStoreSearchOptionalRequestParams, total=False):
+    """Request body for searching a vector store"""
+    query: Union[str, List[str]]

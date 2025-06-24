@@ -1,9 +1,16 @@
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union, cast
+
+import httpx
 
 import litellm
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
-from litellm.utils.secrets import get_secret_str
+from litellm.types.vector_stores import (
+    VectorStoreSearchOptionalRequestParams,
+    VectorStoreSearchRequest,
+    VectorStoreSearchResponse,
+)
 
 
 class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
@@ -11,7 +18,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
     ASSISTANTS_HEADER_VALUE = "assistants=v2"
 
     def validate_environment(
-        self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
+        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
     ) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
         api_key = (
@@ -63,27 +70,37 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
     def transform_search_vector_store_request(
         self,
         vector_store_id: str,
-        query: str,
+        query: Union[str, List[str]],
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
     ) -> Tuple[str, Dict]:
         url = f"{api_base}/{vector_store_id}/search"
-        request_body = {
-            "query": query,
-            "filters": [],
-            "max_num_results": 10,
-            "ranking_options": {
-                "relevance": {
-                    "alpha": 0.5,
-                    "beta": 0.5,
-                }
-            },
-            "rewrite_query": False,
-        }
-        return url, request_body
+        typed_request_body = VectorStoreSearchRequest(
+            query=query,
+            filters=vector_store_search_optional_params.get("filters", None),
+            max_num_results=vector_store_search_optional_params.get("max_num_results", None),
+            ranking_options=vector_store_search_optional_params.get("ranking_options", None),
+            rewrite_query=vector_store_search_optional_params.get("rewrite_query", None),
+        )
+
+        dict_request_body = cast(dict, typed_request_body)
+        return url, dict_request_body
     
 
-    def transform_search_vector_store_response(self):
-        pass
+
+    def transform_search_vector_store_response(self, response: httpx.Response) -> VectorStoreSearchResponse:
+        try:
+            response_json = response.json()
+            return VectorStoreSearchResponse(
+                **response_json
+            )
+        except Exception as e:
+            raise self.get_error_class(
+                error_message=str(e), 
+                status_code=response.status_code, 
+                headers=response.headers
+            )
+
     
 
     
