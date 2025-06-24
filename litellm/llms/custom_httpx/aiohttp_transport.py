@@ -233,7 +233,6 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 ),
                 proxy=proxy,
                 server_hostname=sni_hostname,
-                proxy=proxy_url_to_use # Explicitly pass the determined proxy URL
             ).__aenter__()
 
         return httpx.Response(
