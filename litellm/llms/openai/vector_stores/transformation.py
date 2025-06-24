@@ -46,7 +46,7 @@ class OpenAIVectorStoreTransformation(BaseVectorStoreTransformation):
         litellm_params: dict,
     ) -> str:
         """
-        Get the endpoint for OpenAI responses API
+        Get the Base endpoint for OpenAI Vector Stores API
         """
         api_base = (
             api_base
