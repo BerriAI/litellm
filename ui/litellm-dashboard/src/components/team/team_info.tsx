@@ -260,6 +260,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         updateData.team_member_budget = Number(values.team_member_budget);
       }
 
+      if (values.team_member_key_duration !== undefined) {
+        updateData.team_member_key_duration = values.team_member_key_duration;
+      }
+
       // Handle object_permission updates
       if (values.vector_stores !== undefined || values.mcp_servers !== undefined) {
         updateData.object_permission = {
