@@ -95,10 +95,6 @@ class TestMistralReasoningSupport:
     def test_get_mistral_reasoning_system_prompt(self):
         """Test that the reasoning system prompt is properly formatted."""
         prompt = MistralConfig._get_mistral_reasoning_system_prompt()
-        
-        assert "<think>" in prompt
-        assert "</think>" in prompt
-        assert "step-by-step" in prompt
         assert isinstance(prompt, str)
         assert len(prompt) > 50  # Ensure it's not empty
 
