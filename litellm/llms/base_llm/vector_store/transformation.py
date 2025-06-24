@@ -4,7 +4,7 @@ from typing import Dict, Optional, Tuple
 from litellm.types.router import GenericLiteLLMParams
 
 
-class BaseVectorStoreTransformation:
+class BaseVectorStoreConfig:
     @abstractmethod
     def transform_search_vector_store_request(
         self,
