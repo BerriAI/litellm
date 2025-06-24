@@ -1225,7 +1225,6 @@ class AWSEventStreamDecoder:
         self.model = model
         self.parser = EventStreamJSONParser()
         self.content_blocks: List[ContentBlockDeltaEvent] = []
-        self.tool_calls_index: Optional[int] = None
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -1315,11 +1314,6 @@ class AWSEventStreamDecoder:
                         response_tool_name = get_bedrock_tool_name(
                             response_tool_name=_response_tool_name
                         )
-                        self.tool_calls_index = (
-                            0
-                            if self.tool_calls_index is None
-                            else self.tool_calls_index + 1
-                        )
                         tool_use = {
                             "id": start_obj["toolUse"]["toolUseId"],
                             "type": "function",
@@ -1327,7 +1321,7 @@ class AWSEventStreamDecoder:
                                 "name": response_tool_name,
                                 "arguments": "",
                             },
-                            "index": self.tool_calls_index,
+                            "index": index,
                         }
                     elif (
                         "reasoningContent" in start_obj
@@ -1352,9 +1346,7 @@ class AWSEventStreamDecoder:
                             "name": None,
                             "arguments": delta_obj["toolUse"]["input"],
                         },
-                        "index": self.tool_calls_index
-                        if self.tool_calls_index is not None
-                        else index,
+                        "index": index,
                     }
                 elif "reasoningContent" in delta_obj:
                     provider_specific_fields = {
