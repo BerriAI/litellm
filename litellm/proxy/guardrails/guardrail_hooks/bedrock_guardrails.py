@@ -305,8 +305,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Check contextual grounding policy
             contextual_grounding_policy = assessment.get("contextualGroundingPolicy")
             if contextual_grounding_policy:
-                filters = contextual_grounding_policy.get("filters", [])
-                for filter_item in filters:
+                grounding_filters = contextual_grounding_policy.get("filters", [])
+                for filter_item in grounding_filters:
                     if filter_item.get("action") == "BLOCKED":
                         return True
 
