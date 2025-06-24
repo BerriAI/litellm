@@ -1237,6 +1237,7 @@ def test_get_azure_ad_token_with_oidc_token(setup_mocks):
         azure_scope="test-azure-scope",
         # Ensure no other auth methods are available
         azure_ad_token_provider=None,
+        client_secret=None
     )
 
     # Call the function
