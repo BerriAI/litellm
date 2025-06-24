@@ -173,11 +173,11 @@ def search(
             custom_llm_provider = "openai"
 
         # get provider config - using vector store custom logger for now
-        vector_store_provider_logger = ProviderConfigManager.get_provider_vector_store_config(
+        vector_store_provider_config = ProviderConfigManager.get_provider_vector_stores_config(
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
-        if vector_store_provider_logger is None:
+        if vector_store_provider_config is None:
             raise ValueError(
                 f"Vector store search is not supported for {custom_llm_provider}"
             )
@@ -206,28 +206,22 @@ def search(
             custom_llm_provider=custom_llm_provider,
         )
 
-        # TODO: Call the handler with _is_async flag once vector_store_search_handler is implemented
-        # response = base_llm_http_handler.vector_store_search_handler(
-        #     vector_store_id=vector_store_id,
-        #     query=query,
-        #     vector_store_search_optional_params=vector_store_search_optional_params,
-        #     custom_llm_provider=custom_llm_provider,
-        #     litellm_params=litellm_params,
-        #     logging_obj=litellm_logging_obj,
-        #     extra_headers=extra_headers,
-        #     extra_body=extra_body,
-        #     timeout=timeout or request_timeout,
-        #     _is_async=_is_async,
-        #     client=kwargs.get("client"),
-        # )
-
-        # For now, return a mock response since the handler doesn't exist yet
-        mock_response = mock_vector_store_search_response()
+        response = base_llm_http_handler.vector_store_search_handler(
+            vector_store_id=vector_store_id,
+            query=query,
+            vector_store_search_optional_params=vector_store_search_optional_params,
+            vector_store_provider_config=vector_store_provider_config,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            logging_obj=litellm_logging_obj,
+            extra_headers=extra_headers,
+            extra_body=extra_body,
+            timeout=timeout or request_timeout,
+            _is_async=_is_async,
+            client=kwargs.get("client"),
+        )
         
-        # Update with actual query
-        mock_response["search_query"] = str(query)
-        
-        return mock_response
+        return response
     except Exception as e:
         raise litellm.exception_type(
             model=None,
