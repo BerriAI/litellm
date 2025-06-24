@@ -78,7 +78,6 @@ class CodestralTextCompletionConfig(OpenAITextCompletionConfig):
         return optional_params
 
     def _chunk_parser(self, chunk_data: str) -> GenericStreamingChunk:
-
         text = ""
         is_finished = False
         finish_reason = None
@@ -105,6 +104,12 @@ class CodestralTextCompletionConfig(OpenAITextCompletionConfig):
 
         original_chunk = litellm.ModelResponse(**chunk_data_dict, stream=True)
         _choices = chunk_data_dict.get("choices", []) or []
+        if len(_choices) == 0:
+            return {
+                "text": "",
+                "is_finished": is_finished,
+                "finish_reason": finish_reason,
+            }
         _choice = _choices[0]
         text = _choice.get("delta", {}).get("content", "")
 

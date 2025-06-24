@@ -13,6 +13,7 @@ interface TopKeyViewProps {
   userID: string | null;
   userRole: string | null;
   teams: any[] | null;
+  premiumUser: boolean;
 }
 
 const TopKeyView: React.FC<TopKeyViewProps> = ({ 
@@ -20,7 +21,8 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
   accessToken, 
   userID, 
   userRole,
-  teams
+  teams,
+  premiumUser
 }) => {
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -33,8 +35,9 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
     try {
       const keyInfo = await keyInfoV1Call(accessToken, item.api_key);
       const transformedKeyData = transformKeyInfo(keyInfo);
+
       setKeyData(transformedKeyData);
-      setSelectedKey(item.key);
+      setSelectedKey(item.api_key);
       setIsModalOpen(true);  // Open modal when key is clicked
     } catch (error) {
       console.error("Error fetching key info:", error);
@@ -140,7 +143,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
                   <div className="space-y-1.5">
                     <div className="text-sm">
                       <span className="text-gray-300">Key: </span>
-                      <span className="font-mono text-gray-100">{item?.key?.slice(0, 10)}...</span>
+                      <span className="font-mono text-gray-100">{item?.api_key?.slice(0, 10)}...</span>
                     </div>
                     <div className="text-sm">
                       <span className="text-gray-300">Spend: </span>
@@ -165,6 +168,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
       )}
 
       {isModalOpen && selectedKey && keyData && (
+        console.log('Rendering modal with:', { isModalOpen, selectedKey, keyData }),
         <div 
           className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
           onClick={handleOutsideClick}
@@ -191,6 +195,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
                 userID={userID}
                 userRole={userRole}
                 teams={teams}
+                premiumUser={premiumUser}
               />
             </div>
           </div>

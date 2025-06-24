@@ -81,7 +81,6 @@ def make_sync_call(
 
 
 class BedrockConverseLLM(BaseAWSLLM):
-
     def __init__(self) -> None:
         super().__init__()
 
@@ -114,7 +113,6 @@ class BedrockConverseLLM(BaseAWSLLM):
         fake_stream: bool = False,
         json_mode: Optional[bool] = False,
     ) -> CustomStreamWrapper:
-
         request_data = await litellm.AmazonConverseConfig()._async_transform_request(
             model=model,
             messages=messages,
@@ -179,7 +177,6 @@ class BedrockConverseLLM(BaseAWSLLM):
         headers: dict = {},
         client: Optional[AsyncHTTPHandler] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-
         request_data = await litellm.AmazonConverseConfig()._async_transform_request(
             model=model,
             messages=messages,
@@ -265,7 +262,6 @@ class BedrockConverseLLM(BaseAWSLLM):
         extra_headers: Optional[dict] = None,
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
     ):
-
         ## SETUP ##
         stream = optional_params.pop("stream", None)
         unencoded_model_id = optional_params.pop("model_id", None)
@@ -301,9 +297,9 @@ class BedrockConverseLLM(BaseAWSLLM):
         aws_sts_endpoint = optional_params.pop("aws_sts_endpoint", None)
         optional_params.pop("aws_region_name", None)
 
-        litellm_params["aws_region_name"] = (
-            aws_region_name  # [DO NOT DELETE] important for async calls
-        )
+        litellm_params[
+            "aws_region_name"
+        ] = aws_region_name  # [DO NOT DELETE] important for async calls
 
         credentials: Credentials = self.get_credentials(
             aws_access_key_id=aws_access_key_id,

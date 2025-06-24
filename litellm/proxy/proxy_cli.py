@@ -1,9 +1,11 @@
+# ruff: noqa: T201
 import importlib
 import json
 import os
 import random
 import subprocess
 import sys
+import urllib.parse
 import urllib.parse as urlparse
 from typing import TYPE_CHECKING, Any, Optional, Union
 
@@ -117,6 +119,7 @@ class ProxyInitializationHelpers:
         host: str,
         port: int,
         log_config: Optional[str] = None,
+        keepalive_timeout: Optional[int] = None,
     ) -> dict:
         """
         Get the arguments for `uvicorn` worker
@@ -134,6 +137,8 @@ class ProxyInitializationHelpers:
         elif litellm.json_logs:
             print("Using json logs. Setting log_config to None.")  # noqa
             uvicorn_args["log_config"] = None
+        if keepalive_timeout is not None:
+            uvicorn_args["timeout_keep_alive"] = keepalive_timeout
         return uvicorn_args
 
     @staticmethod
@@ -143,6 +148,7 @@ class ProxyInitializationHelpers:
         port: int,
         ssl_certfile_path: str,
         ssl_keyfile_path: str,
+        ciphers: Optional[str] = None,
     ):
         """
         Initialize litellm with `hypercorn`
@@ -164,6 +170,8 @@ class ProxyInitializationHelpers:
             )
             config.certfile = ssl_certfile_path
             config.keyfile = ssl_keyfile_path
+            if ciphers is not None:
+                config.ciphers = ciphers
 
         # hypercorn serve raises a type warning when passing a fast api app - even though fast API is a valid type
         asyncio.run(serve(app, config))  # type: ignore
@@ -451,7 +459,32 @@ class ProxyInitializationHelpers:
     help="Path to the SSL certfile. Use this when you want to provide SSL certificate when starting proxy",
     envvar="SSL_CERTFILE_PATH",
 )
+@click.option(
+    "--ciphers",
+    default=None,
+    type=str,
+    help="Ciphers to use for the SSL setup.",
+)
+@click.option(
+    "--use_prisma_migrate",
+    is_flag=True,
+    default=False,
+    help="Use prisma migrate instead of prisma db push for database schema updates",
+)
 @click.option("--local", is_flag=True, default=False, help="for local debugging")
+@click.option(
+    "--skip_server_startup",
+    is_flag=True,
+    default=False,
+    help="Skip starting the server after setup (useful for migrations only)",
+)
+@click.option(
+    "--keepalive_timeout",
+    default=None,
+    type=int,
+    help="Set the uvicorn keepalive timeout in seconds (uvicorn timeout_keep_alive parameter)",
+    envvar="KEEPALIVE_TIMEOUT",
+)
 def run_server(  # noqa: PLR0915
     host,
     port,
@@ -485,7 +518,11 @@ def run_server(  # noqa: PLR0915
     run_hypercorn,
     ssl_keyfile_path,
     ssl_certfile_path,
+    ciphers,
     log_config,
+    use_prisma_migrate,
+    skip_server_startup,
+    keepalive_timeout,
 ):
     args = locals()
     if local:
@@ -502,6 +539,10 @@ def run_server(  # noqa: PLR0915
                 ProxyConfig,
                 app,
                 save_worker_config,
+            )
+        except ModuleNotFoundError as e:
+            raise ModuleNotFoundError(
+                f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`"
             )
         except ImportError as e:
             if "litellm[proxy]" in str(e):
@@ -644,7 +685,7 @@ def run_server(  # noqa: PLR0915
                     **key_management_settings
                 )
             database_url = general_settings.get("database_url", None)
-            if database_url is None:
+            if database_url is None and os.getenv("DATABASE_URL") is None:
                 # Check if all required variables are provided
                 database_host = os.getenv("DATABASE_HOST")
                 database_username = os.getenv("DATABASE_USERNAME")
@@ -657,15 +698,21 @@ def run_server(  # noqa: PLR0915
                     and database_password
                     and database_name
                 ):
+                    # Handle the problem of special character escaping in the database URL
+                    database_username_enc = urllib.parse.quote_plus(database_username)
+                    database_password_enc = urllib.parse.quote_plus(database_password)
+                    database_name_enc = urllib.parse.quote_plus(database_name)
+
                     # Construct DATABASE_URL from the provided variables
-                    database_url = f"postgresql://{database_username}:{database_password}@{database_host}/{database_name}"
+                    database_url = f"postgresql://{database_username_enc}:{database_password_enc}@{database_host}/{database_name_enc}"
+
                     os.environ["DATABASE_URL"] = database_url
             db_connection_pool_limit = general_settings.get(
                 "database_connection_pool_limit",
                 LiteLLMDatabaseConnectionPool.database_connection_pool_limit.value,
             )
             db_connection_timeout = general_settings.get(
-                "database_connection_timeout",
+                "database_connection_pool_timeout",
                 LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value,
             )
             if database_url and database_url.startswith("os.environ/"):
@@ -715,7 +762,10 @@ def run_server(  # noqa: PLR0915
 
             if is_prisma_runnable:
                 from litellm.proxy.db.check_migration import check_prisma_schema_diff
-                from litellm.proxy.db.prisma_client import should_update_prisma_schema
+                from litellm.proxy.db.prisma_client import (
+                    PrismaManager,
+                    should_update_prisma_schema,
+                )
 
                 if (
                     should_update_prisma_schema(
@@ -725,26 +775,7 @@ def run_server(  # noqa: PLR0915
                 ):
                     check_prisma_schema_diff(db_url=None)
                 else:
-                    for _ in range(4):
-                        # run prisma db push, before starting server
-                        # Save the current working directory
-                        original_dir = os.getcwd()
-                        # set the working directory to where this script is
-                        abspath = os.path.abspath(__file__)
-                        dname = os.path.dirname(abspath)
-                        os.chdir(dname)
-                        try:
-                            subprocess.run(
-                                ["prisma", "db", "push", "--accept-data-loss"]
-                            )
-                            break  # Exit the loop if the subprocess succeeds
-                        except subprocess.CalledProcessError as e:
-                            import time
-
-                            print(f"Error: {e}")  # noqa
-                            time.sleep(random.randrange(start=1, stop=5))
-                        finally:
-                            os.chdir(original_dir)
+                    PrismaManager.setup_database(use_migrate=use_prisma_migrate)
             else:
                 print(  # noqa
                     f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa
@@ -760,10 +791,18 @@ def run_server(  # noqa: PLR0915
         # DO NOT DELETE - enables global variables to work across files
         from litellm.proxy.proxy_server import app  # noqa
 
+        # Skip server startup if requested (after all setup is done)
+        if skip_server_startup:
+            print(  # noqa
+                "LiteLLM: Setup complete. Skipping server startup as requested."
+            )
+            return
+
         uvicorn_args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
             host=host,
             port=port,
             log_config=log_config,
+            keepalive_timeout=keepalive_timeout,
         )
         if run_gunicorn is False and run_hypercorn is False:
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
@@ -797,6 +836,7 @@ def run_server(  # noqa: PLR0915
                 port=port,
                 ssl_certfile_path=ssl_certfile_path,
                 ssl_keyfile_path=ssl_keyfile_path,
+                ciphers=ciphers,
             )
 
 

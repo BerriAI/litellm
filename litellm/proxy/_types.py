@@ -16,19 +16,32 @@ from pydantic import (
 from typing_extensions import Required, TypedDict
 
 from litellm.types.integrations.slack_alerting import AlertType
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, OpenAIFileObject
+from litellm.types.mcp import (
+    MCPAuthType,
+    MCPSpecVersion,
+    MCPSpecVersionType,
+    MCPTransport,
+    MCPTransportType,
+)
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.utils import (
     CallTypes,
     EmbeddingResponse,
     GenericBudgetConfigType,
     ImageResponse,
+    LiteLLMBatch,
+    LiteLLMFineTuningJob,
     LiteLLMPydanticObjectBase,
     ModelResponse,
     ProviderField,
     StandardCallbackDynamicParams,
+    StandardLoggingGuardrailInformation,
+    StandardLoggingMCPToolCall,
+    StandardLoggingModelInformation,
     StandardLoggingPayloadErrorInformation,
     StandardLoggingPayloadStatus,
+    StandardLoggingVectorStoreRequest,
     StandardPassThroughResponseObject,
     TextCompletionResponse,
 )
@@ -38,7 +51,7 @@ from .types_utils.utils import get_instance_fn, validate_custom_validate_return_
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     Span = Any
 
@@ -142,6 +155,25 @@ class LitellmTableNames(str, enum.Enum):
     USER_TABLE_NAME = "LiteLLM_UserTable"
     KEY_TABLE_NAME = "LiteLLM_VerificationToken"
     PROXY_MODEL_TABLE_NAME = "LiteLLM_ProxyModelTable"
+    MANAGED_FILE_TABLE_NAME = "LiteLLM_ManagedFileTable"
+
+
+class Litellm_EntityType(enum.Enum):
+    """
+    Enum for types of entities on litellm
+
+    This enum allows specifying the type of entity that is being tracked in the database.
+    """
+
+    KEY = "key"
+    USER = "user"
+    END_USER = "end_user"
+    TEAM = "team"
+    TEAM_MEMBER = "team_member"
+    ORGANIZATION = "organization"
+
+    # global proxy level entity
+    PROXY = "proxy"
 
 
 def hash_token(token: str):
@@ -174,6 +206,28 @@ class LiteLLM_UpperboundKeyGenerateParams(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
 
 
+class KeyManagementRoutes(str, enum.Enum):
+    """
+    Enum for key management routes
+    """
+
+    # write routes
+    KEY_GENERATE = "/key/generate"
+    KEY_UPDATE = "/key/update"
+    KEY_DELETE = "/key/delete"
+    KEY_REGENERATE = "/key/regenerate"
+    KEY_REGENERATE_WITH_PATH_PARAM = "/key/{key_id}/regenerate"
+    KEY_BLOCK = "/key/block"
+    KEY_UNBLOCK = "/key/unblock"
+
+    # info and health routes
+    KEY_INFO = "/key/info"
+    KEY_HEALTH = "/key/health"
+
+    # list routes
+    KEY_LIST = "/key/list"
+
+
 class LiteLLMRoutes(enum.Enum):
     openai_route_names = [
         "chat_completion",
@@ -203,6 +257,9 @@ class LiteLLMRoutes(enum.Enum):
         # image generation
         "/images/generations",
         "/v1/images/generations",
+        # image edit
+        "/images/edits",
+        "/v1/images/edits",
         # audio transcription
         "/audio/transcriptions",
         "/v1/audio/transcriptions",
@@ -247,10 +304,11 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/models",
         # token counter
         "/utils/token_counter",
+        "/utils/transform_request",
         # rerank
         "/rerank",
         "/v1/rerank",
-        "/v2/rerank"
+        "/v2/rerank",
         # realtime
         "/realtime",
         "/v1/realtime",
@@ -277,21 +335,39 @@ class LiteLLMRoutes(enum.Enum):
         "/openai",
         "/assemblyai",
         "/eu.assemblyai",
+        "/vllm",
+        "/mistral",
     ]
 
     anthropic_routes = [
         "/v1/messages",
+        # MCP routes
+        "/mcp/tools",
+        "/mcp/tools/list",
+        "/mcp/tools/call",
     ]
 
+    apply_guardrail_routes = [
+        "/guardrails/apply_guardrail",
+    ]
+
+    llm_api_routes = (
+        openai_routes
+        + anthropic_routes
+        + mapped_pass_through_routes
+        + apply_guardrail_routes
+    )
     info_routes = [
         "/key/info",
         "/key/health",
         "/team/info",
         "/team/list",
+        "/v2/team/list",
         "/organization/list",
         "/team/available",
         "/user/info",
         "/model/info",
+        "/v1/model/info",
         "/v2/model/info",
         "/v2/key/info",
         "/model_group/info",
@@ -303,14 +379,19 @@ class LiteLLMRoutes(enum.Enum):
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
     master_key_only_routes = ["/global/spend/reset"]
 
-    management_routes = [  # key
-        "/key/generate",
-        "/key/{token_id}/regenerate",
-        "/key/update",
-        "/key/delete",
-        "/key/info",
-        "/key/health",
-        "/key/list",
+    key_management_routes = [
+        KeyManagementRoutes.KEY_GENERATE,
+        KeyManagementRoutes.KEY_UPDATE,
+        KeyManagementRoutes.KEY_DELETE,
+        KeyManagementRoutes.KEY_INFO,
+        KeyManagementRoutes.KEY_REGENERATE,
+        KeyManagementRoutes.KEY_REGENERATE_WITH_PATH_PARAM,
+        KeyManagementRoutes.KEY_LIST,
+        KeyManagementRoutes.KEY_BLOCK,
+        KeyManagementRoutes.KEY_UNBLOCK,
+    ]
+
+    management_routes = [
         # user
         "/user/new",
         "/user/update",
@@ -321,16 +402,19 @@ class LiteLLMRoutes(enum.Enum):
         "/team/update",
         "/team/delete",
         "/team/list",
+        "/v2/team/list",
         "/team/info",
         "/team/block",
         "/team/unblock",
         "/team/available",
+        "/team/permissions_list",
+        "/team/permissions_update",
         # model
         "/model/new",
         "/model/update",
         "/model/delete",
         "/model/info",
-    ]
+    ] + key_management_routes
 
     spend_tracking_routes = [
         # spend
@@ -364,6 +448,8 @@ class LiteLLMRoutes(enum.Enum):
             "/test",
             "/config/yaml",
             "/metrics",
+            "/litellm/.well-known/litellm-ui-config",
+            "/.well-known/litellm-ui-config",
         ]
     )
 
@@ -386,23 +472,22 @@ class LiteLLMRoutes(enum.Enum):
         "/global/predict/spend/logs",
         "/global/activity",
         "/health/services",
+        "/get/litellm_model_cost_map",
     ] + info_routes
 
-    internal_user_routes = [
-        "/key/generate",
-        "/key/{token_id}/regenerate",
-        "/key/update",
-        "/key/delete",
-        "/key/health",
-        "/key/info",
-        "/global/spend/tags",
-        "/global/spend/keys",
-        "/global/spend/models",
-        "/global/spend/provider",
-        "/global/spend/end_users",
-        "/global/activity",
-        "/global/activity/model",
-    ] + spend_tracking_routes
+    internal_user_routes = (
+        [
+            "/global/spend/tags",
+            "/global/spend/keys",
+            "/global/spend/models",
+            "/global/spend/provider",
+            "/global/spend/end_users",
+            "/global/activity",
+            "/global/activity/model",
+        ]
+        + spend_tracking_routes
+        + key_management_routes
+    )
 
     internal_user_view_only_routes = (
         spend_tracking_routes + global_spend_tracking_routes
@@ -411,7 +496,14 @@ class LiteLLMRoutes(enum.Enum):
     self_managed_routes = [
         "/team/member_add",
         "/team/member_delete",
+        "/team/permissions_list",
+        "/team/permissions_update",
+        "/team/daily/activity",
         "/model/new",
+        "/model/update",
+        "/model/delete",
+        "/user/daily/activity",
+        "/model/{model_id}/update",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
@@ -576,6 +668,11 @@ class ModelParams(LiteLLMPydanticObjectBase):
         return values
 
 
+class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
+    mcp_servers: Optional[List[str]] = None
+    vector_stores: Optional[List[str]] = None
+
+
 class GenerateRequestBase(LiteLLMPydanticObjectBase):
     """
     Overlapping schema between key and user generate/update requests
@@ -606,6 +703,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     guardrails: Optional[List[str]] = None
     blocked: Optional[bool] = None
     aliases: Optional[dict] = {}
+    object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
 
 class KeyRequestBase(GenerateRequestBase):
@@ -613,6 +711,7 @@ class KeyRequestBase(GenerateRequestBase):
     budget_id: Optional[str] = None
     tags: Optional[List[str]] = None
     enforced_params: Optional[List[str]] = None
+    allowed_routes: Optional[list] = []
 
 
 class GenerateKeyRequest(KeyRequestBase):
@@ -623,13 +722,15 @@ class GenerateKeyRequest(KeyRequestBase):
 class GenerateKeyResponse(KeyRequestBase):
     key: str  # type: ignore
     key_name: Optional[str] = None
-    expires: Optional[datetime]
+    expires: Optional[datetime] = None
     user_id: Optional[str] = None
     token_id: Optional[str] = None
     litellm_budget_table: Optional[Any] = None
     token: Optional[str] = None
     created_by: Optional[str] = None
     updated_by: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -698,9 +799,11 @@ class KeyRequest(LiteLLMPydanticObjectBase):
 
 
 class LiteLLM_ModelTable(LiteLLMPydanticObjectBase):
+    id: Optional[int] = None
     model_aliases: Optional[Union[str, dict]] = None  # json dump the dict
     created_by: str
     updated_by: str
+    team: Optional["LiteLLM_TeamTable"] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -729,6 +832,55 @@ class LiteLLM_ProxyModelTable(LiteLLMPydanticObjectBase):
         return values
 
 
+# MCP Types
+class SpecialMCPServerName(str, enum.Enum):
+    all_team_servers = "all-team-mcpservers"
+    all_proxy_servers = "all-proxy-mcpservers"
+
+
+# MCP Proxy Request Types
+class NewMCPServerRequest(LiteLLMPydanticObjectBase):
+    server_id: Optional[str] = None
+    alias: Optional[str] = None
+    description: Optional[str] = None
+    transport: MCPTransportType = MCPTransport.sse
+    spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
+    auth_type: Optional[MCPAuthType] = None
+    url: str
+
+
+class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
+    server_id: str
+    alias: Optional[str] = None
+    description: Optional[str] = None
+    transport: MCPTransportType = MCPTransport.sse
+    spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
+    auth_type: Optional[MCPAuthType] = None
+    url: str
+
+
+class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
+    """Represents a LiteLLM_MCPServerTable record"""
+
+    server_id: str
+    alias: Optional[str] = None
+    description: Optional[str] = None
+    url: str
+    transport: MCPTransportType
+    spec_version: MCPSpecVersionType
+    auth_type: Optional[MCPAuthType] = None
+    created_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+    updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
+
+
+class NewUserRequestTeam(LiteLLMPydanticObjectBase):
+    team_id: str
+    max_budget_in_team: Optional[float] = None
+    user_role: Literal["user", "admin"] = "user"
+
+
 class NewUserRequest(GenerateRequestBase):
     max_budget: Optional[float] = None
     user_email: Optional[str] = None
@@ -741,11 +893,13 @@ class NewUserRequest(GenerateRequestBase):
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
         ]
     ] = None
-    teams: Optional[list] = None
+    teams: Optional[Union[List[str], List[NewUserRequestTeam]]] = None
     auto_create_key: bool = (
         True  # flag used for returning a key as part of the /user/new response
     )
     send_invite_email: Optional[bool] = None
+    sso_user_id: Optional[str] = None
+    organizations: Optional[List[str]] = None
 
 
 class NewUserResponse(GenerateKeyResponse):
@@ -762,6 +916,8 @@ class NewUserResponse(GenerateKeyResponse):
     teams: Optional[list] = None
     user_alias: Optional[str] = None
     model_max_budget: Optional[dict] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 
 class UpdateUserRequest(GenerateRequestBase):
@@ -824,6 +980,10 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
         default=None,
         description="Max budget for each model (e.g. {'gpt-4o': {'max_budget': '0.0000001', 'budget_duration': '1d', 'tpm_limit': 1000, 'rpm_limit': 1000}})",
     )
+    budget_reset_at: Optional[datetime] = Field(
+        default=None,
+        description="Datetime when the budget is reset",
+    )
 
 
 class BudgetRequest(LiteLLMPydanticObjectBase):
@@ -854,6 +1014,7 @@ class NewCustomerRequest(BudgetNewRequest):
     alias: Optional[str] = None  # human-friendly alias
     blocked: bool = False  # allow/disallow requests for this end-user
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
+    spend: Optional[float] = None
     allowed_model_region: Optional[AllowedModelRegion] = (
         None  # require all user requests to use models in this specific region
     )
@@ -933,6 +1094,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
     admins: list = []
     members: list = []
     members_with_roles: List[Member] = []
+    team_member_permissions: Optional[List[str]] = None
     metadata: Optional[dict] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
@@ -949,6 +1111,10 @@ class NewTeamRequest(TeamBase):
     model_aliases: Optional[dict] = None
     tags: Optional[list] = None
     guardrails: Optional[List[str]] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+    team_member_budget: Optional[float] = (
+        None  # allow user to set a budget for all team members
+    )
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -989,6 +1155,8 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     tags: Optional[list] = None
     model_aliases: Optional[dict] = None
     guardrails: Optional[List[str]] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+    team_member_budget: Optional[float] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
@@ -1081,6 +1249,14 @@ class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
         return values
 
 
+class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
+    """Represents a LiteLLM_ObjectPermissionTable record"""
+
+    object_permission_id: str
+    mcp_servers: Optional[List[str]] = []
+    vector_stores: Optional[List[str]] = []
+
+
 class LiteLLM_TeamTable(TeamBase):
     team_id: str  # type: ignore
     spend: Optional[float] = None
@@ -1089,7 +1265,14 @@ class LiteLLM_TeamTable(TeamBase):
     budget_reset_at: Optional[datetime] = None
     model_id: Optional[int] = None
     litellm_model_table: Optional[LiteLLM_ModelTable] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
+    updated_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
+
+    #########################################################
+    # Object Permission - MCP, Vector Stores etc.
+    #########################################################
+    object_permission_id: Optional[str] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1136,6 +1319,7 @@ class TeamRequest(LiteLLMPydanticObjectBase):
 class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     """Represents user-controllable params for a LiteLLM_BudgetTable record"""
 
+    budget_id: Optional[str] = None
     soft_budget: Optional[float] = None
     max_budget: Optional[float] = None
     max_parallel_requests: Optional[int] = None
@@ -1145,6 +1329,13 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     budget_duration: Optional[str] = None
 
     model_config = ConfigDict(protected_namespaces=())
+
+
+class LiteLLM_BudgetTableFull(LiteLLM_BudgetTable):
+    """Represents all params for a LiteLLM_BudgetTable record"""
+
+    budget_reset_at: Optional[datetime] = None
+    created_at: datetime
 
 
 class LiteLLM_TeamMemberTable(LiteLLM_BudgetTable):
@@ -1166,6 +1357,11 @@ class NewOrganizationRequest(LiteLLM_BudgetTable):
     models: List = []
     budget_id: Optional[str] = None
     metadata: Optional[dict] = None
+
+    #########################################################
+    # Object Permission - MCP, Vector Stores etc.
+    #########################################################
+    object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
 
 class OrganizationRequest(LiteLLMPydanticObjectBase):
@@ -1240,12 +1436,25 @@ class DynamoDBArgs(LiteLLMPydanticObjectBase):
 
 
 class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
+    id: Optional[str] = Field(
+        default=None,
+        description="Optional unique identifier for the pass-through endpoint. If not provided, endpoints will be identified by path for backwards compatibility.",
+    )
     path: str = Field(description="The route to be added to the LiteLLM Proxy Server.")
     target: str = Field(
         description="The URL to which requests for this path should be forwarded."
     )
     headers: dict = Field(
-        description="Key-value pairs of headers to be forwarded with the request. You can set any key value pair here and it will be forwarded to your target endpoint"
+        default={},
+        description="Key-value pairs of headers to be forwarded with the request. You can set any key value pair here and it will be forwarded to your target endpoint",
+    )
+    include_subpath: bool = Field(
+        default=False,
+        description="If True, requests to subpaths of the path will be forwarded to the target endpoint. For example, if the path is /bria and include_subpath is True, requests to /bria/v1/text-to-image/base/2.3 will be forwarded to the target endpoint.",
+    )
+    cost_per_request: float = Field(
+        default=0.0,
+        description="The USD cost per request to the target endpoint. This is used to calculate the cost of the request to the target endpoint.",
     )
 
 
@@ -1262,6 +1471,10 @@ class ConfigFieldUpdate(LiteLLMPydanticObjectBase):
 class ConfigFieldDelete(LiteLLMPydanticObjectBase):
     config_type: Literal["general_settings"]
     field_name: str
+
+
+class CallbackDelete(LiteLLMPydanticObjectBase):
+    callback_name: str
 
 
 class FieldDetail(BaseModel):
@@ -1436,6 +1649,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
     allowed_cache_controls: Optional[list] = []
+    allowed_routes: Optional[list] = []
     permissions: Dict = {}
     model_spend: Dict = {}
     model_max_budget: Dict = {}
@@ -1447,6 +1661,8 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     created_by: Optional[str] = None
     updated_at: Optional[datetime] = None
     updated_by: Optional[str] = None
+    object_permission_id: Optional[str] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1509,6 +1725,7 @@ class UserAPIKeyAuth(
     user_tpm_limit: Optional[int] = None
     user_rpm_limit: Optional[int] = None
     user_email: Optional[str] = None
+    request_route: Optional[str] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -1556,6 +1773,55 @@ class LiteLLM_OrganizationMembershipTable(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(protected_namespaces=())
 
 
+class LiteLLM_OrganizationTableUpdate(LiteLLMPydanticObjectBase):
+    """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
+
+    organization_id: Optional[str] = None
+    organization_alias: Optional[str] = None
+    budget_id: Optional[str] = None
+    spend: Optional[float] = None
+    metadata: Optional[dict] = None
+    models: Optional[List[str]] = None
+    updated_by: Optional[str] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
+
+
+class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
+    user_id: str
+    max_budget: Optional[float] = None
+    spend: float = 0.0
+    model_max_budget: Optional[Dict] = {}
+    model_spend: Optional[Dict] = {}
+    user_email: Optional[str] = None
+    user_alias: Optional[str] = None
+    models: list = []
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    user_role: Optional[str] = None
+    organization_memberships: Optional[List[LiteLLM_OrganizationMembershipTable]] = None
+    teams: List[str] = []
+    sso_user_id: Optional[str] = None
+    budget_duration: Optional[str] = None
+    budget_reset_at: Optional[datetime] = None
+    metadata: Optional[dict] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def set_model_info(cls, values):
+        if values.get("spend") is None:
+            values.update({"spend": 0.0})
+        if values.get("models") is None:
+            values.update({"models": []})
+        if values.get("teams") is None:
+            values.update({"teams": []})
+        return values
+
+    model_config = ConfigDict(protected_namespaces=())
+
+
 class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
     """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
 
@@ -1567,18 +1833,14 @@ class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
     models: List[str]
     created_by: str
     updated_by: str
+    users: Optional[List[LiteLLM_UserTable]] = None
+    litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
 
-
-class LiteLLM_OrganizationTableUpdate(LiteLLMPydanticObjectBase):
-    """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
-
-    organization_id: Optional[str] = None
-    organization_alias: Optional[str] = None
-    budget_id: Optional[str] = None
-    spend: Optional[float] = None
-    metadata: Optional[dict] = None
-    models: Optional[List[str]] = None
-    updated_by: Optional[str] = None
+    #########################################################
+    # Object Permission - MCP, Vector Stores etc.
+    #########################################################
+    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
+    object_permission_id: Optional[str] = None
 
 
 class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
@@ -1597,41 +1859,9 @@ class NewOrganizationResponse(LiteLLM_OrganizationTable):
     updated_at: datetime
 
 
-class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
-    user_id: str
-    max_budget: Optional[float] = None
-    spend: float = 0.0
-    model_max_budget: Optional[Dict] = {}
-    model_spend: Optional[Dict] = {}
-    user_email: Optional[str] = None
-    models: list = []
-    tpm_limit: Optional[int] = None
-    rpm_limit: Optional[int] = None
-    user_role: Optional[str] = None
-    organization_memberships: Optional[List[LiteLLM_OrganizationMembershipTable]] = None
-    teams: List[str] = []
-    sso_user_id: Optional[str] = None
-    budget_duration: Optional[str] = None
-    budget_reset_at: Optional[datetime] = None
-    metadata: Optional[dict] = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def set_model_info(cls, values):
-        if values.get("spend") is None:
-            values.update({"spend": 0.0})
-        if values.get("models") is None:
-            values.update({"models": []})
-        if values.get("teams") is None:
-            values.update({"teams": []})
-        return values
-
-    model_config = ConfigDict(protected_namespaces=())
-
-
 class LiteLLM_UserTableFiltered(BaseModel):  # done to avoid exposing sensitive data
     user_id: str
-    user_email: str
+    user_email: Optional[str] = None
 
 
 class LiteLLM_UserTableWithKeyCount(LiteLLM_UserTable):
@@ -1693,7 +1923,7 @@ class LiteLLM_ErrorLogs(LiteLLMPydanticObjectBase):
     endTime: Union[str, datetime, None]
 
 
-AUDIT_ACTIONS = Literal["created", "updated", "deleted", "blocked"]
+AUDIT_ACTIONS = Literal["created", "updated", "deleted", "blocked", "rotated"]
 
 
 class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
@@ -1713,6 +1943,36 @@ class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
         if values.get("changed_by") is not None:
             values["changed_by"] = str(values["changed_by"])
         return values
+
+    @model_validator(mode="after")
+    def mask_api_keys(self):
+        from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+
+        masker = SensitiveDataMasker(sensitive_patterns={"key"})
+
+        if self.before_value is not None:
+            json_before_value: Optional[dict] = None
+            if isinstance(self.before_value, str):
+                json_before_value = json.loads(self.before_value)
+            elif isinstance(self.before_value, dict):
+                json_before_value = self.before_value
+
+            if json_before_value is not None:
+                json_before_value = masker.mask_dict(json_before_value)
+                self.before_value = json.dumps(json_before_value, default=str)
+
+        if self.updated_values is not None:
+            json_updated_values: Optional[dict] = None
+            if isinstance(self.updated_values, str):
+                json_updated_values = json.loads(self.updated_values)
+            elif isinstance(self.updated_values, dict):
+                json_updated_values = self.updated_values
+
+            if json_updated_values is not None:
+                json_updated_values = masker.mask_dict(json_updated_values)
+                self.updated_values = json.dumps(json_updated_values, default=str)
+
+        return self
 
 
 class LiteLLM_SpendLogs_ResponseObject(LiteLLMPydanticObjectBase):
@@ -1747,6 +2007,7 @@ class CallInfo(LiteLLMPydanticObjectBase):
     key_alias: Optional[str] = None
     projected_exceeded_date: Optional[str] = None
     projected_spend: Optional[float] = None
+    event_group: Litellm_EntityType
 
 
 class WebhookEvent(CallInfo):
@@ -1759,14 +2020,18 @@ class WebhookEvent(CallInfo):
         "internal_user_created",
         "spend_tracked",
     ]
-    event_group: Literal["internal_user", "key", "team", "proxy", "customer"]
     event_message: str  # human-readable description of event
+    event_group: Litellm_EntityType
 
 
 class SpecialModelNames(enum.Enum):
     all_team_models = "all-team-models"
     all_proxy_models = "all-proxy-models"
     no_default_models = "no-default-models"
+
+
+class SpecialProxyStrings(enum.Enum):
+    default_user_id = "default_user_id"  # global proxy admin
 
 
 class InvitationNew(LiteLLMPydanticObjectBase):
@@ -1909,10 +2174,15 @@ class SpendLogsMetadata(TypedDict):
     ]  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: Optional[str]
     applied_guardrails: Optional[List[str]]
+    mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
+    vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]
+    guardrail_information: Optional[StandardLoggingGuardrailInformation]
     status: StandardLoggingPayloadStatus
     proxy_server_request: Optional[str]
     batch_models: Optional[List[str]]
     error_information: Optional[StandardLoggingPayloadErrorInformation]
+    usage_object: Optional[dict]
+    model_map_information: Optional[StandardLoggingModelInformation]
 
 
 class SpendLogsPayload(TypedDict):
@@ -1941,6 +2211,9 @@ class SpendLogsPayload(TypedDict):
     custom_llm_provider: Optional[str]
     messages: Optional[Union[str, list, dict]]
     response: Optional[Union[str, list, dict]]
+    proxy_server_request: Optional[str]
+    session_id: Optional[str]
+    status: Literal["success", "failure"]
 
 
 class SpanAttributes(str, enum.Enum):
@@ -2053,9 +2326,13 @@ class CommonProxyErrors(str, enum.Enum):
     )
     no_llm_router = "No models configured on proxy"
     not_allowed_access = "Admin-only endpoint. Not allowed to access this."
-    not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. Get a 7 day trial key here: https://www.litellm.ai/#trial. \nPricing: https://www.litellm.ai/#pricing"
+    not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. Get a 7 day trial key here: https://www.litellm.ai/enterprise#trial. \nPricing: https://www.litellm.ai/#pricing"
     max_parallel_request_limit_reached = (
         "Crossed TPM / RPM / Max Parallel Request Limit"
+    )
+    missing_enterprise_package = "Missing litellm-enterprise package. Please install it to use this feature. Run `pip install litellm-enterprise`"
+    missing_enterprise_package_docker = (
+        "This uses the enterprise folder - only available on the Docker image."
     )
 
 
@@ -2067,20 +2344,102 @@ class SpendCalculateRequest(LiteLLMPydanticObjectBase):
 
 class ProxyErrorTypes(str, enum.Enum):
     budget_exceeded = "budget_exceeded"
+    """
+    Object was over budget
+    """
+    no_db_connection = "no_db_connection"
+    """
+    No database connection
+    """
+
+    token_not_found_in_db = "token_not_found_in_db"
+    """
+    Requested token was not found in the database
+    """
+
     key_model_access_denied = "key_model_access_denied"
+    """
+    Key does not have access to the model
+    """
+
     team_model_access_denied = "team_model_access_denied"
+    """
+    Team does not have access to the model
+    """
+
     user_model_access_denied = "user_model_access_denied"
+    """
+    User does not have access to the model
+    """
+
+    org_model_access_denied = "org_model_access_denied"
+    """
+    Organization does not have access to the model
+    """
+
     expired_key = "expired_key"
+    """
+    Key has expired
+    """
+
     auth_error = "auth_error"
+    """
+    General authentication error
+    """
+
     internal_server_error = "internal_server_error"
+    """
+    Internal server error
+    """
+
     bad_request_error = "bad_request_error"
+    """
+    Bad request error
+    """
+
     not_found_error = "not_found_error"
-    validation_error = "bad_request_error"
+    """
+    Not found error
+    """
+
+    validation_error = "validation_error"
+    """
+    Validation error
+    """
+
     cache_ping_error = "cache_ping_error"
+    """
+    Cache ping error
+    """
+
+    team_member_permission_error = "team_member_permission_error"
+    """
+    Team member permission error
+    """
+
+    key_vector_store_access_denied = "key_vector_store_access_denied"
+    """
+    Key does not have access to the vector store
+    """
+
+    team_vector_store_access_denied = "team_vector_store_access_denied"
+    """
+    Team does not have access to the vector store
+    """
+
+    org_vector_store_access_denied = "org_vector_store_access_denied"
+    """
+    Organization does not have access to the vector store
+    """
+
+    team_member_already_in_team = "team_member_already_in_team"
+    """
+    Team member is already in team
+    """
 
     @classmethod
     def get_model_access_error_type_for_object(
-        cls, object_type: Literal["key", "user", "team"]
+        cls, object_type: Literal["key", "user", "team", "org"]
     ) -> "ProxyErrorTypes":
         """
         Get the model access error type for object_type
@@ -2091,9 +2450,29 @@ class ProxyErrorTypes(str, enum.Enum):
             return cls.team_model_access_denied
         elif object_type == "user":
             return cls.user_model_access_denied
+        elif object_type == "org":
+            return cls.org_model_access_denied
+
+    @classmethod
+    def get_vector_store_access_error_type_for_object(
+        cls, object_type: Literal["key", "team", "org"]
+    ) -> "ProxyErrorTypes":
+        """
+        Get the vector store access error type for object_type
+        """
+        if object_type == "key":
+            return cls.key_vector_store_access_denied
+        elif object_type == "team":
+            return cls.team_vector_store_access_denied
+        elif object_type == "org":
+            return cls.org_vector_store_access_denied
 
 
-DB_CONNECTION_ERROR_TYPES = (httpx.ConnectError, httpx.ReadError, httpx.ReadTimeout)
+DB_CONNECTION_ERROR_TYPES = (
+    httpx.ConnectError,
+    httpx.ReadError,
+    httpx.ReadTimeout,
+)
 
 
 class SSOUserDefinedValues(TypedDict):
@@ -2121,7 +2500,8 @@ class CreatePassThroughEndpoint(LiteLLMPydanticObjectBase):
 class LiteLLM_TeamMembership(LiteLLMPydanticObjectBase):
     user_id: str
     team_id: str
-    budget_id: str
+    budget_id: Optional[str] = None
+    spend: Optional[float] = 0.0
     litellm_budget_table: Optional[LiteLLM_BudgetTable]
 
 
@@ -2154,7 +2534,10 @@ class OrgMemberAddRequest(LiteLLMPydanticObjectBase):
         member_data = data.get("member")
         if isinstance(member_data, list):
             # If member is a list of dictionaries, convert each dictionary to a Member object
-            members = [OrgMember(**item) for item in member_data]
+            if all(isinstance(item, dict) for item in member_data):
+                members = [OrgMember(**item) for item in member_data]
+            else:
+                members = [item for item in member_data]
             # Replace member_data with the list of Member objects
             data["member"] = members
         elif isinstance(member_data, dict):
@@ -2270,9 +2653,13 @@ class OrganizationMemberUpdateResponse(MemberUpdateResponse):
 ##########################################
 
 
+class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
+    team_member_budget_table: Optional[LiteLLM_BudgetTable] = None
+
+
 class TeamInfoResponseObject(TypedDict):
     team_id: str
-    team_info: LiteLLM_TeamTable
+    team_info: TeamInfoResponseObjectTeamTable
     keys: List
     team_memberships: List[LiteLLM_TeamMembership]
 
@@ -2314,12 +2701,15 @@ class SpecialHeaders(enum.Enum):
     anthropic_authorization = "x-api-key"
     google_ai_studio_authorization = "x-goog-api-key"
     azure_apim_authorization = "Ocp-Apim-Subscription-Key"
+    custom_litellm_api_key = "x-litellm-api-key"
+    mcp_auth = "x-mcp-auth"
 
 
 class LitellmDataForBackendLLMCall(TypedDict, total=False):
     headers: dict
     organization: str
     timeout: Optional[float]
+    user: Optional[str]
 
 
 class JWTKeyItem(TypedDict, total=False):
@@ -2646,3 +3036,83 @@ class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
     models: Optional[List[str]] = Field(
         default=None, description="Default list of models that new users can access"
     )
+
+    teams: Optional[Union[List[str], List[NewUserRequestTeam]]] = Field(
+        default=None,
+        description="Default teams for new users created",
+    )
+
+
+class BaseDailySpendTransaction(TypedDict):
+    date: str
+    api_key: str
+    model: str
+    model_group: Optional[str]
+    custom_llm_provider: Optional[str]
+
+    # token count metrics
+    prompt_tokens: int
+    completion_tokens: int
+    cache_read_input_tokens: int
+    cache_creation_input_tokens: int
+
+    # request level metrics
+    spend: float
+    api_requests: int
+    successful_requests: int
+    failed_requests: int
+
+
+class DailyTeamSpendTransaction(BaseDailySpendTransaction):
+    team_id: str
+
+
+class DailyUserSpendTransaction(BaseDailySpendTransaction):
+    user_id: str
+
+
+class DailyTagSpendTransaction(BaseDailySpendTransaction):
+    tag: str
+
+
+class DBSpendUpdateTransactions(TypedDict):
+    """
+    Internal Data Structure for buffering spend updates in Redis or in memory before committing them to the database
+    """
+
+    user_list_transactions: Optional[Dict[str, float]]
+    end_user_list_transactions: Optional[Dict[str, float]]
+    key_list_transactions: Optional[Dict[str, float]]
+    team_list_transactions: Optional[Dict[str, float]]
+    team_member_list_transactions: Optional[Dict[str, float]]
+    org_list_transactions: Optional[Dict[str, float]]
+
+
+class SpendUpdateQueueItem(TypedDict, total=False):
+    entity_type: Litellm_EntityType
+    entity_id: str
+    response_cost: Optional[float]
+
+
+class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
+    unified_file_id: str
+    file_object: OpenAIFileObject
+    model_mappings: Dict[str, str]
+    flat_model_file_ids: List[str]
+    created_by: Optional[str]
+    updated_by: Optional[str]
+
+
+class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
+    unified_object_id: str
+    model_object_id: str
+    file_purpose: Literal["batch", "fine-tune"]
+    file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob]
+
+
+class EnterpriseLicenseData(TypedDict, total=False):
+    expiration_date: str
+    user_id: str
+    allowed_features: List[str]
+    max_users: int
+    max_teams: int

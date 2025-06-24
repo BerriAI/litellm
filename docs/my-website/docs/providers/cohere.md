@@ -13,7 +13,9 @@ os.environ["COHERE_API_KEY"] = ""
 
 ## Usage
 
-```python
+### LiteLLM Python SDK
+
+```python showLineNumbers
 from litellm import completion
 
 ## set ENV variables
@@ -26,9 +28,9 @@ response = completion(
 )
 ```
 
-## Usage - Streaming
+#### Streaming
 
-```python
+```python showLineNumbers
 from litellm import completion
 
 ## set ENV variables
@@ -46,15 +48,90 @@ for chunk in response:
 ```
 
 
+
+## Usage with LiteLLM Proxy 
+
+Here's how to call Cohere with the LiteLLM Proxy Server
+
+### 1. Save key in your environment
+
+```bash
+export COHERE_API_KEY="your-api-key"
+```
+
+### 2. Start the proxy 
+
+Define the cohere models you want to use in the config.yaml
+
+```yaml showLineNumbers
+model_list:
+  - model_name: command-a-03-2025 
+    litellm_params:
+      model: command-a-03-2025
+      api_key: "os.environ/COHERE_API_KEY"
+```
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+
+### 3. Test it
+
+
+<Tabs>
+<TabItem value="Curl" label="Curl Request">
+
+```shell showLineNumbers
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer <your-litellm-api-key>' \
+--data ' {
+      "model": "command-a-03-2025",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+</TabItem>
+<TabItem value="openai" label="OpenAI v1.0.0+">
+
+```python showLineNumbers
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy
+response = client.chat.completions.create(model="command-a-03-2025", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+])
+
+print(response)
+
+```
+</TabItem>
+</Tabs>
+
+
 ## Supported Models
 | Model Name | Function Call |
 |------------|----------------|
-| command-r-plus-08-2024 | `completion('command-r-plus-08-2024', messages)` |  
-| command-r-08-2024 | `completion('command-r-08-2024', messages)` |
-| command-r-plus | `completion('command-r-plus', messages)` |  
-| command-r | `completion('command-r', messages)` |
-| command-light | `completion('command-light', messages)` |  
-| command-nightly | `completion('command-nightly', messages)` |
+| command-a-03-2025 | `litellm.completion('command-a-03-2025', messages)` |
+| command-r-plus-08-2024 | `litellm.completion('command-r-plus-08-2024', messages)` |  
+| command-r-08-2024 | `litellm.completion('command-r-08-2024', messages)` |
+| command-r-plus | `litellm.completion('command-r-plus', messages)` |  
+| command-r | `litellm.completion('command-r', messages)` |
+| command-light | `litellm.completion('command-light', messages)` |  
+| command-nightly | `litellm.completion('command-nightly', messages)` |
 
 
 ## Embedding

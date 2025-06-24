@@ -1,16 +1,16 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 import httpx
 
 from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
-    ResponsesAPIRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStreamingResponse,
 )
+from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 
 if TYPE_CHECKING:
@@ -59,15 +59,11 @@ class BaseResponsesAPIConfig(ABC):
         model: str,
         drop_params: bool,
     ) -> Dict:
-
         pass
 
     @abstractmethod
     def validate_environment(
-        self,
-        headers: dict,
-        model: str,
-        api_key: Optional[str] = None,
+        self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
     ) -> dict:
         return {}
 
@@ -75,8 +71,7 @@ class BaseResponsesAPIConfig(ABC):
     def get_complete_url(
         self,
         api_base: Optional[str],
-        model: str,
-        stream: Optional[bool] = None,
+        litellm_params: dict,
     ) -> str:
         """
         OPTIONAL
@@ -97,7 +92,7 @@ class BaseResponsesAPIConfig(ABC):
         response_api_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> ResponsesAPIRequestParams:
+    ) -> Dict:
         pass
 
     @abstractmethod
@@ -121,6 +116,82 @@ class BaseResponsesAPIConfig(ABC):
         """
         pass
 
+    #########################################################
+    ########## DELETE RESPONSE API TRANSFORMATION ##############
+    #########################################################
+    @abstractmethod
+    def transform_delete_response_api_request(
+        self,
+        response_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        pass
+
+    @abstractmethod
+    def transform_delete_response_api_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> DeleteResponseResult:
+        pass
+
+    #########################################################
+    ########## END DELETE RESPONSE API TRANSFORMATION #######
+    #########################################################
+
+    #########################################################
+    ########## GET RESPONSE API TRANSFORMATION ###############
+    #########################################################
+    @abstractmethod
+    def transform_get_response_api_request(
+        self,
+        response_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        pass
+
+    @abstractmethod
+    def transform_get_response_api_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIResponse:
+        pass
+
+    #########################################################
+    ########## LIST INPUT ITEMS API TRANSFORMATION ##########
+    #########################################################
+    @abstractmethod
+    def transform_list_input_items_request(
+        self,
+        response_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+        after: Optional[str] = None,
+        before: Optional[str] = None,
+        include: Optional[List[str]] = None,
+        limit: int = 20,
+        order: Literal["asc", "desc"] = "desc",
+    ) -> Tuple[str, Dict]:
+        pass
+
+    @abstractmethod
+    def transform_list_input_items_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> Dict:
+        pass
+
+    #########################################################
+    ########## END GET RESPONSE API TRANSFORMATION ##########
+    #########################################################
+
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
@@ -131,3 +202,12 @@ class BaseResponsesAPIConfig(ABC):
             message=error_message,
             headers=headers,
         )
+
+    def should_fake_stream(
+        self,
+        model: Optional[str],
+        stream: Optional[bool],
+        custom_llm_provider: Optional[str] = None,
+    ) -> bool:
+        """Returns True if litellm should fake a stream for the given model and stream value"""
+        return False

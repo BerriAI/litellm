@@ -43,19 +43,19 @@ These headers are useful for clients to understand the current rate limit status
 | `x-litellm-max-fallbacks` | int | Maximum number of fallback attempts allowed |
 
 ## Cost Tracking Headers
-| Header | Type | Description |
-|--------|------|-------------|
-| `x-litellm-response-cost` | float | Cost of the API call |
-| `x-litellm-key-spend` | float | Total spend for the API key |
+| Header | Type | Description | Available on Pass-Through Endpoints |
+|--------|------|-------------|-------------|
+| `x-litellm-response-cost` | float | Cost of the API call | |
+| `x-litellm-key-spend` | float | Total spend for the API key | ✅ |
 
 ## LiteLLM Specific Headers
-| Header | Type | Description |
-|--------|------|-------------|
-| `x-litellm-call-id` | string | Unique identifier for the API call |
-| `x-litellm-model-id` | string | Unique identifier for the model used |
-| `x-litellm-model-api-base` | string | Base URL of the API endpoint |
-| `x-litellm-version` | string | Version of LiteLLM being used |
-| `x-litellm-model-group` | string | Model group identifier |
+| Header | Type | Description | Available on Pass-Through Endpoints |
+|--------|------|-------------|-------------|
+| `x-litellm-call-id` | string | Unique identifier for the API call | ✅ |
+| `x-litellm-model-id` | string | Unique identifier for the model used | |
+| `x-litellm-model-api-base` | string | Base URL of the API endpoint | ✅ |
+| `x-litellm-version` | string | Version of LiteLLM being used | |
+| `x-litellm-model-group` | string | Model group identifier | |
 
 ## Response headers from LLM providers
 

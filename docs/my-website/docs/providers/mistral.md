@@ -144,20 +144,22 @@ All models listed here https://docs.mistral.ai/platform/endpoints are supported.
 :::
 
 
-| Model Name     | Function Call                                                |
-|----------------|--------------------------------------------------------------|
-| Mistral Small  | `completion(model="mistral/mistral-small-latest", messages)` |
-| Mistral Medium | `completion(model="mistral/mistral-medium-latest", messages)`|
-| Mistral Large 2  | `completion(model="mistral/mistral-large-2407", messages)` |
-| Mistral Large Latest  | `completion(model="mistral/mistral-large-latest", messages)` |
-| Mistral 7B     | `completion(model="mistral/open-mistral-7b", messages)`      |
-| Mixtral 8x7B   | `completion(model="mistral/open-mixtral-8x7b", messages)`    |
-| Mixtral 8x22B  | `completion(model="mistral/open-mixtral-8x22b", messages)`   |
-| Codestral      | `completion(model="mistral/codestral-latest", messages)`     |
-| Mistral NeMo      | `completion(model="mistral/open-mistral-nemo", messages)`     |
-| Mistral NeMo 2407      | `completion(model="mistral/open-mistral-nemo-2407", messages)`     |
-| Codestral Mamba      | `completion(model="mistral/open-codestral-mamba", messages)`     |
-| Codestral Mamba    | `completion(model="mistral/codestral-mamba-latest"", messages)`     |
+| Model Name     | Function Call                                                | Reasoning Support |
+|----------------|--------------------------------------------------------------|-------------------|
+| Mistral Small  | `completion(model="mistral/mistral-small-latest", messages)` | No |
+| Mistral Medium | `completion(model="mistral/mistral-medium-latest", messages)`| No |
+| Mistral Large 2  | `completion(model="mistral/mistral-large-2407", messages)` | No |
+| Mistral Large Latest  | `completion(model="mistral/mistral-large-latest", messages)` | No |
+| **Magistral Small**  | `completion(model="mistral/magistral-small-2506", messages)` | Yes |
+| **Magistral Medium** | `completion(model="mistral/magistral-medium-2506", messages)`| Yes |
+| Mistral 7B     | `completion(model="mistral/open-mistral-7b", messages)`      | No |
+| Mixtral 8x7B   | `completion(model="mistral/open-mixtral-8x7b", messages)`    | No |
+| Mixtral 8x22B  | `completion(model="mistral/open-mixtral-8x22b", messages)`   | No |
+| Codestral      | `completion(model="mistral/codestral-latest", messages)`     | No |
+| Mistral NeMo      | `completion(model="mistral/open-mistral-nemo", messages)`     | No |
+| Mistral NeMo 2407      | `completion(model="mistral/open-mistral-nemo-2407", messages)`     | No |
+| Codestral Mamba      | `completion(model="mistral/open-codestral-mamba", messages)`     | No |
+| Codestral Mamba    | `completion(model="mistral/codestral-mamba-latest"", messages)`     | No |
 
 ## Function Calling 
 
@@ -202,6 +204,112 @@ assert isinstance(
     response.choices[0].message.tool_calls[0].function.arguments, str
 )
 ```
+
+## Reasoning
+
+Mistral does not directly support reasoning, instead it recommends a specific [system prompt](https://docs.mistral.ai/capabilities/reasoning/) to use with their magistral models. By setting the `reasoning_effort` parameter, LiteLLM will prepend the system prompt to the request. 
+
+If an existing system message is provided, LiteLLM will send both as a list of system messages (you can verify this by enabling `litellm._turn_on_debug()`).
+
+### Supported Models
+
+| Model Name     | Function Call                                                |
+|----------------|--------------------------------------------------------------|
+| Magistral Small  | `completion(model="mistral/magistral-small-2506", messages)` |
+| Magistral Medium | `completion(model="mistral/magistral-medium-2506", messages)`|
+
+### Using Reasoning Effort
+
+The `reasoning_effort` parameter controls how much effort the model puts into reasoning. When used with magistral models.
+
+```python
+from litellm import completion
+import os
+
+os.environ['MISTRAL_API_KEY'] = "your-api-key"
+
+response = completion(
+    model="mistral/magistral-medium-2506",
+    messages=[
+        {"role": "user", "content": "What is 15 multiplied by 7?"}
+    ],
+    reasoning_effort="medium"  # Options: "low", "medium", "high"
+)
+
+print(response)
+```
+
+### Example with System Message
+
+If you already have a system message, LiteLLM will prepend the reasoning instructions:
+
+```python
+response = completion(
+    model="mistral/magistral-medium-2506",
+    messages=[
+        {"role": "system", "content": "You are a helpful math tutor."},
+        {"role": "user", "content": "Explain how to solve quadratic equations."}
+    ],
+    reasoning_effort="high"
+)
+
+# The system message becomes:
+# "When solving problems, think step-by-step in <think> tags before providing your final answer...
+#  
+#  You are a helpful math tutor."
+```
+
+### Usage with LiteLLM Proxy
+
+You can also use reasoning capabilities through the LiteLLM proxy:
+
+<Tabs>
+<TabItem value="Curl" label="Curl Request">
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data '{
+      "model": "magistral-medium-2506",
+      "messages": [
+        {
+          "role": "user",
+          "content": "What is the square root of 144? Show your reasoning."
+        }
+      ],
+      "reasoning_effort": "medium"
+    }'
+```
+</TabItem>
+<TabItem value="openai" label="OpenAI v1.0.0+">
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="magistral-medium-2506", 
+    messages=[
+        {
+            "role": "user",
+            "content": "Calculate the area of a circle with radius 5. Show your work."
+        }
+    ],
+    reasoning_effort="high"
+)
+
+print(response)
+```
+</TabItem>
+</Tabs>
+
+### Important Notes
+
+- **Model Compatibility**: Reasoning parameters only work with magistral models
+- **Backward Compatibility**: Non-magistral models will ignore reasoning parameters and work normally
 
 ## Sample Usage - Embedding
 ```python

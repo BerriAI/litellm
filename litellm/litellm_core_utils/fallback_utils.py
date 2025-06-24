@@ -1,5 +1,6 @@
 import uuid
 from copy import deepcopy
+from typing import Optional
 
 import litellm
 from litellm._logging import verbose_logger
@@ -31,13 +32,16 @@ async def async_completion_with_fallbacks(**kwargs):
     kwargs.pop("acompletion", None)  # Remove to prevent keyword conflicts
     litellm_call_id = str(uuid.uuid4())
     base_kwargs = {**kwargs, **nested_kwargs, "litellm_call_id": litellm_call_id}
+
+    # fields to remove
     base_kwargs.pop("model", None)  # Remove model as it will be set per fallback
+    litellm_logging_obj = base_kwargs.pop("litellm_logging_obj", None)
 
     # Try each fallback model
+    most_recent_exception_str: Optional[str] = None
     for fallback in fallbacks:
         try:
             completion_kwargs = deepcopy(base_kwargs)
-
             # Handle dictionary fallback configurations
             if isinstance(fallback, dict):
                 model = fallback.pop("model", original_model)
@@ -45,7 +49,11 @@ async def async_completion_with_fallbacks(**kwargs):
             else:
                 model = fallback
 
-            response = await litellm.acompletion(**completion_kwargs, model=model)
+            response = await litellm.acompletion(
+                **completion_kwargs,
+                model=model,
+                litellm_logging_obj=litellm_logging_obj,
+            )
 
             if response is not None:
                 return response
@@ -54,10 +62,11 @@ async def async_completion_with_fallbacks(**kwargs):
             verbose_logger.exception(
                 f"Fallback attempt failed for model {model}: {str(e)}"
             )
+            most_recent_exception_str = str(e)
             continue
 
     raise Exception(
-        "All fallback attempts failed. Enable verbose logging with `litellm.set_verbose=True` for details."
+        f"{most_recent_exception_str}. All fallback attempts failed. Enable verbose logging with `litellm.set_verbose=True` for details."
     )
 
 

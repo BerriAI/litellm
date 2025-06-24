@@ -25,14 +25,7 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
         _is_async: bool = False,
         api_version: Optional[str] = None,
         litellm_params: Optional[dict] = None,
-    ) -> Optional[
-        Union[
-            OpenAI,
-            AsyncOpenAI,
-            AzureOpenAI,
-            AsyncAzureOpenAI,
-        ]
-    ]:
+    ) -> Optional[Union[OpenAI, AsyncOpenAI, AzureOpenAI, AsyncAzureOpenAI,]]:
         # Override to use Azure-specific client initialization
         if isinstance(client, OpenAI) or isinstance(client, AsyncOpenAI):
             client = None

@@ -18,22 +18,26 @@ import {
 import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
 import { keyDeleteCall, keyUpdateCall } from "./networking";
 import { KeyResponse } from "./key_team_helpers/key_list";
-import { Form, Input, InputNumber, message, Select } from "antd";
+import { Form, Input, InputNumber, message, Select, Tooltip } from "antd";
 import { KeyEditView } from "./key_edit_view";
 import { RegenerateKeyModal } from "./regenerate_key_modal";
 import { rolesWithWriteAccess } from '../utils/roles';
+import ObjectPermissionsView from "./object_permissions_view";
 
 interface KeyInfoViewProps {
   keyId: string;
   onClose: () => void;
   keyData: KeyResponse | undefined;
+  onKeyDataUpdate?: (data: Partial<KeyResponse>) => void;
+  onDelete?: () => void;
   accessToken: string | null;
   userID: string | null;
   userRole: string | null;
   teams: any[] | null;
+  premiumUser: boolean;
 }
 
-export default function KeyInfoView({ keyId, onClose, keyData, accessToken, userID, userRole, teams }: KeyInfoViewProps) {
+export default function KeyInfoView({ keyId, onClose, keyData, accessToken, userID, userRole, teams, onKeyDataUpdate, onDelete, premiumUser }: KeyInfoViewProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [form] = Form.useForm();
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -61,6 +65,25 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
 
       const currentKey = formValues.token;
       formValues.key = currentKey;
+
+      // Handle object_permission updates
+      if (formValues.vector_stores !== undefined) {
+        formValues.object_permission = {
+          ...keyData.object_permission,
+          vector_stores: formValues.vector_stores || []
+        };
+        // Remove vector_stores from the top level as it should be in object_permission
+        delete formValues.vector_stores;
+      }
+
+      if (formValues.mcp_servers !== undefined) {
+        formValues.object_permission = {
+          ...keyData.object_permission,
+          mcp_servers: formValues.mcp_servers || []
+        };
+        // Remove mcp_servers from the top level as it should be in object_permission
+        delete formValues.mcp_servers;
+      }
 
       // Convert metadata back to an object if it exists and is a string
       if (formValues.metadata && typeof formValues.metadata === "string") {
@@ -93,6 +116,9 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
       }
 
       const newKeyValues = await keyUpdateCall(accessToken, formValues);
+      if (onKeyDataUpdate) {
+        onKeyDataUpdate(newKeyValues)
+      }
       message.success("Key updated successfully");
       setIsEditing(false);
       // Refresh key data here if needed
@@ -107,6 +133,9 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
       if (!accessToken) return;
       await keyDeleteCall(accessToken as string, keyData.token);
       message.success("Key deleted successfully");
+      if (onDelete) {
+        onDelete()
+      }
       onClose();
     } catch (error) {
       console.error("Error deleting the key:", error);
@@ -115,7 +144,7 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
   };
 
   return (
-    <div className="p-4">
+    <div className="w-full h-screen p-4">
       <div className="flex justify-between items-center mb-6">
         <div>
           <Button 
@@ -131,14 +160,19 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
         </div>
         {userRole && rolesWithWriteAccess.includes(userRole) && (
           <div className="flex gap-2">
-            <Button
-              icon={RefreshIcon}
-              variant="secondary"
-              onClick={() => setIsRegenerateModalOpen(true)}
-              className="flex items-center"
-            >
-              Regenerate Key
-            </Button>
+            <Tooltip title={!premiumUser ? "This is a LiteLLM Enterprise feature, and requires a valid key to use." : ""}>
+              <span className="inline-block">
+                <Button
+                  icon={RefreshIcon}
+                  variant="secondary"
+                  onClick={() => setIsRegenerateModalOpen(true)}
+                  className="flex items-center"
+                  disabled={!premiumUser}
+                >
+                  Regenerate Key
+                </Button>
+              </span>
+            </Tooltip>
             <Button
               icon={TrashIcon}
               variant="secondary"
@@ -157,6 +191,7 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
         visible={isRegenerateModalOpen}
         onClose={() => setIsRegenerateModalOpen(false)}
         accessToken={accessToken}
+        premiumUser={premiumUser}
       />
 
       {/* Delete Confirmation Modal */}
@@ -241,12 +276,20 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
                   )}
                 </div>
               </Card>
+
+              <Card>
+                <ObjectPermissionsView 
+                  objectPermission={keyData.object_permission} 
+                  variant="inline"
+                  accessToken={accessToken}
+                />
+              </Card>
             </Grid>
           </TabPanel>
 
           {/* Settings Panel */}
           <TabPanel>
-            <Card>
+            <Card className="overflow-y-auto max-h-[65vh]">
               <div className="flex justify-between items-center mb-4">
                 <Title>Key Settings</Title>
                 {!isEditing && userRole && rolesWithWriteAccess.includes(userRole) && (
@@ -346,6 +389,13 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
                       {JSON.stringify(keyData.metadata, null, 2)}
                     </pre>
                   </div>
+
+                  <ObjectPermissionsView 
+                    objectPermission={keyData.object_permission} 
+                    variant="inline"
+                    className="pt-4 border-t border-gray-200"
+                    accessToken={accessToken}
+                  />
                 </div>
               )}
             </Card>

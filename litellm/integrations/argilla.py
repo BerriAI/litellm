@@ -98,7 +98,6 @@ class ArgillaLogger(CustomBatchLogger):
         argilla_dataset_name: Optional[str],
         argilla_base_url: Optional[str],
     ) -> ArgillaCredentialsObject:
-
         _credentials_api_key = argilla_api_key or os.getenv("ARGILLA_API_KEY")
         if _credentials_api_key is None:
             raise Exception("Invalid Argilla API Key given. _credentials_api_key=None.")

@@ -6,7 +6,7 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-from typing import List, Literal, Optional, Tuple, Union
+from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload, cast
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
@@ -75,17 +75,25 @@ class MistralConfig(OpenAIGPTConfig):
         return super().get_config()
 
     def get_supported_openai_params(self, model: str) -> List[str]:
-        return [
+        supported_params = [
             "stream",
             "temperature",
             "top_p",
             "max_tokens",
+            "max_completion_tokens",
             "tools",
             "tool_choice",
             "seed",
             "stop",
             "response_format",
+            "parallel_tool_calls",
         ]
+
+        # Add reasoning support for magistral models
+        if "magistral" in model.lower():
+            supported_params.extend(["thinking", "reasoning_effort"])
+            
+        return supported_params
 
     def _map_tool_choice(self, tool_choice: str) -> str:
         if tool_choice == "auto" or tool_choice == "none":
@@ -94,6 +102,20 @@ class MistralConfig(OpenAIGPTConfig):
             return "any"
         else:  # openai 'tool_choice' object param not supported by Mistral API
             return "any"
+
+    @staticmethod
+    def _get_mistral_reasoning_system_prompt() -> str:
+        """
+        Returns the system prompt for Mistral reasoning models.
+        Based on Mistral's documentation: https://docs.mistral.ai/capabilities/reasoning/
+        """
+        return """When solving problems, think step-by-step in <think> tags before providing your final answer. Use the following format:
+
+<think>
+Your step-by-step reasoning process. Be thorough and work through the problem carefully.
+</think>
+
+Then provide a clear, concise answer based on your reasoning."""
 
     def map_openai_params(
         self,
@@ -104,6 +126,10 @@ class MistralConfig(OpenAIGPTConfig):
     ) -> dict:
         for param, value in non_default_params.items():
             if param == "max_tokens":
+                optional_params["max_tokens"] = value
+            if (
+                param == "max_completion_tokens"
+            ):  # max_completion_tokens should take priority
                 optional_params["max_tokens"] = value
             if param == "tools":
                 optional_params["tools"] = value
@@ -123,6 +149,14 @@ class MistralConfig(OpenAIGPTConfig):
                 optional_params["extra_body"] = {"random_seed": value}
             if param == "response_format":
                 optional_params["response_format"] = value
+            if param == "reasoning_effort" and "magistral" in model.lower():
+                # Flag that we need to add reasoning system prompt
+                optional_params["_add_reasoning_prompt"] = True
+            if param == "thinking" and "magistral" in model.lower():
+                # Flag that we need to add reasoning system prompt
+                optional_params["_add_reasoning_prompt"] = True
+            if param == "parallel_tool_calls":
+                optional_params["parallel_tool_calls"] = value
         return optional_params
 
     def _get_openai_compatible_provider_info(
@@ -147,9 +181,24 @@ class MistralConfig(OpenAIGPTConfig):
         )
         return api_base, dynamic_api_key
 
+    @overload
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str
+        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
+        ...
+
+    @overload
+    def _transform_messages(
+        self,
+        messages: List[AllMessageValues],
+        model: str,
+        is_async: Literal[False] = False,
     ) -> List[AllMessageValues]:
+        ...
+
+    def _transform_messages(
+        self, messages: List[AllMessageValues], model: str, is_async: bool = False
+    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
         - handles scenario where content is list and not string
         - content list is just text, and no images
@@ -164,7 +213,10 @@ class MistralConfig(OpenAIGPTConfig):
             if _content_block and isinstance(_content_block, list):
                 for c in _content_block:
                     if c.get("type") == "image_url":
-                        return messages
+                        if is_async:
+                            return super()._transform_messages(messages, model, True)
+                        else:
+                            return super()._transform_messages(messages, model, False)
 
         ## 2. If content is list, then convert to string
         messages = handle_messages_with_content_list_to_str_conversion(messages)
@@ -177,19 +229,79 @@ class MistralConfig(OpenAIGPTConfig):
             m = strip_none_values_from_message(m)  # prevents 'extra_forbidden' error
             new_messages.append(m)
 
-        return new_messages
+        if is_async:
+            return super()._transform_messages(new_messages, model, True)
+        else:
+            return super()._transform_messages(new_messages, model, False)
+
+    def _add_reasoning_system_prompt_if_needed(
+        self, 
+        messages: List[AllMessageValues], 
+        optional_params: dict
+    ) -> List[AllMessageValues]:
+        """
+        Add reasoning system prompt for Mistral magistral models when reasoning_effort is specified.
+        """
+        if not optional_params.get("_add_reasoning_prompt", False):
+            return messages
+        
+        # Check if there's already a system message
+        has_system_message = any(msg.get("role") == "system" for msg in messages)
+        
+        if has_system_message:
+            # Prepend reasoning instructions to existing system message
+            for i, msg in enumerate(messages):
+                if msg.get("role") == "system":
+                    existing_content = msg.get("content", "")
+                    reasoning_prompt = self._get_mistral_reasoning_system_prompt()
+                    
+                    # Handle both string and list content, preserving original format
+                    if isinstance(existing_content, str):
+                        # String content - prepend reasoning prompt
+                        new_content: Union[str, list] = f"{reasoning_prompt}\n\n{existing_content}"
+                    elif isinstance(existing_content, list):
+                        # List content - prepend reasoning prompt as text block
+                        new_content = [
+                            {"type": "text", "text": reasoning_prompt + "\n\n"}
+                        ] + existing_content
+                    else:
+                        # Fallback for any other type - convert to string
+                        new_content = f"{reasoning_prompt}\n\n{str(existing_content)}"
+                    
+                    messages[i] = cast(AllMessageValues, {
+                        **msg,
+                        "content": new_content
+                    })
+                    break
+        else:
+            # Add new system message with reasoning instructions
+            reasoning_message: AllMessageValues = cast(AllMessageValues, {
+                "role": "system",
+                "content": self._get_mistral_reasoning_system_prompt()
+            })
+            messages = [reasoning_message] + messages
+        
+        # Remove the internal flag
+        optional_params.pop("_add_reasoning_prompt", None)
+        return messages
 
     @classmethod
     def _handle_name_in_message(cls, message: AllMessageValues) -> AllMessageValues:
         """
         Mistral API only supports `name` in tool messages
 
-        If role == tool, then we keep `name`
+        If role == tool, then we keep `name` if it's not an empty string
         Otherwise, we drop `name`
         """
         _name = message.get("name")  # type: ignore
-        if _name is not None and message["role"] != "tool":
-            message.pop("name", None)  # type: ignore
+        
+        if _name is not None:
+            # Remove name if not a tool message
+            if message["role"] != "tool":
+                message.pop("name", None)  # type: ignore
+            # For tool messages, remove name if it's an empty string
+            elif isinstance(_name, str) and len(_name.strip()) == 0:
+                message.pop("name", None)  # type: ignore
 
         return message
 
@@ -210,3 +322,31 @@ class MistralConfig(OpenAIGPTConfig):
                 mistral_tool_calls.append(_tool_call_message)
             message["tool_calls"] = mistral_tool_calls  # type: ignore
         return message
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        """
+        Transform the overall request to be sent to the API.
+        For magistral models, adds reasoning system prompt when reasoning_effort is specified.
+
+        Returns:
+            dict: The transformed request. Sent as the body of the API call.
+        """
+        # Add reasoning system prompt if needed (for magistral models)
+        if "magistral" in model.lower() and optional_params.get("_add_reasoning_prompt", False):
+            messages = self._add_reasoning_system_prompt_if_needed(messages, optional_params)
+        
+        # Call parent transform_request which handles _transform_messages
+        return super().transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )

@@ -11,9 +11,10 @@ model/{model_id}/update - PATCH endpoint for model update.
 #### MODEL MANAGEMENT ####
 
 import asyncio
+import datetime
 import json
 import uuid
-from typing import Optional, cast
+from typing import Dict, List, Literal, Optional, Tuple, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -23,6 +24,7 @@ from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._types import (
     CommonProxyErrors,
     LiteLLM_ProxyModelTable,
+    LiteLLM_TeamTable,
     LitellmTableNames,
     LitellmUserRoles,
     ModelInfoDelete,
@@ -35,6 +37,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_endpoints.team_endpoints import (
     team_model_add,
     update_team,
@@ -77,6 +80,7 @@ def update_db_model(
         litellm_params=LiteLLMParamsTypedDict(
             **db_model.litellm_params.model_dump(exclude_none=True)  # type: ignore
         ),
+        model_info=db_model.model_info.model_dump(exclude_none=True),
     )
     # update model name
     if updated_patch.model_name:
@@ -116,9 +120,12 @@ def update_db_model(
         )
 
     if "model_info" in merged_deployment_dict:
-        prisma_compatible_model_dict["model_info"] = json.dumps(
-            merged_deployment_dict["model_info"]
-        )
+        model_info = merged_deployment_dict["model_info"]
+        for key, value in model_info.items():
+            if isinstance(value, datetime.datetime):
+                model_info[key] = value.isoformat()
+        prisma_compatible_model_dict["model_info"] = json.dumps(model_info)
+
     return prisma_compatible_model_dict
 
 
@@ -152,6 +159,7 @@ async def patch_model(
     from litellm.proxy.proxy_server import (
         litellm_proxy_admin_name,
         llm_router,
+        premium_user,
         prisma_client,
         store_model_in_db,
     )
@@ -191,6 +199,12 @@ async def patch_model(
                 param=None,
             )
 
+        await ModelManagementAuthChecks.can_user_make_model_call(
+            model_params=db_model,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+            premium_user=premium_user,
+        )
         # Create update dictionary only for provided fields
         update_data = update_db_model(db_model=db_model, updated_patch=patch_data)
 
@@ -205,6 +219,9 @@ async def patch_model(
             where={"model_id": model_id},
             data=update_data,
         )
+        
+        # Clear cache and reload models
+        await clear_cache()
 
         return updated_model
 
@@ -317,22 +334,125 @@ async def _add_team_model_to_db(
     return model_response
 
 
-def check_if_team_id_matches_key(
-    team_id: Optional[str], user_api_key_dict: UserAPIKeyAuth
-) -> bool:
-    can_make_call = True
-    if (
-        user_api_key_dict.user_role
-        and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
-    ):
+class ModelManagementAuthChecks:
+    """
+    Common auth checks for model management endpoints
+    """
+
+    @staticmethod
+    def can_user_make_team_model_call(
+        team_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+        team_obj: Optional[LiteLLM_TeamTable] = None,
+        premium_user: bool = False,
+    ) -> Literal[True]:
+        if premium_user is False:
+            raise HTTPException(
+                status_code=403,
+                detail={"error": CommonProxyErrors.not_premium_user.value},
+            )
+        if (
+            user_api_key_dict.user_role
+            and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        ):
+            return True
+        elif team_obj is None or not _is_user_team_admin(
+            user_api_key_dict=user_api_key_dict, team_obj=team_obj
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Team ID={} does not match the API key's team ID={}, OR you are not the admin for this team. Check `/user/info` to verify your team admin status.".format(
+                        team_id, user_api_key_dict.team_id
+                    )
+                },
+            )
         return True
-    if team_id is None:
-        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-            can_make_call = False
-    else:
-        if user_api_key_dict.team_id != team_id:
-            can_make_call = False
-    return can_make_call
+
+    @staticmethod
+    async def allow_team_model_action(
+        model_params: Union[Deployment, updateDeployment],
+        user_api_key_dict: UserAPIKeyAuth,
+        prisma_client: PrismaClient,
+        premium_user: bool,
+    ) -> Literal[True]:
+        if model_params.model_info is None or model_params.model_info.team_id is None:
+            return True
+        if model_params.model_info.team_id is not None and premium_user is not True:
+            raise HTTPException(
+                status_code=403,
+                detail={"error": CommonProxyErrors.not_premium_user.value},
+            )
+
+        _existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
+            where={"team_id": model_params.model_info.team_id}
+        )
+
+        if _existing_team_row is None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Team id={} does not exist in db".format(
+                        model_params.model_info.team_id
+                    )
+                },
+            )
+        existing_team_row = LiteLLM_TeamTable(**_existing_team_row.model_dump())
+
+        ModelManagementAuthChecks.can_user_make_team_model_call(
+            team_id=model_params.model_info.team_id,
+            user_api_key_dict=user_api_key_dict,
+            team_obj=existing_team_row,
+            premium_user=premium_user,
+        )
+        return True
+
+    @staticmethod
+    async def can_user_make_model_call(
+        model_params: Deployment,
+        user_api_key_dict: UserAPIKeyAuth,
+        prisma_client: PrismaClient,
+        premium_user: bool,
+    ) -> Literal[True]:
+        ## Check team model auth
+        if (
+            model_params.model_info is not None
+            and model_params.model_info.team_id is not None
+        ):
+            team_obj_row = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": model_params.model_info.team_id}
+            )
+            if team_obj_row is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Team id={} does not exist in db".format(
+                            model_params.model_info.team_id
+                        )
+                    },
+                )
+            team_obj = LiteLLM_TeamTable(**team_obj_row.model_dump())
+
+            return ModelManagementAuthChecks.can_user_make_team_model_call(
+                team_id=model_params.model_info.team_id,
+                user_api_key_dict=user_api_key_dict,
+                team_obj=team_obj,
+                premium_user=premium_user,
+            )
+        ## Check non-team model auth
+        elif user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "User does not have permission to make this model call. Your role={}. You can only make model calls if you are a PROXY_ADMIN or if you are a team admin, by specifying a team_id in the model_info.".format(
+                        user_api_key_dict.user_role
+                    )
+                },
+            )
+        else:
+            return True
+
+        return True
 
 
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
@@ -358,6 +478,7 @@ async def delete_model(
 
         from litellm.proxy.proxy_server import (
             llm_router,
+            premium_user,
             prisma_client,
             store_model_in_db,
         )
@@ -369,6 +490,52 @@ async def delete_model(
                     "error": "No DB Connected. Here's how to do it - https://docs.litellm.ai/docs/proxy/virtual_keys"
                 },
             )
+
+        model_in_db = await prisma_client.db.litellm_proxymodeltable.find_unique(
+            where={"model_id": model_info.id}
+        )
+        if model_in_db is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"Model with id={model_info.id} not found in db"},
+            )
+
+        model_params = Deployment(**model_in_db.model_dump())
+        await ModelManagementAuthChecks.can_user_make_model_call(
+            model_params=model_params,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+            premium_user=premium_user,
+        )
+
+        # delete team model alias
+        if model_params.model_info.team_id is not None:
+            removed_model_aliases = await delete_team_model_alias(
+                public_model_name=model_params.model_name,
+                prisma_client=prisma_client,
+            )
+
+            valid_team_model_aliases = [
+                model
+                for team_id, model in removed_model_aliases
+                if team_id == model_params.model_info.team_id
+            ]
+
+            ## UPDATE TEAM TO NOT LIST MODEL ##
+            existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": model_params.model_info.team_id}
+            )
+            if existing_team_row is not None:
+                existing_team_row.models = [
+                    model
+                    for model in existing_team_row.models
+                    if model not in valid_team_model_aliases
+                ]
+
+                await prisma_client.db.litellm_teamtable.update(
+                    where={"team_id": model_params.model_info.team_id},
+                    data={"models": existing_team_row.models},
+                )
 
         # update DB
         if store_model_in_db is True:
@@ -434,6 +601,45 @@ async def delete_model(
         )
 
 
+async def delete_team_model_alias(
+    public_model_name: str,
+    prisma_client: PrismaClient,
+) -> List[Tuple[str, str]]:
+    """
+    Delete a team model alias
+
+    Iterate through all team model aliases and delete the one that matches the model_id
+
+    Returns:
+    - List of team id + model alias pairs that were removed
+    """
+    team_model_aliases = await prisma_client.db.litellm_modeltable.find_many(
+        include={"team": True}
+    )
+    tasks = []
+    removed_model_aliases = []
+    for team_model_alias in team_model_aliases:
+        model_aliases = team_model_alias.model_aliases  # {"alias": "public model name"}
+        id = team_model_alias.id
+
+        if public_model_name in model_aliases.values():
+            key = list(model_aliases.keys())[
+                list(model_aliases.values()).index(public_model_name)
+            ]
+            if team_model_alias.team is not None:
+                removed_model_aliases.append((team_model_alias.team.team_id, key))
+            del model_aliases[key]
+            tasks.append(
+                prisma_client.db.litellm_modeltable.update(
+                    where={"id": id},
+                    data={"model_aliases": json.dumps(model_aliases)},
+                )
+            )
+    await asyncio.gather(*tasks)
+
+    return removed_model_aliases
+
+
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
 @router.post(
     "/model/new",
@@ -455,7 +661,6 @@ async def add_new_model(
     )
 
     try:
-
         if prisma_client is None:
             raise HTTPException(
                 status_code=500,
@@ -464,19 +669,13 @@ async def add_new_model(
                 },
             )
 
-        if model_params.model_info.team_id is not None and premium_user is not True:
-            raise HTTPException(
-                status_code=403,
-                detail={"error": CommonProxyErrors.not_premium_user.value},
-            )
-
-        if not check_if_team_id_matches_key(
-            team_id=model_params.model_info.team_id, user_api_key_dict=user_api_key_dict
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail={"error": "Team ID does not match the API key's team ID"},
-            )
+        ## Auth check
+        await ModelManagementAuthChecks.can_user_make_model_call(
+            model_params=model_params,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+            premium_user=premium_user,
+        )
 
         model_response: Optional[LiteLLM_ProxyModelTable] = None
         # update DB
@@ -593,12 +792,12 @@ async def update_model(
     from litellm.proxy.proxy_server import (
         LITELLM_PROXY_ADMIN_NAME,
         llm_router,
+        premium_user,
         prisma_client,
         store_model_in_db,
     )
 
     try:
-
         if prisma_client is None:
             raise HTTPException(
                 status_code=500,
@@ -606,33 +805,46 @@ async def update_model(
                     "error": "No DB Connected. Here's how to do it - https://docs.litellm.ai/docs/proxy/virtual_keys"
                 },
             )
+
+        _model_id = None
+        _model_info = getattr(model_params, "model_info", None)
+        if _model_info is None:
+            raise Exception("model_info not provided")
+
+        _model_id = _model_info.id
+        if _model_id is None:
+            raise Exception("model_info.id not provided")
+
+        _existing_litellm_params = (
+            await prisma_client.db.litellm_proxymodeltable.find_unique(
+                where={"model_id": _model_id}
+            )
+        )
+
+        if _existing_litellm_params is None:
+            if (
+                llm_router is not None
+                and llm_router.get_deployment(model_id=_model_id) is not None
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Can't edit model. Model in config. Store model in db via `/model/new`. to edit."
+                    },
+                )
+            else:
+                raise Exception("model not found")
+        deployment = Deployment(**_existing_litellm_params.model_dump())
+
+        await ModelManagementAuthChecks.can_user_make_model_call(
+            model_params=deployment,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+            premium_user=premium_user,
+        )
+
         # update DB
         if store_model_in_db is True:
-            _model_id = None
-            _model_info = getattr(model_params, "model_info", None)
-            if _model_info is None:
-                raise Exception("model_info not provided")
-
-            _model_id = _model_info.id
-            if _model_id is None:
-                raise Exception("model_info.id not provided")
-            _existing_litellm_params = (
-                await prisma_client.db.litellm_proxymodeltable.find_unique(
-                    where={"model_id": _model_id}
-                )
-            )
-            if _existing_litellm_params is None:
-                if (
-                    llm_router is not None
-                    and llm_router.get_deployment(model_id=_model_id) is not None
-                ):
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error": "Can't edit model. Model in config. Store model in db via `/model/new`. to edit."
-                        },
-                    )
-                raise Exception("model not found")
             _existing_litellm_params_dict = dict(
                 _existing_litellm_params.litellm_params
             )
@@ -716,4 +928,48 @@ async def update_model(
             type=ProxyErrorTypes.auth_error,
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+def _deduplicate_litellm_router_models(models: List[Dict]) -> List[Dict]:
+    """
+    Deduplicate models based on their model_info.id field.
+    Returns a list of unique models keeping only the first occurrence of each model ID.
+
+    Args:
+        models: List of model dictionaries containing model_info
+
+    Returns:
+        List of deduplicated model dictionaries
+    """
+    seen_ids = set()
+    unique_models = []
+    for model in models:
+        model_id = model.get("model_info", {}).get("id", None)
+        if model_id is not None and model_id not in seen_ids:
+            unique_models.append(model)
+            seen_ids.add(model_id)
+    return unique_models
+
+async def clear_cache():
+    """
+    Clear router caches and reload models.
+    """
+    from litellm.proxy.proxy_server import (
+        proxy_config,
+        llm_router,
+        prisma_client,
+        proxy_logging_obj,
+        verbose_proxy_logger,
+    )
+    try:
+        llm_router.model_list.clear()
+        
+        await proxy_config.add_deployment(
+            prisma_client=prisma_client, 
+            proxy_logging_obj=proxy_logging_obj
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            f"Failed to clear cache and reload models. Due to error - {str(e)}"
         )

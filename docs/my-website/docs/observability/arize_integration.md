@@ -1,4 +1,7 @@
+
 import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
 # Arize AI
 
@@ -10,6 +13,8 @@ This is community maintained, Please make an issue if you run into a bug
 https://github.com/BerriAI/litellm
 
 :::
+
+<Image img={require('../../img/arize.png')} />
 
 
 
@@ -24,7 +29,9 @@ You can also use the instrumentor option instead of the callback, which you can 
 ```python
 litellm.callbacks = ["arize"]
 ```
+
 ```python
+
 import litellm
 import os
 
@@ -48,7 +55,7 @@ response = litellm.completion(
 
 ### Using with LiteLLM Proxy
 
-
+1. Setup config.yaml
 ```yaml
 model_list:
   - model_name: gpt-4
@@ -60,12 +67,133 @@ model_list:
 litellm_settings:
   callbacks: ["arize"]
 
+general_settings:
+  master_key: "sk-1234" # can also be set as an environment variable
+
 environment_variables:
     ARIZE_SPACE_KEY: "d0*****"
     ARIZE_API_KEY: "141a****"
     ARIZE_ENDPOINT: "https://otlp.arize.com/v1" # OPTIONAL - your custom arize GRPC api endpoint
-    ARIZE_HTTP_ENDPOINT: "https://otlp.arize.com/v1" # OPTIONAL - your custom arize HTTP api endpoint. Set either this or ARIZE_ENDPOINT
+    ARIZE_HTTP_ENDPOINT: "https://otlp.arize.com/v1" # OPTIONAL - your custom arize HTTP api endpoint. Set either this or ARIZE_ENDPOINT or Neither (defaults to https://otlp.arize.com/v1 on grpc)
 ```
+
+2. Start the proxy
+
+```bash
+litellm --config config.yaml
+```
+
+3. Test it!
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{ "model": "gpt-4", "messages": [{"role": "user", "content": "Hi 👋 - i'm openai"}]}'
+```
+
+## Pass Arize Space/Key per-request
+
+Supported parameters:
+- `arize_api_key`
+- `arize_space_key`
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+import os
+
+# LLM API Keys
+os.environ['OPENAI_API_KEY']=""
+
+# set arize as a callback, litellm will send the data to arize
+litellm.callbacks = ["arize"]
+ 
+# openai call
+response = litellm.completion(
+  model="gpt-3.5-turbo",
+  messages=[
+    {"role": "user", "content": "Hi 👋 - i'm openai"}
+  ],
+  arize_api_key=os.getenv("ARIZE_SPACE_2_API_KEY"),
+  arize_space_key=os.getenv("ARIZE_SPACE_2_KEY"),
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+litellm_settings:
+  callbacks: ["arize"]
+
+general_settings:
+  master_key: "sk-1234" # can also be set as an environment variable
+```
+
+2. Start the proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+
+<Tabs>
+<TabItem value="curl" label="CURL">
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+  "model": "gpt-4",
+  "messages": [{"role": "user", "content": "Hi 👋 - i'm openai"}],
+  "arize_api_key": "ARIZE_SPACE_2_API_KEY",
+  "arize_space_key": "ARIZE_SPACE_2_KEY"
+}'
+```
+</TabItem>
+<TabItem value="openai_python" label="OpenAI Python">
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    extra_body={
+      "arize_api_key": "ARIZE_SPACE_2_API_KEY",
+      "arize_space_key": "ARIZE_SPACE_2_KEY"
+    }
+)
+
+print(response)
+```
+</TabItem>
+</Tabs>
+</TabItem>
+</Tabs>
 
 ## Support & Talk to Founders
 

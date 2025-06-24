@@ -1,8 +1,16 @@
 import json
 from abc import abstractmethod
-from typing import Optional, Union
+from typing import List, Optional, Union, cast
 
-from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
+import litellm
+from litellm.types.utils import (
+    Choices,
+    Delta,
+    GenericStreamingChunk,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+)
 
 
 class BaseModelResponseIterator:
@@ -29,10 +37,28 @@ class BaseModelResponseIterator:
     def __iter__(self):
         return self
 
+    @staticmethod
+    def _string_to_dict_parser(str_line: str) -> Optional[dict]:
+        stripped_json_chunk: Optional[dict] = None
+        stripped_chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(
+            str_line
+        )
+        try:
+            if stripped_chunk is not None:
+                stripped_json_chunk = json.loads(stripped_chunk)
+            else:
+                stripped_json_chunk = None
+        except json.JSONDecodeError:
+            stripped_json_chunk = None
+        return stripped_json_chunk
+
     def _handle_string_chunk(
         self, str_line: str
     ) -> Union[GenericStreamingChunk, ModelResponseStream]:
         # chunk is a str at this point
+        stripped_json_chunk = BaseModelResponseIterator._string_to_dict_parser(
+            str_line=str_line
+        )
         if "[DONE]" in str_line:
             return GenericStreamingChunk(
                 text="",
@@ -42,9 +68,8 @@ class BaseModelResponseIterator:
                 index=0,
                 tool_use=None,
             )
-        elif str_line.startswith("data:"):
-            data_json = json.loads(str_line[5:])
-            return self.chunk_parser(chunk=data_json)
+        elif stripped_json_chunk:
+            return self.chunk_parser(chunk=stripped_json_chunk)
         else:
             return GenericStreamingChunk(
                 text="",
@@ -85,6 +110,7 @@ class BaseModelResponseIterator:
     async def __anext__(self):
         try:
             chunk = await self.async_response_iterator.__anext__()
+
         except StopAsyncIteration:
             raise StopAsyncIteration
         except ValueError as e:
@@ -99,11 +125,66 @@ class BaseModelResponseIterator:
                     str_line = str_line[index:]
 
             # chunk is a str at this point
-            return self._handle_string_chunk(str_line=str_line)
+            chunk = self._handle_string_chunk(str_line=str_line)
+
+            return chunk
         except StopAsyncIteration:
             raise StopAsyncIteration
         except ValueError as e:
             raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+
+
+class MockResponseIterator:  # for returning ai21 streaming responses
+    def __init__(
+        self, model_response: ModelResponse, json_mode: Optional[bool] = False
+    ):
+        self.model_response = model_response
+        self.json_mode = json_mode
+        self.is_done = False
+
+    # Sync iterator
+    def __iter__(self):
+        return self
+
+    def _chunk_parser(self, chunk_data: ModelResponse) -> ModelResponseStream:
+        try:
+            streaming_choices: List[StreamingChoices] = []
+            for choice in chunk_data.choices:
+                streaming_choices.append(
+                    StreamingChoices(
+                        index=choice.index,
+                        delta=Delta(
+                            **cast(Choices, choice).message.model_dump(),
+                        ),
+                        finish_reason=choice.finish_reason,
+                    )
+                )
+            processed_chunk = ModelResponseStream(
+                id=chunk_data.id,
+                object="chat.completion",
+                created=chunk_data.created,
+                model=chunk_data.model,
+                choices=streaming_choices,
+            )
+            return processed_chunk
+        except Exception as e:
+            raise ValueError(f"Failed to decode chunk: {chunk_data}. Error: {e}")
+
+    def __next__(self):
+        if self.is_done:
+            raise StopIteration
+        self.is_done = True
+        return self._chunk_parser(self.model_response)
+
+    # Async iterator
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self.is_done:
+            raise StopAsyncIteration
+        self.is_done = True
+        return self._chunk_parser(self.model_response)
 
 
 class FakeStreamResponseIterator:

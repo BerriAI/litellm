@@ -19,6 +19,7 @@ class httpxSpecialProvider(str, Enum):
     SecretManager = "secret_manager"
     PassThroughEndpoint = "pass_through_endpoint"
     PromptFactory = "prompt_factory"
+    SSO_HANDLER = "sso_handler"
 
 
 VerifyTypes = Union[str, bool, ssl.SSLContext]

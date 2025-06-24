@@ -60,6 +60,7 @@ async def add_new_member(
     team_id: str,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
+    default_team_budget_id: Optional[str] = None,
 ) -> Tuple[LiteLLM_UserTable, Optional[LiteLLM_TeamMembership]]:
     """
     Add a new member to a team
@@ -119,11 +120,8 @@ async def add_new_member(
             )
 
     # Check if trying to set a budget for team member
-    if (
-        max_budget_in_team is not None
-        and returned_user is not None
-        and returned_user.user_id is not None
-    ):
+
+    if max_budget_in_team is not None:
         # create a new budget item for this member
         response = await prisma_client.db.litellm_budgettable.create(
             data={
@@ -134,6 +132,10 @@ async def add_new_member(
         )
 
         _budget_id = response.budget_id
+    else:
+        _budget_id = default_team_budget_id
+
+    if _budget_id and returned_user is not None and returned_user.user_id is not None:
         _returned_team_membership = (
             await prisma_client.db.litellm_teammembership.create(
                 data={
@@ -179,7 +181,7 @@ def _delete_api_key_from_cache(kwargs):
             user_api_key_cache.delete_cache(key=update_request.key)
 
         # delete key request
-        if isinstance(update_request, KeyRequest):
+        if isinstance(update_request, KeyRequest) and update_request.keys:
             for key in update_request.keys:
                 user_api_key_cache.delete_cache(key=key)
     pass
@@ -226,11 +228,8 @@ async def send_management_endpoint_alert(
     - An internal user is created, updated, or deleted
     - A team is created, updated, or deleted
     """
-    from litellm.proxy.proxy_server import premium_user, proxy_logging_obj
+    from litellm.proxy.proxy_server import proxy_logging_obj
     from litellm.types.integrations.slack_alerting import AlertType
-
-    if premium_user is not True:
-        return
 
     management_function_to_event_name = {
         "generate_key_fn": AlertType.new_virtual_key_created,
@@ -251,7 +250,6 @@ async def send_management_endpoint_alert(
         proxy_logging_obj is not None
         and proxy_logging_obj.slack_alerting_instance is not None
     ):
-
         # Virtual Key Events
         if function_name in management_function_to_event_name:
             _event_name: AlertType = management_function_to_event_name[function_name]

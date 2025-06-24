@@ -7,7 +7,9 @@ import {
   getProxyUISettings,
   Organization,
   organizationListCall,
-  DEFAULT_ORGANIZATION
+  DEFAULT_ORGANIZATION,
+  keyInfoCall,
+  getProxyBaseUrl
 } from "./networking";
 import { fetchTeams } from "./common_components/fetch_teams";
 import { Grid, Col, Card, Text, Title } from "@tremor/react";
@@ -22,12 +24,6 @@ import { Team } from "./key_team_helpers/key_list";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
 import { clearTokenCookies } from "@/utils/cookieUtils";
-const isLocal = process.env.NODE_ENV === "development";
-if (isLocal != true) {
-  console.log = function() {};
-}
-console.log("isLocal:", isLocal);
-const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 
 export interface ProxySettings {
   PROXY_BASE_URL: string | null;
@@ -65,6 +61,8 @@ interface UserDashboardProps {
   setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
   premiumUser: boolean;
   organizations: Organization[] | null;
+  addKey: (data: any) => void;
+  createClicked: boolean
 }
 
 type TeamInterface = {
@@ -84,7 +82,9 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   setTeams,
   setKeys,
   premiumUser,
-  organizations
+  organizations,
+  addKey,
+  createClicked
 }) => {
   const [userSpendData, setUserSpendData] = useState<UserInfo | null>(
     null
@@ -108,6 +108,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     team_id: null,
   };
   const [selectedTeam, setSelectedTeam] = useState<any | null>(null);
+  const [selectedKeyAlias, setSelectedKeyAlias] = useState<string | null>(null);
   // check if window is not undefined
   if (typeof window !== "undefined") {
     window.addEventListener("beforeunload", function () {
@@ -191,6 +192,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
               null,
               null
             );
+            
 
             setUserSpendData(response["user_info"]);
             console.log(`userSpendData: ${JSON.stringify(userSpendData)}`)
@@ -237,8 +239,11 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
               "userModels" + userID,
               JSON.stringify(available_model_names)
             );
-          } catch (error) {
+          } catch (error: any) {
             console.error("There was an error fetching the data", error);
+            if (error.message.includes("Invalid proxy server token passed")) {
+              gotoLogin();
+            }
             // Optionally, update your UI to reflect the error state here as well
           }
         };
@@ -247,6 +252,24 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       }
     }
   }, [userID, token, accessToken, keys, userRole]);
+
+
+  useEffect(() => {
+    // check key health - if it's invalid, redirect to login
+    if (accessToken) {
+      const fetchKeyInfo = async () => {
+        try {
+          const keyInfo = await keyInfoCall(accessToken, [accessToken]);
+          console.log("keyInfo: ", keyInfo);
+        } catch (error: any) {
+          if (error.message.includes("Invalid proxy server token passed")) {
+            gotoLogin();
+          }
+        }
+      }
+      fetchKeyInfo();
+    }
+  }, [accessToken]);
 
   useEffect(() => {
     console.log(`currentOrg: ${JSON.stringify(currentOrg)}, accessToken: ${accessToken}, userID: ${userID}, userRole: ${userRole}`)
@@ -294,24 +317,67 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     )
   }
 
-  if (userID == null || token == null) {
+  function gotoLogin() {
+    // Clear token cookies using the utility function
+    clearTokenCookies();
+
+    const baseUrl = getProxyBaseUrl();
+
+    console.log("proxyBaseUrl:", baseUrl);
+    
+    const url = baseUrl
+      ? `${baseUrl}/sso/key/generate`
+      : `/sso/key/generate`;
+
+    console.log("Full URL:", url);
+    window.location.href = url; 
+
+    return null;
+  }
+
+  if (token == null) {
     // user is not logged in as yet 
     console.log("All cookies before redirect:", document.cookie);
     
     // Clear token cookies using the utility function
-    clearTokenCookies();
-    
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/sso/key/generate`
-      : `/sso/key/generate`;
-    
-    console.log("Full URL:", url);
-    window.location.href = url;
-
+    gotoLogin();
     return null;
-  } else if (accessToken == null) {
-    return null;
+  } else {
+    // Check if token is expired
+    try {
+      const decoded = jwtDecode(token) as { [key: string]: any };
+      console.log("Decoded token:", decoded);
+      const expTime = decoded.exp;
+      const currentTime = Math.floor(Date.now() / 1000);
+      
+      if (expTime && currentTime >= expTime) {
+        console.log("Token expired, redirecting to login");
+        
+        gotoLogin();
+        
+        return null;
+      }
+    } catch (error) {
+      console.error("Error decoding token:", error);
+      // If there's an error decoding the token, consider it invalid
+      clearTokenCookies();
+      
+      gotoLogin();
+      
+      return null;
+    }
+    
+    if (accessToken == null) {
+      return null;
+    }
   }
+
+  if (userID == null) {
+    return (
+      <h1>User ID is not set</h1>
+    );
+  }
+
 
   if (userRole == null) {
     setUserRole("App Owner");
@@ -341,7 +407,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             userRole={userRole}
             accessToken={accessToken}
             data={keys}
-            setData={setKeys}
+            addKey={addKey}
+            premiumUser={premiumUser}
           />
 
           <ViewKeyTable
@@ -350,6 +417,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             accessToken={accessToken}
             selectedTeam={selectedTeam ? selectedTeam : null}
             setSelectedTeam={setSelectedTeam}
+            selectedKeyAlias={selectedKeyAlias}
+            setSelectedKeyAlias={setSelectedKeyAlias}
             data={keys}
             setData={setKeys}
             premiumUser={premiumUser}
@@ -357,6 +426,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             currentOrg={currentOrg}
             setCurrentOrg={setCurrentOrg}
             organizations={organizations}
+            createClicked={createClicked}
           />
         </Col>
       </Grid>

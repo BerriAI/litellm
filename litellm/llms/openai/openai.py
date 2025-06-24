@@ -1,4 +1,3 @@
-import hashlib
 import time
 import types
 from typing import (
@@ -33,7 +32,6 @@ from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
-from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
 from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -50,7 +48,11 @@ from litellm.utils import (
 from ...types.llms.openai import *
 from ..base import BaseLLM
 from .chat.o_series_transformation import OpenAIOSeriesConfig
-from .common_utils import OpenAIError, drop_params_from_unprocessable_entity_error
+from .common_utils import (
+    BaseOpenAILLM,
+    OpenAIError,
+    drop_params_from_unprocessable_entity_error,
+)
 
 openaiOSeriesConfig = OpenAIOSeriesConfig()
 
@@ -264,7 +266,6 @@ class OpenAIConfig(BaseConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-
         logging_obj.post_call(original_response=raw_response.text)
         logging_obj.model_call_details["response_headers"] = raw_response.headers
         final_response_obj = cast(
@@ -285,6 +286,7 @@ class OpenAIConfig(BaseConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
@@ -317,8 +319,7 @@ class OpenAIChatCompletionResponseIterator(BaseModelResponseIterator):
             raise e
 
 
-class OpenAIChatCompletion(BaseLLM):
-
+class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
     def __init__(self) -> None:
         super().__init__()
 
@@ -343,7 +344,8 @@ class OpenAIChatCompletion(BaseLLM):
         max_retries: Optional[int] = DEFAULT_MAX_RETRIES,
         organization: Optional[str] = None,
         client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
-    ):
+    ) -> Optional[Union[OpenAI, AsyncOpenAI]]:
+        client_initialization_params: Dict = locals()
         if client is None:
             if not isinstance(max_retries, int):
                 raise OpenAIError(
@@ -352,25 +354,21 @@ class OpenAIChatCompletion(BaseLLM):
                         max_retries
                     ),
                 )
-            # Creating a new OpenAI Client
-            # check in memory cache before creating a new one
-            # Convert the API key to bytes
-            hashed_api_key = None
-            if api_key is not None:
-                hash_object = hashlib.sha256(api_key.encode())
-                # Hexadecimal representation of the hash
-                hashed_api_key = hash_object.hexdigest()
+            cached_client = self.get_cached_openai_client(
+                client_initialization_params=client_initialization_params,
+                client_type="openai",
+            )
 
-            _cache_key = f"hashed_api_key={hashed_api_key},api_base={api_base},timeout={timeout},max_retries={max_retries},organization={organization},is_async={is_async}"
-
-            _cached_client = litellm.in_memory_llm_clients_cache.get_cache(_cache_key)
-            if _cached_client:
-                return _cached_client
+            if cached_client:
+                if isinstance(cached_client, OpenAI) or isinstance(
+                    cached_client, AsyncOpenAI
+                ):
+                    return cached_client
             if is_async:
                 _new_client: Union[OpenAI, AsyncOpenAI] = AsyncOpenAI(
                     api_key=api_key,
                     base_url=api_base,
-                    http_client=litellm.aclient_session,
+                    http_client=OpenAIChatCompletion._get_async_http_client(),
                     timeout=timeout,
                     max_retries=max_retries,
                     organization=organization,
@@ -379,17 +377,17 @@ class OpenAIChatCompletion(BaseLLM):
                 _new_client = OpenAI(
                     api_key=api_key,
                     base_url=api_base,
-                    http_client=litellm.client_session,
+                    http_client=OpenAIChatCompletion._get_sync_http_client(),
                     timeout=timeout,
                     max_retries=max_retries,
                     organization=organization,
                 )
 
             ## SAVE CACHE KEY
-            litellm.in_memory_llm_clients_cache.set_cache(
-                key=_cache_key,
-                value=_new_client,
-                ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+            self.set_cached_openai_client(
+                openai_client=_new_client,
+                client_initialization_params=client_initialization_params,
+                client_type="openai",
             )
             return _new_client
 
@@ -514,7 +512,6 @@ class OpenAIChatCompletion(BaseLLM):
         custom_llm_provider: Optional[str] = None,
         drop_params: Optional[bool] = None,
     ):
-
         super().completion()
         try:
             fake_stream: bool = False
@@ -529,6 +526,9 @@ class OpenAIChatCompletion(BaseLLM):
                 provider_config = ProviderConfigManager.get_provider_chat_config(
                     model=model, provider=LlmProviders(custom_llm_provider)
                 )
+
+            if provider_config is None:
+                provider_config = OpenAIConfig()
 
             if provider_config:
                 fake_stream = provider_config.should_fake_stream(
@@ -554,31 +554,17 @@ class OpenAIChatCompletion(BaseLLM):
             for _ in range(
                 2
             ):  # if call fails due to alternating messages, retry with reformatted message
-
-                if provider_config is not None:
-                    data = provider_config.transform_request(
-                        model=model,
-                        messages=messages,
-                        optional_params=inference_params,
-                        litellm_params=litellm_params,
-                        headers=headers or {},
-                    )
-                else:
-                    data = OpenAIConfig().transform_request(
-                        model=model,
-                        messages=messages,
-                        optional_params=inference_params,
-                        litellm_params=litellm_params,
-                        headers=headers or {},
-                    )
                 try:
-                    max_retries = data.pop("max_retries", 2)
+                    max_retries = inference_params.pop("max_retries", 2)
                     if acompletion is True:
                         if stream is True and fake_stream is False:
                             return self.async_streaming(
                                 logging_obj=logging_obj,
                                 headers=headers,
-                                data=data,
+                                messages=messages,
+                                optional_params=inference_params,
+                                litellm_params=litellm_params,
+                                provider_config=provider_config,
                                 model=model,
                                 api_base=api_base,
                                 api_key=api_key,
@@ -592,7 +578,10 @@ class OpenAIChatCompletion(BaseLLM):
                             )
                         else:
                             return self.acompletion(
-                                data=data,
+                                messages=messages,
+                                optional_params=inference_params,
+                                litellm_params=litellm_params,
+                                provider_config=provider_config,
                                 headers=headers,
                                 model=model,
                                 logging_obj=logging_obj,
@@ -607,7 +596,15 @@ class OpenAIChatCompletion(BaseLLM):
                                 drop_params=drop_params,
                                 fake_stream=fake_stream,
                             )
-                    elif stream is True and fake_stream is False:
+
+                    data = provider_config.transform_request(
+                        model=model,
+                        messages=messages,
+                        optional_params=inference_params,
+                        litellm_params=litellm_params,
+                        headers=headers or {},
+                    )
+                    if stream is True and fake_stream is False:
                         return self.streaming(
                             logging_obj=logging_obj,
                             headers=headers,
@@ -650,13 +647,14 @@ class OpenAIChatCompletion(BaseLLM):
                             },
                         )
 
-                        headers, response = (
-                            self.make_sync_openai_chat_completion_request(
-                                openai_client=openai_client,
-                                data=data,
-                                timeout=timeout,
-                                logging_obj=logging_obj,
-                            )
+                        (
+                            headers,
+                            response,
+                        ) = self.make_sync_openai_chat_completion_request(
+                            openai_client=openai_client,
+                            data=data,
+                            timeout=timeout,
+                            logging_obj=logging_obj,
                         )
 
                         logging_obj.model_call_details["response_headers"] = headers
@@ -744,7 +742,10 @@ class OpenAIChatCompletion(BaseLLM):
 
     async def acompletion(
         self,
-        data: dict,
+        messages: list,
+        optional_params: dict,
+        litellm_params: dict,
+        provider_config: BaseConfig,
         model: str,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
@@ -761,10 +762,16 @@ class OpenAIChatCompletion(BaseLLM):
         fake_stream: bool = False,
     ):
         response = None
+        data = await provider_config.async_transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers or {},
+        )
         for _ in range(
             2
         ):  # if call fails due to alternating messages, retry with reformatted message
-
             try:
                 openai_aclient: AsyncOpenAI = self._get_openai_client(  # type: ignore
                     is_async=True,
@@ -907,7 +914,10 @@ class OpenAIChatCompletion(BaseLLM):
     async def async_streaming(
         self,
         timeout: Union[float, httpx.Timeout],
-        data: dict,
+        messages: list,
+        optional_params: dict,
+        litellm_params: dict,
+        provider_config: BaseConfig,
         model: str,
         logging_obj: LiteLLMLoggingObj,
         api_key: Optional[str] = None,
@@ -921,6 +931,13 @@ class OpenAIChatCompletion(BaseLLM):
         stream_options: Optional[dict] = None,
     ):
         response = None
+        data = provider_config.transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers or {},
+        )
         data["stream"] = True
         data.update(
             self.get_stream_options(stream_options=stream_options, api_base=api_base)
@@ -974,7 +991,6 @@ class OpenAIChatCompletion(BaseLLM):
             except (
                 Exception
             ) as e:  # need to exception handle here. async exceptions don't get caught in sync functions.
-
                 if isinstance(e, OpenAIError):
                     raise e
 
@@ -1247,7 +1263,6 @@ class OpenAIChatCompletion(BaseLLM):
     ):
         response = None
         try:
-
             openai_aclient = self._get_openai_client(
                 is_async=True,
                 api_key=api_key,
@@ -1334,7 +1349,6 @@ class OpenAIChatCompletion(BaseLLM):
             )
             return convert_to_model_response_object(response_object=response, model_response_object=model_response, response_type="image_generation")  # type: ignore
         except OpenAIError as e:
-
             ## LOGGING
             logging_obj.post_call(
                 input=prompt,
@@ -1373,7 +1387,6 @@ class OpenAIChatCompletion(BaseLLM):
         aspeech: Optional[bool] = None,
         client=None,
     ) -> HttpxBinaryResponseContent:
-
         if aspeech is not None and aspeech is True:
             return self.async_audio_speech(
                 model=model,
@@ -1420,7 +1433,6 @@ class OpenAIChatCompletion(BaseLLM):
         timeout: Union[float, httpx.Timeout],
         client=None,
     ) -> HttpxBinaryResponseContent:
-
         openai_client = cast(
             AsyncOpenAI,
             self._get_openai_client(
@@ -1491,9 +1503,9 @@ class OpenAIFilesAPI(BaseLLM):
         self,
         create_file_data: CreateFileRequest,
         openai_client: AsyncOpenAI,
-    ) -> FileObject:
+    ) -> OpenAIFileObject:
         response = await openai_client.files.create(**create_file_data)
-        return response
+        return OpenAIFileObject(**response.model_dump())
 
     def create_file(
         self,
@@ -1505,7 +1517,7 @@ class OpenAIFilesAPI(BaseLLM):
         max_retries: Optional[int],
         organization: Optional[str],
         client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
-    ) -> Union[FileObject, Coroutine[Any, Any, FileObject]]:
+    ) -> Union[OpenAIFileObject, Coroutine[Any, Any, OpenAIFileObject]]:
         openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
@@ -1528,8 +1540,8 @@ class OpenAIFilesAPI(BaseLLM):
             return self.acreate_file(  # type: ignore
                 create_file_data=create_file_data, openai_client=openai_client
             )
-        response = openai_client.files.create(**create_file_data)
-        return response
+        response = cast(OpenAI, openai_client).files.create(**create_file_data)
+        return OpenAIFileObject(**response.model_dump())
 
     async def afile_content(
         self,

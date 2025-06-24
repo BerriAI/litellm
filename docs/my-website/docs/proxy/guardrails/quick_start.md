@@ -17,6 +17,14 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
 
 guardrails:
+  - guardrail_name: general-guard
+    litellm_params:
+      guardrail: aim
+      mode: [pre_call, post_call]
+      api_key: os.environ/AIM_API_KEY
+      api_base: os.environ/AIM_API_BASE
+      default_on: true # Optional
+  
   - guardrail_name: "aporia-pre-guard"
     litellm_params:
       guardrail: aporia  # supported values: "aporia", "lakera"
@@ -45,6 +53,7 @@ guardrails:
 - `pre_call` Run **before** LLM call, on **input**
 - `post_call` Run **after** LLM call, on **input & output**
 - `during_call` Run **during** LLM call, on **input** Same as `pre_call` but runs in parallel as LLM call.  Response not returned until guardrail check completes
+- A list of the above values to run multiple modes, e.g. `mode: [pre_call, post_call]`
 
 
 ## 2. Start LiteLLM Gateway 
@@ -155,7 +164,7 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 **Expected response**
 
-Your response headers will incude `x-litellm-applied-guardrails` with the guardrail applied 
+Your response headers will include `x-litellm-applied-guardrails` with the guardrail applied 
 
 ```
 x-litellm-applied-guardrails: aporia-pre-guard

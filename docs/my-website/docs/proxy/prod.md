@@ -49,7 +49,21 @@ Need Help or want dedicated support ? Talk to a founder [here]: (https://calendl
 :::
 
 
-## 2. On Kubernetes - Use 1 Uvicorn worker [Suggested CMD]
+## 2. Recommended Machine Specifications
+
+For optimal performance in production, we recommend the following minimum machine specifications:
+
+| Resource | Recommended Value |
+|----------|------------------|
+| CPU      | 2 vCPU           |
+| Memory   | 4 GB RAM         |
+
+These specifications provide:
+- Sufficient compute power for handling concurrent requests
+- Adequate memory for request processing and caching
+
+
+## 3. On Kubernetes - Use 1 Uvicorn worker [Suggested CMD]
 
 Use this Docker `CMD`. This will start the proxy with 1 Uvicorn Async Worker
 
@@ -59,15 +73,21 @@ CMD ["--port", "4000", "--config", "./proxy_server_config.yaml"]
 ```
 
 
-## 3. Use Redis 'port','host', 'password'. NOT 'redis_url'
+## 4. Use Redis 'port','host', 'password'. NOT 'redis_url'
 
-If you decide to use Redis, DO NOT use 'redis_url'. We recommend usig redis port, host, and password params. 
+If you decide to use Redis, DO NOT use 'redis_url'. We recommend using redis port, host, and password params. 
 
 `redis_url`is 80 RPS slower
 
 This is still something we're investigating. Keep track of it [here](https://github.com/BerriAI/litellm/issues/3188)
 
-Recommended to do this for prod: 
+### Redis Version Requirement
+
+| Component | Minimum Version |
+|-----------|-----------------|
+| Redis     | 7.0+            |
+
+Recommended to do this for prod:
 
 ```yaml
 router_settings:
@@ -86,24 +106,40 @@ litellm_settings:
     password: os.environ/REDIS_PASSWORD
 ```
 
-## 4. Disable 'load_dotenv'
+## 5. Disable 'load_dotenv'
 
 Set `export LITELLM_MODE="PRODUCTION"`
 
 This disables the load_dotenv() functionality, which will automatically load your environment credentials from the local `.env`. 
 
-## 5. If running LiteLLM on VPC, gracefully handle DB unavailability
+## 6. If running LiteLLM on VPC, gracefully handle DB unavailability
 
-This will allow LiteLLM to continue to process requests even if the DB is unavailable. This is better handling for DB unavailability.
+When running LiteLLM on a VPC (and inaccessible from the public internet), you can enable graceful degradation so that request processing continues even if the database is temporarily unavailable.
+
 
 **WARNING: Only do this if you're running LiteLLM on VPC, that cannot be accessed from the public internet.**
 
-```yaml
+#### Configuration
+
+```yaml showLineNumbers title="litellm config.yaml"
 general_settings:
   allow_requests_on_db_unavailable: True
 ```
 
-## 6. Disable spend_logs & error_logs if not using the LiteLLM UI
+#### Expected Behavior
+
+When `allow_requests_on_db_unavailable` is set to `true`, LiteLLM will handle errors as follows:
+
+| Type of Error | Expected Behavior | Details |
+|---------------|-------------------|----------------|
+| Prisma Errors | ✅ Request will be allowed | Covers issues like DB connection resets or rejections from the DB via Prisma, the ORM used by LiteLLM. |
+| Httpx Errors | ✅ Request will be allowed | Occurs when the database is unreachable, allowing the request to proceed despite the DB outage. |
+| Pod Startup Behavior | ✅ Pods start regardless | LiteLLM Pods will start even if the database is down or unreachable, ensuring higher uptime guarantees for deployments. |
+| Health/Readiness Check | ✅ Always returns 200 OK | The /health/readiness endpoint returns a 200 OK status to ensure that pods remain operational even when the database is unavailable.
+| LiteLLM Budget Errors or Model Errors | ❌ Request will be blocked | Triggered when the DB is reachable but the authentication token is invalid, lacks access, or exceeds budget limits. |
+
+
+## 7. Disable spend_logs & error_logs if not using the LiteLLM UI
 
 By default, LiteLLM writes several types of logs to the database:
 - Every LLM API request to the `LiteLLM_SpendLogs` table
@@ -119,7 +155,7 @@ general_settings:
 
 [More information about what the Database is used for here](db_info)
 
-## 7. Use Helm PreSync Hook for Database Migrations [BETA]
+## 8. Use Helm PreSync Hook for Database Migrations [BETA]
 
 To ensure only one service manages database migrations, use our [Helm PreSync hook for Database Migrations](https://github.com/BerriAI/litellm/blob/main/deploy/charts/litellm-helm/templates/migrations-job.yaml). This ensures migrations are handled during `helm upgrade` or `helm install`, while LiteLLM pods explicitly disable migrations.
 
@@ -147,19 +183,69 @@ To ensure only one service manages database migrations, use our [Helm PreSync ho
    ```
 
 
-## 8. Set LiteLLM Salt Key 
+## 9. Set LiteLLM Salt Key 
 
 If you plan on using the DB, set a salt key for encrypting/decrypting variables in the DB. 
 
 Do not change this after adding a model. It is used to encrypt / decrypt your LLM API Key credentials
 
-We recommned - https://1password.com/password-generator/ password generator to get a random hash for litellm salt key.
+We recommend - https://1password.com/password-generator/ password generator to get a random hash for litellm salt key.
 
 ```bash
 export LITELLM_SALT_KEY="sk-1234"
 ```
 
 [**See Code**](https://github.com/BerriAI/litellm/blob/036a6821d588bd36d170713dcf5a72791a694178/litellm/proxy/common_utils/encrypt_decrypt_utils.py#L15)
+
+
+## 10. Use `prisma migrate deploy`
+
+Use this to handle db migrations across LiteLLM versions in production
+
+<Tabs>
+<TabItem value="env" label="ENV">
+
+```bash
+USE_PRISMA_MIGRATE="True"
+```
+
+</TabItem>
+
+<TabItem value="cli" label="CLI">
+
+```bash
+litellm --use_prisma_migrate
+```
+
+</TabItem>
+</Tabs>
+
+Benefits:
+
+The migrate deploy command:
+
+- **Does not** issue a warning if an already applied migration is missing from migration history
+- **Does not** detect drift (production database schema differs from migration history end state - for example, due to a hotfix)
+- **Does not** reset the database or generate artifacts (such as Prisma Client)
+- **Does not** rely on a shadow database
+
+
+### How does LiteLLM handle DB migrations in production?
+
+1. A new migration file is written to our `litellm-proxy-extras` package. [See all](https://github.com/BerriAI/litellm/tree/main/litellm-proxy-extras/litellm_proxy_extras/migrations)
+
+2. The core litellm pip package is bumped to point to the new `litellm-proxy-extras` package. This ensures, older versions of LiteLLM will continue to use the old migrations. [See code](https://github.com/BerriAI/litellm/blob/52b35cd8093b9ad833987b24f494586a1e923209/pyproject.toml#L58)
+
+3. When you upgrade to a new version of LiteLLM, the migration file is applied to the database. [See code](https://github.com/BerriAI/litellm/blob/52b35cd8093b9ad833987b24f494586a1e923209/litellm-proxy-extras/litellm_proxy_extras/utils.py#L42)
+
+
+### Read-only File System
+
+If you see a `Permission denied` error, it means the LiteLLM pod is running with a read-only file system.
+
+To fix this, just set `LITELLM_MIGRATION_DIR="/path/to/writeable/directory"` in your environment.
+
+LiteLLM will use this directory to write migration files.
 
 ## Extras
 ### Expected Performance in Production
@@ -182,94 +268,4 @@ You should only see the following level of details in logs on the proxy server
 # INFO:     192.168.2.205:11774 - "POST /chat/completions HTTP/1.1" 200 OK
 # INFO:     192.168.2.205:34717 - "POST /chat/completions HTTP/1.1" 200 OK
 # INFO:     192.168.2.205:29734 - "POST /chat/completions HTTP/1.1" 200 OK
-```
-
-
-### Machine Specifications to Deploy LiteLLM
-
-| Service | Spec | CPUs | Memory | Architecture | Version|
-| --- | --- | --- | --- | --- | --- | 
-| Server | `t2.small`. | `1vCPUs` | `8GB` | `x86` |
-| Redis Cache | - | - | - | - | 7.0+ Redis Engine|
-
-
-### Reference Kubernetes Deployment YAML
-
-Reference Kubernetes `deployment.yaml` that was load tested by us
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: litellm-deployment
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: litellm
-  template:
-    metadata:
-      labels:
-        app: litellm
-    spec:
-      containers:
-        - name: litellm-container
-          image: ghcr.io/berriai/litellm:main-latest
-          imagePullPolicy: Always
-          env:
-            - name: AZURE_API_KEY
-              value: "d6******"
-            - name: AZURE_API_BASE
-              value: "https://ope******"
-            - name: LITELLM_MASTER_KEY
-              value: "sk-1234"
-            - name: DATABASE_URL
-              value: "po**********"
-          args:
-            - "--config"
-            - "/app/proxy_config.yaml"  # Update the path to mount the config file
-          volumeMounts:                 # Define volume mount for proxy_config.yaml
-            - name: config-volume
-              mountPath: /app
-              readOnly: true
-          livenessProbe:
-            httpGet:
-              path: /health/liveliness
-              port: 4000
-            initialDelaySeconds: 120
-            periodSeconds: 15
-            successThreshold: 1
-            failureThreshold: 3
-            timeoutSeconds: 10
-          readinessProbe:
-            httpGet:
-              path: /health/readiness
-              port: 4000
-            initialDelaySeconds: 120
-            periodSeconds: 15
-            successThreshold: 1
-            failureThreshold: 3
-            timeoutSeconds: 10
-      volumes:  # Define volume to mount proxy_config.yaml
-        - name: config-volume
-          configMap:
-            name: litellm-config  
-
-```
-
-
-Reference Kubernetes `service.yaml` that was load tested by us
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: litellm-service
-spec:
-  selector:
-    app: litellm
-  ports:
-    - protocol: TCP
-      port: 4000
-      targetPort: 4000
-  type: LoadBalancer
 ```

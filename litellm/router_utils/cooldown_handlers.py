@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from litellm.router import Router as _Router
 
     LitellmRouter = _Router
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     LitellmRouter = Any
     Span = Any

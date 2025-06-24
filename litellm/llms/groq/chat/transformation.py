@@ -2,7 +2,7 @@
 Translate from OpenAI's `/v1/chat/completions` to Groq's `/v1/chat/completions`
 """
 
-from typing import List, Optional, Tuple, Union
+from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
 
 from pydantic import BaseModel
 
@@ -14,11 +14,10 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParamFunctionChunk,
 )
 
-from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
 
-class GroqChatConfig(OpenAIGPTConfig):
-
+class GroqChatConfig(OpenAILikeChatConfig):
     frequency_penalty: Optional[int] = None
     function_call: Optional[Union[str, dict]] = None
     functions: Optional[list] = None
@@ -58,7 +57,32 @@ class GroqChatConfig(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
-    def _transform_messages(self, messages: List[AllMessageValues], model: str) -> List:
+    def get_supported_openai_params(self, model: str) -> list:
+        base_params = super().get_supported_openai_params(model)
+        try:
+            base_params.remove("max_retries")
+        except ValueError:
+            pass
+        return base_params
+
+    @overload
+    def _transform_messages(
+        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
+        ...
+
+    @overload
+    def _transform_messages(
+        self,
+        messages: List[AllMessageValues],
+        model: str,
+        is_async: Literal[False] = False,
+    ) -> List[AllMessageValues]:
+        ...
+
+    def _transform_messages(
+        self, messages: List[AllMessageValues], model: str, is_async: bool = False
+    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         for idx, message in enumerate(messages):
             """
             1. Don't pass 'null' function_call assistant message to groq - https://github.com/BerriAI/litellm/issues/5839
@@ -75,7 +99,14 @@ class GroqChatConfig(OpenAIGPTConfig):
                         new_message[k] = v  # type: ignore
                 messages[idx] = new_message
 
-        return messages
+        if is_async:
+            return super()._transform_messages(
+                messages=messages, model=model, is_async=True
+            )
+        else:
+            return super()._transform_messages(
+                messages=messages, model=model, is_async=False
+            )
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
@@ -125,8 +156,11 @@ class GroqChatConfig(OpenAIGPTConfig):
         optional_params: dict,
         model: str,
         drop_params: bool = False,
+        replace_max_completion_tokens_with_max_tokens: bool = False,  # groq supports max_completion_tokens
     ) -> dict:
         _response_format = non_default_params.get("response_format")
+        if self._should_fake_stream(non_default_params):
+            optional_params["fake_stream"] = True
         if _response_format is not None and isinstance(_response_format, dict):
             json_schema: Optional[dict] = None
             if "response_schema" in _response_format:
@@ -153,6 +187,8 @@ class GroqChatConfig(OpenAIGPTConfig):
                 non_default_params.pop(
                     "response_format", None
                 )  # only remove if it's a json_schema - handled via using groq's tool calling params.
-        return super().map_openai_params(
+        optional_params = super().map_openai_params(
             non_default_params, optional_params, model, drop_params
         )
+
+        return optional_params

@@ -57,7 +57,7 @@ messages = [{ "content": "Hello, how are you?","role": "user"}]
 # litellm proxy call
 response = completion(
     model="litellm_proxy/your-model-name", 
-    messages, 
+    messages=messages, 
     api_base = "your-litellm-proxy-url",
     api_key = "your-litellm-proxy-api-key"
 )
@@ -76,7 +76,7 @@ messages = [{ "content": "Hello, how are you?","role": "user"}]
 # openai call
 response = completion(
     model="litellm_proxy/your-model-name", 
-    messages, 
+    messages=messages,
     api_base = "your-litellm-proxy-url", 
     stream=True
 )
@@ -155,6 +155,59 @@ response = litellm.rerank(
     api_key="your-litellm-proxy-api-key"
 )
 ```
-## **Usage with Langchain, LLamaindex, OpenAI Js, Anthropic SDK, Instructor**
 
-#### [Follow this doc to see how to use litellm proxy with langchain, llamaindex, anthropic etc](../proxy/user_keys)
+
+## Integration with Other Libraries
+
+LiteLLM Proxy works seamlessly with Langchain, LlamaIndex, OpenAI JS, Anthropic SDK, Instructor, and more.
+
+[Learn how to use LiteLLM proxy with these libraries →](../proxy/user_keys)
+
+## Send all SDK requests to LiteLLM Proxy
+
+:::info
+
+Requires v1.72.1 or higher.
+
+:::
+
+Use this when calling LiteLLM Proxy from any library / codebase already using the LiteLLM SDK.
+
+These flags will route all requests through your LiteLLM proxy, regardless of the model specified.
+
+When enabled, requests will use `LITELLM_PROXY_API_BASE` with `LITELLM_PROXY_API_KEY` as the authentication.
+
+### Option 1: Set Globally in Code
+
+```python
+# Set the flag globally for all requests
+litellm.use_litellm_proxy = True
+
+response = litellm.completion(
+    model="vertex_ai/gemini-2.0-flash-001",
+    messages=[{"role": "user", "content": "Hello, how are you?"}]
+)
+```
+
+### Option 2: Control via Environment Variable
+
+```python
+# Control proxy usage through environment variable
+os.environ["USE_LITELLM_PROXY"] = "True"
+
+response = litellm.completion(
+    model="vertex_ai/gemini-2.0-flash-001",
+    messages=[{"role": "user", "content": "Hello, how are you?"}]
+)
+```
+
+### Option 3: Set Per Request
+
+```python
+# Enable proxy for specific requests only
+response = litellm.completion(
+    model="vertex_ai/gemini-2.0-flash-001",
+    messages=[{"role": "user", "content": "Hello, how are you?"}],
+    use_litellm_proxy=True
+)
+```

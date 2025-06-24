@@ -43,59 +43,296 @@ Features:
     - ✅ [Public Model Hub](#public-model-hub)
     - ✅ [Custom Email Branding](./email.md#customizing-email-branding)
 
-## Audit Logs
 
-Store Audit logs for **Create, Update Delete Operations** done on `Teams` and `Virtual Keys`
+### Blocking web crawlers
 
-**Step 1** Switch on audit Logs 
-```shell
-litellm_settings:
-  store_audit_logs: true
+To block web crawlers from indexing the proxy server endpoints, set the `block_robots` setting to `true` in your `litellm_config.yaml` file.
+
+```yaml showLineNumbers title="litellm_config.yaml"
+general_settings:
+  block_robots: true
 ```
 
-Start the litellm proxy with this config
+#### How it works
 
-**Step 2** Test it - Create a Team
+When this is enabled, the `/robots.txt` endpoint will return a 200 status code with the following content:
+
+```shell showLineNumbers title="robots.txt"
+User-agent: *
+Disallow: /
+```
+
+
+
+### Required Params for LLM Requests
+Use this when you want to enforce all requests to include certain params. Example you need all requests to include the `user` and `["metadata]["generation_name"]` params.
+
+
+<Tabs>
+
+<TabItem value="config" label="Set on Config">
+
+**Step 1** Define all Params you want to enforce on config.yaml
+
+This means `["user"]` and `["metadata]["generation_name"]` are required in all LLM Requests to LiteLLM
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  enforced_params:  
+    - user
+    - metadata.generation_name
+```
+</TabItem>
+
+<TabItem value="key" label="Set on Key">
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "enforced_params": ["user", "metadata.generation_name"]
+}'
+```
+
+</TabItem>
+</Tabs>
+
+**Step 2 Verify if this works**
+
+<Tabs>
+
+<TabItem value="bad" label="Invalid Request (No `user` passed)">
 
 ```shell
-curl --location 'http://0.0.0.0:4000/team/new' \
-    --header 'Authorization: Bearer sk-1234' \
+curl --location 'http://localhost:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-5fmYeaUEbAMpwBNT-QpxyA' \
     --header 'Content-Type: application/json' \
     --data '{
-        "max_budget": 2
-    }'
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "hi"
+        }
+    ]
+}'
 ```
 
-**Step 3** Expected Log
+Expected Response 
+
+```shell
+{"error":{"message":"Authentication Error, BadRequest please pass param=user in request body. This is a required param","type":"auth_error","param":"None","code":401}}% 
+```
+
+</TabItem>
+
+<TabItem value="bad2" label="Invalid Request (No `metadata` passed)">
+
+```shell
+curl --location 'http://localhost:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-5fmYeaUEbAMpwBNT-QpxyA' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "user": "gm",
+    "messages": [
+        {
+        "role": "user",
+        "content": "hi"
+        }
+    ],
+   "metadata": {}
+}'
+```
+
+Expected Response 
+
+```shell
+{"error":{"message":"Authentication Error, BadRequest please pass param=[metadata][generation_name] in request body. This is a required param","type":"auth_error","param":"None","code":401}}% 
+```
+
+
+</TabItem>
+<TabItem value="good" label="Valid Request">
+
+```shell
+curl --location 'http://localhost:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-5fmYeaUEbAMpwBNT-QpxyA' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "user": "gm",
+    "messages": [
+        {
+        "role": "user",
+        "content": "hi"
+        }
+    ],
+   "metadata": {"generation_name": "prod-app"}
+}'
+```
+
+Expected Response
+
+```shell
+{"id":"chatcmpl-9XALnHqkCBMBKrOx7Abg0hURHqYtY","choices":[{"finish_reason":"stop","index":0,"message":{"content":"Hello! How can I assist you today?","role":"assistant"}}],"created":1717691639,"model":"gpt-3.5-turbo-0125","object":"chat.completion","system_fingerprint":null,"usage":{"completion_tokens":9,"prompt_tokens":8,"total_tokens":17}}%  
+```
+
+</TabItem>
+</Tabs>
+
+
+
+### Control available public, private routes
+
+**Restrict certain endpoints of proxy**
+
+:::info
+
+❓ Use this when you want to:
+- make an existing private route -> public
+- set certain routes as admin_only routes 
+
+:::
+
+#### Usage - Define public, admin only routes
+
+**Step 1** - Set  on config.yaml 
+
+
+| Route Type | Optional | Requires Virtual Key Auth | Admin Can Access | All Roles Can Access | Description |
+|------------|----------|---------------------------|-------------------|----------------------|-------------|
+| `public_routes` | ✅ | ❌ | ✅ | ✅ | Routes that can be accessed without any authentication  |
+| `admin_only_routes` | ✅ | ✅ | ✅ | ❌ | Routes that can only be accessed by [Proxy Admin](./self_serve#available-roles) |
+| `allowed_routes` | ✅ | ✅ | ✅ | ✅ | Routes are exposed on the proxy. If not set then all routes exposed.  |
+
+`LiteLLMRoutes.public_routes` is an ENUM corresponding to the default public routes on LiteLLM. [You can see this here](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/_types.py)
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  public_routes: ["LiteLLMRoutes.public_routes", "/spend/calculate"]     # routes that can be accessed without any auth
+  admin_only_routes: ["/key/generate"]  # Optional - routes that can only be accessed by Proxy Admin
+  allowed_routes: ["/chat/completions", "/spend/calculate", "LiteLLMRoutes.public_routes"] # Optional - routes that can be accessed by anyone after Authentication
+```
+
+**Step 2** - start proxy 
+
+```shell
+litellm --config config.yaml
+```
+
+**Step 3** - Test it 
+
+<Tabs>
+
+<TabItem value="public" label="Test `public_routes`">
+
+```shell
+curl --request POST \
+  --url 'http://localhost:4000/spend/calculate' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "model": "gpt-4",
+    "messages": [{"role": "user", "content": "Hey, how'\''s it going?"}]
+  }'
+```
+
+🎉 Expect this endpoint to work without an `Authorization / Bearer Token`
+
+</TabItem>
+
+<TabItem value="admin_only_routes" label="Test `admin_only_routes`">
+
+
+**Successful Request**
+
+```shell
+curl --location 'http://0.0.0.0:4000/key/generate' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data '{}'
+```
+
+
+**Un-successfull Request**
+
+```shell
+ curl --location 'http://0.0.0.0:4000/key/generate' \
+--header 'Authorization: Bearer <virtual-key-from-non-admin>' \
+--header 'Content-Type: application/json' \
+--data '{"user_role": "internal_user"}'
+```
+
+**Expected Response**
 
 ```json
 {
- "id": "e1760e10-4264-4499-82cd-c08c86c8d05b",
- "updated_at": "2024-06-06T02:10:40.836420+00:00",
- "changed_by": "109010464461339474872",
- "action": "created",
- "table_name": "LiteLLM_TeamTable",
- "object_id": "82e725b5-053f-459d-9a52-867191635446",
- "before_value": null,
- "updated_values": {
-   "team_id": "82e725b5-053f-459d-9a52-867191635446",
-   "admins": [],
-   "members": [],
-   "members_with_roles": [
-     {
-       "role": "admin",
-       "user_id": "109010464461339474872"
-     }
-   ],
-   "max_budget": 2.0,
-   "models": [],
-   "blocked": false
- }
+  "error": {
+    "message": "user not allowed to access this route. Route=/key/generate is an admin only route",
+    "type": "auth_error",
+    "param": "None",
+    "code": "403"
+  }
 }
 ```
 
 
-## Tracking Spend for Custom Tags
+</TabItem>
+
+<TabItem value="allowed_routes" label="Test `allowed_routes`">
+
+
+**Successful Request**
+
+```shell
+curl http://localhost:4000/chat/completions \
+-H "Content-Type: application/json" \
+-H "Authorization: Bearer sk-1234" \
+-d '{
+"model": "fake-openai-endpoint",
+"messages": [
+    {"role": "user", "content": "Hello, Claude"}
+]
+}'
+```
+
+
+**Un-successfull Request**
+
+```shell
+curl --location 'http://0.0.0.0:4000/embeddings' \
+--header 'Content-Type: application/json' \
+-H "Authorization: Bearer sk-1234" \
+--data ' {
+"model": "text-embedding-ada-002",
+"input": ["write a litellm poem"]
+}'
+```
+
+**Expected Response**
+
+```json
+{
+  "error": {
+    "message": "Route /embeddings not allowed",
+    "type": "auth_error",
+    "param": "None",
+    "code": "403"
+  }
+}
+```
+
+
+</TabItem>
+
+</Tabs>
+
+## Spend Tracking
+
+### Custom Tags
 
 Requirements: 
 
@@ -294,7 +531,7 @@ curl -X GET "http://0.0.0.0:4000/spend/tags" \
 ```
 
 
-## Tracking Spend with custom metadata
+### Tracking Spend with custom metadata
 
 Requirements: 
 
@@ -505,278 +742,6 @@ curl -X GET "http://0.0.0.0:4000/spend/logs?request_id=<your-call-id" \ # e.g.: 
     }
 ]
 ```
-
-
-
-## Enforce Required Params for LLM Requests
-Use this when you want to enforce all requests to include certain params. Example you need all requests to include the `user` and `["metadata]["generation_name"]` params.
-
-
-<Tabs>
-
-<TabItem value="config" label="Set on Config">
-
-**Step 1** Define all Params you want to enforce on config.yaml
-
-This means `["user"]` and `["metadata]["generation_name"]` are required in all LLM Requests to LiteLLM
-
-```yaml
-general_settings:
-  master_key: sk-1234
-  enforced_params:  
-    - user
-    - metadata.generation_name
-```
-</TabItem>
-
-<TabItem value="key" label="Set on Key">
-
-```bash
-curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
--H 'Authorization: Bearer sk-1234' \
--H 'Content-Type: application/json' \
--d '{
-    "enforced_params": ["user", "metadata.generation_name"]
-}'
-```
-
-</TabItem>
-</Tabs>
-
-**Step 2 Verify if this works**
-
-<Tabs>
-
-<TabItem value="bad" label="Invalid Request (No `user` passed)">
-
-```shell
-curl --location 'http://localhost:4000/chat/completions' \
-    --header 'Authorization: Bearer sk-5fmYeaUEbAMpwBNT-QpxyA' \
-    --header 'Content-Type: application/json' \
-    --data '{
-    "model": "gpt-3.5-turbo",
-    "messages": [
-        {
-        "role": "user",
-        "content": "hi"
-        }
-    ]
-}'
-```
-
-Expected Response 
-
-```shell
-{"error":{"message":"Authentication Error, BadRequest please pass param=user in request body. This is a required param","type":"auth_error","param":"None","code":401}}% 
-```
-
-</TabItem>
-
-<TabItem value="bad2" label="Invalid Request (No `metadata` passed)">
-
-```shell
-curl --location 'http://localhost:4000/chat/completions' \
-    --header 'Authorization: Bearer sk-5fmYeaUEbAMpwBNT-QpxyA' \
-    --header 'Content-Type: application/json' \
-    --data '{
-    "model": "gpt-3.5-turbo",
-    "user": "gm",
-    "messages": [
-        {
-        "role": "user",
-        "content": "hi"
-        }
-    ],
-   "metadata": {}
-}'
-```
-
-Expected Response 
-
-```shell
-{"error":{"message":"Authentication Error, BadRequest please pass param=[metadata][generation_name] in request body. This is a required param","type":"auth_error","param":"None","code":401}}% 
-```
-
-
-</TabItem>
-<TabItem value="good" label="Valid Request">
-
-```shell
-curl --location 'http://localhost:4000/chat/completions' \
-    --header 'Authorization: Bearer sk-5fmYeaUEbAMpwBNT-QpxyA' \
-    --header 'Content-Type: application/json' \
-    --data '{
-    "model": "gpt-3.5-turbo",
-    "user": "gm",
-    "messages": [
-        {
-        "role": "user",
-        "content": "hi"
-        }
-    ],
-   "metadata": {"generation_name": "prod-app"}
-}'
-```
-
-Expected Response
-
-```shell
-{"id":"chatcmpl-9XALnHqkCBMBKrOx7Abg0hURHqYtY","choices":[{"finish_reason":"stop","index":0,"message":{"content":"Hello! How can I assist you today?","role":"assistant"}}],"created":1717691639,"model":"gpt-3.5-turbo-0125","object":"chat.completion","system_fingerprint":null,"usage":{"completion_tokens":9,"prompt_tokens":8,"total_tokens":17}}%  
-```
-
-</TabItem>
-</Tabs>
-
-
-
-## Control available public, private routes
-
-**Restrict certain endpoints of proxy**
-
-:::info
-
-❓ Use this when you want to:
-- make an existing private route -> public
-- set certain routes as admin_only routes 
-
-:::
-
-#### Usage - Define public, admin only routes
-
-**Step 1** - Set  on config.yaml 
-
-
-| Route Type | Optional | Requires Virtual Key Auth | Admin Can Access | All Roles Can Access | Description |
-|------------|----------|---------------------------|-------------------|----------------------|-------------|
-| `public_routes` | ✅ | ❌ | ✅ | ✅ | Routes that can be accessed without any authentication  |
-| `admin_only_routes` | ✅ | ✅ | ✅ | ❌ | Routes that can only be accessed by [Proxy Admin](./self_serve#available-roles) |
-| `allowed_routes` | ✅ | ✅ | ✅ | ✅ | Routes are exposed on the proxy. If not set then all routes exposed.  |
-
-`LiteLLMRoutes.public_routes` is an ENUM corresponding to the default public routes on LiteLLM. [You can see this here](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/_types.py)
-
-```yaml
-general_settings:
-  master_key: sk-1234
-  public_routes: ["LiteLLMRoutes.public_routes", "/spend/calculate"]     # routes that can be accessed without any auth
-  admin_only_routes: ["/key/generate"]  # Optional - routes that can only be accessed by Proxy Admin
-  allowed_routes: ["/chat/completions", "/spend/calculate", "LiteLLMRoutes.public_routes"] # Optional - routes that can be accessed by anyone after Authentication
-```
-
-**Step 2** - start proxy 
-
-```shell
-litellm --config config.yaml
-```
-
-**Step 3** - Test it 
-
-<Tabs>
-
-<TabItem value="public" label="Test `public_routes`">
-
-```shell
-curl --request POST \
-  --url 'http://localhost:4000/spend/calculate' \
-  --header 'Content-Type: application/json' \
-  --data '{
-    "model": "gpt-4",
-    "messages": [{"role": "user", "content": "Hey, how'\''s it going?"}]
-  }'
-```
-
-🎉 Expect this endpoint to work without an `Authorization / Bearer Token`
-
-</TabItem>
-
-<TabItem value="admin_only_routes" label="Test `admin_only_routes`">
-
-
-**Successfull Request**
-
-```shell
-curl --location 'http://0.0.0.0:4000/key/generate' \
---header 'Authorization: Bearer <your-master-key>' \
---header 'Content-Type: application/json' \
---data '{}'
-```
-
-
-**Un-successfull Request**
-
-```shell
- curl --location 'http://0.0.0.0:4000/key/generate' \
---header 'Authorization: Bearer <virtual-key-from-non-admin>' \
---header 'Content-Type: application/json' \
---data '{"user_role": "internal_user"}'
-```
-
-**Expected Response**
-
-```json
-{
-  "error": {
-    "message": "user not allowed to access this route. Route=/key/generate is an admin only route",
-    "type": "auth_error",
-    "param": "None",
-    "code": "403"
-  }
-}
-```
-
-
-</TabItem>
-
-<TabItem value="allowed_routes" label="Test `allowed_routes`">
-
-
-**Successfull Request**
-
-```shell
-curl http://localhost:4000/chat/completions \
--H "Content-Type: application/json" \
--H "Authorization: Bearer sk-1234" \
--d '{
-"model": "fake-openai-endpoint",
-"messages": [
-    {"role": "user", "content": "Hello, Claude"}
-]
-}'
-```
-
-
-**Un-successfull Request**
-
-```shell
-curl --location 'http://0.0.0.0:4000/embeddings' \
---header 'Content-Type: application/json' \
--H "Authorization: Bearer sk-1234" \
---data ' {
-"model": "text-embedding-ada-002",
-"input": ["write a litellm poem"]
-}'
-```
-
-**Expected Response**
-
-```json
-{
-  "error": {
-    "message": "Route /embeddings not allowed",
-    "type": "auth_error",
-    "param": "None",
-    "code": "403"
-  }
-}
-```
-
-
-</TabItem>
-
-
-
-
-
-</Tabs>
 
 ## Guardrails - Secret Detection/Redaction
 ❓ Use this to REDACT API Keys, Secrets sent in requests to an LLM. 

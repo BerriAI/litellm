@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Modal } from "antd";
 import type { FormInstance } from "antd";
 import type { UploadProps } from "antd/es/upload";
@@ -8,11 +8,13 @@ import ProviderSpecificFields from "./provider_specific_fields";
 import AdvancedSettings from "./advanced_settings";
 import { Providers, providerLogoMap, getPlaceholder } from "../provider_info_helpers";
 import type { Team } from "../key_team_helpers/key_list";
-import { CredentialItem } from "../networking";
+import { CredentialItem, modelAvailableCall } from "../networking";
 import ConnectionErrorDisplay from "./model_connection_test";
 import { TEST_MODES } from "./add_model_modes";
 import { Row, Col } from "antd";
 import { Text, TextInput } from "@tremor/react";
+import TeamDropdown from "../common_components/team_dropdown";
+import { all_admin_roles } from "@/utils/roles";
 
 interface AddModelTabProps {
   form: FormInstance;
@@ -28,6 +30,7 @@ interface AddModelTabProps {
   teams: Team[] | null;
   credentials: CredentialItem[];
   accessToken: string;
+  userRole: string;
 }
 
 const { Title, Link } = Typography;
@@ -46,6 +49,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
   teams,
   credentials,
   accessToken,
+  userRole,
 }) => {
   // State for test mode and connection testing
   const [testMode, setTestMode] = useState<string>("chat");
@@ -63,6 +67,18 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
     // Show the modal with the fresh test
     setIsResultModalVisible(true);
   };
+
+  const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
+
+  useEffect(() => {
+    const fetchModelAccessGroups = async () => {
+      const response = await modelAvailableCall(accessToken, "", "", false, null, true, true);
+      setModelAccessGroups(response["data"].map((model: any) => model["id"]));
+    };
+    fetchModelAccessGroups();
+  }, [accessToken]);
+
+  const isAdmin = all_admin_roles.includes(userRole);
 
   return (
     <>
@@ -217,6 +233,51 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                 );
               }}
             </Form.Item>
+            <div className="flex items-center my-4">
+              <div className="flex-grow border-t border-gray-200"></div>
+              <span className="px-4 text-gray-500 text-sm">Additional Model Info Settings</span>
+              <div className="flex-grow border-t border-gray-200"></div>
+            </div>
+            <Form.Item
+              label="Team"
+              name="team_id"
+              className="mb-4"
+              tooltip="Only keys for this team, will be able to call this model."
+              rules={[
+                {
+                  required: !isAdmin, // Required if not admin
+                  message: 'Please select a team.'
+                }
+              ]}
+            >
+              <TeamDropdown teams={teams} />
+            </Form.Item>
+            {
+              isAdmin && (
+                <>
+                  <Form.Item
+                    label="Model Access Group"
+                    name="model_access_group"
+                    className="mb-4"
+                    tooltip="Use model access groups to give users access to select models, and add new ones to the group over time."
+                  >
+                    <AntdSelect
+                      mode="tags"
+                      showSearch
+                      placeholder="Select existing groups or type to create new ones"
+                      optionFilterProp="children"
+                      tokenSeparators={[',']}
+                      options={modelAccessGroups.map((group) => ({
+                        value: group,
+                        label: group
+                      }))}
+                      maxTagCount="responsive"
+                      allowClear
+                    />
+                  </Form.Item>
+                </>
+              )
+            }
             <AdvancedSettings 
               showAdvancedSettings={showAdvancedSettings}
               setShowAdvancedSettings={setShowAdvancedSettings}

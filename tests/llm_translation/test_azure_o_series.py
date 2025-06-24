@@ -21,9 +21,10 @@ from base_llm_unit_tests import BaseLLMChatTest, BaseOSeriesModelsTest
 class TestAzureOpenAIO1(BaseOSeriesModelsTest, BaseLLMChatTest):
     def get_base_completion_call_args(self):
         return {
-            "model": "azure/o1-preview",
+            "model": "azure/o1",
             "api_key": os.getenv("AZURE_OPENAI_O1_KEY"),
-            "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com",
+            "api_base": "https://openai-prod-test.openai.azure.com",
+            "api_version": "2024-12-01-preview"
         }
 
     def get_client(self):
@@ -31,7 +32,7 @@ class TestAzureOpenAIO1(BaseOSeriesModelsTest, BaseLLMChatTest):
 
         return AzureOpenAI(
             api_key="my-fake-o1-key",
-            base_url="https://openai-gpt-4-test-v-1.openai.azure.com",
+            base_url="https://openai-prod-test.openai.azure.com",
             api_version="2024-02-15-preview",
         )
 
@@ -170,3 +171,54 @@ def test_openai_o_series_max_retries_0(mock_get_openai_client):
 
     mock_get_openai_client.assert_called_once()
     assert mock_get_openai_client.call_args.kwargs["max_retries"] == 0
+
+
+@pytest.mark.asyncio
+async def test_azure_o1_series_response_format_extra_params():
+    """
+    Tool calling should work for all azure o_series models.
+    """
+    litellm._turn_on_debug()
+
+    from openai import AsyncAzureOpenAI
+
+    litellm.set_verbose = True
+
+    client = AsyncAzureOpenAI(
+        api_key="fake-api-key", 
+        base_url="https://openai-prod-test.openai.azure.com/openai/deployments/o1/chat/completions?api-version=2025-01-01-preview", 
+        api_version="2025-01-01-preview"
+    )
+
+    tools = [{'type': 'function', 'function': {'name': 'get_current_time', 'description': 'Get the current time in a given location.', 'parameters': {'type': 'object', 'properties': {'location': {'type': 'string', 'description': 'The city name, e.g. San Francisco'}}, 'required': ['location']}}}]
+    response_format = {'type': 'json_object'}
+    tool_choice = "auto"
+    with patch.object(
+        client.chat.completions.with_raw_response, "create"
+    ) as mock_client:
+        try:
+            await litellm.acompletion(
+                client=client,
+                model="azure/o_series/<my-deployment-name>",
+                api_key="xxxxx",
+                api_base="https://openai-prod-test.openai.azure.com/openai/deployments/o1/chat/completions?api-version=2025-01-01-preview",
+                api_version="2024-12-01-preview",
+                messages=[{"role": "user", "content": "Hello! return a json object"}],
+                tools=tools,
+                response_format=response_format,
+                tool_choice=tool_choice
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs
+
+        print("request_body: ", json.dumps(request_body, indent=4))
+        assert request_body["tools"] == tools
+        assert request_body["response_format"] == response_format
+        assert request_body["tool_choice"] == tool_choice
+
+    
+
+
