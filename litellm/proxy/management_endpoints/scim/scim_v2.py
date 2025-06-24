@@ -5,7 +5,7 @@ This is an enterprise feature and requires a premium license.
 """
 
 import uuid
-from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict, cast
+from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict
 
 from fastapi import (
     APIRouter,
