@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from litellm.proxy._types import (
-    JWTAuthBuilderResult,
+    JWTLiteLLMRoleMap,
     LiteLLM_JWTAuth,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -296,3 +296,32 @@ async def test_auth_builder_non_proxy_admin_user_role():
         assert result["is_proxy_admin"] is False
         assert result["user_object"] == user_object
         assert result["user_id"] == "test_user_1"
+
+
+@pytest.mark.asyncio
+async def test_sync_user_role_and_teams():
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth.team_id_jwt_field = "my_id_teams"
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        jwt_litellm_role_map=[
+            JWTLiteLLMRoleMap(jwt_role="ADMIN", litellm_role=LitellmUserRoles.PROXY_ADMIN)
+        ]
+    )
+
+    token = {"roles": ["ADMIN"], "my_id_teams": ["team1", "team2"]}
+
+    user = LiteLLM_UserTable(user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER.value, teams=["team2"])
+
+    prisma = AsyncMock()
+    prisma.db.litellm_usertable.update = AsyncMock()
+
+    with patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+        new_callable=AsyncMock,
+    ) as mock_patch:
+        await JWTAuthManager.sync_user_role_and_teams(jwt_handler, token, user, prisma)
+
+    prisma.db.litellm_usertable.update.assert_called_once()
+    mock_patch.assert_called_once()
+    assert user.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    assert set(user.teams) == {"team1", "team2"}
