@@ -3,7 +3,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { MCPTool, InputSchema } from "./types";
 import { Button, Callout, Icon } from "@tremor/react"
 
-const AuthBanner = ({needsAuth, authValue}) => {
+const AuthBanner = ({needsAuth, authValue}: {needsAuth: boolean, authValue?: string | null}) => {
   if(!needsAuth || (needsAuth && authValue)) {
     return (
       <Callout
