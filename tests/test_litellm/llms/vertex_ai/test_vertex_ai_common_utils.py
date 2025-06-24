@@ -237,11 +237,7 @@ def test_build_vertex_schema():
                     },
                     "recursion_limit": {"type": "integer"},
                     "configurable": {"type": "object"},
-                    "run_id": {
-                        "anyOf": [
-                            {"format": "uuid", "type": "string", "nullable": True}
-                        ]
-                    },
+                    "run_id": {"anyOf": [{"type": "string", "nullable": True}]},
                 },
                 "type": "object",
             },
@@ -627,3 +623,57 @@ def test_get_vertex_region_global_only_model(
 
         assert result == expected_region
         mock_is_global_only.assert_called_once_with("test-model")
+
+
+def test_vertex_filter_format_uri():
+    import json
+
+    from litellm.llms.vertex_ai.common_utils import filter_schema_fields
+
+    parameters = {
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "format": "uri",
+                "description": "The URL to fetch content from",
+            },
+            "prompt": {
+                "type": "string",
+                "description": "The prompt to run on the fetched content",
+            },
+        },
+        "required": ["url", "prompt"],
+        "$schema": "http://json-schema.org/draft-07/schema#",
+    }
+    valid_schema_fields = {
+        "minLength",
+        "nullable",
+        "maxItems",
+        "required",
+        "default",
+        "items",
+        "propertyOrdering",
+        "maximum",
+        "properties",
+        "anyOf",
+        "description",
+        "minProperties",
+        "minimum",
+        "minItems",
+        "maxProperties",
+        "title",
+        "pattern",
+        "example",
+        "format",
+        "enum",
+        "maxLength",
+        "type",
+    }
+
+    new_parameters = filter_schema_fields(
+        schema_dict=parameters,
+        valid_fields=valid_schema_fields,
+    )
+
+    assert "uri" not in json.dumps(new_parameters)
