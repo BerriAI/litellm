@@ -2166,6 +2166,66 @@
         "supports_tool_choice": true,
         "supports_native_streaming": true
     },
+    "azure/o3-pro": {
+        "max_tokens": 100000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 2e-05,
+        "output_cost_per_token": 8e-05,
+        "input_cost_per_token_batches": 1e-05,
+        "output_cost_per_token_batches": 4e-05,
+        "litellm_provider": "azure",
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": false,
+        "supports_vision": true,
+        "supports_prompt_caching": false,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "azure/o3-pro-2025-06-10": {
+        "max_tokens": 100000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 2e-05,
+        "output_cost_per_token": 8e-05,
+        "input_cost_per_token_batches": 1e-05,
+        "output_cost_per_token_batches": 4e-05,
+        "litellm_provider": "azure",
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": false,
+        "supports_vision": true,
+        "supports_prompt_caching": false,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
     "azure/o3": {
         "max_tokens": 100000,
         "max_input_tokens": 200000,
