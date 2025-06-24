@@ -161,16 +161,20 @@ const CacheDashboard: React.FC<CachePageProps> = ({
       return;
     }
 
+    // Create new Date objects to avoid mutating the original dates
+    const adjustedStartTime = new Date(startTime);
+    const adjustedEndTime = new Date(endTime);
+
     // the endTime put it to the last hour of the selected date
-    endTime.setHours(23, 59, 59, 999);
+    adjustedEndTime.setHours(23, 59, 59, 999);
 
     // startTime put it to the first hour of the selected date
-    startTime.setHours(0, 0, 0, 0);
+    adjustedStartTime.setHours(0, 0, 0, 0);
 
     let new_cache_data = await adminGlobalCacheActivity(
       accessToken,
-      formatDateWithoutTZ(startTime),
-      formatDateWithoutTZ(endTime)
+      formatDateWithoutTZ(adjustedStartTime),
+      formatDateWithoutTZ(adjustedEndTime)
     )
 
     setData(new_cache_data);
