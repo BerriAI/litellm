@@ -370,7 +370,7 @@ async def create_user(
             LitellmUserRoles.INTERNAL_USER,
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
         ]
-        ] = None
+        ] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
         if litellm.default_internal_user_params:
             default_role = litellm.default_internal_user_params.get("user_role")
 
