@@ -178,3 +178,39 @@ def test_get_request_tags():
     assert "test-tag" in tags
     assert "User-Agent: litellm" in tags
     assert "User-Agent: litellm/0.1.0" in tags
+
+
+def test_response_cost_calculator_with_response_cost_in_hidden_params(logging_obj):
+    from litellm import Router
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "DeepSeek-R1",
+                "litellm_params": {
+                    "model": "together_ai/deepseek-ai/DeepSeek-R1",
+                },
+                "model_info": {
+                    "access_groups": ["agent-models"],
+                    "supports_tool_choice": True,
+                    "supports_function_calling": True,
+                    "input_cost_per_token": 100,
+                    "output_cost_per_token": 100,
+                },
+            }
+        ]
+    )
+
+    mock_response = router.completion(
+        model="DeepSeek-R1",
+        messages=[{"role": "user", "content": "Hey"}],
+        mock_response="Hello, world!",
+    )
+
+    response_cost = logging_obj._response_cost_calculator(
+        result=mock_response,
+    )
+
+    assert response_cost is not None
+    assert response_cost > 100
