@@ -520,7 +520,7 @@ def unpack_defs(schema: dict, defs: dict) -> None:
 
     # Use iterative approach with queue to avoid recursion
     # Each item in queue is (node, parent_container, key/index, active_defs, seen_ids)
-    queue = deque([(schema, None, None, root_defs, set())])
+    queue: deque[tuple[Any, Union[dict, list, None], Union[str, int, None], dict, set]] = deque([(schema, None, None, root_defs, set())])
     
     while queue:
         node, parent, key, active_defs, seen = queue.popleft()
