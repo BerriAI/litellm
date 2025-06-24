@@ -468,6 +468,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                 user_api_key_request_route=user_api_key_dict.request_route,
             )
         )
+
         _metadata["user_api_key"] = user_api_key_dict.api_key
         if _litellm_metadata:
             _metadata.update(_litellm_metadata)
@@ -479,13 +480,13 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
 
         kwargs = {
             "litellm_params": {
+                **litellm_params_in_body,
                 "metadata": _metadata,
                 "proxy_server_request": {
                     "url": str(request.url),
                     "method": request.method,
                     "body": copy.copy(_parsed_body),  # use copy instead of deepcopy
                 },
-                **litellm_params_in_body,
             },
             "call_type": "pass_through_endpoint",
             "litellm_call_id": litellm_call_id,
@@ -641,6 +642,7 @@ async def pass_through_request(  # noqa: PLR0915
             request=request,
             logging_obj=logging_obj,
         )
+
         # done for supporting 'parallel_request_limiter.py' with pass-through endpoints
         logging_obj.update_environment_variables(
             model="unknown",
