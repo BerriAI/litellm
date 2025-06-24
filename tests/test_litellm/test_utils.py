@@ -466,6 +466,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     },
                     "additionalProperties": False,
                 },
+                "citation_cost_per_token": {"type": "number"},
                 "supported_modalities": {
                     "type": "array",
                     "items": {
