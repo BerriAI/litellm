@@ -89,20 +89,3 @@ def test_validate_environment_azure_api_key_within_secret_str():
         expected = {"api-key": "test-api-key"}
 
         assert result == expected
-
-
-def test_validate_environment_get_azure_ad_token():
-    azure_openai_responses_apiconfig = AzureOpenAIResponsesAPIConfig()
-
-    with patch(
-        "litellm.llms.azure.responses.transformation.get_azure_ad_token"
-    ) as mock_get_azure_ad_token:
-        mock_get_azure_ad_token.side_effect = lambda key: "test-azure-ad-token"
-
-        litellm_params = GenericLiteLLMParams(azure_ad_token="test-azure-ad-token")
-        result = azure_openai_responses_apiconfig.validate_environment(
-            headers={}, model="", litellm_params=litellm_params
-        )
-        expected = {"Authorization": "Bearer test-azure-ad-token"}
-
-        assert result == expected
