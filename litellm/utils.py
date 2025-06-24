@@ -3117,7 +3117,7 @@ def get_optional_params(  # noqa: PLR0915
         Args:
             supported_params: List[str] - supported params from the litellm config
         """
-        verbose_logger.info(
+        verbose_logger.debug(
             f"\nLiteLLM completion() model= {model}; provider = {custom_llm_provider}"
         )
         verbose_logger.debug(

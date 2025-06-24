@@ -657,7 +657,7 @@ def completion_cost(  # noqa: PLR0915
             potential_model_names.append(model)
         for idx, model in enumerate(potential_model_names):
             try:
-                verbose_logger.info(
+                verbose_logger.debug(
                     f"selected model name for cost calculation: {model}"
                 )
 
