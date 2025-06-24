@@ -292,6 +292,10 @@ Let's also set the default models to `no-default-models`. This means a user can 
 </TabItem>
 <TabItem value="yaml" label="YAML">
 
+:::info
+Team must be created before setting it as the default team. 
+:::
+
 ```yaml
 default_internal_user_params:    # Default Params used when a new user signs in Via SSO
     user_role: "internal_user"     # one of "internal_user", "internal_user_viewer", 
