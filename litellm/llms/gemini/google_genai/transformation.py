@@ -1,7 +1,7 @@
 """
 Transformation for Calling Google models in their native format.
 """
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 import httpx
 
@@ -11,13 +11,18 @@ from litellm.llms.base_llm.google_genai.transformation import (
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.google_genai.main import (
-    GenerateContentConfigDict,
-    GenerateContentContentListUnionDict,
-    GenerateContentRequestDict,
-    GenerateContentResponse,
-)
 from litellm.types.router import GenericLiteLLMParams
+
+if TYPE_CHECKING:
+    from litellm.types.google_genai.main import (
+        GenerateContentConfigDict,
+        GenerateContentContentListUnionDict,
+        GenerateContentResponse,
+    )
+else:
+    GenerateContentConfigDict = Any
+    GenerateContentContentListUnionDict = Any
+    GenerateContentResponse = Any
 
 
 class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
@@ -89,6 +94,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         Returns:
             Mapped parameters for the provider
         """
+        from litellm.types.google_genai.main import GenerateContentConfigDict
         _generate_content_config_dict = GenerateContentConfigDict()
         supported_google_genai_params = self.get_supported_generate_content_optional_params(model)
         for param, value in generate_content_config_dict.items():
@@ -247,7 +253,10 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         contents: GenerateContentContentListUnionDict,
         generate_content_config_dict: Dict,
     ) -> dict:
-
+        from litellm.types.google_genai.main import (
+            GenerateContentConfigDict,
+            GenerateContentRequestDict,
+        )
         typed_generate_content_request = GenerateContentRequestDict(
             model=model,
             contents=contents,
@@ -273,6 +282,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         Returns:
             Transformed response data
         """
+        from litellm.types.google_genai.main import GenerateContentResponse
         try:
             response = raw_response.json()
         except Exception as e:
