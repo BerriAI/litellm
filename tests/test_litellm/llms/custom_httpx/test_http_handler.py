@@ -96,7 +96,7 @@ async def test_ssl_verify_true(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ssl_verify_none(monkeypatch):
-    # Ensure environment variable for SSL security level is not set
+    # Ensure environment variable for SSL security level is not set. Default to checking
     monkeypatch.setenv("SSL_VERIFY", None)
 
     # Create async client with SSL verification disabled to isolate SSL context testing
