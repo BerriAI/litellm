@@ -15,6 +15,7 @@ import {
   TableHeaderCell, TableBody, TableCell,
   Subtitle, DateRangePicker, DateRangePickerValue
 } from "@tremor/react";
+import UsageDatePicker from "./shared/usage_date_picker";
 import { AreaChart } from "@tremor/react";
 
 import { userDailyActivityCall, tagListCall } from "./networking";
@@ -273,9 +274,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
           <TabPanel>
             <Grid numItems={2} className="gap-2 w-full mb-4">
               <Col>
-                <Text>Select Time Range</Text>
-                <DateRangePicker
-                  enableSelect={true}
+                <UsageDatePicker
                   value={dateValue}
                   onValueChange={(value) => {
                     setDateValue(value);
