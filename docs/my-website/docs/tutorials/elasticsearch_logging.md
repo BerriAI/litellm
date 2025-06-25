@@ -5,6 +5,8 @@ import TabItem from '@theme/TabItem';
 
 Send your LLM requests, responses, costs, and performance data to Elasticsearch for analytics and monitoring using OpenTelemetry.
 
+![Elasticsearch Demo](../../img/elasticsearch_demo.png)
+
 ## Quick Start
 
 ### 1. Start Elasticsearch
