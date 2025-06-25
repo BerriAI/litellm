@@ -1,4 +1,4 @@
-from typing import List, Literal, Optional, TypedDict
+from typing import List, Literal, Optional, TypedDict, Union
 
 from pydantic import Field
 
@@ -31,6 +31,14 @@ class MicrosoftServicePrincipalTeam(TypedDict, total=False):
     principalId: Optional[str]
 
 
+class AccessControl_UI_AccessMode(LiteLLMPydanticObjectBase):
+    """Model for Controlling UI Access Mode via SSO Groups"""
+
+    type: Literal["restricted_sso_group"]
+    restricted_sso_group: str
+    sso_group_jwt_field: str
+
+
 class SSOConfig(LiteLLMPydanticObjectBase):
     """
     Configuration for SSO environment variables and settings
@@ -45,7 +53,7 @@ class SSOConfig(LiteLLMPydanticObjectBase):
         default=None,
         description="Google OAuth Client Secret for SSO authentication",
     )
-    
+
     # Microsoft SSO
     microsoft_client_id: Optional[str] = Field(
         default=None,
@@ -59,7 +67,7 @@ class SSOConfig(LiteLLMPydanticObjectBase):
         default=None,
         description="Microsoft Azure Tenant ID for SSO authentication",
     )
-    
+
     # Generic/Okta SSO
     generic_client_id: Optional[str] = Field(
         default=None,
@@ -81,7 +89,7 @@ class SSOConfig(LiteLLMPydanticObjectBase):
         default=None,
         description="User info endpoint URL for generic OAuth provider",
     )
-    
+
     # Common settings
     proxy_base_url: Optional[str] = Field(
         default=None,
@@ -90,6 +98,12 @@ class SSOConfig(LiteLLMPydanticObjectBase):
     user_email: Optional[str] = Field(
         default=None,
         description="Email of the proxy admin user",
+    )
+
+    # Access Mode
+    ui_access_mode: Optional[Union[AccessControl_UI_AccessMode, str]] = Field(
+        default=None,
+        description="Access mode for the UI",
     )
 
 

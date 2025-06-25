@@ -119,6 +119,8 @@ def anthropic_messages_handler(
     """
     Makes Anthropic `/v1/messages` API calls In the Anthropic API Spec
     """
+    from litellm.types.utils import LlmProviders
+
     local_vars = locals()
     is_async = kwargs.pop("is_async", False)
     # Use provided client or create a new one
@@ -141,12 +143,17 @@ def anthropic_messages_handler(
         api_key=litellm_params.api_key,
     )
 
-    anthropic_messages_provider_config: Optional[
-        BaseAnthropicMessagesConfig
-    ] = ProviderConfigManager.get_provider_anthropic_messages_config(
-        model=model,
-        provider=litellm.LlmProviders(custom_llm_provider),
-    )
+    anthropic_messages_provider_config: Optional[BaseAnthropicMessagesConfig] = None
+
+    if custom_llm_provider is not None and custom_llm_provider in [
+        provider.value for provider in LlmProviders
+    ]:
+        anthropic_messages_provider_config = (
+            ProviderConfigManager.get_provider_anthropic_messages_config(
+                model=model,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
+        )
     if anthropic_messages_provider_config is None:
         # Handle non-Anthropic models using the adapter
         return (

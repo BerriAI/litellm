@@ -54,7 +54,9 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.mlflow import MlflowLogger
-from litellm.integrations.vector_stores.bedrock_vector_store import BedrockVectorStore
+from litellm.integrations.vector_store_integrations.bedrock_vector_store import (
+    BedrockVectorStore,
+)
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,

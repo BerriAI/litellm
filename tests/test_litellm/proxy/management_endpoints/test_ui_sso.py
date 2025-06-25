@@ -696,11 +696,12 @@ async def test_get_generic_sso_response_with_additional_headers():
                 "fastapi_sso.sso.generic.create_provider", return_value=mock_sso_class
             ) as mock_create_provider:
                 # Act
-                result = await get_generic_sso_response(
+                result, received_response = await get_generic_sso_response(
                     request=mock_request,
                     jwt_handler=mock_jwt_handler,
                     generic_client_id=generic_client_id,
                     redirect_url=redirect_url,
+                    sso_jwt_handler=None,
                 )
 
                 # Assert
@@ -756,11 +757,12 @@ async def test_get_generic_sso_response_with_empty_headers():
                 "fastapi_sso.sso.generic.create_provider", return_value=mock_sso_class
             ) as mock_create_provider:
                 # Act
-                result = await get_generic_sso_response(
+                result, received_response = await get_generic_sso_response(
                     request=mock_request,
                     jwt_handler=mock_jwt_handler,
                     generic_client_id=generic_client_id,
                     redirect_url=redirect_url,
+                    sso_jwt_handler=None,
                 )
 
                 # Assert
