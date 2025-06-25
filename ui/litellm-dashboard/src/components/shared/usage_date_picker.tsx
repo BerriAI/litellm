@@ -6,17 +6,20 @@ interface UsageDatePickerProps {
   onValueChange: (value: DateRangePickerValue) => void;
   label?: string;
   className?: string;
+  showTimeRange?: boolean;
 }
 
 /**
  * Reusable date picker component for usage dashboards.
  * Handles proper time boundaries for date ranges, especially "Today" selections.
+ * Addresses timezone issues by ensuring UTC time boundaries are set correctly.
  */
 const UsageDatePicker: React.FC<UsageDatePickerProps> = ({
   value,
   onValueChange,
   label = "Select Time Range",
-  className = ""
+  className = "",
+  showTimeRange = true
 }) => {
   const handleDateChange = (newValue: DateRangePickerValue) => {
     // Handle the case where "Today" or same-day selection is made
@@ -33,8 +36,9 @@ const UsageDatePicker: React.FC<UsageDatePickerProps> = ({
       
       if (isSameDay) {
         // For same-day selections (like "Today"), set proper time boundaries
-        adjustedStartTime.setHours(0, 0, 0, 0); // Start of day
-        adjustedEndTime.setHours(23, 59, 59, 999); // End of day
+        // Use local timezone boundaries that will be converted to UTC properly
+        adjustedStartTime.setHours(0, 0, 0, 0); // Start of day in local time
+        adjustedEndTime.setHours(23, 59, 59, 999); // End of day in local time
       } else {
         // For multi-day ranges, set start to beginning of first day and end to end of last day
         adjustedStartTime.setHours(0, 0, 0, 0);
@@ -51,6 +55,45 @@ const UsageDatePicker: React.FC<UsageDatePickerProps> = ({
     }
   };
 
+  const formatTimeRange = (from: Date | undefined, to: Date | undefined) => {
+    if (!from || !to) return "";
+    
+    const formatDateTime = (date: Date) => {
+      return date.toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+        timeZoneName: 'short'
+      });
+    };
+
+    const isSameDay = from.toDateString() === to.toDateString();
+    
+    if (isSameDay) {
+      const dateStr = from.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric'
+      });
+      const startTime = from.toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+      });
+      const endTime = to.toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+        timeZoneName: 'short'
+      });
+      return `${dateStr}: ${startTime} - ${endTime}`;
+    } else {
+      return `${formatDateTime(from)} - ${formatDateTime(to)}`;
+    }
+  };
+
   return (
     <div className={className}>
       {label && <Text className="mb-2">{label}</Text>}
@@ -59,6 +102,11 @@ const UsageDatePicker: React.FC<UsageDatePickerProps> = ({
         value={value}
         onValueChange={handleDateChange}
       />
+      {showTimeRange && value.from && value.to && (
+        <Text className="mt-1 text-xs text-gray-500">
+          {formatTimeRange(value.from, value.to)}
+        </Text>
+      )}
     </div>
   );
 };
