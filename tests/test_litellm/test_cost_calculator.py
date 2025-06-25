@@ -373,12 +373,15 @@ def test_gpt_image_1_azure_deployment_names():
         )
         assert abs(cost - expected_cost) < 1e-6, f"Failed for model: {model_name}"
     
-    # Test a scenario that should NOT be detected as gpt-image-1
-    # Should raise an error since it's not a supported gpt-image-1 variant
+    # Test a scenario with missing token-based pricing configuration
+    # Should raise an error since cost_info doesn't have token pricing fields
+    invalid_cost_info = {
+        "input_cost_per_pixel": 0.001,  # pixel-based pricing instead
+    }
     try:
         _calculate_token_based_image_cost(
             model="azure/some-other-model",
-            cost_info=cost_info,
+            cost_info=invalid_cost_info,
             quality="medium", 
             height=1024,
             width=1024,
@@ -386,11 +389,11 @@ def test_gpt_image_1_azure_deployment_names():
             prompt_tokens=50,
             completion_tokens=1056
         )
-        assert False, "Should have raised ValueError for non-gpt-image-1 model"
+        assert False, "Should have raised ValueError for model without token-based pricing"
     except ValueError as e:
-        assert "does not support token-based pricing" in str(e)
+        assert "does not have token-based pricing configuration" in str(e)
     
-    # Test that missing token counts raise an error for gpt-image-1 models
+    # Test that missing token counts raise an error for token-based models
     try:
         _calculate_token_based_image_cost(
             model="azure/gpt-image-1",
