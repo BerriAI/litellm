@@ -3266,7 +3266,7 @@ class Router:
             - An asynchronous function for asynchronous call types
         """
         # Handle synchronous call types
-        if call_type == "responses":
+        if call_type in ("responses", "generate_content", "generate_content_stream"):
 
             def sync_wrapper(
                 custom_llm_provider: Optional[
@@ -3312,9 +3312,7 @@ class Router:
                 "aimage_edit",
                 "allm_passthrough_route",
                 "agenerate_content",
-                "generate_content",
                 "agenerate_content_stream",
-                "generate_content_stream",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
