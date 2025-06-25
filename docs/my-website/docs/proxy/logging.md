@@ -56,27 +56,6 @@ components in your system, including in logging tools.
 
 ## Logging Features
 
-### Conditional Logging by Virtual Keys, Teams
-
-Use this to:
-1. Conditionally enable logging for some virtual keys/teams
-2. Set different logging providers for different virtual keys/teams
-
-[👉 **Get Started** - Team/Key Based Logging](team_logging)
-
-
-### Redacting UserAPIKeyInfo 
-
-Redact information about the user api key (hashed token, user_id, team id, etc.), from logs. 
-
-Currently supported for Langfuse, OpenTelemetry, Logfire, ArizeAI logging.
-
-```yaml
-litellm_settings: 
-  callbacks: ["langfuse"]
-  redact_user_api_key_info: true
-```
-
 
 ### Redact Messages, Response Content
 
@@ -171,6 +150,18 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 
 <Image img={require('../../img/message_redaction_spend_logs.png')} />
 
+
+### Redacting UserAPIKeyInfo 
+
+Redact information about the user api key (hashed token, user_id, team id, etc.), from logs. 
+
+Currently supported for Langfuse, OpenTelemetry, Logfire, ArizeAI logging.
+
+```yaml
+litellm_settings: 
+  callbacks: ["langfuse"]
+  redact_user_api_key_info: true
+```
 
 ### Disable Message Redaction
 
@@ -268,6 +259,81 @@ print(response)
 ```
 LiteLLM.Info: "no-log request, skipping logging"
 ```
+
+### ✨ Dynamically Disable specific callbacks
+
+:::info
+
+This is an enterprise feature.
+
+[Proceed with LiteLLM Enterprise](https://www.litellm.ai/enterprise)
+
+:::
+
+For some use cases, you may want to disable specific callbacks for a request. You can do this by passing `x-litellm-disable-callbacks: <callback_name>` in the request headers.
+
+Send the list of callbacks to disable in the request header `x-litellm-disable-callbacks`.
+
+<Tabs>
+<TabItem value="Curl" label="Curl Request">
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'x-litellm-disable-callbacks: langfuse' \
+    --data '{
+    "model": "claude-sonnet-4-20250514",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+}'
+```
+
+</TabItem>
+<TabItem value="OpenAI" label="OpenAI Python SDK">
+
+```python
+import openai
+
+client = openai.OpenAI(
+    api_key="sk-1234",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="claude-sonnet-4-20250514",
+    messages=[
+        {
+            "role": "user",
+            "content": "what llm are you"
+        }
+    ],
+    extra_headers={
+        "x-litellm-disable-callbacks": "langfuse"
+    }
+)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
+
+### ✨ Conditional Logging by Virtual Keys, Teams
+
+Use this to:
+1. Conditionally enable logging for some virtual keys/teams
+2. Set different logging providers for different virtual keys/teams
+
+[👉 **Get Started** - Team/Key Based Logging](team_logging)
+
+
+
 
 
 ## What gets logged?

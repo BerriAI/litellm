@@ -272,26 +272,11 @@ class VertexPassthroughLoggingHandler:
             return None
         if len(parsed_chunks) == 0:
             return None
-        litellm_custom_stream_wrapper = litellm.CustomStreamWrapper(
-            completion_stream=vertex_iterator,
-            model=model,
-            logging_obj=litellm_logging_obj,
-            custom_llm_provider="vertex_ai",
-        )
         all_openai_chunks = []
         for parsed_chunk in parsed_chunks:
-            try:
-                litellm_chunk = litellm_custom_stream_wrapper.chunk_creator(
-                    chunk=parsed_chunk
-                )
-            except Exception as e:
-                verbose_proxy_logger.error(
-                    "Error creating litellm chunk from vertex passthrough endpoint: %s",
-                    str(e),
-                )
+            if parsed_chunk is None:
                 continue
-            if litellm_chunk is not None:
-                all_openai_chunks.append(litellm_chunk)
+            all_openai_chunks.append(parsed_chunk)
 
         complete_streaming_response = litellm.stream_chunk_builder(
             chunks=all_openai_chunks
