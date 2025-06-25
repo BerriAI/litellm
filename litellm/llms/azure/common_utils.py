@@ -643,7 +643,7 @@ class BaseAzureLLM(BaseOpenAILLM):
     @staticmethod
     def _get_base_azure_url(
         api_base: Optional[str],
-        litellm_params: Optional[GenericLiteLLMParams],
+        litellm_params: Optional[Union[GenericLiteLLMParams, Dict[str, Any]]],
         route: Literal["/openai/responses", "/openai/vector_stores"]
     ) -> str:
         api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
@@ -654,7 +654,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         original_url = httpx.URL(api_base)
 
         # Extract api_version or use default
-        litellm_params = litellm_params or GenericLiteLLMParams()
+        litellm_params = litellm_params or {}
         api_version = cast(Optional[str], litellm_params.get("api_version"))
 
         # Create a new dictionary with existing params
