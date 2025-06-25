@@ -2887,4 +2887,19 @@ class BaseLLMHTTPHandler:
         return vector_store_provider_config.transform_create_vector_store_response(
             response=response,
         )
+    
+    #####################################################################
+    ################ Google GenAI GENERATE CONTENT HANDLER ###########################
+    #####################################################################
+    def generate_content_handler(
+        self,
+        **kwargs,
+    ) -> Any:
+        pass
+    
 
+    async def async_generate_content_handler(
+        self,
+        **kwargs,
+    ) -> Any:
+        pass
