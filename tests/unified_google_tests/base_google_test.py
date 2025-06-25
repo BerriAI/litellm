@@ -16,7 +16,7 @@ from litellm.google_genai import (
     generate_content_stream,
     agenerate_content_stream,
 )
-from google.genai.types import ContentDict, PartDict
+from google.genai.types import ContentDict, PartDict, GenerateContentResponse
 
 
 class BaseGoogleGenAITest:
@@ -34,8 +34,8 @@ class BaseGoogleGenAITest:
         if isinstance(response, AsyncIterator):
             pytest.fail("Expected non-streaming response but got AsyncIterator")
         
-        assert isinstance(response, dict), f"Expected dict response, got {type(response)}"
-        print(f"Response keys: {list(response.keys())}")
+        assert isinstance(response, GenerateContentResponse), f"Expected dict response, got {type(response)}"
+        print(f"Response: {response.model_dump_json(indent=4)}")
         
         # Basic validation - adjust based on actual Google GenAI response structure
         # The exact structure may vary, so we'll be flexible here
