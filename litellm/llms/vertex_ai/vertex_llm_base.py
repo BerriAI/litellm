@@ -12,7 +12,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.secrets import get_secret_str
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES, VertexPartnerProvider
 
 from .common_utils import (
@@ -492,7 +492,7 @@ class VertexBase:
         return headers
     
     @staticmethod
-    def get_vertex_ai_project(litellm_params: dict) -> str:
+    def get_vertex_ai_project(litellm_params: dict) -> Optional[str]:
         return (
             litellm_params.pop("vertex_project", None)
             or litellm_params.pop("vertex_ai_project", None)
@@ -501,7 +501,7 @@ class VertexBase:
         )
     
     @staticmethod
-    def get_vertex_ai_credentials(litellm_params: dict) -> str:
+    def get_vertex_ai_credentials(litellm_params: dict) -> Optional[str]:
         return (
             litellm_params.pop("vertex_credentials", None)
             or litellm_params.pop("vertex_ai_credentials", None)
@@ -509,7 +509,7 @@ class VertexBase:
         )
     
     @staticmethod
-    def get_vertex_ai_location(litellm_params: dict) -> str:
+    def get_vertex_ai_location(litellm_params: dict) -> Optional[str]:
         return (
             litellm_params.pop("vertex_location", None)
             or litellm_params.pop("vertex_ai_location", None)

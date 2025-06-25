@@ -9,14 +9,12 @@ from pydantic import BaseModel
 import litellm
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
-
-from .utils import GoogleGenAIRequestUtils
 
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
@@ -131,16 +129,7 @@ class GenerateContentHelper:
             local_vars.update(kwargs)
         
         # Get optional parameters for generate content
-        generate_content_request_params: Dict[str, Any] = (
-            GoogleGenAIRequestUtils.get_optional_params_generate_content(
-                model=model,
-                generate_content_provider_config=generate_content_provider_config,
-                contents=contents,
-                config=config,
-                local_vars=local_vars or kwargs,
-            )
-        )
-
+        generate_content_request_params: Dict[str, Any] = {}
         # Pre Call logging
         if litellm_logging_obj:
             litellm_logging_obj.update_environment_variables(
