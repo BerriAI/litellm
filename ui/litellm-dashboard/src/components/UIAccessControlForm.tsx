@@ -20,12 +20,26 @@ const UIAccessControlForm: React.FC<UIAccessControlFormProps> = ({ accessToken, 
         try {
           const ssoData = await getSSOSettings(accessToken);
           if (ssoData && ssoData.values) {
-            const uiAccessValues = {
-              ui_access_mode: ssoData.values.ui_access_mode,
-              restricted_sso_group: ssoData.values.restricted_sso_group,
-              team_ids_jwt_field: ssoData.values.team_ids_jwt_field,
-            };
-            form.setFieldsValue(uiAccessValues);
+            // Handle nested ui_access_mode structure
+            const uiAccessMode = ssoData.values.ui_access_mode;
+            let formValues = {};
+            
+            if (uiAccessMode && typeof uiAccessMode === 'object') {
+              formValues = {
+                ui_access_mode_type: uiAccessMode.type,
+                restricted_sso_group: uiAccessMode.restricted_sso_group,
+                sso_group_jwt_field: uiAccessMode.sso_group_jwt_field,
+              };
+            } else if (typeof uiAccessMode === 'string') {
+              // Handle legacy flat structure
+              formValues = {
+                ui_access_mode_type: uiAccessMode,
+                restricted_sso_group: ssoData.values.restricted_sso_group,
+                sso_group_jwt_field: ssoData.values.team_ids_jwt_field || ssoData.values.sso_group_jwt_field,
+              };
+            }
+            
+            form.setFieldsValue(formValues);
           }
         } catch (error) {
           console.error("Failed to load UI access settings:", error);
@@ -44,8 +58,16 @@ const UIAccessControlForm: React.FC<UIAccessControlFormProps> = ({ accessToken, 
 
     setLoading(true);
     try {
-      // Only update UI access control fields
-      await updateSSOSettings(accessToken, formValues);
+      // Transform form data to match API expected structure
+      const apiPayload = {
+        ui_access_mode: {
+          type: formValues.ui_access_mode_type,
+          restricted_sso_group: formValues.restricted_sso_group,
+          sso_group_jwt_field: formValues.sso_group_jwt_field,
+        }
+      };
+
+      await updateSSOSettings(accessToken, apiPayload);
       onSuccess();
     } catch (error) {
       console.error("Failed to save UI access settings:", error);
@@ -70,7 +92,7 @@ const UIAccessControlForm: React.FC<UIAccessControlFormProps> = ({ accessToken, 
       >
         <Form.Item
           label="UI Access Mode"
-          name="ui_access_mode"
+          name="ui_access_mode_type"
           tooltip="Controls who can access the UI interface"
         >
           <Select placeholder="Select access mode">
@@ -81,11 +103,11 @@ const UIAccessControlForm: React.FC<UIAccessControlFormProps> = ({ accessToken, 
 
         <Form.Item
           noStyle
-          shouldUpdate={(prevValues, currentValues) => prevValues.ui_access_mode !== currentValues.ui_access_mode}
+          shouldUpdate={(prevValues, currentValues) => prevValues.ui_access_mode_type !== currentValues.ui_access_mode_type}
         >
           {({ getFieldValue }) => {
-            const uiAccessMode = getFieldValue('ui_access_mode');
-            return uiAccessMode === 'restricted_sso_group' ? (
+            const uiAccessModeType = getFieldValue('ui_access_mode_type');
+            return uiAccessModeType === 'restricted_sso_group' ? (
               <Form.Item
                 label="Restricted SSO Group"
                 name="restricted_sso_group"
@@ -99,7 +121,7 @@ const UIAccessControlForm: React.FC<UIAccessControlFormProps> = ({ accessToken, 
 
         <Form.Item
           label="SSO Group JWT Field"
-          name="team_ids_jwt_field"
+          name="sso_group_jwt_field"
           tooltip="JWT field name that contains team/group information. Use dot notation to access nested fields."
         >
           <TextInput placeholder="groups" />

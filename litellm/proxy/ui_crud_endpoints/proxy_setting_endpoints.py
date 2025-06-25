@@ -401,9 +401,6 @@ async def update_sso_settings(sso_config: SSOConfig):
     import os
 
     from litellm.proxy.proxy_server import proxy_config
-    from litellm.types.proxy.management_endpoints.ui_sso import (
-        AccessControl_UI_AccessMode,
-    )
 
     # Update environment variables
     env_var_mapping = {
@@ -439,6 +436,7 @@ async def update_sso_settings(sso_config: SSOConfig):
             # Store user_email in general_settings instead of environment variables
             config["general_settings"]["proxy_admin_email"] = value
         elif field_name == "ui_access_mode" and value is not None:
+
             config["general_settings"]["ui_access_mode"] = value
         elif field_name in env_var_mapping and value is not None:
             env_var_name = env_var_mapping[field_name]
