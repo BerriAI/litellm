@@ -1,7 +1,9 @@
 """
 Transformation for Calling Google models in their native format.
 """
-from typing import Literal, Optional, Tuple, Union
+from typing import Any, Literal, Optional, Tuple, Union
+
+import httpx
 
 import litellm
 from litellm.llms.base_llm.google_genai.transformation import (
@@ -9,6 +11,7 @@ from litellm.llms.base_llm.google_genai.transformation import (
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.google_genai.main import GenerateContentResponse
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -100,3 +103,29 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         )
 
         return headers, api_base
+    
+    def transform_generate_content_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+    ) -> GenerateContentResponse:
+        """
+        Transform the raw response from the generate content API.
+
+        Args:
+            model: The model name
+            raw_response: Raw HTTP response
+
+        Returns:
+            Transformed response data
+        """
+        try:
+            response = raw_response.json()
+        except Exception as e:
+            raise self.get_error_class(
+                error_message=f"Error transforming generate content response: {e}",
+                status_code=raw_response.status_code,
+                headers=raw_response.headers,
+            )
+        
+        return GenerateContentResponse(**response)

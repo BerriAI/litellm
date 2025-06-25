@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
+from litellm.types.google_genai.main import GenerateContentResponse
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -136,7 +137,7 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         self,
         model: str,
         raw_response: httpx.Response,
-    ) -> Dict[str, Any]:
+    ) -> GenerateContentResponse:
         """
         Transform the raw response from the generate content API.
 
