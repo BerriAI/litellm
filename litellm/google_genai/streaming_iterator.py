@@ -1,14 +1,16 @@
 import asyncio
 import json
 from datetime import datetime
-from typing import Any, AsyncIterator, Iterator, List, Optional, Union
+from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.google_genai.transformation import (
-    BaseGoogleGenAIGenerateContentConfig,
-)
-from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
+if TYPE_CHECKING:
+    from litellm.llms.base_llm.google_genai.transformation import (
+        BaseGoogleGenAIGenerateContentConfig,
+    )
+else:
+    BaseGoogleGenAIGenerateContentConfig = Any
 
 class BaseGoogleGenAIGenerateContentStreamingIterator:
     """
@@ -54,13 +56,16 @@ class GoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContent
         self.generate_content_provider_config = generate_content_provider_config
         self.litellm_metadata = litellm_metadata
         self.custom_llm_provider = custom_llm_provider
+        # Store the iterator once to avoid multiple stream consumption
+        self.stream_iterator = response.iter_lines()
 
     def __iter__(self):
         return self
 
     def __next__(self):
         try:
-            chunk = next(self.response.iter_lines())
+            # Get the next chunk from the stored iterator
+            chunk = next(self.stream_iterator)
             # Just yield raw bytes
             return chunk
         except StopIteration:
@@ -70,12 +75,9 @@ class GoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContent
         return self
 
     async def __anext__(self):
-        try:
-            chunk = await self.response.__anext__()
-            # Just yield raw bytes
-            return chunk
-        except StopAsyncIteration:
-            raise StopAsyncIteration
+        # This should not be used for sync responses
+        # If you need async iteration, use AsyncGoogleGenAIGenerateContentStreamingIterator
+        raise NotImplementedError("Use AsyncGoogleGenAIGenerateContentStreamingIterator for async iteration")
 
 
 class AsyncGoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContentStreamingIterator):
@@ -102,15 +104,17 @@ class AsyncGoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateCo
         self.generate_content_provider_config = generate_content_provider_config
         self.litellm_metadata = litellm_metadata
         self.custom_llm_provider = custom_llm_provider
+        # Store the async iterator once to avoid multiple stream consumption
+        self.stream_iterator = response.aiter_lines()
 
     def __aiter__(self):
         return self
 
     async def __anext__(self):
         try:
-            async for chunk in self.response.aiter_lines():
-                # Just yield raw bytes
-                return chunk
-            raise StopAsyncIteration
+            # Get the next chunk from the stored async iterator
+            chunk = await self.stream_iterator.__anext__()
+            # Just yield raw bytes
+            return chunk
         except StopAsyncIteration:
             raise StopAsyncIteration 

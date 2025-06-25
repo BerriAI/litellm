@@ -20,10 +20,6 @@ import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
 from litellm._logging import verbose_logger
-from litellm.google_genai.streaming_iterator import (
-    AsyncGoogleGenAIGenerateContentStreamingIterator,
-    GoogleGenAIGenerateContentStreamingIterator,
-)
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -2919,6 +2915,10 @@ class BaseLLMHTTPHandler:
         Handles Google GenAI generate content requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
         """
+        from litellm.google_genai.streaming_iterator import (
+            GoogleGenAIGenerateContentStreamingIterator,
+        )
+        
         if _is_async:
             return self.async_generate_content_handler(
                 model=model,
@@ -3032,6 +3032,10 @@ class BaseLLMHTTPHandler:
         Async version of the generate content handler.
         Uses async HTTP client to make requests.
         """
+        from litellm.google_genai.streaming_iterator import (
+            AsyncGoogleGenAIGenerateContentStreamingIterator,
+        )
+
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider),

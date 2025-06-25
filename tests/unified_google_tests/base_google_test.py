@@ -87,7 +87,13 @@ class BaseGoogleGenAITest:
     async def test_streaming_base(self, is_async: bool):
         """Base test for streaming requests (parametrized for sync/async)"""
         request_params = self.model_config
-        contents = self.test_contents
+        contents = ContentDict(
+            parts=[
+                PartDict(
+                    text="Hello, can you tell me a short joke?"
+                )
+            ],
+        )
 
         print(f"Testing {'async' if is_async else 'sync'} streaming with model config: {request_params}")
         print(f"Contents: {contents}")
