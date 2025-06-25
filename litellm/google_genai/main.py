@@ -34,7 +34,7 @@ class GenerateContentSetupResult(BaseModel):
     generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig
     generate_content_config_dict: Dict[str, Any]
     litellm_params: GenericLiteLLMParams
-    litellm_logging_obj: Optional[LiteLLMLoggingObj]
+    litellm_logging_obj: LiteLLMLoggingObj
     litellm_call_id: Optional[str]
 
     class Config:
@@ -145,15 +145,17 @@ class GenerateContentHelper:
         )
 
         # Pre Call logging
-        if litellm_logging_obj:
-            litellm_logging_obj.update_environment_variables(
-                model=model,
-                optional_params=dict(generate_content_config_dict),
-                litellm_params={
-                    "litellm_call_id": litellm_call_id,
-                },
-                custom_llm_provider=custom_llm_provider,
-            )
+        if litellm_logging_obj is None:
+            raise ValueError(f"litellm_logging_obj is required, but got None")
+        
+        litellm_logging_obj.update_environment_variables(
+            model=model,
+            optional_params=dict(generate_content_config_dict),
+            litellm_params={
+                "litellm_call_id": litellm_call_id,
+            },
+            custom_llm_provider=custom_llm_provider,
+        )
 
         return GenerateContentSetupResult(
             model=model,
