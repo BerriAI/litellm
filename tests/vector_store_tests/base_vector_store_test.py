@@ -26,6 +26,11 @@ class BaseVectorStoreTest(ABC):
     def get_base_request_args(self) -> dict:
         """Must return the base request args"""
         pass
+    
+    @abstractmethod
+    def get_base_create_vector_store_args(self) -> dict:
+        """Must return the base create vector store args"""
+        pass
 
     @pytest.mark.parametrize("sync_mode", [True, False])
     @pytest.mark.asyncio
@@ -57,7 +62,7 @@ class BaseVectorStoreTest(ABC):
     async def test_basic_create_vector_store(self, sync_mode):
         litellm._turn_on_debug()
         litellm.set_verbose = True
-        base_request_args = self.get_base_request_args()
+        base_request_args = self.get_base_create_vector_store_args()
         
         # Extract custom_llm_provider from base args if present
         create_args = {}
