@@ -65,10 +65,7 @@ class BaseVectorStoreTest(ABC):
         base_request_args = self.get_base_create_vector_store_args()
         
         # Extract custom_llm_provider from base args if present
-        create_args = {}
-        if "custom_llm_provider" in base_request_args:
-            create_args["custom_llm_provider"] = base_request_args["custom_llm_provider"]
-        
+        create_args = base_request_args
         try: 
             if sync_mode:
                 response = litellm.vector_stores.create(
