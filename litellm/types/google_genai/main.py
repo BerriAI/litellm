@@ -1,4 +1,6 @@
 # Import types from the Google GenAI SDK
+from typing import Optional
+
 from google.genai import types
 
 ContentListUnion = types.ContentListUnion
@@ -9,6 +11,9 @@ GenerateContentResponse = types.GenerateContentResponse
 ########################################################
 # Request Type
 ########################################################
-GenerateContentRequestDict = types._GenerateContentParametersDict
 GenerateContentContentListUnionDict = types.ContentListUnionDict
 GenerateContentConfigDict = types.GenerateContentConfigDict
+
+
+class GenerateContentRequestDict(types._GenerateContentParametersDict, total=False):
+    generationConfig: Optional[GenerateContentConfigDict]
