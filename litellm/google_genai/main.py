@@ -13,6 +13,10 @@ from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.types.google_genai.main import (
+    GenerateContentConfigDict,
+    GenerateContentContentListUnionDict,
+)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
@@ -25,9 +29,10 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 class GenerateContentSetupResult(BaseModel):
     """Internal Type - Result of setting up a generate content call"""
     model: str
+    request_body: Dict[str, Any]
     custom_llm_provider: str
     generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig
-    generate_content_request_params: Dict[str, Any]
+    generate_content_config_dict: Dict[str, Any]
     litellm_params: GenericLiteLLMParams
     litellm_logging_obj: Optional[LiteLLMLoggingObj]
     litellm_call_id: Optional[str]
@@ -67,11 +72,10 @@ class GenerateContentHelper:
     @staticmethod
     def setup_generate_content_call(
         model: str,
-        contents: Union[str, List[Dict[str, Any]]],
-        config: Optional[Dict[str, Any]] = None,
+        contents: GenerateContentContentListUnionDict,
+        config: Optional[GenerateContentConfigDict] = None,
         custom_llm_provider: Optional[str] = None,
         stream: bool = False,
-        local_vars: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> GenerateContentSetupResult:
         """
@@ -125,19 +129,28 @@ class GenerateContentHelper:
                 f"Generate content {operation} is not supported for {custom_llm_provider}".strip()
             )
 
-        if local_vars:
-            local_vars.update(kwargs)
-        
-        # Get optional parameters for generate content
-        generate_content_request_params: Dict[str, Any] = {}
+
+        #########################################################################################
+        # Construct request body
+        #########################################################################################
+        # Create Google Optional Params Config
+        generate_content_config_dict = generate_content_provider_config.map_generate_content_optional_params(
+            generate_content_config_dict=config or {},
+            model=model,
+        )
+        request_body = generate_content_provider_config.transform_generate_content_request(
+            model=model,
+            contents=contents,
+            generate_content_config_dict=generate_content_config_dict,
+        )
+
         # Pre Call logging
         if litellm_logging_obj:
             litellm_logging_obj.update_environment_variables(
                 model=model,
-                optional_params=dict(generate_content_request_params),
+                optional_params=dict(generate_content_config_dict),
                 litellm_params={
                     "litellm_call_id": litellm_call_id,
-                    **generate_content_request_params,
                 },
                 custom_llm_provider=custom_llm_provider,
             )
@@ -145,8 +158,9 @@ class GenerateContentHelper:
         return GenerateContentSetupResult(
             model=model,
             custom_llm_provider=custom_llm_provider,
+            request_body=request_body,
             generate_content_provider_config=generate_content_provider_config,
-            generate_content_request_params=generate_content_request_params,
+            generate_content_config_dict=generate_content_config_dict,
             litellm_params=litellm_params,
             litellm_logging_obj=litellm_logging_obj,
             litellm_call_id=litellm_call_id
@@ -156,8 +170,8 @@ class GenerateContentHelper:
 @client
 async def agenerate_content(
     model: str,
-    contents: Union[str, List[Dict[str, Any]]],
-    config: Optional[Dict[str, Any]] = None,
+    contents: GenerateContentContentListUnionDict,
+    config: Optional[GenerateContentConfigDict] = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -219,8 +233,8 @@ async def agenerate_content(
 @client
 def generate_content(
     model: str,
-    contents: Union[str, List[Dict[str, Any]]],
-    config: Optional[Dict[str, Any]] = None,
+    contents: GenerateContentContentListUnionDict,
+    config: Optional[GenerateContentConfigDict] = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -261,7 +275,7 @@ def generate_content(
             model=setup_result.model,
             contents=contents,
             generate_content_provider_config=setup_result.generate_content_provider_config,
-            generate_content_request_params=setup_result.generate_content_request_params,
+            generate_content_config_dict=setup_result.generate_content_config_dict,
             custom_llm_provider=setup_result.custom_llm_provider,
             litellm_params=setup_result.litellm_params,
             logging_obj=setup_result.litellm_logging_obj,
@@ -288,8 +302,8 @@ def generate_content(
 @client
 async def agenerate_content_stream(
     model: str,
-    contents: Union[str, List[Dict[str, Any]]],
-    config: Optional[Dict[str, Any]] = None,
+    contents: GenerateContentContentListUnionDict,
+    config: Optional[GenerateContentConfigDict] = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -344,8 +358,8 @@ async def agenerate_content_stream(
 @client
 def generate_content_stream(
     model: str,
-    contents: Union[str, List[Dict[str, Any]]],
-    config: Optional[Dict[str, Any]] = None,
+    contents: GenerateContentContentListUnionDict,
+    config: Optional[GenerateContentConfigDict] = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -379,7 +393,7 @@ def generate_content_stream(
             model=setup_result.model,
             contents=contents,
             generate_content_provider_config=setup_result.generate_content_provider_config,
-            generate_content_request_params=setup_result.generate_content_request_params,
+            generate_content_config_dict=setup_result.generate_content_config_dict,
             custom_llm_provider=setup_result.custom_llm_provider,
             litellm_params=setup_result.litellm_params,
             logging_obj=setup_result.litellm_logging_obj,

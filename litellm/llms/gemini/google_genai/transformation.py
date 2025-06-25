@@ -76,9 +76,9 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
 
     def map_generate_content_optional_params(
         self,
-        generate_content_optional_params: Dict[str, Any],
+        generate_content_config_dict: GenerateContentConfigDict,
         model: str,
-    ) -> GenerateContentConfigDict:
+    ) -> Dict[str, Any]:
         """
         Map Google GenAI parameters to provider-specific format.
 
@@ -89,12 +89,12 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         Returns:
             Mapped parameters for the provider
         """
-        generate_content_config_dict = GenerateContentConfigDict()
+        _generate_content_config_dict = GenerateContentConfigDict()
         supported_google_genai_params = self.get_supported_generate_content_optional_params(model)
-        for param, value in generate_content_optional_params.items():
+        for param, value in generate_content_config_dict.items():
             if param in supported_google_genai_params:
-                generate_content_config_dict[param] = value
-        return generate_content_config_dict
+                _generate_content_config_dict[param] = value
+        return dict(_generate_content_config_dict)
     
     def validate_environment(
         self, 
@@ -178,15 +178,13 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         self,
         model: str,
         contents: GenerateContentContentListUnionDict,
-        generate_content_config_dict: GenerateContentConfigDict,
-        litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        generate_content_config_dict: Dict,
     ) -> dict:
 
         typed_generate_content_request = GenerateContentRequestDict(
             model=model,
             contents=contents,
-            config=generate_content_config_dict,
+            config=GenerateContentConfigDict(**generate_content_config_dict),
         )
 
         request_dict = cast(dict, typed_generate_content_request)

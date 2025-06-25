@@ -54,9 +54,9 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
     @abstractmethod
     def map_generate_content_optional_params(
         self,
-        generate_content_optional_params: Dict[str, Any],
+        generate_content_config_dict: GenerateContentConfigDict,
         model: str,
-    ) -> GenerateContentConfigDict:
+    ) -> Dict[str, Any]:
         """
         Map Google GenAI parameters to provider-specific format.
 
@@ -116,9 +116,7 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         self,
         model: str,
         contents: GenerateContentContentListUnionDict,
-        generate_content_config_dict: GenerateContentConfigDict,
-        litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        generate_content_config_dict: Dict,
     ) -> dict:
         """
         Transform the request parameters for the generate content API.
