@@ -32,6 +32,70 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         super().__init__()
         VertexLLM.__init__(self)
     
+    def get_supported_generate_content_optional_params(self, model: str) -> List[str]:
+        """
+        Get the list of supported Google GenAI parameters for the model.
+
+        Args:
+            model: The model name
+
+        Returns:
+            List of supported parameter names
+        """
+        return [
+            "http_options",
+            "system_instruction", 
+            "temperature",
+            "top_p",
+            "top_k",
+            "candidate_count",
+            "max_output_tokens",
+            "stop_sequences",
+            "response_logprobs",
+            "logprobs",
+            "presence_penalty",
+            "frequency_penalty",
+            "seed",
+            "response_mime_type",
+            "response_schema",
+            "routing_config",
+            "model_selection_config",
+            "safety_settings",
+            "tools",
+            "tool_config",
+            "labels",
+            "cached_content",
+            "response_modalities",
+            "media_resolution",
+            "speech_config",
+            "audio_timestamp",
+            "automatic_function_calling",
+            "thinking_config"
+        ]
+
+
+    def map_generate_content_optional_params(
+        self,
+        generate_content_optional_params: Dict[str, Any],
+        model: str,
+    ) -> GenerateContentConfigDict:
+        """
+        Map Google GenAI parameters to provider-specific format.
+
+        Args:
+            generate_content_optional_params: Optional parameters for generate content
+            model: The model name
+
+        Returns:
+            Mapped parameters for the provider
+        """
+        generate_content_config_dict = GenerateContentConfigDict()
+        supported_google_genai_params = self.get_supported_generate_content_optional_params(model)
+        for param, value in generate_content_optional_params.items():
+            if param in supported_google_genai_params:
+                generate_content_config_dict[param] = value
+        return generate_content_config_dict
+    
     def validate_environment(
         self, 
         api_key: Optional[str],
@@ -74,7 +138,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             litellm_params: LiteLLM parameters
 
         Returns:
-            Complete URL for the API request
+            Tuple of headers and API base
         """
 
         vertex_credentials = self.get_vertex_ai_credentials(litellm_params)

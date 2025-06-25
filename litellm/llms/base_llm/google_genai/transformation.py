@@ -1,6 +1,6 @@
 import types
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import httpx
 
@@ -48,36 +48,7 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         Returns:
             List of supported parameter names
         """
-        return [
-            "http_options",
-            "system_instruction", 
-            "temperature",
-            "top_p",
-            "top_k",
-            "candidate_count",
-            "max_output_tokens",
-            "stop_sequences",
-            "response_logprobs",
-            "logprobs",
-            "presence_penalty",
-            "frequency_penalty",
-            "seed",
-            "response_mime_type",
-            "response_schema",
-            "routing_config",
-            "model_selection_config",
-            "safety_settings",
-            "tools",
-            "tool_config",
-            "labels",
-            "cached_content",
-            "response_modalities",
-            "media_resolution",
-            "speech_config",
-            "audio_timestamp",
-            "automatic_function_calling",
-            "thinking_config"
-        ]
+        raise NotImplementedError("get_supported_generate_content_optional_params is not implemented")
 
 
     @abstractmethod
@@ -96,12 +67,7 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         Returns:
             Mapped parameters for the provider
         """
-        generate_content_config_dict = GenerateContentConfigDict()
-        supported_google_genai_params = self.get_supported_generate_content_optional_params(model)
-        for param, value in generate_content_optional_params.items():
-            if param in supported_google_genai_params:
-                generate_content_config_dict[param] = value
-        return generate_content_config_dict
+        raise NotImplementedError("map_generate_content_optional_params is not implemented")
 
     @abstractmethod
     def validate_environment(
@@ -124,14 +90,14 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
             Updated headers
         """
         raise NotImplementedError("validate_environment is not implemented")
-
-    @abstractmethod
-    def get_complete_url(
+    
+    async def get_auth_token_and_url(
         self,
         api_base: Optional[str],
         model: str,
         litellm_params: dict,
-    ) -> str:
+        stream: bool,
+    ) -> Tuple[dict, str]:
         """
         Get the complete URL for the request.
 
@@ -141,11 +107,9 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
             litellm_params: LiteLLM parameters
 
         Returns:
-            Complete URL for the API request
+            Tuple of headers and API base
         """
-        if api_base is None:
-            raise ValueError("api_base is required")
-        return api_base
+        raise NotImplementedError("get_auth_token_and_url is not implemented")
 
     @abstractmethod
     def transform_generate_content_request(
@@ -186,24 +150,6 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
 
         Returns:
             Transformed response data
-        """
-        pass
-
-    @abstractmethod
-    def transform_streaming_response(
-        self,
-        model: str,
-        parsed_chunk: dict,
-    ) -> Dict[str, Any]:
-        """
-        Transform a parsed streaming response chunk.
-
-        Args:
-            model: The model name
-            parsed_chunk: Parsed chunk data
-
-        Returns:
-            Transformed chunk data
         """
         pass
 

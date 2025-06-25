@@ -9,6 +9,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
+import litellm
 from litellm.google_genai import (
     generate_content,
     agenerate_content,
@@ -55,6 +56,8 @@ class BaseGoogleGenAITest:
         """Base test for non-streaming requests (parametrized for sync/async)"""
         request_params = self.model_config
         contents = self.test_contents
+
+        litellm._turn_on_debug()
 
         print(f"Testing {'async' if is_async else 'sync'} non-streaming with model config: {request_params}")
         print(f"Contents: {contents}")

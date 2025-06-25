@@ -6991,7 +6991,11 @@ class ProviderConfigManager:
         provider: LlmProviders,
     ) -> Optional[BaseGoogleGenAIGenerateContentConfig]:
         if litellm.LlmProviders.GEMINI == provider:
-            pass
+            from litellm.llms.gemini.google_genai.transformation import (
+                GoogleGenAIConfig,
+            )
+
+            return GoogleGenAIConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:
             pass
         return None
