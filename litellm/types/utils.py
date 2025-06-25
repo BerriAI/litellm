@@ -177,7 +177,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     search_context_cost_per_query: Optional[
         SearchContextCostPerQuery
     ]  # Cost for using web search tool
-
+    citation_cost_per_token: Optional[float]  # Cost per citation token for Perplexity
     litellm_provider: Required[str]
     mode: Required[
         Literal[
@@ -947,24 +947,6 @@ class Usage(CompletionUsage):
             elif isinstance(completion_tokens_details, CompletionTokensDetails):
                 _completion_tokens_details = completion_tokens_details
 
-        ## DEEPSEEK MAPPING ##
-        if "prompt_cache_hit_tokens" in params and isinstance(
-            params["prompt_cache_hit_tokens"], int
-        ):
-            if prompt_tokens_details is None:
-                prompt_tokens_details = PromptTokensDetailsWrapper(
-                    cached_tokens=params["prompt_cache_hit_tokens"]
-                )
-
-        ## ANTHROPIC MAPPING ##
-        if "cache_read_input_tokens" in params and isinstance(
-            params["cache_read_input_tokens"], int
-        ):
-            if prompt_tokens_details is None:
-                prompt_tokens_details = PromptTokensDetailsWrapper(
-                    cached_tokens=params["cache_read_input_tokens"]
-                )
-
         # handle prompt_tokens_details
         _prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         if prompt_tokens_details:
@@ -974,6 +956,28 @@ class Usage(CompletionUsage):
                 )
             elif isinstance(prompt_tokens_details, PromptTokensDetails):
                 _prompt_tokens_details = prompt_tokens_details
+
+        ## DEEPSEEK MAPPING ##
+        if "prompt_cache_hit_tokens" in params and isinstance(
+            params["prompt_cache_hit_tokens"], int
+        ):
+            if _prompt_tokens_details is None:
+                _prompt_tokens_details = PromptTokensDetailsWrapper(
+                    cached_tokens=params["prompt_cache_hit_tokens"]
+                )
+            else:
+                _prompt_tokens_details.cached_tokens = params["prompt_cache_hit_tokens"]
+
+        ## ANTHROPIC MAPPING ##
+        if "cache_read_input_tokens" in params and isinstance(
+            params["cache_read_input_tokens"], int
+        ):
+            if _prompt_tokens_details is None:
+                _prompt_tokens_details = PromptTokensDetailsWrapper(
+                    cached_tokens=params["cache_read_input_tokens"]
+                )
+            else:
+                _prompt_tokens_details.cached_tokens = params["cache_read_input_tokens"]
 
         super().__init__(
             prompt_tokens=prompt_tokens or 0,
@@ -2489,3 +2493,9 @@ class DynamicPromptManagementParamLiteral(str, Enum):
     @classmethod
     def list_all_params(cls):
         return [param.value for param in cls]
+
+
+class CallbacksByType(TypedDict):
+    success: List[str]
+    failure: List[str]
+    success_and_failure: List[str]

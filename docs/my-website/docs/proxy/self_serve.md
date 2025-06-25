@@ -161,6 +161,11 @@ Here's the available UI roles for a LiteLLM Internal User:
   - `internal_user`: can login, view/create/delete their own keys, view their spend. **Cannot** add new users.
   - `internal_user_viewer`: can login, view their own keys, view their own spend. **Cannot** create/delete keys, add new users.
 
+**Team Roles:**
+  - `admin`: can add new members to the team, can control Team Permissions, can add team-only models (useful for onboarding a team's finetuned models).
+  - `user`: can login, view their own keys, view their own spend. **Cannot** create/delete keys (controllable via Team Permissions), add new users.
+
+
 ## Auto-add SSO users to teams
 
 This walks through setting up sso auto-add for **Okta, Google SSO**
@@ -272,6 +277,65 @@ This budget does not apply to keys created under non-default teams.
 ### Set max budget for teams
 
 [**Go Here**](./team_budgets.md)
+
+### Default Team
+
+<Tabs>
+<TabItem value="ui" label="UI">
+
+Go to `Internal Users` -> `Default User Settings` and set the default team to the team you just created. 
+
+Let's also set the default models to `no-default-models`. This means a user can only create keys within a team.
+
+<Image img={require('../../img/default_user_settings_with_default_team.png')}  style={{ width: '1000px', height: 'auto' }} />
+
+</TabItem>
+<TabItem value="yaml" label="YAML">
+
+:::info
+Team must be created before setting it as the default team. 
+:::
+
+```yaml
+litellm_settings:
+  default_internal_user_params:    # Default Params used when a new user signs in Via SSO
+      user_role: "internal_user"     # one of "internal_user", "internal_user_viewer", 
+      models: ["no-default-models"] # Optional[List[str]], optional): models to be used by the user
+      teams: # Optional[List[NewUserRequestTeam]], optional): teams to be used by the user
+        - team_id: "team_id_1" # Required[str]: team_id to be used by the user
+          user_role: "user" # Optional[str], optional): Default role in the team. Values: "user" or "admin". Defaults to "user"
+```
+
+</TabItem>
+</Tabs>
+
+### Team Member Budgets
+
+Set a max budget for a team member. 
+
+You can do this when creating a new team, or by updating an existing team. 
+
+<Tabs>
+<TabItem value="ui" label="UI">
+
+<Image img={require('../../img/create_default_team.png')}  style={{ width: '600px', height: 'auto' }} />
+
+</TabItem>
+<TabItem value="api" label="API">
+
+```bash
+curl -X POST '<PROXY_BASE_URL>/team/new' \
+-H 'Authorization: Bearer <PROXY_MASTER_KEY>' \
+-H 'Content-Type: application/json' \
+-D '{
+    "team_alias": "team_1",
+    "budget_duration": "10d",
+    "team_member_budget": 10
+}'
+```
+
+</TabItem>
+</Tabs>
 
 ### Set default params for new teams
 
