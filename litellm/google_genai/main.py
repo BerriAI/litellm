@@ -268,7 +268,6 @@ def generate_content(
             config=config,
             custom_llm_provider=custom_llm_provider,
             stream=False,
-            local_vars=local_vars,
             **kwargs
         )
 
@@ -321,7 +320,6 @@ async def agenerate_content_stream(
     """
     local_vars = locals()
     try:
-        # Get the streaming generator from the sync version
         kwargs["agenerate_content_stream"] = True
         
         # get custom llm provider so we can use this for mapping exceptions
@@ -330,21 +328,36 @@ async def agenerate_content_stream(
                 model=model, api_base=local_vars.get("base_url", None)
             )
 
-        # Call the sync streaming version to get the generator
-        stream_response = generate_content_stream(
+        # Setup the call
+        setup_result = GenerateContentHelper.setup_generate_content_call(
             model=model,
             contents=contents,
             config=config,
-            extra_headers=extra_headers,
-            extra_query=extra_query,
-            extra_body=extra_body,
-            timeout=timeout,
             custom_llm_provider=custom_llm_provider,
-            **kwargs,
+            stream=True,
+            **kwargs
         )
 
-        # Convert the sync generator to async
-        for chunk in stream_response:
+        # Call the handler with async enabled and streaming
+        async_generator = await base_llm_http_handler.generate_content_handler(
+            model=setup_result.model,
+            contents=contents,
+            generate_content_provider_config=setup_result.generate_content_provider_config,
+            generate_content_config_dict=setup_result.generate_content_config_dict,
+            custom_llm_provider=setup_result.custom_llm_provider,
+            litellm_params=setup_result.litellm_params,
+            logging_obj=setup_result.litellm_logging_obj,
+            extra_headers=extra_headers,
+            extra_body=extra_body,
+            timeout=timeout or request_timeout,
+            _is_async=True,
+            client=kwargs.get("client"),
+            stream=True,
+            litellm_metadata=kwargs.get("litellm_metadata", {}),
+        )
+
+        # Iterate over the async generator
+        async for chunk in async_generator:
             yield chunk
             
     except Exception as e:
@@ -377,7 +390,8 @@ def generate_content_stream(
     """
     local_vars = locals()
     try:
-        _is_async = kwargs.pop("agenerate_content_stream", False) is True
+        # Remove any async-related flags since this is the sync function
+        kwargs.pop("agenerate_content_stream", None)
 
         # Setup the call
         setup_result = GenerateContentHelper.setup_generate_content_call(
@@ -386,11 +400,10 @@ def generate_content_stream(
             config=config,
             custom_llm_provider=custom_llm_provider,
             stream=True,
-            local_vars=local_vars,
             **kwargs
         )
 
-        # Call the handler with streaming enabled
+        # Call the handler with streaming enabled (sync version)
         return base_llm_http_handler.generate_content_handler(
             model=setup_result.model,
             contents=contents,
@@ -402,7 +415,7 @@ def generate_content_stream(
             extra_headers=extra_headers,
             extra_body=extra_body,
             timeout=timeout or request_timeout,
-            _is_async=_is_async,
+            _is_async=False,
             client=kwargs.get("client"),
             stream=True,
             litellm_metadata=kwargs.get("litellm_metadata", {}),
