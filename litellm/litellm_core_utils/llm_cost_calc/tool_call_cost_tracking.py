@@ -85,9 +85,63 @@ class StandardBuiltInToolCostTracking:
         elif StandardBuiltInToolCostTracking.response_object_includes_file_search_call(
             response_object=response_object
         ):
-            return StandardBuiltInToolCostTracking.get_cost_for_file_search(
-                file_search=standard_built_in_tools_params.get("file_search", None),
+            model_info = StandardBuiltInToolCostTracking._safe_get_model_info(
+                model=model, custom_llm_provider=custom_llm_provider
             )
+            file_search_usage = standard_built_in_tools_params.get("file_search", {})
+            return StandardBuiltInToolCostTracking.get_cost_for_file_search(
+                file_search=file_search_usage,
+                provider=custom_llm_provider,
+                model_info=model_info,
+                storage_gb=file_search_usage.get("storage_gb") if isinstance(file_search_usage, dict) else None,
+                days=file_search_usage.get("days") if isinstance(file_search_usage, dict) else None,
+            )
+
+        # Accumulate costs from multiple Azure assistant features
+        total_assistant_cost = 0.0
+        model_info = StandardBuiltInToolCostTracking._safe_get_model_info(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        
+        #########################################################
+        # Vector Store (Azure-specific)
+        #########################################################
+        if custom_llm_provider == "azure":
+            vector_store_usage = standard_built_in_tools_params.get("vector_store_usage", None)
+            if vector_store_usage:
+                total_assistant_cost += StandardBuiltInToolCostTracking.get_cost_for_vector_store(
+                    vector_store_usage=vector_store_usage,
+                    provider=custom_llm_provider,
+                    model_info=model_info,
+                )
+        
+        #########################################################
+        # Computer Use (Azure-specific)
+        #########################################################
+        if custom_llm_provider == "azure":
+            computer_use_usage = standard_built_in_tools_params.get("computer_use_usage", {})
+            if computer_use_usage:
+                total_assistant_cost += StandardBuiltInToolCostTracking.get_cost_for_computer_use(
+                    input_tokens=computer_use_usage.get("input_tokens"),
+                    output_tokens=computer_use_usage.get("output_tokens"),
+                    provider=custom_llm_provider,
+                    model_info=model_info,
+                )
+        
+        #########################################################
+        # Code Interpreter (Azure-specific)
+        #########################################################
+        if custom_llm_provider == "azure":
+            code_interpreter_sessions = standard_built_in_tools_params.get("code_interpreter_sessions", None)
+            if code_interpreter_sessions:
+                total_assistant_cost += StandardBuiltInToolCostTracking.get_cost_for_code_interpreter(
+                    sessions=code_interpreter_sessions,
+                    provider=custom_llm_provider,
+                    model_info=model_info,
+                )
+
+        if total_assistant_cost > 0:
+            return total_assistant_cost
 
         return 0.0
 
@@ -251,15 +305,129 @@ class StandardBuiltInToolCostTracking:
     @staticmethod
     def get_cost_for_file_search(
         file_search: Optional[FileSearchTool] = None,
+        provider: Optional[str] = None,
+        model_info: Optional[dict] = None,
+        storage_gb: Optional[float] = None,
+        days: Optional[float] = None,
     ) -> float:
         """ "
-        Charged at $2.50/1k calls
+        OpenAI: $2.50/1k calls
+        Azure: $0.1 USD per 1 GB/Day (storage-based pricing)
 
         Doc: https://platform.openai.com/docs/pricing#built-in-tools
         """
         if file_search is None:
             return 0.0
+        
+        # Check if model-specific pricing is available
+        if model_info and "file_search_cost_per_gb_per_day" in model_info and provider == "azure":
+            if storage_gb and days:
+                return storage_gb * days * model_info["file_search_cost_per_gb_per_day"]
+        elif model_info and "file_search_cost_per_1k_calls" in model_info:
+            return model_info["file_search_cost_per_1k_calls"]
+        
+        # Azure has storage-based pricing for file search
+        if provider == "azure":
+            from litellm.constants import AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY
+            if storage_gb and days:
+                return storage_gb * days * AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY
+            # Default to 0 if no storage info provided
+            return 0.0
+        
+        # Default to OpenAI pricing (per-call based)
         return OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
+
+    @staticmethod
+    def get_cost_for_vector_store(
+        vector_store_usage: Optional[dict] = None,
+        provider: Optional[str] = None,
+        model_info: Optional[dict] = None,
+    ) -> float:
+        """
+        Calculate cost for vector store usage.
+        
+        Azure charges based on storage size and duration.
+        """
+        if vector_store_usage is None:
+            return 0.0
+        
+        storage_gb = vector_store_usage.get("storage_gb", 0.0)
+        days = vector_store_usage.get("days", 0.0)
+        
+        # Check if model-specific pricing is available
+        if model_info and "vector_store_cost_per_gb_per_day" in model_info:
+            return storage_gb * days * model_info["vector_store_cost_per_gb_per_day"]
+        
+        # Azure has different pricing structure for vector store
+        if provider == "azure":
+            from litellm.constants import AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY
+            return storage_gb * days * AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY
+        
+        # OpenAI doesn't charge separately for vector store (included in embeddings)
+        return 0.0
+
+    @staticmethod
+    def get_cost_for_computer_use(
+        input_tokens: Optional[int] = None,
+        output_tokens: Optional[int] = None,
+        provider: Optional[str] = None,
+        model_info: Optional[dict] = None,
+    ) -> float:
+        """
+        Calculate cost for computer use feature.
+        
+        Azure: $0.003 USD per 1K input tokens, $0.012 USD per 1K output tokens
+        """
+        if provider == "azure" and (input_tokens or output_tokens):
+            # Check if model-specific pricing is available
+            if model_info:
+                input_cost = model_info.get("computer_use_input_cost_per_1k_tokens", 0.0)
+                output_cost = model_info.get("computer_use_output_cost_per_1k_tokens", 0.0)
+                if input_cost or output_cost:
+                    total_cost = 0.0
+                    if input_tokens:
+                        total_cost += (input_tokens / 1000.0) * input_cost
+                    if output_tokens:
+                        total_cost += (output_tokens / 1000.0) * output_cost
+                    return total_cost
+            
+            # Azure default pricing
+            from litellm.constants import AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS, AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS
+            total_cost = 0.0
+            if input_tokens:
+                total_cost += (input_tokens / 1000.0) * AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS
+            if output_tokens:
+                total_cost += (output_tokens / 1000.0) * AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS
+            return total_cost
+        
+        # OpenAI doesn't charge separately for computer use yet
+        return 0.0
+
+    @staticmethod
+    def get_cost_for_code_interpreter(
+        sessions: Optional[int] = None,
+        provider: Optional[str] = None,
+        model_info: Optional[dict] = None,
+    ) -> float:
+        """
+        Calculate cost for code interpreter feature.
+        
+        Azure: $0.03 USD per session
+        """
+        if sessions is None or sessions == 0:
+            return 0.0
+        
+        # Check if model-specific pricing is available
+        if model_info and "code_interpreter_cost_per_session" in model_info:
+            return sessions * model_info["code_interpreter_cost_per_session"]
+        
+        # Azure pricing for code interpreter
+        if provider == "azure":
+            from litellm.constants import AZURE_CODE_INTERPRETER_COST_PER_SESSION
+            return sessions * AZURE_CODE_INTERPRETER_COST_PER_SESSION
+        
+        # OpenAI doesn't charge separately for code interpreter yet
+        return 0.0
 
     @staticmethod
     def chat_completion_response_includes_annotations(
