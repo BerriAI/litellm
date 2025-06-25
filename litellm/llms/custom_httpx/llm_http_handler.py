@@ -20,6 +20,10 @@ import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
 from litellm._logging import verbose_logger
+from litellm.google_genai.streaming_iterator import (
+    AsyncGoogleGenAIGenerateContentStreamingIterator,
+    GoogleGenAIGenerateContentStreamingIterator,
+)
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -2980,12 +2984,16 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                     stream=True,
                 )
-                # Return streaming iterator from provider config
-                # return generate_content_provider_config.get_generate_content_stream_iterator(
-                #     response=response,
-                #     model=model,
-                #     logging_obj=logging_obj,
-                # )
+                # Return streaming iterator
+                return GoogleGenAIGenerateContentStreamingIterator(
+                    response=response,
+                    model=model,
+                    logging_obj=logging_obj,
+                    generate_content_provider_config=generate_content_provider_config,
+                    litellm_metadata=litellm_metadata or {},
+                    custom_llm_provider=custom_llm_provider,
+                    request_body=data,
+                )
             else:
                 response = sync_httpx_client.post(
                     url=api_base,
@@ -3073,12 +3081,16 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                     stream=True,
                 )
-                # Return async streaming iterator from provider config
-                # return generate_content_provider_config.get_async_generate_content_stream_iterator(
-                #     response=response,
-                #     model=model,
-                #     logging_obj=logging_obj,
-                # )
+                # Return async streaming iterator
+                return AsyncGoogleGenAIGenerateContentStreamingIterator(
+                    response=response,
+                    model=model,
+                    logging_obj=logging_obj,
+                    generate_content_provider_config=generate_content_provider_config,
+                    litellm_metadata=litellm_metadata or {},
+                    custom_llm_provider=custom_llm_provider,
+                    request_body=data,
+                )
             else:
                 response = await async_httpx_client.post(
                     url=api_base,
