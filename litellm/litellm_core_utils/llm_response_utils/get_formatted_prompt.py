@@ -1,4 +1,4 @@
-from litellm._logging import verbose_proxy_logge
+from litellm._logging import verbose_proxy_logger
 from typing import List, Literal
 
 def get_formatted_prompt(
@@ -41,3 +41,16 @@ def _extract_messages(messages: List[dict]) -> str:
         content = message.get('content', None)
         if content == None:
             continue
+
+        if isinstance(content, str):
+            result += content
+        elif isinstance(content, list):
+            _tmp = "".join(c.get('text', '') for c in content if c.get('type') == 'text')
+            if _tmp != "":
+                result += _tmp
+
+        for tool_call in message.get("tool_calls", []):
+            function_arguments = tool_call.get("function", {}).get("arguments", None)
+            if isinstance(function_arguments, str):
+                result += function_arguments
+    return result
