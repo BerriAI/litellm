@@ -89,12 +89,35 @@ class StandardBuiltInToolCostTracking:
                 model=model, custom_llm_provider=custom_llm_provider
             )
             file_search_usage = standard_built_in_tools_params.get("file_search", {})
+            # Convert model_info to dict if it's a ModelInfo object
+            model_info_dict = dict(model_info) if model_info is not None else None
+            # Safely extract and convert storage_gb and days
+            storage_gb = None
+            days = None
+            if isinstance(file_search_usage, dict):
+                storage_gb_val = file_search_usage.get("storage_gb")
+                days_val = file_search_usage.get("days")
+                if storage_gb_val is not None:
+                    try:
+                        storage_gb = float(storage_gb_val)  # type: ignore
+                    except (TypeError, ValueError):
+                        storage_gb = None
+                else:
+                    storage_gb = None
+                if days_val is not None:
+                    try:
+                        days = float(days_val)  # type: ignore
+                    except (TypeError, ValueError):
+                        days = None
+                else:
+                    days = None
+            
             return StandardBuiltInToolCostTracking.get_cost_for_file_search(
                 file_search=file_search_usage,
                 provider=custom_llm_provider,
-                model_info=model_info,
-                storage_gb=file_search_usage.get("storage_gb") if isinstance(file_search_usage, dict) else None,
-                days=file_search_usage.get("days") if isinstance(file_search_usage, dict) else None,
+                model_info=model_info_dict,
+                storage_gb=storage_gb,
+                days=days,
             )
 
         # Accumulate costs from multiple Azure assistant features
@@ -109,10 +132,14 @@ class StandardBuiltInToolCostTracking:
         if custom_llm_provider == "azure":
             vector_store_usage = standard_built_in_tools_params.get("vector_store_usage", None)
             if vector_store_usage:
+                # Convert model_info to dict if it's a ModelInfo object
+                model_info_dict = dict(model_info) if model_info is not None else None
+                # Ensure vector_store_usage is a dict
+                vector_store_dict = vector_store_usage if isinstance(vector_store_usage, dict) else {}
                 total_assistant_cost += StandardBuiltInToolCostTracking.get_cost_for_vector_store(
-                    vector_store_usage=vector_store_usage,
+                    vector_store_usage=vector_store_dict,
                     provider=custom_llm_provider,
-                    model_info=model_info,
+                    model_info=model_info_dict,
                 )
         
         #########################################################
@@ -121,11 +148,34 @@ class StandardBuiltInToolCostTracking:
         if custom_llm_provider == "azure":
             computer_use_usage = standard_built_in_tools_params.get("computer_use_usage", {})
             if computer_use_usage:
+                # Convert model_info to dict if it's a ModelInfo object
+                model_info_dict = dict(model_info) if model_info is not None else None
+                # Safely extract token counts
+                input_tokens = None
+                output_tokens = None
+                if isinstance(computer_use_usage, dict):
+                    input_tokens_val = computer_use_usage.get("input_tokens")
+                    output_tokens_val = computer_use_usage.get("output_tokens")
+                    if input_tokens_val is not None:
+                        try:
+                            input_tokens = int(input_tokens_val)  # type: ignore
+                        except (TypeError, ValueError):
+                            input_tokens = None
+                    else:
+                        input_tokens = None
+                    if output_tokens_val is not None:
+                        try:
+                            output_tokens = int(output_tokens_val)  # type: ignore
+                        except (TypeError, ValueError):
+                            output_tokens = None
+                    else:
+                        output_tokens = None
+                
                 total_assistant_cost += StandardBuiltInToolCostTracking.get_cost_for_computer_use(
-                    input_tokens=computer_use_usage.get("input_tokens"),
-                    output_tokens=computer_use_usage.get("output_tokens"),
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
                     provider=custom_llm_provider,
-                    model_info=model_info,
+                    model_info=model_info_dict,
                 )
         
         #########################################################
@@ -134,10 +184,20 @@ class StandardBuiltInToolCostTracking:
         if custom_llm_provider == "azure":
             code_interpreter_sessions = standard_built_in_tools_params.get("code_interpreter_sessions", None)
             if code_interpreter_sessions:
+                # Convert model_info to dict if it's a ModelInfo object
+                model_info_dict = dict(model_info) if model_info is not None else None
+                # Safely convert sessions to int
+                if code_interpreter_sessions is not None:
+                    try:
+                        sessions = int(code_interpreter_sessions)  # type: ignore
+                    except (TypeError, ValueError):
+                        sessions = None
+                else:
+                    sessions = None
                 total_assistant_cost += StandardBuiltInToolCostTracking.get_cost_for_code_interpreter(
-                    sessions=code_interpreter_sessions,
+                    sessions=sessions,
                     provider=custom_llm_provider,
-                    model_info=model_info,
+                    model_info=model_info_dict,
                 )
 
         if total_assistant_cost > 0:
