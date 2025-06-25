@@ -75,7 +75,7 @@ def test_validate_environment_azure_api_key_within_secret_str():
     azure_openai_responses_apiconfig = AzureOpenAIResponsesAPIConfig()
 
     with patch(
-        "litellm.llms.azure.responses.transformation.get_secret_str"
+        "litellm.llms.azure.common_utils.get_secret_str"
     ) as mock_get_secret_str:
         # Configure the mock to return "test-api-key" when called with "AZURE_API_KEY"
         mock_get_secret_str.side_effect = (
