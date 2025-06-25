@@ -24,6 +24,8 @@ def get_formatted_prompt(
     elif call_type in {"image_generation", "audio_transcription"}:
         if (prompt:=data.get('prompt', None)):
             return prompt
+        else: 
+            return ""
     elif call_type in {"embedding", "moderation"}:
         input_data = data.get("input", "")
         if isinstance(input_data, str):
@@ -39,7 +41,7 @@ def _extract_messages(messages: List[dict]) -> str:
     result = ""
     for message in messages:
         content = message.get('content', None)
-        if content == None:
+        if content is None:
             continue
 
         if isinstance(content, str):
