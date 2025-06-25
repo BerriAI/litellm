@@ -148,7 +148,7 @@ async def google_login(request: Request):  # noqa: PLR0915
 def generic_response_convertor(
     response,
     jwt_handler: JWTHandler,
-    sso_jwt_handler: Optional[JWTHandler],
+    sso_jwt_handler: Optional[JWTHandler] = None,
 ):
     generic_user_id_attribute_name = os.getenv(
         "GENERIC_USER_ID_ATTRIBUTE", "preferred_username"
@@ -510,7 +510,6 @@ async def auth_callback(request: Request):  # noqa: PLR0915
         premium_user,
         prisma_client,
         proxy_logging_obj,
-        ui_access_mode,
         user_api_key_cache,
         user_custom_sso,
     )
