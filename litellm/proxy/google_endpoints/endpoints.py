@@ -8,9 +8,8 @@ router = APIRouter(
     tags=["google genai endpoints"],
 )
 
-
-
 @router.post("/v1beta/models/{model_name}:generateContent", dependencies=[Depends(user_api_key_auth)])
+@router.post("/models/{model_name}:generateContent", dependencies=[Depends(user_api_key_auth)])
 async def google_generate_content(
     request: Request,
     model_name: str,
@@ -68,6 +67,7 @@ async def google_generate_content(
 
 
 @router.post("/v1beta/models/{model_name}:streamGenerateContent", dependencies=[Depends(user_api_key_auth)])
+@router.post("/models/{model_name}:streamGenerateContent", dependencies=[Depends(user_api_key_auth)])
 async def google_stream_generate_content(
     request: Request,
     model_name: str,
@@ -130,6 +130,7 @@ async def google_stream_generate_content(
 
 
 @router.post("/v1beta/models/{model_name}:countTokens", dependencies=[Depends(user_api_key_auth)])
+@router.post("/models/{model_name}:countTokens", dependencies=[Depends(user_api_key_auth)])
 async def google_count_tokens(request: Request, model_name: str):
     """
     Not Implemented, this is a placeholder for the google genai countTokens endpoint.
