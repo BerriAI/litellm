@@ -781,6 +781,22 @@ class Router:
             litellm.allm_passthrough_route, call_type="allm_passthrough_route"
         )
 
+        #########################################################
+        # Gemini Native routes
+        #########################################################
+        self.agenerate_content = self.factory_function(
+            litellm.google_genai.agenerate_content, call_type="agenerate_content"
+        )
+        self.generate_content = self.factory_function(
+            litellm.google_genai.generate_content, call_type="generate_content"
+        )
+        self.agenerate_content_stream = self.factory_function(
+            litellm.google_genai.agenerate_content_stream, call_type="agenerate_content_stream"
+        )
+        self.generate_content_stream = self.factory_function(
+            litellm.google_genai.generate_content_stream, call_type="generate_content_stream"
+        )
+
     def validate_fallbacks(self, fallback_param: Optional[List]):
         """
         Validate the fallbacks parameter.
@@ -3230,6 +3246,10 @@ class Router:
             "aimage_edit",
             "allm_passthrough_route",
             "alist_input_items",
+            "agenerate_content",
+            "generate_content",
+            "agenerate_content_stream",
+            "generate_content_stream",
         ] = "assistants",
     ):
         """
@@ -3285,6 +3305,10 @@ class Router:
                 "alist_files",
                 "aimage_edit",
                 "allm_passthrough_route",
+                "agenerate_content",
+                "generate_content",
+                "agenerate_content_stream",
+                "generate_content_stream",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
