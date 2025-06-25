@@ -367,6 +367,36 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         return data
 
+    async def async_filter_deployments(
+        self,
+        model: str,
+        healthy_deployments: List,
+        messages: Optional[List[AllMessageValues]],
+        request_kwargs: Optional[Dict] = None,
+        parent_otel_span: Optional[Span] = None,
+    ) -> List[Dict]:
+        if request_kwargs is None:
+            return healthy_deployments
+
+        input_file_id = cast(Optional[str], request_kwargs.get("input_file_id"))
+        model_file_id_mapping = cast(
+            Optional[Dict[str, Dict[str, str]]],
+            request_kwargs.get("model_file_id_mapping"),
+        )
+        allowed_model_ids = []
+        if input_file_id and model_file_id_mapping:
+            model_id_dict = model_file_id_mapping.get(input_file_id, {})
+            allowed_model_ids = list(model_id_dict.keys())
+
+        if len(allowed_model_ids) == 0:
+            return healthy_deployments
+
+        return [
+            deployment
+            for deployment in healthy_deployments
+            if deployment.get("model_info", {}).get("id") in allowed_model_ids
+        ]
+
     async def async_pre_call_deployment_hook(
         self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
     ) -> Optional[dict]:
