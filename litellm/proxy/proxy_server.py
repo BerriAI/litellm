@@ -2278,6 +2278,8 @@ class ProxyConfig:
                         model_group=model["model_name"],
                         litellm_params=model["litellm_params"],
                     )
+                else:
+                    model_id = str(model_id)
                 combined_id_list.append(model_id)  # ADD CONFIG MODEL TO COMBINED LIST
 
         router_model_ids = llm_router.get_model_ids()
