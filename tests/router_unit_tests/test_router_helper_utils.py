@@ -446,6 +446,40 @@ async def test_deployment_callback_on_failure(model_list):
     )
 
 
+def test_deployment_callback_respects_cooldown_time(model_list):
+    """Ensure per-model cooldown_time is honored even when exception headers are present."""
+    import httpx
+    import time
+    from unittest.mock import patch
+
+    router = Router(model_list=model_list)
+
+    class FakeException(Exception):
+        def __init__(self):
+            self.status_code = 429
+            self.headers = httpx.Headers({"x-test": "1"})
+
+    kwargs = {
+        "exception": FakeException(),
+        "litellm_params": {
+            "metadata": {"model_group": "gpt-3.5-turbo"},
+            "model_info": {"id": 100},
+            "cooldown_time": 0,
+        },
+    }
+
+    with patch("litellm.router._set_cooldown_deployments") as mock_set:
+        router.deployment_callback_on_failure(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=time.time(),
+            end_time=time.time(),
+        )
+
+        mock_set.assert_called_once()
+        assert mock_set.call_args.kwargs["time_to_cooldown"] == 0
+
+
 def test_log_retry(model_list):
     """Test if the '_log_retry' function is working correctly"""
     import time
