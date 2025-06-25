@@ -1,3 +1,4 @@
+import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
@@ -5,7 +6,7 @@ import TabItem from '@theme/TabItem';
 
 Send your LLM requests, responses, costs, and performance data to Elasticsearch for analytics and monitoring using OpenTelemetry.
 
-![Elasticsearch Demo](../../img/elasticsearch_demo.png)
+<Image img={require('../../img/elasticsearch_demo.png')} />
 
 ## Quick Start
 
@@ -179,7 +180,7 @@ docker run -d --name kibana --link elasticsearch:elasticsearch -p 5601:5601 dock
 
 Open Kibana at http://localhost:5601 and create an index pattern for your LiteLLM traces:
 
-![Elasticsearch Demo](../../img/elasticsearch_demo.png)
+<Image img={require('../../img/elasticsearch_demo.png')} />
 
 ## Production Setup
 
