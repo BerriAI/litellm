@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any, AsyncIterator, Dict, Iterator, Optional, Union
 
 import httpx
 from pydantic import BaseModel
@@ -146,7 +146,7 @@ class GenerateContentHelper:
 
         # Pre Call logging
         if litellm_logging_obj is None:
-            raise ValueError(f"litellm_logging_obj is required, but got None")
+            raise ValueError("litellm_logging_obj is required, but got None")
         
         litellm_logging_obj.update_environment_variables(
             model=model,

@@ -1,39 +1,37 @@
 # Import types from the Google GenAI SDK
-from typing import Any, Optional, TypedDict
+from typing import TYPE_CHECKING, Any, Optional, TypeAlias, TypedDict
 
 from pydantic import BaseModel
 
 
 # Define fallback base class
 class _FallbackRequestDict(TypedDict):
-    pass
+    """Fallback when google.genai types are unavailable."""
 
-try:
-    from google.genai import types
 
-    ContentListUnion = types.ContentListUnion
-    ContentListUnionDict = types.ContentListUnionDict
-    GenerateContentConfigOrDict = types.GenerateContentConfigOrDict
-    GenerateContentResponse = types.GenerateContentResponse
+if TYPE_CHECKING:
+    # During static type-checking we can rely on the real google-genai types.
+    from google.genai import types as _genai_types  # type: ignore
 
-    ########################################################
-    # Request Type
-    ########################################################
-    GenerateContentContentListUnionDict = types.ContentListUnionDict
-    GenerateContentConfigDict = types.GenerateContentConfigDict
-    GenerateContentRequestParametersDict = types._GenerateContentParametersDict
+    ContentListUnion = _genai_types.ContentListUnion
+    ContentListUnionDict = _genai_types.ContentListUnionDict
+    GenerateContentConfigOrDict = _genai_types.GenerateContentConfigOrDict
+    GenerateContentResponse = _genai_types.GenerateContentResponse
 
-    # When google-genai is available, inherit from their base clas
+    GenerateContentContentListUnionDict = _genai_types.ContentListUnionDict
+    GenerateContentConfigDict = _genai_types.GenerateContentConfigDict
+    GenerateContentRequestParametersDict = _genai_types._GenerateContentParametersDict
+else:
+    # At runtime we fall back to `Any` to avoid a hard dependency on the SDK.
+    ContentListUnion: TypeAlias = Any
+    ContentListUnionDict: TypeAlias = Any
+    GenerateContentConfigOrDict: TypeAlias = Any
+    GenerateContentResponse: TypeAlias = Any
 
-except ImportError:
-    # If google-genai is not installed, we need to define the types manually
-    ContentListUnion = Any
-    ContentListUnionDict = Any
-    GenerateContentConfigOrDict = Any
-    GenerateContentResponse = Any
-    GenerateContentContentListUnionDict = Any
-    GenerateContentConfigDict = Any
-    GenerateContentRequestParametersDict = _FallbackRequestDict
+    GenerateContentContentListUnionDict: TypeAlias = Any
+    GenerateContentConfigDict: TypeAlias = Any
+    GenerateContentRequestParametersDict: TypeAlias = _FallbackRequestDict
 
-class GenerateContentRequestDict(GenerateContentRequestParametersDict):  # type: ignore
+
+class GenerateContentRequestDict(GenerateContentRequestParametersDict):  # type: ignore[misc]
     generationConfig: Optional[Any]
