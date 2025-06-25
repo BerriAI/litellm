@@ -58,6 +58,7 @@ class BaseGoogleGenAITest:
                     text="Hello, can you tell me a short joke?"
                 )
             ],
+            role="user",
         )
         litellm._turn_on_debug()
 
@@ -93,6 +94,7 @@ class BaseGoogleGenAITest:
                     text="Hello, can you tell me a short joke?"
                 )
             ],
+            role="user",
         )
 
         print(f"Testing {'async' if is_async else 'sync'} streaming with model config: {request_params}")
