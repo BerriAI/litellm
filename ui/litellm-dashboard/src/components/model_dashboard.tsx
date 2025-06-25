@@ -327,8 +327,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       const streamingModelMetricsResponse = await streamingModelMetricsCall(
         accessToken,
         modelGroup,
-        adjustedStartTime.toISOString(),
-        adjustedEndTime.toISOString()
+        startTime.toISOString(),
+        endTime.toISOString()
       );
 
       // Assuming modelMetricsResponse now contains the metric data for the specified model group
@@ -342,8 +342,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         userID,
         userRole,
         modelGroup,
-        adjustedStartTime.toISOString(),
-        adjustedEndTime.toISOString(),
+        startTime.toISOString(),
+        endTime.toISOString(),
         selected_token,
         selected_customer
       );
@@ -356,8 +356,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         userID,
         userRole,
         modelGroup,
-        adjustedStartTime.toISOString(),
-        adjustedEndTime.toISOString(),
+        startTime.toISOString(),
+        endTime.toISOString(),
         selected_token,
         selected_customer
       );
@@ -370,8 +370,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       if (modelGroup) {
         const dailyExceptions = await adminGlobalActivityExceptions(
           accessToken,
-          adjustedStartTime?.toISOString().split('T')[0],
-          adjustedEndTime?.toISOString().split('T')[0],
+          startTime?.toISOString().split('T')[0],
+          endTime?.toISOString().split('T')[0],
           modelGroup,
         );
 
@@ -379,8 +379,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
         const dailyExceptionsPerDeplyment = await adminGlobalActivityExceptionsPerDeployment(
           accessToken,
-          adjustedStartTime?.toISOString().split('T')[0],
-          adjustedEndTime?.toISOString().split('T')[0],
+          startTime?.toISOString().split('T')[0],
+          endTime?.toISOString().split('T')[0],
           modelGroup,
         )
 
