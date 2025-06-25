@@ -7,6 +7,9 @@ from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreCon
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
+    VectorStoreCreateOptionalRequestParams,
+    VectorStoreCreateRequest,
+    VectorStoreCreateResponse,
     VectorStoreSearchOptionalRequestParams,
     VectorStoreSearchRequest,
     VectorStoreSearchResponse,
@@ -92,6 +95,36 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
         try:
             response_json = response.json()
             return VectorStoreSearchResponse(
+                **response_json
+            )
+        except Exception as e:
+            raise self.get_error_class(
+                error_message=str(e), 
+                status_code=response.status_code, 
+                headers=response.headers
+            )
+
+    def transform_create_vector_store_request(
+        self,
+        vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
+        api_base: str,
+    ) -> Tuple[str, Dict]:
+        url = api_base  # Base URL for creating vector stores
+        typed_request_body = VectorStoreCreateRequest(
+            name=vector_store_create_optional_params.get("name", None),
+            file_ids=vector_store_create_optional_params.get("file_ids", None),
+            expires_after=vector_store_create_optional_params.get("expires_after", None),
+            chunking_strategy=vector_store_create_optional_params.get("chunking_strategy", None),
+            metadata=vector_store_create_optional_params.get("metadata", None),
+        )
+
+        dict_request_body = cast(dict, typed_request_body)
+        return url, dict_request_body
+
+    def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:
+        try:
+            response_json = response.json()
+            return VectorStoreCreateResponse(
                 **response_json
             )
         except Exception as e:

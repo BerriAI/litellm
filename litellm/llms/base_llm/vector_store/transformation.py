@@ -5,6 +5,8 @@ import httpx
 
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
+    VectorStoreCreateOptionalRequestParams,
+    VectorStoreCreateResponse,
     VectorStoreSearchOptionalRequestParams,
     VectorStoreSearchResponse,
 )
@@ -35,6 +37,17 @@ class BaseVectorStoreConfig:
     def transform_search_vector_store_response(self, response: httpx.Response) -> VectorStoreSearchResponse:
         pass
 
+    @abstractmethod
+    def transform_create_vector_store_request(
+        self,
+        vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
+        api_base: str,
+    ) -> Tuple[str, Dict]:
+        pass
+
+    @abstractmethod
+    def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:
+        pass
 
     @abstractmethod
     def validate_environment(
