@@ -570,6 +570,46 @@ async def test_router_transcription_fallbacks_cross_provider():
     assert "azure/whisper-deployment:good-azure-key" in call_log
 
 
+def test_router_sync_transcription_fallbacks():
+    """
+    Test that router.transcription (sync) supports fallbacks correctly
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "whisper-primary",
+                "litellm_params": {
+                    "model": "openai/whisper-1",
+                    "api_key": "bad-key",
+                },
+            },
+            {
+                "model_name": "whisper-backup",
+                "litellm_params": {
+                    "model": "openai/whisper-1",
+                    "api_key": "good-key",
+                },
+            },
+        ],
+        fallbacks=[{"whisper-primary": ["whisper-backup"]}],
+        num_retries=1,
+    )
+
+    with patch.object(
+        litellm, "transcription", side_effect=[Exception("API Error"), "success"]
+    ) as mock_transcription:
+        audio_file = io.BytesIO(b"fake audio data")
+        audio_file.name = "test.mp3"
+        
+        response = router.transcription(
+            file=audio_file,
+            model="whisper-primary",
+        )
+        
+        assert response == "success"
+        assert mock_transcription.call_count == 2
+
+
 @pytest.mark.asyncio
 async def test_router_aretrieve_batch():
     """
