@@ -1151,7 +1151,6 @@ from .fine_tuning.main import *
 from .files.main import *
 from .scheduler import *
 from .cost_calculator import response_cost_calculator, cost_per_token
-from .google_genai import *
 ### ADAPTERS ###
 from .types.adapter import AdapterItem
 import litellm.anthropic_interface as anthropic

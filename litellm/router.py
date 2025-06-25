@@ -784,17 +784,23 @@ class Router:
         #########################################################
         # Gemini Native routes
         #########################################################
+        from litellm.google_genai import (
+            agenerate_content,
+            agenerate_content_stream,
+            generate_content,
+            generate_content_stream,
+        )
         self.agenerate_content = self.factory_function(
-            litellm.google_genai.agenerate_content, call_type="agenerate_content"
+            agenerate_content, call_type="agenerate_content"
         )
         self.generate_content = self.factory_function(
-            litellm.google_genai.generate_content, call_type="generate_content"
+            generate_content, call_type="generate_content"
         )
         self.agenerate_content_stream = self.factory_function(
-            litellm.google_genai.agenerate_content_stream, call_type="agenerate_content_stream"
+            agenerate_content_stream, call_type="agenerate_content_stream"
         )
         self.generate_content_stream = self.factory_function(
-            litellm.google_genai.generate_content_stream, call_type="generate_content_stream"
+            generate_content_stream, call_type="generate_content_stream"
         )
 
     def validate_fallbacks(self, fallback_param: Optional[List]):
