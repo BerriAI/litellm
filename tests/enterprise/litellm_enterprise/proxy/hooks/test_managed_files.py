@@ -1,18 +1,13 @@
 import json
 import os
 import sys
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
-
-from unittest.mock import AsyncMock, MagicMock, patch
-
-from enterprise.enterprise_hooks.managed_files import _PROXY_LiteLLMManagedFiles
 from litellm.caching import DualCache
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,

@@ -1,8 +1,8 @@
 from typing import Dict, Literal, Type, Union
 
-from litellm.integrations.custom_logger import CustomLogger
+from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
-from .managed_files import _PROXY_LiteLLMManagedFiles
+from litellm.integrations.custom_logger import CustomLogger
 
 ENTERPRISE_PROXY_HOOKS: Dict[str, Type[CustomLogger]] = {
     "managed_files": _PROXY_LiteLLMManagedFiles,
@@ -16,7 +16,7 @@ def get_enterprise_proxy_hook(
             "max_parallel_requests",
         ],
         str,
-    ]
+    ],
 ):
     """
     Factory method to get a enterprise hook instance by name

@@ -1237,7 +1237,12 @@ class Logging(LiteLLMLoggingBaseClass):
                 return False
 
         # Check for dynamically disabled callbacks via headers
-        if EnterpriseCallbackControls is not None and EnterpriseCallbackControls.is_callback_disabled_via_headers(callback, litellm_params):
+        if (
+            EnterpriseCallbackControls is not None
+            and EnterpriseCallbackControls.is_callback_disabled_via_headers(
+                callback, litellm_params
+            )
+        ):
             verbose_logger.debug(
                 f"Callback {callback} disabled via x-litellm-disable-callbacks header for {event_hook} event"
             )
@@ -1908,8 +1913,10 @@ class Logging(LiteLLMLoggingBaseClass):
             return
 
         ## CALCULATE COST FOR BATCH JOBS
-        if self.call_type == CallTypes.aretrieve_batch.value and isinstance(
-            result, LiteLLMBatch
+        if (
+            self.call_type == CallTypes.aretrieve_batch.value
+            and isinstance(result, LiteLLMBatch)
+            and result.status == "completed"
         ):
             response_cost, batch_usage, batch_models = await _handle_completed_batch(
                 batch=result, custom_llm_provider=self.custom_llm_provider

@@ -23,6 +23,8 @@ from litellm.proxy._types import (
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     convert_b64_uid_to_unified_uid,
+    get_batch_id_from_unified_batch_id,
+    get_model_id_from_unified_batch_id,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -39,6 +41,10 @@ from litellm.types.utils import (
     LLMResponseTypes,
     SpecialEnums,
 )
+
+if TYPE_CHECKING:
+    from litellm.types.llms.openai import HttpxBinaryResponseContent
+
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -360,7 +366,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     )
 
                 ## for managed batch id - get the model id
-                potential_model_id = self.get_model_id_from_unified_batch_id(
+                potential_model_id = get_model_id_from_unified_batch_id(
                     potential_llm_object_id
                 )
                 if potential_model_id is None:
@@ -368,7 +374,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         f"LiteLLM Managed {accessor_key} with id={retrieve_object_id} is invalid - does not contain encoded model_id."
                     )
                 data["model"] = potential_model_id
-                data[accessor_key] = self.get_batch_id_from_unified_batch_id(
+                data[accessor_key] = get_batch_id_from_unified_batch_id(
                     potential_llm_object_id
                 )
         elif call_type == CallTypes.acreate_fine_tuning_job.value:
@@ -647,25 +653,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     def get_output_file_id_from_unified_file_id(self, file_id: str) -> str:
         return file_id.split("llm_output_file_id,")[1].split(";")[0]
 
-    def get_model_id_from_unified_batch_id(self, file_id: str) -> Optional[str]:
-        """
-        Get the model_id from the file_id
-
-        Expected format: litellm_proxy;model_id:{};llm_batch_id:{};llm_output_file_id:{}
-        """
-        ## use regex to get the model_id from the file_id
-        try:
-            return file_id.split("model_id:")[1].split(";")[0]
-        except Exception:
-            return None
-
-    def get_batch_id_from_unified_batch_id(self, file_id: str) -> str:
-        ## use regex to get the batch_id from the file_id
-        if "llm_batch_id" in file_id:
-            return file_id.split("llm_batch_id:")[1].split(",")[0]
-        else:
-            return file_id.split("generic_response_id:")[1].split(",")[0]
-
     async def async_post_call_success_hook(
         self, data: Dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
     ) -> Any:
@@ -813,7 +800,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         litellm_parent_otel_span: Optional[Span],
         llm_router: Router,
         **data: Dict,
-    ) -> str:
+    ) -> "HttpxBinaryResponseContent":
         """
         Get the content of a file from first model that has it
         """
