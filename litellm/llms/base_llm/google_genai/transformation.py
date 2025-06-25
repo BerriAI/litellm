@@ -48,14 +48,44 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         Returns:
             List of supported parameter names
         """
-        pass
+        return [
+            "http_options",
+            "system_instruction", 
+            "temperature",
+            "top_p",
+            "top_k",
+            "candidate_count",
+            "max_output_tokens",
+            "stop_sequences",
+            "response_logprobs",
+            "logprobs",
+            "presence_penalty",
+            "frequency_penalty",
+            "seed",
+            "response_mime_type",
+            "response_schema",
+            "routing_config",
+            "model_selection_config",
+            "safety_settings",
+            "tools",
+            "tool_config",
+            "labels",
+            "cached_content",
+            "response_modalities",
+            "media_resolution",
+            "speech_config",
+            "audio_timestamp",
+            "automatic_function_calling",
+            "thinking_config"
+        ]
+
 
     @abstractmethod
     def map_generate_content_optional_params(
         self,
         generate_content_optional_params: Dict[str, Any],
         model: str,
-    ) -> Dict[str, Any]:
+    ) -> GenerateContentConfigDict:
         """
         Map Google GenAI parameters to provider-specific format.
 
@@ -66,7 +96,12 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         Returns:
             Mapped parameters for the provider
         """
-        pass
+        generate_content_config_dict = GenerateContentConfigDict()
+        supported_google_genai_params = self.get_supported_generate_content_optional_params(model)
+        for param, value in generate_content_optional_params.items():
+            if param in supported_google_genai_params:
+                generate_content_config_dict[param] = value
+        return generate_content_config_dict
 
     @abstractmethod
     def validate_environment(
