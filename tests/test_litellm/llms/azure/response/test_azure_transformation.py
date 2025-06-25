@@ -54,9 +54,9 @@ def test_validate_environment_azure_key_within_litellm():
 def test_validate_environment_azure_openai_api_key_within_secret_str():
     azure_openai_responses_apiconfig = AzureOpenAIResponsesAPIConfig()
 
-    with patch(
-        "litellm.llms.azure.responses.transformation.get_secret_str"
-    ) as mock_get_secret_str:
+    with patch("litellm.api_key", None), \
+         patch("litellm.azure_key", None), \
+         patch("litellm.llms.azure.common_utils.get_secret_str") as mock_get_secret_str:
         # Configure the mock to return "test-api-key" when called with "AZURE_OPENAI_API_KEY"
         mock_get_secret_str.side_effect = (
             lambda key: "test-api-key" if key == "AZURE_OPENAI_API_KEY" else None
@@ -74,13 +74,19 @@ def test_validate_environment_azure_openai_api_key_within_secret_str():
 def test_validate_environment_azure_api_key_within_secret_str():
     azure_openai_responses_apiconfig = AzureOpenAIResponsesAPIConfig()
 
-    with patch(
-        "litellm.llms.azure.common_utils.get_secret_str"
-    ) as mock_get_secret_str:
-        # Configure the mock to return "test-api-key" when called with "AZURE_API_KEY"
-        mock_get_secret_str.side_effect = (
-            lambda key: "test-api-key" if key == "AZURE_API_KEY" else None
-        )
+    with patch("litellm.api_key", None), \
+         patch("litellm.azure_key", None), \
+         patch("litellm.llms.azure.common_utils.get_secret_str") as mock_get_secret_str:
+        # Configure the mock to return None for "AZURE_OPENAI_API_KEY" and "test-api-key" for "AZURE_API_KEY"
+        def mock_side_effect(key):
+            if key == "AZURE_OPENAI_API_KEY":
+                return None
+            elif key == "AZURE_API_KEY":
+                return "test-api-key"
+            else:
+                return None
+        
+        mock_get_secret_str.side_effect = mock_side_effect
 
         litellm_params = GenericLiteLLMParams()
         result = azure_openai_responses_apiconfig.validate_environment(
