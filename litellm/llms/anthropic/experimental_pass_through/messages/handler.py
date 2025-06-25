@@ -144,9 +144,10 @@ def anthropic_messages_handler(
     )
 
     anthropic_messages_provider_config: Optional[BaseAnthropicMessagesConfig] = None
-    if (
-        custom_llm_provider in LlmProviders.__annotations__.keys()
-    ):  # send custom models straight through to chat completion handler
+
+    if custom_llm_provider is not None and custom_llm_provider in [
+        provider.value for provider in LlmProviders
+    ]:
         anthropic_messages_provider_config = (
             ProviderConfigManager.get_provider_anthropic_messages_config(
                 model=model,
