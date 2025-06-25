@@ -88,6 +88,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             litellm_parent_otel_span=litellm_parent_otel_span,
         )
 
+        ## STORE MODEL MAPPINGS IN DB
+
         await self.prisma_client.db.litellm_managedfiletable.create(
             data={
                 "unified_file_id": file_id,
@@ -530,15 +532,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         ## STORE MODEL MAPPINGS IN DB
         model_mappings: Dict[str, str] = {}
+
         for file_object in responses:
-            model_id = file_object._hidden_params.get("model_id")
-            if model_id is None:
-                verbose_logger.warning(
-                    f"Skipping file_object: {file_object} because model_id in hidden_params={file_object._hidden_params} is None"
-                )
-                continue
-            file_id = file_object.id
-            model_mappings[model_id] = file_id
+            model_file_id_mapping = file_object._hidden_params.get(
+                "model_file_id_mapping"
+            )
+            if model_file_id_mapping and isinstance(model_file_id_mapping, dict):
+                model_mappings.update(model_file_id_mapping)
 
         await self.store_unified_file_id(
             file_id=response.id,

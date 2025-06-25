@@ -2791,6 +2791,8 @@ class Router:
         **kwargs,
     ) -> OpenAIFileObject:
         try:
+            from litellm.router_utils.common_utils import add_model_file_id_mappings
+
             verbose_router_logger.debug(
                 f"Inside _atext_completion()- model: {model}; kwargs: {kwargs}"
             )
@@ -2885,6 +2887,7 @@ class Router:
                 return response
 
             tasks = []
+
             if isinstance(healthy_deployments, dict):
                 tasks.append(create_file_for_deployment(healthy_deployments))
             else:
@@ -2895,7 +2898,15 @@ class Router:
 
             if len(responses) == 0:
                 raise Exception("No healthy deployments found.")
-            return responses[0]
+
+            model_file_id_mapping = add_model_file_id_mappings(
+                healthy_deployments=healthy_deployments, responses=responses
+            )
+            returned_response = cast(OpenAIFileObject, responses[0])
+            returned_response._hidden_params["model_file_id_mapping"] = (
+                model_file_id_mapping
+            )
+            return returned_response
         except Exception as e:
             verbose_router_logger.exception(
                 f"litellm.acreate_file(model={model}, {kwargs})\033[31m Exception {str(e)}\033[0m"
