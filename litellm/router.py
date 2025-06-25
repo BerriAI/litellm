@@ -743,6 +743,7 @@ class Router:
         self.afile_delete = self.factory_function(
             litellm.afile_delete, call_type="afile_delete"
         )
+
         self.afile_content = self.factory_function(
             litellm.afile_content, call_type="afile_content"
         )
@@ -2458,9 +2459,9 @@ class Router:
         self._update_kwargs_before_fallbacks(
             model=model,
             kwargs=kwargs,
-            metadata_variable_name = _get_router_metadata_variable_name(
+            metadata_variable_name=_get_router_metadata_variable_name(
                 function_name=function_name
-            )
+            ),
         )
         try:
             verbose_router_logger.debug(
