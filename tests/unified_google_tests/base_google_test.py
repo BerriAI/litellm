@@ -102,18 +102,20 @@ class BaseGoogleGenAITest:
         
         if is_async:
             print("\n--- Testing async agenerate_content_stream ---")
-            async for chunk in agenerate_content_stream(
+            response = await agenerate_content_stream(
                 contents=contents,
                 **request_params
-            ):
+            )
+            async for chunk in response:
                 print(f"Async chunk: {chunk}")
                 chunks.append(chunk)
         else:
             print("\n--- Testing sync generate_content_stream ---")
-            for chunk in generate_content_stream(
+            response = generate_content_stream(
                 contents=contents,
                 **request_params
-            ):
+            )
+            for chunk in response:
                 print(f"Sync chunk: {chunk}")
                 chunks.append(chunk)
         
