@@ -348,6 +348,7 @@ class ProxyBaseLLMRequestProcessing:
         user_max_tokens: Optional[int] = None,
         user_api_base: Optional[str] = None,
         version: Optional[str] = None,
+        is_streaming_request: Optional[bool] = False,
     ) -> Any:
         """
         Common request processing logic for both chat completions and responses API endpoints
@@ -422,9 +423,7 @@ class ProxyBaseLLMRequestProcessing:
                 litellm_call_id=self.data.get("litellm_call_id", ""), status="success"
             )
         )
-        if (
-            "stream" in self.data and self.data["stream"] is True
-        ):  # use generate_responses to stream responses
+        if self._is_streaming_request(data=self.data, is_streaming_request=is_streaming_request):  # use generate_responses to stream responses
             custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 call_id=logging_obj.litellm_call_id,
@@ -479,6 +478,22 @@ class ProxyBaseLLMRequestProcessing:
         await check_response_size_is_safe(response=response)
 
         return response
+
+    def _is_streaming_request(
+        self, data: dict, is_streaming_request: Optional[bool] = False
+    ) -> bool:
+        """
+        Check if the request is a streaming request.
+
+        1. is_streaming_request is a dynamic param passed in
+        2. if "stream" in data and data["stream"] is True
+        """
+        if is_streaming_request is True:
+            return True
+        if "stream" in data and data["stream"] is True:
+            return True
+        return False
+
 
     async def _handle_llm_api_exception(
         self,

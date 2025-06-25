@@ -116,6 +116,7 @@ async def google_stream_generate_content(
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
             version=version,
+            is_streaming_request=True,
         )
     except Exception as e:
         raise await processor._handle_llm_api_exception(
