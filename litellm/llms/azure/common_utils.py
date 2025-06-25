@@ -6,7 +6,6 @@ import httpx
 from openai import AsyncAzureOpenAI, AzureOpenAI
 
 import litellm
-from litellm.types.router import GenericLiteLLMParams
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -15,6 +14,7 @@ from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.router import GenericLiteLLMParams
 
 azure_ad_cache = DualCache()
 
@@ -613,3 +613,28 @@ class BaseAzureLLM(BaseOpenAILLM):
             else:
                 client = AzureOpenAI(**azure_client_params)  # type: ignore
         return client
+    
+    @staticmethod
+    def _base_validate_azure_environment(
+        headers: dict,  litellm_params: Optional[GenericLiteLLMParams]
+    ) -> dict:
+        litellm_params = litellm_params or GenericLiteLLMParams()
+        api_key = (
+            litellm_params.api_key
+            or litellm.api_key
+            or litellm.azure_key
+            or get_secret_str("AZURE_OPENAI_API_KEY")
+            or get_secret_str("AZURE_API_KEY")
+        )
+
+        if api_key:
+            headers["api-key"] = api_key
+            return headers
+
+        ### Fallback to Azure AD token-based authentication if no API key is available
+        ### Retrieves Azure AD token and adds it to the Authorization header
+        azure_ad_token = get_azure_ad_token(litellm_params)
+        if azure_ad_token:
+            headers["Authorization"] = f"Bearer {azure_ad_token}"
+
+        return headers
