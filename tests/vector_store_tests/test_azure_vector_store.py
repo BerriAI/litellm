@@ -15,7 +15,7 @@ class TestAzureOpenAIVectorStore(BaseVectorStoreTest):
 
     def get_base_create_vector_store_args(self) -> dict:
         """
-        This is a real vector store on OpenAI
+        This is a real vector store on Azure
         """
         return {
             "custom_llm_provider": "azure",
