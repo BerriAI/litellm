@@ -175,11 +175,13 @@ def generic_response_convertor(
         f" generic_user_id_attribute_name: {generic_user_id_attribute_name}\n generic_user_email_attribute_name: {generic_user_email_attribute_name}"
     )
 
+    all_teams = []
     if sso_jwt_handler is not None:
         team_ids = sso_jwt_handler.get_team_ids_from_jwt(cast(dict, response))
-    else:
-        team_ids = jwt_handler.get_team_ids_from_jwt(cast(dict, response))
+        all_teams.extend(team_ids)
 
+    team_ids = jwt_handler.get_team_ids_from_jwt(cast(dict, response))
+    all_teams.extend(team_ids)
     return CustomOpenID(
         id=response.get(generic_user_id_attribute_name),
         display_name=response.get(generic_user_display_name_attribute_name),
@@ -187,7 +189,7 @@ def generic_response_convertor(
         first_name=response.get(generic_user_first_name_attribute_name),
         last_name=response.get(generic_user_last_name_attribute_name),
         provider=response.get(generic_provider_attribute_name),
-        team_ids=jwt_handler.get_team_ids_from_jwt(cast(dict, response)),
+        team_ids=all_teams,
     )
 
 

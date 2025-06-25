@@ -164,7 +164,9 @@ class JWTHandler:
             self.litellm_jwtauth.team_ids_jwt_field is not None
             and token.get(self.litellm_jwtauth.team_ids_jwt_field) is not None
         ):
+
             return token[self.litellm_jwtauth.team_ids_jwt_field]
+
         return []
 
     def get_end_user_id(
