@@ -16,6 +16,7 @@ from litellm.google_genai import (
     generate_content_stream,
     agenerate_content_stream,
 )
+from google.genai.types import ContentDict, PartDict
 
 
 class BaseGoogleGenAITest:
@@ -26,10 +27,6 @@ class BaseGoogleGenAITest:
         """Override in subclasses to provide model-specific configuration"""
         raise NotImplementedError("Subclasses must implement model_config")
     
-    @property
-    def test_contents(self) -> Union[str, List[Dict[str, Any]]]:
-        """Override in subclasses to provide test content"""
-        return "Hello, can you tell me a short joke?"
     
     def _validate_non_streaming_response(self, response: Any):
         """Validate non-streaming response structure"""
@@ -55,8 +52,13 @@ class BaseGoogleGenAITest:
     async def test_non_streaming_base(self, is_async: bool):
         """Base test for non-streaming requests (parametrized for sync/async)"""
         request_params = self.model_config
-        contents = self.test_contents
-
+        contents = ContentDict(
+            parts=[
+                PartDict(
+                    text="Hello, can you tell me a short joke?"
+                )
+            ],
+        )
         litellm._turn_on_debug()
 
         print(f"Testing {'async' if is_async else 'sync'} non-streaming with model config: {request_params}")
