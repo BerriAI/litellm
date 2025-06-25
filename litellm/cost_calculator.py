@@ -1220,19 +1220,19 @@ def _calculate_token_based_image_cost(
     prompt_tokens: Optional[int] = None,
     completion_tokens: Optional[int] = None,
 ) -> float:
-    """Compute cost for GPT-image-1 and similar token-priced image models.
+    """Compute cost for token-priced image models.
 
-    This function intentionally supports both OpenAI and Azure deployment names.
+    This function supports token-based pricing for image generation models,
+    including GPT-image-1 and other models with similar pricing structures.
     It requires real token usage from the API – if these are missing we raise so
     callers know to pass `prompt_tokens` and `completion_tokens` extracted from
     the response `usage` field.
     """
 
-    # Validate model family – we only support gpt-image-1-style pricing here so
-    # fail fast for others (unit-tests rely on this behaviour).
-    if "gpt-image-1" not in model:
+    # Validate that cost_info has token-based pricing fields
+    if not (cost_info.get("input_cost_per_token") or cost_info.get("output_cost_per_token")):
         raise ValueError(
-            f"Model {model} does not support token-based pricing or is not a gpt-image-1 variant"
+            f"Model {model} does not have token-based pricing configuration in cost_info"
         )
 
     if prompt_tokens is None or completion_tokens is None:
@@ -1240,8 +1240,22 @@ def _calculate_token_based_image_cost(
             "Token counts are required for token-based image cost calculation."
         )
 
-    input_cost = prompt_tokens * cost_info.get("input_cost_per_token", 0)
-    output_cost = completion_tokens * cost_info.get("output_cost_per_token", 0)
+    input_cost_per_token = cost_info.get("input_cost_per_token", 0)
+    output_cost_per_token = cost_info.get("output_cost_per_token", 0)
+    
+    # Validate that cost fields are not None and are valid numbers
+    if input_cost_per_token is None:
+        input_cost_per_token = 0
+    if output_cost_per_token is None:
+        output_cost_per_token = 0
+        
+    if not isinstance(input_cost_per_token, (int, float)) or not isinstance(output_cost_per_token, (int, float)):
+        raise ValueError(
+            f"Invalid cost configuration for model {model}: input_cost_per_token={input_cost_per_token}, output_cost_per_token={output_cost_per_token}"
+        )
+
+    input_cost = prompt_tokens * input_cost_per_token
+    output_cost = completion_tokens * output_cost_per_token
 
     # Some providers (e.g., OpenAI) separate image-token cost – already included
     # inside input_cost_per_token via model_prices table.
