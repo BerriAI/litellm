@@ -65,12 +65,17 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
 
     @abstractmethod
     def validate_environment(
-        self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
+        self, 
+        api_key: Optional[str],
+        headers: Optional[dict],
+        model: str,
+        litellm_params: Optional[Union[GenericLiteLLMParams, dict]]
     ) -> dict:
         """
         Validate the environment and return headers for the request.
 
         Args:
+            api_key: API key
             headers: Existing headers
             model: The model name
             litellm_params: LiteLLM parameters
@@ -78,7 +83,7 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         Returns:
             Updated headers
         """
-        return headers
+        raise NotImplementedError("validate_environment is not implemented")
 
     @abstractmethod
     def get_complete_url(
