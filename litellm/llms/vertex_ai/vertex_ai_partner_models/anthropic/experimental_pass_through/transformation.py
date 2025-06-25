@@ -1,10 +1,8 @@
 from typing import Any, Dict, List, Optional, Tuple
 
-import litellm
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
 from litellm.types.router import GenericLiteLLMParams
 
