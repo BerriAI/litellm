@@ -1060,6 +1060,17 @@ const Teams: React.FC<TeamProps> = ({
                           >  
                             <NumericalInput step={0.01} precision={2} width={200} />
                           </Form.Item>
+                          <Form.Item 
+                            label="Team Member Key Duration" 
+                            name="team_member_key_duration"
+                            tooltip="Set a limit to the duration of a team member's key."
+                          >  
+                            <Select2 defaultValue={null} placeholder="n/a">
+                              <Select2.Option value="1d">1 day</Select2.Option>
+                              <Select2.Option value="1w">1 week</Select2.Option>
+                              <Select2.Option value="1mo">1 month</Select2.Option>
+                            </Select2>
+                          </Form.Item>
                           <Form.Item label="Metadata" name="metadata" help="Additional team metadata. Enter metadata as JSON object.">
                             <Input.TextArea rows={4} />
                           </Form.Item>
