@@ -1,0 +1,357 @@
+[92m18:10:09 - LiteLLM Router:INFO[0m: router.py:660 - Routing strategy: simple-shuffle
+[92m18:10:11 - LiteLLM Proxy:INFO[0m: utils.py:1317 - All necessary views exist!
+[92m18:10:11 - LiteLLM Router:WARNING[0m: router.py:4862 - Error upserting deployment: vertex_project, and vertex_location must be set in litellm_params for pass-through endpoints., ignoring and continuing with other deployments.
+[92m18:10:11 - LiteLLM Router:WARNING[0m: router.py:4862 - Error upserting deployment: vertex_project, and vertex_location must be set in litellm_params for pass-through endpoints., ignoring and continuing with other deployments.
+[92m18:10:23 - LiteLLM Proxy:INFO[0m: ui_sso.py:129 - Redirecting to SSO login for http://localhost:4000/sso/callback
+[92m18:10:27 - LiteLLM Proxy:INFO[0m: ui_sso.py:495 - Starting SSO callback
+[92m18:10:27 - LiteLLM Proxy:INFO[0m: ui_sso.py:550 - Redirecting to http://localhost:4000/sso/callback
+[92m18:10:28 - LiteLLM Proxy:INFO[0m: ui_sso.py:581 - SSO callback result: id='krrishd' email='krrishdholakia@gmail.com' first_name=None last_name=None display_name='a3f1c107-04dc-4c93-ae60-7f32eb4b05ce' picture=None provider=None team_ids=[]
+[92m18:10:28 - LiteLLM Proxy:INFO[0m: ui_sso.py:671 - user_defined_values for creating ui key: {'models': [], 'user_id': 'krrishd', 'user_email': 'krrishdholakia@gmail.com', 'max_budget': None, 'user_role': 'proxy_admin', 'budget_duration': None}
+[92m18:10:28 - LiteLLM Proxy:INFO[0m: utils.py:1856 - Data Inserted into Keys Table
+[92m18:10:28 - LiteLLM Proxy:INFO[0m: ui_sso.py:761 - user_id: krrishd; jwt_token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoia3JyaXNoZCIsImtleSI6InNrLTVvOXVVc0ZaaTVBRFBiWERoanhCZlEiLCJ1c2VyX2VtYWlsIjoia3JyaXNoZGhvbGFraWFAZ21haWwuY29tIiwidXNlcl9yb2xlIjoicHJveHlfYWRtaW4iLCJsb2dpbl9tZXRob2QiOiJzc28iLCJwcmVtaXVtX3VzZXIiOnRydWUsImF1dGhfaGVhZGVyX25hbWUiOiJBdXRob3JpemF0aW9uIiwiZGlzYWJsZWRfbm9uX2FkbWluX3BlcnNvbmFsX2tleV9jcmVhdGlvbiI6ZmFsc2UsInNlcnZlcl9yb290X3BhdGgiOiIvIn0.OiZdFjZ2wiMhFbMCwu2cZYXh7oV5BB8Vta-Ysk5JBQU
+[92m18:10:28 - LiteLLM Proxy:INFO[0m: ui_sso.py:764 - Redirecting to http://localhost:4000/ui/?login=success
+[92m18:10:30 - LiteLLM Proxy:ERROR[0m: key_management_endpoints.py:2275 - Error in list_keys: Server disconnected without sending a response.
+Traceback (most recent call last):
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_transports/default.py", line 101, in map_httpcore_exceptions
+    yield
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_transports/default.py", line 394, in handle_async_request
+    resp = await self._pool.handle_async_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 216, in handle_async_request
+    raise exc from None
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 196, in handle_async_request
+    response = await connection.handle_async_request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_async/connection.py", line 101, in handle_async_request
+    return await self._connection.handle_async_request(request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_async/http11.py", line 143, in handle_async_request
+    raise exc
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_async/http11.py", line 113, in handle_async_request
+    ) = await self._receive_response_headers(**kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_async/http11.py", line 186, in _receive_response_headers
+    event = await self._receive_event(timeout=timeout)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_async/http11.py", line 238, in _receive_event
+    raise RemoteProtocolError(msg)
+httpcore.RemoteProtocolError: Server disconnected without sending a response.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/krrishdholakia/Documents/litellm/litellm/proxy/management_endpoints/key_management_endpoints.py", line 2255, in list_keys
+    response = await _list_key_helper(
+               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/krrishdholakia/Documents/litellm/litellm/proxy/management_endpoints/key_management_endpoints.py", line 2434, in _list_key_helper
+    total_count = await prisma_client.db.litellm_verificationtoken.count(
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/prisma/actions.py", line 10157, in count
+    resp = await self._client._execute(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/prisma/_base_client.py", line 543, in _execute
+    return await self._engine.query(builder.build(), tx_id=self._tx_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/prisma/engine/_query.py", line 402, in query
+    return await self.request(
+           ^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/prisma/engine/_http.py", line 217, in request
+    response = await self.session.request(method, url, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/prisma/_async_http.py", line 26, in request
+    return Response(await self.session.request(method, url, **kwargs))
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_client.py", line 1540, in request
+    return await self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_client.py", line 1629, in send
+    response = await self._send_handling_auth(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_client.py", line 1657, in _send_handling_auth
+    response = await self._send_handling_redirects(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_client.py", line 1694, in _send_handling_redirects
+    response = await self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_client.py", line 1730, in _send_single_request
+    response = await transport.handle_async_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_transports/default.py", line 393, in handle_async_request
+    with map_httpcore_exceptions():
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py", line 155, in __exit__
+    self.gen.throw(typ, value, traceback)
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_transports/default.py", line 118, in map_httpcore_exceptions
+    raise mapped_exc(message) from exc
+httpx.RemoteProtocolError: Server disconnected without sending a response.
+[92m18:10:30 - LiteLLM Proxy:ERROR[0m: proxy_server.py:2730 - litellm.proxy_server.py::add_deployment() - Error getting new models from DB - All connection attempts failed
+Traceback (most recent call last):
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_transports/default.py", line 101, in map_httpcore_exceptions
+    yield
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_transports/default.py", line 394, in handle_async_request
+    resp = await self._pool.handle_async_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 216, in handle_async_request
+    raise exc from None
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 196, in handle_async_request
+    response = await connection.handle_async_request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_async/connection.py", line 99, in handle_async_request
+    raise exc
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_async/connection.py", line 76, in handle_async_request
+    stream = await self._connect(request)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_async/connection.py", line 122, in _connect
+    stream = await self._network_backend.connect_tcp(**kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_backends/auto.py", line 30, in connect_tcp
+    return await self._backend.connect_tcp(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_backends/anyio.py", line 112, in connect_tcp
+    with map_exceptions(exc_map):
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py", line 155, in __exit__
+    self.gen.throw(typ, value, traceback)
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_exceptions.py", line 14, in map_exceptions
+    raise to_exc(exc) from exc
+httpcore.ConnectError: All connection attempts failed
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/krrishdholakia/Documents/litellm/litellm/proxy/proxy_server.py", line 2728, in _get_models_from_db
+    new_models = await prisma_client.db.litellm_proxymodeltable.find_many()
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/prisma/actions.py", line 2540, in find_many
+    resp = await self._client._execute(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/prisma/_base_client.py", line 543, in _execute
+    return await self._engine.query(builder.build(), tx_id=self._tx_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/prisma/engine/_query.py", line 402, in query
+    return await self.request(
+           ^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/prisma/engine/_http.py", line 217, in request
+    response = await self.session.request(method, url, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/prisma/_async_http.py", line 26, in request
+    return Response(await self.session.request(method, url, **kwargs))
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_client.py", line 1540, in request
+    return await self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_client.py", line 1629, in send
+    response = await self._send_handling_auth(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_client.py", line 1657, in _send_handling_auth
+    response = await self._send_handling_redirects(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_client.py", line 1694, in _send_handling_redirects
+    response = await self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_client.py", line 1730, in _send_single_request
+    response = await transport.handle_async_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_transports/default.py", line 393, in handle_async_request
+    with map_httpcore_exceptions():
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py", line 155, in __exit__
+    self.gen.throw(typ, value, traceback)
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_transports/default.py", line 118, in map_httpcore_exceptions
+    raise mapped_exc(message) from exc
+httpx.ConnectError: All connection attempts failed
+[92m18:10:30 - LiteLLM Proxy:ERROR[0m: utils.py:1404 - LiteLLM Prisma Client Exception get_generic_data: All connection attempts failed
+[92m18:10:30 - LiteLLM Proxy:ERROR[0m: utils.py:1404 - LiteLLM Prisma Client Exception get_generic_data: All connection attempts failed
+[92m18:10:30 - LiteLLM Proxy:ERROR[0m: proxy_server.py:2778 - litellm.proxy.proxy_server.py::ProxyConfig:add_deployment - All connection attempts failed
+Traceback (most recent call last):
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_transports/default.py", line 101, in map_httpcore_exceptions
+    yield
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_transports/default.py", line 394, in handle_async_request
+    resp = await self._pool.handle_async_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 216, in handle_async_request
+    raise exc from None
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 196, in handle_async_request
+    response = await connection.handle_async_request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_async/connection.py", line 99, in handle_async_request
+    raise exc
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_async/connection.py", line 76, in handle_async_request
+    stream = await self._connect(request)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_async/connection.py", line 122, in _connect
+    stream = await self._network_backend.connect_tcp(**kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_backends/auto.py", line 30, in connect_tcp
+    return await self._backend.connect_tcp(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_backends/anyio.py", line 112, in connect_tcp
+    with map_exceptions(exc_map):
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py", line 155, in __exit__
+    self.gen.throw(typ, value, traceback)
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_exceptions.py", line 14, in map_exceptions
+    raise to_exc(exc) from exc
+httpcore.ConnectError: All connection attempts failed
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/krrishdholakia/Documents/litellm/litellm/proxy/proxy_server.py", line 2760, in add_deployment
+    await self._update_llm_router(
+  File "/Users/krrishdholakia/Documents/litellm/litellm/proxy/proxy_server.py", line 2418, in _update_llm_router
+    config_data = await proxy_config.get_config()
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/krrishdholakia/Documents/litellm/litellm/proxy/proxy_server.py", line 1584, in get_config
+    config = await self._update_config_from_db(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/krrishdholakia/Documents/litellm/litellm/proxy/proxy_server.py", line 2706, in _update_config_from_db
+    responses = await asyncio.gather(*_tasks)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/krrishdholakia/Documents/litellm/litellm/proxy/db/log_db_metrics.py", line 99, in wrapper
+    raise e
+  File "/Users/krrishdholakia/Documents/litellm/litellm/proxy/db/log_db_metrics.py", line 42, in wrapper
+    result = await func(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/backoff/_async.py", line 151, in retry
+    ret = await target(*args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/krrishdholakia/Documents/litellm/litellm/proxy/utils.py", line 1418, in get_generic_data
+    raise e
+  File "/Users/krrishdholakia/Documents/litellm/litellm/proxy/utils.py", line 1392, in get_generic_data
+    response = await self.db.litellm_config.find_first(  # type: ignore
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/prisma/actions.py", line 11822, in find_first
+    resp = await self._client._execute(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/prisma/_base_client.py", line 543, in _execute
+    return await self._engine.query(builder.build(), tx_id=self._tx_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/prisma/engine/_query.py", line 402, in query
+    return await self.request(
+           ^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/prisma/engine/_http.py", line 217, in request
+    response = await self.session.request(method, url, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/prisma/_async_http.py", line 26, in request
+    return Response(await self.session.request(method, url, **kwargs))
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_client.py", line 1540, in request
+    return await self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_client.py", line 1629, in send
+    response = await self._send_handling_auth(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_client.py", line 1657, in _send_handling_auth
+    response = await self._send_handling_redirects(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_client.py", line 1694, in _send_handling_redirects
+    response = await self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_client.py", line 1730, in _send_single_request
+    response = await transport.handle_async_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_transports/default.py", line 393, in handle_async_request
+    with map_httpcore_exceptions():
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py", line 155, in __exit__
+    self.gen.throw(typ, value, traceback)
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_transports/default.py", line 118, in map_httpcore_exceptions
+    raise mapped_exc(message) from exc
+httpx.ConnectError: All connection attempts failed
+[92m18:10:30 - LiteLLM Proxy:ERROR[0m: utils.py:1404 - LiteLLM Prisma Client Exception get_generic_data: All connection attempts failed
+[92m18:10:30 - LiteLLM Proxy:ERROR[0m: utils.py:1404 - LiteLLM Prisma Client Exception get_generic_data: All connection attempts failed
+[92m18:10:30 - LiteLLM Proxy:INFO[0m: proxy_server.py:490 - Shutting down LiteLLM Proxy Server
+[92m18:11:47 - LiteLLM Router:INFO[0m: router.py:660 - Routing strategy: simple-shuffle
+[92m18:11:49 - LiteLLM Proxy:INFO[0m: utils.py:1317 - All necessary views exist!
+[92m18:11:50 - LiteLLM Router:WARNING[0m: router.py:4862 - Error upserting deployment: vertex_project, and vertex_location must be set in litellm_params for pass-through endpoints., ignoring and continuing with other deployments.
+[92m18:11:50 - LiteLLM Router:WARNING[0m: router.py:4862 - Error upserting deployment: vertex_project, and vertex_location must be set in litellm_params for pass-through endpoints., ignoring and continuing with other deployments.
+[92m18:12:00 - LiteLLM Proxy:ERROR[0m: proxy_server.py:2925 - litellm.proxy_server.py::get_credentials() - Error getting credentials from DB - Server disconnected without sending a response.
+Traceback (most recent call last):
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_transports/default.py", line 101, in map_httpcore_exceptions
+    yield
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_transports/default.py", line 394, in handle_async_request
+    resp = await self._pool.handle_async_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 216, in handle_async_request
+    raise exc from None
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_async/connection_pool.py", line 196, in handle_async_request
+    response = await connection.handle_async_request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_async/connection.py", line 101, in handle_async_request
+    return await self._connection.handle_async_request(request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_async/http11.py", line 143, in handle_async_request
+    raise exc
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_async/http11.py", line 113, in handle_async_request
+    ) = await self._receive_response_headers(**kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_async/http11.py", line 186, in _receive_response_headers
+    event = await self._receive_event(timeout=timeout)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpcore/_async/http11.py", line 238, in _receive_event
+    raise RemoteProtocolError(msg)
+httpcore.RemoteProtocolError: Server disconnected without sending a response.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/krrishdholakia/Documents/litellm/litellm/proxy/proxy_server.py", line 2916, in get_credentials
+    credentials = await prisma_client.db.litellm_credentialstable.find_many()
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/prisma/actions.py", line 1502, in find_many
+    resp = await self._client._execute(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/prisma/_base_client.py", line 543, in _execute
+    return await self._engine.query(builder.build(), tx_id=self._tx_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/prisma/engine/_query.py", line 402, in query
+    return await self.request(
+           ^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/prisma/engine/_http.py", line 217, in request
+    response = await self.session.request(method, url, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/prisma/_async_http.py", line 26, in request
+    return Response(await self.session.request(method, url, **kwargs))
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_client.py", line 1540, in request
+    return await self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_client.py", line 1629, in send
+    response = await self._send_handling_auth(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_client.py", line 1657, in _send_handling_auth
+    response = await self._send_handling_redirects(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_client.py", line 1694, in _send_handling_redirects
+    response = await self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_client.py", line 1730, in _send_single_request
+    response = await transport.handle_async_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_transports/default.py", line 393, in handle_async_request
+    with map_httpcore_exceptions():
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py", line 155, in __exit__
+    self.gen.throw(typ, value, traceback)
+  File "/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_transports/default.py", line 118, in map_httpcore_exceptions
+    raise mapped_exc(message) from exc
+httpx.RemoteProtocolError: Server disconnected without sending a response.
+[92m18:12:01 - LiteLLM Proxy:INFO[0m: proxy_server.py:490 - Shutting down LiteLLM Proxy Server
+[92m18:12:14 - LiteLLM Router:INFO[0m: router.py:660 - Routing strategy: simple-shuffle
+[92m18:12:16 - LiteLLM Proxy:INFO[0m: utils.py:1317 - All necessary views exist!
+[92m18:12:16 - LiteLLM Router:WARNING[0m: router.py:4862 - Error upserting deployment: vertex_project, and vertex_location must be set in litellm_params for pass-through endpoints., ignoring and continuing with other deployments.
+[92m18:12:16 - LiteLLM Router:WARNING[0m: router.py:4862 - Error upserting deployment: vertex_project, and vertex_location must be set in litellm_params for pass-through endpoints., ignoring and continuing with other deployments.
+[92m18:12:21 - LiteLLM Proxy:INFO[0m: ui_sso.py:129 - Redirecting to SSO login for http://localhost:4000/sso/callback
+[92m18:12:26 - LiteLLM Proxy:INFO[0m: ui_sso.py:495 - Starting SSO callback
+[92m18:12:26 - LiteLLM Proxy:INFO[0m: ui_sso.py:550 - Redirecting to http://localhost:4000/sso/callback
+[92m18:12:26 - LiteLLM Proxy:INFO[0m: ui_sso.py:581 - SSO callback result: id='krrishd' email='krrishdholakia@gmail.com' first_name=None last_name=None display_name='a3f1c107-04dc-4c93-ae60-7f32eb4b05ce' picture=None provider=None team_ids=[]
+[92m18:12:27 - LiteLLM Proxy:INFO[0m: ui_sso.py:672 - user_defined_values for creating ui key: {'models': [], 'user_id': 'krrishd', 'user_email': 'krrishdholakia@gmail.com', 'max_budget': None, 'user_role': 'proxy_admin', 'budget_duration': None}
+[92m18:12:27 - LiteLLM Proxy:INFO[0m: utils.py:1856 - Data Inserted into Keys Table
+[92m18:12:27 - LiteLLM Proxy:INFO[0m: ui_sso.py:762 - user_id: krrishd; jwt_token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoia3JyaXNoZCIsImtleSI6InNrLUQzMEFpdW9lckU3YlMyakFXWVFLd1EiLCJ1c2VyX2VtYWlsIjoia3JyaXNoZGhvbGFraWFAZ21haWwuY29tIiwidXNlcl9yb2xlIjoicHJveHlfYWRtaW4iLCJsb2dpbl9tZXRob2QiOiJzc28iLCJwcmVtaXVtX3VzZXIiOnRydWUsImF1dGhfaGVhZGVyX25hbWUiOiJBdXRob3JpemF0aW9uIiwiZGlzYWJsZWRfbm9uX2FkbWluX3BlcnNvbmFsX2tleV9jcmVhdGlvbiI6ZmFsc2UsInNlcnZlcl9yb290X3BhdGgiOiIvIn0.EzYP86hw12J4WHLe6ZZz4YgVNGPnxM_PHqLjINH2_-U
+[92m18:12:27 - LiteLLM Proxy:INFO[0m: ui_sso.py:765 - Redirecting to http://localhost:4000/ui/?login=success
+[92m18:12:31 - LiteLLM Proxy:INFO[0m: proxy_server.py:490 - Shutting down LiteLLM Proxy Server
+[92m18:15:07 - LiteLLM Router:INFO[0m: router.py:660 - Routing strategy: simple-shuffle
+[92m18:15:09 - LiteLLM Proxy:INFO[0m: utils.py:1317 - All necessary views exist!
+[92m18:15:09 - LiteLLM Router:WARNING[0m: router.py:4862 - Error upserting deployment: vertex_project, and vertex_location must be set in litellm_params for pass-through endpoints., ignoring and continuing with other deployments.
+[92m18:15:09 - LiteLLM Router:WARNING[0m: router.py:4862 - Error upserting deployment: vertex_project, and vertex_location must be set in litellm_params for pass-through endpoints., ignoring and continuing with other deployments.
+[92m18:15:17 - LiteLLM Proxy:INFO[0m: utils.py:1916 - Data Inserted into Config Table
+[92m18:15:28 - LiteLLM Proxy:INFO[0m: ui_sso.py:129 - Redirecting to SSO login for http://localhost:4000/sso/callback
+[92m18:15:32 - LiteLLM Proxy:INFO[0m: ui_sso.py:495 - Starting SSO callback
+[92m18:15:32 - LiteLLM Proxy:INFO[0m: ui_sso.py:550 - Redirecting to http://localhost:4000/sso/callback
+[92m18:15:32 - LiteLLM Proxy:INFO[0m: ui_sso.py:581 - SSO callback result: id='krrishd' email='krrishdholakia@gmail.com' first_name=None last_name=None display_name='a3f1c107-04dc-4c93-ae60-7f32eb4b05ce' picture=None provider=None team_ids=[]
+[92m18:15:37 - LiteLLM Proxy:INFO[0m: proxy_server.py:490 - Shutting down LiteLLM Proxy Server

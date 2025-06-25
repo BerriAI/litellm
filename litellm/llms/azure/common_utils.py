@@ -1,12 +1,11 @@
 import json
 import os
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Callable, Dict, Literal, Optional, Union, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AzureOpenAI
 
 import litellm
-from litellm.types.router import GenericLiteLLMParams
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -15,6 +14,8 @@ from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.router import GenericLiteLLMParams
+from litellm.utils import _add_path_to_api_base
 
 azure_ad_cache = DualCache()
 
@@ -613,3 +614,78 @@ class BaseAzureLLM(BaseOpenAILLM):
             else:
                 client = AzureOpenAI(**azure_client_params)  # type: ignore
         return client
+    
+    @staticmethod
+    def _base_validate_azure_environment(
+        headers: dict,  litellm_params: Optional[GenericLiteLLMParams]
+    ) -> dict:
+        litellm_params = litellm_params or GenericLiteLLMParams()
+        api_key = (
+            litellm_params.api_key
+            or litellm.api_key
+            or litellm.azure_key
+            or get_secret_str("AZURE_OPENAI_API_KEY")
+            or get_secret_str("AZURE_API_KEY")
+        )
+
+        if api_key:
+            headers["api-key"] = api_key
+            return headers
+
+        ### Fallback to Azure AD token-based authentication if no API key is available
+        ### Retrieves Azure AD token and adds it to the Authorization header
+        azure_ad_token = get_azure_ad_token(litellm_params)
+        if azure_ad_token:
+            headers["Authorization"] = f"Bearer {azure_ad_token}"
+
+        return headers
+    
+    @staticmethod
+    def _get_base_azure_url(
+        api_base: Optional[str],
+        litellm_params: Optional[Union[GenericLiteLLMParams, Dict[str, Any]]],
+        route: Literal["/openai/responses", "/openai/vector_stores"]
+    ) -> str:
+        api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
+        if api_base is None:
+            raise ValueError(
+                f"api_base is required for Azure AI Studio. Please set the api_base parameter. Passed `api_base={api_base}`"
+            )
+        original_url = httpx.URL(api_base)
+
+        # Extract api_version or use default
+        litellm_params = litellm_params or {}
+        api_version = cast(Optional[str], litellm_params.get("api_version"))
+
+        # Create a new dictionary with existing params
+        query_params = dict(original_url.params)
+
+        # Add api_version if needed
+        if "api-version" not in query_params and api_version:
+            query_params["api-version"] = api_version
+        
+        # Add the path to the base URL
+        if route not in api_base:
+            new_url = _add_path_to_api_base(
+                api_base=api_base, ending_path=route
+            )
+        else:
+            new_url = api_base
+        
+        if BaseAzureLLM._is_azure_v1_api_version(api_version):
+            # ensure the request go to /openai/v1 and not just /openai
+            if "/openai/v1" not in new_url:
+                parsed_url = httpx.URL(new_url)
+                new_url = str(parsed_url.copy_with(path=parsed_url.path.replace("/openai", "/openai/v1")))
+
+
+        # Use the new query_params dictionary
+        final_url = httpx.URL(new_url).copy_with(params=query_params)
+
+        return str(final_url)
+    
+    @staticmethod
+    def _is_azure_v1_api_version(api_version: Optional[str]) -> bool:
+        if api_version is None:
+            return False
+        return api_version == "preview" or api_version == "latest"
