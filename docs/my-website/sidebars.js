@@ -198,7 +198,8 @@ const sidebars = {
           items: [
             "proxy/logging",
             "proxy/logging_spec",
-            "proxy/team_logging"
+            "proxy/team_logging",
+            "proxy/dynamic_logging"
           ],
         },
         

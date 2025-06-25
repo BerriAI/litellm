@@ -81,7 +81,10 @@ async def route_request(
     team_id = get_team_id_from_data(data)
     router_model_names = llm_router.model_names if llm_router is not None else []
     if "api_key" in data or "api_base" in data:
-        return getattr(llm_router, f"{route_type}")(**data)
+        if llm_router is not None:
+            return getattr(llm_router, f"{route_type}")(**data)
+        else:
+            return getattr(litellm, f"{route_type}")(**data)
 
     elif "user_config" in data:
         router_config = data.pop("user_config")

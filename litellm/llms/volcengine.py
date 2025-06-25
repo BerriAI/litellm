@@ -63,3 +63,26 @@ class VolcEngineConfig(OpenAILikeChatConfig):
             "extra_headers",
             "thinking",
         ]  # works across all models
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+        replace_max_completion_tokens_with_max_tokens: bool = True,
+    ) -> dict:
+        optional_params = super().map_openai_params(
+            non_default_params,
+            optional_params,
+            model,
+            drop_params,
+            replace_max_completion_tokens_with_max_tokens,
+        )
+
+        if "thinking" in optional_params:
+            optional_params.setdefault("extra_body", {})["thinking"] = (
+                optional_params.pop("thinking")
+            )
+
+        return optional_params

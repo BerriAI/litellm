@@ -79,9 +79,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         if messages:
             for message in messages:
-                message_text_content: Optional[
-                    List[str]
-                ] = self.get_content_for_message(message=message)
+                message_text_content: Optional[List[str]] = (
+                    self.get_content_for_message(message=message)
+                )
                 if message_text_content is None:
                     continue
                 for text_content in message_text_content:
@@ -241,7 +241,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self, response: BedrockGuardrailResponse
     ) -> bool:
         """
-        By default always raise an exception when a guardrail intervention is detected.
+        Only raise exception for "BLOCKED" actions, not for "ANONYMIZED" actions.
 
         If `self.mask_request_content` or `self.mask_response_content` is set to `True`, then use the output from the guardrail to mask the request or response content.
         """
@@ -250,11 +250,68 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if self.mask_request_content or self.mask_response_content:
             return False
 
-        # if intervention, return True
-        if response.get("action") == "GUARDRAIL_INTERVENED":
-            return True
-
         # if no intervention, return False
+        if response.get("action") != "GUARDRAIL_INTERVENED":
+            return False
+
+        # Check assessments to determine if any actions were BLOCKED (vs ANONYMIZED)
+        assessments = response.get("assessments", [])
+        if not assessments:
+            return False
+
+        for assessment in assessments:
+            # Check topic policy
+            topic_policy = assessment.get("topicPolicy")
+            if topic_policy:
+                topics = topic_policy.get("topics", [])
+                for topic in topics:
+                    if topic.get("action") == "BLOCKED":
+                        return True
+
+            # Check content policy
+            content_policy = assessment.get("contentPolicy")
+            if content_policy:
+                filters = content_policy.get("filters", [])
+                for filter_item in filters:
+                    if filter_item.get("action") == "BLOCKED":
+                        return True
+
+            # Check word policy
+            word_policy = assessment.get("wordPolicy")
+            if word_policy:
+                custom_words = word_policy.get("customWords", [])
+                for custom_word in custom_words:
+                    if custom_word.get("action") == "BLOCKED":
+                        return True
+                managed_words = word_policy.get("managedWordLists", [])
+                for managed_word in managed_words:
+                    if managed_word.get("action") == "BLOCKED":
+                        return True
+
+            # Check sensitive information policy
+            sensitive_info_policy = assessment.get("sensitiveInformationPolicy")
+            if sensitive_info_policy:
+                pii_entities = sensitive_info_policy.get("piiEntities", [])
+                if pii_entities:
+                    for pii_entity in pii_entities:
+                        if pii_entity.get("action") == "BLOCKED":
+                            return True
+                regexes = sensitive_info_policy.get("regexes", [])
+                if regexes:
+                    for regex in regexes:
+                        if regex.get("action") == "BLOCKED":
+                            return True
+
+            # Check contextual grounding policy
+            contextual_grounding_policy = assessment.get("contextualGroundingPolicy")
+            if contextual_grounding_policy:
+                grounding_filters = contextual_grounding_policy.get("filters", [])
+                for grounding_filter in grounding_filters:
+                    if grounding_filter.get("action") == "BLOCKED":
+                        return True
+
+        # If we got here, intervention occurred but no BLOCKED actions found
+        # This means all actions were ANONYMIZED or NONE, so don't raise exception
         return False
 
     @log_guardrail_information
@@ -300,11 +357,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 2. Update the messages with the guardrail response ##########
         #########################################################
-        data[
-            "messages"
-        ] = self._update_messages_with_updated_bedrock_guardrail_response(
-            messages=new_messages,
-            bedrock_guardrail_response=bedrock_guardrail_response,
+        data["messages"] = (
+            self._update_messages_with_updated_bedrock_guardrail_response(
+                messages=new_messages,
+                bedrock_guardrail_response=bedrock_guardrail_response,
+            )
         )
 
         #########################################################
@@ -354,11 +411,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 2. Update the messages with the guardrail response ##########
         #########################################################
-        data[
-            "messages"
-        ] = self._update_messages_with_updated_bedrock_guardrail_response(
-            messages=new_messages,
-            bedrock_guardrail_response=bedrock_guardrail_response,
+        data["messages"] = (
+            self._update_messages_with_updated_bedrock_guardrail_response(
+                messages=new_messages,
+                bedrock_guardrail_response=bedrock_guardrail_response,
+            )
         )
 
         #########################################################
@@ -408,11 +465,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 2. Update the messages with the guardrail response ##########
         #########################################################
-        data[
-            "messages"
-        ] = self._update_messages_with_updated_bedrock_guardrail_response(
-            messages=new_messages,
-            bedrock_guardrail_response=bedrock_guardrail_response,
+        data["messages"] = (
+            self._update_messages_with_updated_bedrock_guardrail_response(
+                messages=new_messages,
+                bedrock_guardrail_response=bedrock_guardrail_response,
+            )
         )
 
         #########################################################
@@ -440,21 +497,29 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Returns:
             List of messages with content masked according to guardrail response
         """
-        # Skip processing if masking is not enabled
-        if not (self.mask_request_content or self.mask_response_content):
-            return messages
-
         # Get masked texts from guardrail response
         masked_texts = self._extract_masked_texts_from_response(
             bedrock_guardrail_response
         )
-        if not masked_texts:
-            return messages
 
-        # Apply masking to messages using index tracking
-        return self._apply_masking_to_messages(
-            messages=messages, masked_texts=masked_texts
-        )
+        # If guardrail provided masked output, use it regardless of masking flags
+        # because the guardrail has already determined this content needs anonymization
+        if masked_texts:
+            verbose_proxy_logger.debug(
+                "Bedrock guardrail provided masked output, applying to messages"
+            )
+            return self._apply_masking_to_messages(
+                messages=messages, masked_texts=masked_texts
+            )
+
+        # If masking is enabled but no masked texts available, still try to apply
+        # (this maintains backward compatibility for edge cases)
+        if self.mask_request_content or self.mask_response_content:
+            verbose_proxy_logger.debug(
+                "Masking enabled but no masked output from guardrail, returning original messages"
+            )
+
+        return messages
 
     async def async_post_call_streaming_iterator_hook(
         self,

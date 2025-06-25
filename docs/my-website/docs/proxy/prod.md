@@ -49,7 +49,21 @@ Need Help or want dedicated support ? Talk to a founder [here]: (https://calendl
 :::
 
 
-## 2. On Kubernetes - Use 1 Uvicorn worker [Suggested CMD]
+## 2. Recommended Machine Specifications
+
+For optimal performance in production, we recommend the following minimum machine specifications:
+
+| Resource | Recommended Value |
+|----------|------------------|
+| CPU      | 2 vCPU           |
+| Memory   | 4 GB RAM         |
+
+These specifications provide:
+- Sufficient compute power for handling concurrent requests
+- Adequate memory for request processing and caching
+
+
+## 3. On Kubernetes - Use 1 Uvicorn worker [Suggested CMD]
 
 Use this Docker `CMD`. This will start the proxy with 1 Uvicorn Async Worker
 
@@ -59,7 +73,7 @@ CMD ["--port", "4000", "--config", "./proxy_server_config.yaml"]
 ```
 
 
-## 3. Use Redis 'port','host', 'password'. NOT 'redis_url'
+## 4. Use Redis 'port','host', 'password'. NOT 'redis_url'
 
 If you decide to use Redis, DO NOT use 'redis_url'. We recommend using redis port, host, and password params. 
 
@@ -92,13 +106,13 @@ litellm_settings:
     password: os.environ/REDIS_PASSWORD
 ```
 
-## 4. Disable 'load_dotenv'
+## 5. Disable 'load_dotenv'
 
 Set `export LITELLM_MODE="PRODUCTION"`
 
 This disables the load_dotenv() functionality, which will automatically load your environment credentials from the local `.env`. 
 
-## 5. If running LiteLLM on VPC, gracefully handle DB unavailability
+## 6. If running LiteLLM on VPC, gracefully handle DB unavailability
 
 When running LiteLLM on a VPC (and inaccessible from the public internet), you can enable graceful degradation so that request processing continues even if the database is temporarily unavailable.
 
@@ -125,7 +139,7 @@ When `allow_requests_on_db_unavailable` is set to `true`, LiteLLM will handle er
 | LiteLLM Budget Errors or Model Errors | ❌ Request will be blocked | Triggered when the DB is reachable but the authentication token is invalid, lacks access, or exceeds budget limits. |
 
 
-## 6. Disable spend_logs & error_logs if not using the LiteLLM UI
+## 7. Disable spend_logs & error_logs if not using the LiteLLM UI
 
 By default, LiteLLM writes several types of logs to the database:
 - Every LLM API request to the `LiteLLM_SpendLogs` table
@@ -141,7 +155,7 @@ general_settings:
 
 [More information about what the Database is used for here](db_info)
 
-## 7. Use Helm PreSync Hook for Database Migrations [BETA]
+## 8. Use Helm PreSync Hook for Database Migrations [BETA]
 
 To ensure only one service manages database migrations, use our [Helm PreSync hook for Database Migrations](https://github.com/BerriAI/litellm/blob/main/deploy/charts/litellm-helm/templates/migrations-job.yaml). This ensures migrations are handled during `helm upgrade` or `helm install`, while LiteLLM pods explicitly disable migrations.
 
@@ -169,7 +183,7 @@ To ensure only one service manages database migrations, use our [Helm PreSync ho
    ```
 
 
-## 8. Set LiteLLM Salt Key 
+## 9. Set LiteLLM Salt Key 
 
 If you plan on using the DB, set a salt key for encrypting/decrypting variables in the DB. 
 
@@ -184,7 +198,7 @@ export LITELLM_SALT_KEY="sk-1234"
 [**See Code**](https://github.com/BerriAI/litellm/blob/036a6821d588bd36d170713dcf5a72791a694178/litellm/proxy/common_utils/encrypt_decrypt_utils.py#L15)
 
 
-## 9. Use `prisma migrate deploy`
+## 10. Use `prisma migrate deploy`
 
 Use this to handle db migrations across LiteLLM versions in production
 

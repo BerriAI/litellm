@@ -489,37 +489,99 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
     )
 
 
-def unpack_defs(schema, defs):
-    properties = schema.get("properties", None)
-    if properties is None:
-        return
+# ---------------------------------------------------------------------------
+# Generic, dependency-free implementation of `unpack_defs`
+# ---------------------------------------------------------------------------
 
-    for name, value in properties.items():
-        ref_key = value.get("$ref", None)
-        if ref_key is not None:
-            ref = defs[ref_key.split("defs/")[-1]]
-            unpack_defs(ref, defs)
-            properties[name] = ref
+
+def unpack_defs(schema: dict, defs: dict) -> None:
+    """Expand *all* ``$ref`` entries pointing into ``$defs`` / ``definitions``.
+
+    This utility walks the entire schema tree (dicts and lists) so it naturally
+    resolves references hidden under any keyword – ``items``, ``allOf``,
+    ``anyOf``, ``oneOf``, ``additionalProperties``, etc.
+
+    It mutates *schema* in-place and does **not** return anything.  The helper
+    keeps memory overhead low by resolving nodes as it encounters them rather
+    than materialising a fully dereferenced copy first.
+    """
+
+    import copy
+    from collections import deque
+
+    # Combine the defs handed down by the caller with defs/definitions found on
+    # the current node.  Local keys shadow parent keys to match JSON-schema
+    # scoping rules.
+    root_defs: dict = {
+        **defs,
+        **schema.get("$defs", {}),
+        **schema.get("definitions", {}),
+    }
+
+    # Use iterative approach with queue to avoid recursion
+    # Each item in queue is (node, parent_container, key/index, active_defs, seen_ids)
+    queue: deque[tuple[Any, Union[dict, list, None], Union[str, int, None], dict, set]] = deque([(schema, None, None, root_defs, set())])
+    
+    while queue:
+        node, parent, key, active_defs, seen = queue.popleft()
+        
+        # Avoid infinite loops on self-referential schemas
+        if id(node) in seen:
             continue
+        seen = seen.copy()  # Create new set for this branch
+        seen.add(id(node))
 
-        anyof = value.get("anyOf", None)
-        if anyof is not None:
-            for i, atype in enumerate(anyof):
-                ref_key = atype.get("$ref", None)
-                if ref_key is not None:
-                    ref = defs[ref_key.split("defs/")[-1]]
-                    unpack_defs(ref, defs)
-                    anyof[i] = ref
-            continue
+        # ----------------------------- dict -----------------------------
+        if isinstance(node, dict):
+            # --- Case 1: this node *is* a reference ---
+            if "$ref" in node:
+                ref_name = node["$ref"].split("/")[-1]
+                target_schema = active_defs.get(ref_name)
+                # Unknown reference – leave untouched
+                if target_schema is None:
+                    continue
 
-        items = value.get("items", None)
-        if items is not None:
-            ref_key = items.get("$ref", None)
-            if ref_key is not None:
-                ref = defs[ref_key.split("defs/")[-1]]
-                unpack_defs(ref, defs)
-                value["items"] = ref
+                # Merge defs from the target to capture nested definitions
+                child_defs = {
+                    **active_defs,
+                    **target_schema.get("$defs", {}),
+                    **target_schema.get("definitions", {}),
+                }
+
+                # Replace the reference with resolved copy
+                resolved = copy.deepcopy(target_schema)
+                if parent is not None and key is not None:
+                    if isinstance(parent, dict) and isinstance(key, str):
+                        parent[key] = resolved
+                    elif isinstance(parent, list) and isinstance(key, int):
+                        parent[key] = resolved
+                else:
+                    # This is the root schema itself
+                    schema.clear()
+                    schema.update(resolved)
+                    resolved = schema
+                
+                # Add resolved node to queue for further processing
+                queue.append((resolved, parent, key, child_defs, seen))
                 continue
+
+            # --- Case 2: regular dict – process its values ---
+            # Update defs with any nested $defs/definitions present *here*.
+            current_defs = {
+                **active_defs,
+                **node.get("$defs", {}),
+                **node.get("definitions", {}),
+            }
+
+            # Add all dict values to queue
+            for k, v in node.items():
+                queue.append((v, node, k, current_defs, seen))
+
+        # ---------------------------- list ------------------------------
+        elif isinstance(node, list):
+            # Add all list items to queue
+            for idx, item in enumerate(node):
+                queue.append((item, node, idx, active_defs, seen))
 
 
 def _get_image_mime_type_from_url(url: str) -> Optional[str]:

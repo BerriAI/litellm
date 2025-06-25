@@ -325,3 +325,50 @@ async def test_bedrock_process_image_async_factory():
         image_url=image_url, format=None
     )
     print(f"content_block: {content_block}")
+
+
+def test_unpack_defs_resolves_nested_ref_inside_anyof_items():
+    """Ensure unpack_defs correctly resolves $ref inside items within anyOf (Issue #11372)."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
+
+    # Define a minimal schema reproducing the bug scenario
+    schema = {
+        "type": "object",
+        "properties": {
+            "vatAmounts": {
+                "anyOf": [
+                    {  # List of VatAmount
+                        "type": "array",
+                        "items": {"$ref": "#/$defs/VatAmount"},
+                    },
+                    {"type": "null"},
+                ],
+                "title": "Vat Amounts",
+            }
+        },
+        "$defs": {
+            "VatAmount": {
+                "type": "object",
+                "properties": {
+                    "vatRate": {"type": "number"},
+                    "vatAmount": {"type": "number"},
+                },
+                "required": ["vatRate", "vatAmount"],
+                "title": "VatAmount",
+            }
+        },
+    }
+
+    # Perform unpacking
+    unpack_defs(schema, schema["$defs"])
+
+    # Extract the items schema after unpacking
+    items_schema = (
+        schema["properties"]["vatAmounts"]["anyOf"][0]["items"]
+    )
+
+    # Assertions: items_schema should now be the resolved object, not an empty dict
+    assert isinstance(items_schema, dict), "Items schema should be a dict after unpacking"
+    assert items_schema.get("type") == "object"
+    # Ensure essential properties are present
+    assert set(items_schema.get("properties", {}).keys()) == {"vatRate", "vatAmount"}
