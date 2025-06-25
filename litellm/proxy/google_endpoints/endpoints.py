@@ -36,6 +36,8 @@ async def google_generate_content(
     )
 
     data = await _read_request_body(request=request)
+    if "model" not in data:
+        data["model"] = model_name
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
@@ -91,6 +93,10 @@ async def google_stream_generate_content(
     )
 
     data = await _read_request_body(request=request)
+    if "model" not in data:
+        data["model"] = model_name
+
+
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
