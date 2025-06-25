@@ -91,6 +91,27 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         """
         raise NotImplementedError("validate_environment is not implemented")
     
+    def sync_get_auth_token_and_url(
+        self,
+        api_base: Optional[str],
+        model: str,
+        litellm_params: dict,
+        stream: bool,
+    ) -> Tuple[dict, str]:
+        """
+        Sync version of get_auth_token_and_url.
+
+        Args:
+            api_base: Base API URL
+            model: The model name
+            litellm_params: LiteLLM parameters
+            stream: Whether this is a streaming call
+
+        Returns:
+            Tuple of headers and API base
+        """
+        raise NotImplementedError("sync_get_auth_token_and_url is not implemented")
+    
     async def get_auth_token_and_url(
         self,
         api_base: Optional[str],
