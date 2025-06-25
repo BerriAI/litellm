@@ -132,7 +132,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
               }
             }
 
-            // Set form values with existing data
+            // Set form values with existing data (excluding UI access control fields)
             const formValues = {
               sso_provider: selectedProvider,
               proxy_base_url: ssoData.values.proxy_base_url,
@@ -299,50 +299,6 @@ const SSOModals: React.FC<SSOModalsProps> = ({
               rules={[{ required: true, message: "Please enter the proxy base url" }]}
             >
               <TextInput />
-            </Form.Item>
-
-            {/* UI Access Control Section */}
-            <div style={{ marginTop: '24px', marginBottom: '16px' }}>
-              <Text style={{ fontSize: '16px', fontWeight: '600', color: '#374151' }}>
-                UI Access Control
-              </Text>
-            </div>
-            
-            <Form.Item
-              label="UI Access Mode"
-              name="ui_access_mode"
-              tooltip="Controls who can access the UI interface"
-            >
-              <Select placeholder="Select access mode">
-                <Select.Option value="all_authenticated_users">All Authenticated Users</Select.Option>
-                <Select.Option value="restricted_sso_group">Restricted SSO Group</Select.Option>
-              </Select>
-            </Form.Item>
-
-            <Form.Item
-              noStyle
-              shouldUpdate={(prevValues, currentValues) => prevValues.ui_access_mode !== currentValues.ui_access_mode}
-            >
-              {({ getFieldValue }) => {
-                const uiAccessMode = getFieldValue('ui_access_mode');
-                return uiAccessMode === 'restricted_sso_group' ? (
-                  <Form.Item
-                    label="Restricted SSO Group"
-                    name="restricted_sso_group"
-                    rules={[{ required: true, message: "Please enter the restricted SSO group" }]}
-                  >
-                    <TextInput placeholder="ui-access-group" />
-                  </Form.Item>
-                ) : null;
-              }}
-            </Form.Item>
-
-            <Form.Item
-              label="SSO Group JWT Field"
-              name="team_ids_jwt_field"
-              tooltip="JWT field name that contains team/group information. Use dot notation to access nested fields."
-            >
-              <TextInput placeholder="groups" />
             </Form.Item>
           </>
           <div style={{ textAlign: "right", marginTop: "10px", display: "flex", justifyContent: "flex-end", alignItems: "center", gap: "8px" }}>
