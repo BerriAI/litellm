@@ -55,6 +55,9 @@ def filter_team_based_models(
     metadata = request_kwargs.get("metadata", {})
     request_team_id = metadata.get("user_api_key_team_id")
     ids_to_remove = []
+    if isinstance(healthy_deployments, dict):
+        return healthy_deployments
+
     for deployment in healthy_deployments:
         _model_info = deployment.get("model_info") or {}
         model_team_id = _model_info.get("team_id")

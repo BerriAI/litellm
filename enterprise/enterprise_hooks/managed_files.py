@@ -66,7 +66,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     async def store_unified_file_id(
         self,
         file_id: str,
-        file_object: OpenAIFileObject,
+        file_object: Optional[OpenAIFileObject],
         litellm_parent_otel_span: Optional[Span],
         model_mappings: Dict[str, str],
         user_api_key_dict: UserAPIKeyAuth,
@@ -74,31 +74,39 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         verbose_logger.info(
             f"Storing LiteLLM Managed File object with id={file_id} in cache"
         )
-        litellm_managed_file_object = LiteLLM_ManagedFileTable(
-            unified_file_id=file_id,
-            file_object=file_object,
-            model_mappings=model_mappings,
-            flat_model_file_ids=list(model_mappings.values()),
-            created_by=user_api_key_dict.user_id,
-            updated_by=user_api_key_dict.user_id,
-        )
-        await self.internal_usage_cache.async_set_cache(
-            key=file_id,
-            value=litellm_managed_file_object.model_dump(),
-            litellm_parent_otel_span=litellm_parent_otel_span,
-        )
+        if file_object is not None:
+            litellm_managed_file_object = LiteLLM_ManagedFileTable(
+                unified_file_id=file_id,
+                file_object=file_object,
+                model_mappings=model_mappings,
+                flat_model_file_ids=list(model_mappings.values()),
+                created_by=user_api_key_dict.user_id,
+                updated_by=user_api_key_dict.user_id,
+            )
+            await self.internal_usage_cache.async_set_cache(
+                key=file_id,
+                value=litellm_managed_file_object.model_dump(),
+                litellm_parent_otel_span=litellm_parent_otel_span,
+            )
 
         ## STORE MODEL MAPPINGS IN DB
 
-        await self.prisma_client.db.litellm_managedfiletable.create(
-            data={
-                "unified_file_id": file_id,
-                "file_object": file_object.model_dump_json(),
-                "model_mappings": json.dumps(model_mappings),
-                "flat_model_file_ids": list(model_mappings.values()),
-                "created_by": user_api_key_dict.user_id,
-                "updated_by": user_api_key_dict.user_id,
-            }
+        db_data = {
+            "unified_file_id": file_id,
+            "model_mappings": json.dumps(model_mappings),
+            "flat_model_file_ids": list(model_mappings.values()),
+            "created_by": user_api_key_dict.user_id,
+            "updated_by": user_api_key_dict.user_id,
+        }
+
+        if file_object is not None:
+            db_data["file_object"] = file_object.model_dump_json()
+
+        result = await self.prisma_client.db.litellm_managedfiletable.create(
+            data=db_data
+        )
+        verbose_logger.debug(
+            f"LiteLLM Managed File object with id={file_id} stored in db: {result}"
         )
 
     async def store_unified_object_id(
@@ -184,10 +192,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         self, unified_file_id: str, user_api_key_dict: UserAPIKeyAuth
     ) -> bool:
         ## check if the user has access to the unified file id
+
         user_id = user_api_key_dict.user_id
         managed_file = await self.prisma_client.db.litellm_managedfiletable.find_first(
             where={"unified_file_id": unified_file_id}
         )
+
         if managed_file:
             return managed_file.created_by == user_id
         return False
@@ -613,13 +623,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         return base64.urlsafe_b64encode(unified_batch_id.encode()).decode().rstrip("=")
 
     def get_unified_output_file_id(
-        self, output_file_id: str, model_id: str, model_name: str
+        self, output_file_id: str, model_id: str, model_name: Optional[str]
     ) -> str:
         unified_output_file_id = (
             SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
                 "application/json",
                 str(uuid.uuid4()),
-                model_name,
+                model_name or "",
                 output_file_id,
                 model_id,
             )
@@ -669,29 +679,38 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             model_id = cast(Optional[str], response._hidden_params.get("model_id"))
             model_name = cast(Optional[str], response._hidden_params.get("model_name"))
             original_response_id = response.id
+
             if (unified_batch_id or unified_file_id) and model_id:
                 response.id = self.get_unified_batch_id(
                     batch_id=response.id, model_id=model_id
                 )
 
                 if (
-                    response.output_file_id and model_name and model_id
+                    response.output_file_id and model_id
                 ):  # return a file id with the model_id and output_file_id
+                    original_output_file_id = response.output_file_id
                     response.output_file_id = self.get_unified_output_file_id(
                         output_file_id=response.output_file_id,
                         model_id=model_id,
                         model_name=model_name,
                     )
-            asyncio.create_task(
-                self.store_unified_object_id(
-                    unified_object_id=response.id,
-                    file_object=response,
-                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
-                    model_object_id=original_response_id,
-                    file_purpose="batch",
-                    user_api_key_dict=user_api_key_dict,
-                )
-            )
+                    await self.store_unified_file_id(  # need to store otherwise any retrieve call will fail
+                        file_id=response.output_file_id,
+                        file_object=None,
+                        litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                        model_mappings={model_id: original_output_file_id},
+                        user_api_key_dict=user_api_key_dict,
+                    )
+            # asyncio.create_task(
+            #     self.store_unified_object_id(
+            #         unified_object_id=response.id,
+            #         file_object=response,
+            #         litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            #         model_object_id=original_response_id,
+            #         file_purpose="batch",
+            #         user_api_key_dict=user_api_key_dict,
+            #     )
+            # )
         elif isinstance(response, LiteLLMFineTuningJob):
             ## Check if unified_file_id is in the response
             unified_file_id = response._hidden_params.get(

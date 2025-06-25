@@ -323,3 +323,61 @@ async def test_router_acreate_batch_only_selects_from_file_id_mapping(monkeypatc
 
             mock_acreate_batch.assert_called()
             assert "5678" in json.dumps(mock_acreate_batch.call_args.kwargs)
+
+
+@pytest.mark.asyncio
+async def test_output_file_id_for_batch_retrieve():
+    """
+    Test that the output file id is the same as the input file id
+    """
+    from typing import cast
+
+    from openai.types.batch import BatchRequestCounts
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.utils import LiteLLMBatch
+
+    batch = LiteLLMBatch(
+        id="bGl0ZWxsbV9wcm94eTttb2RlbF9pZDoxMjM0NTY3OTtsbG1fYmF0Y2hfaWQ6YmF0Y2hfNjg1YzVlNWQ2Mzk4ODE5MGI4NWJkYjIxNDdiYTEzMWQ",
+        completion_window="24h",
+        created_at=1750883933,
+        endpoint="/v1/chat/completions",
+        input_file_id="file-8ci8gux8s7oES7GydYvnMG",
+        object="batch",
+        status="completed",
+        cancelled_at=None,
+        cancelling_at=None,
+        completed_at=1750883939,
+        error_file_id=None,
+        errors=None,
+        expired_at=None,
+        expires_at=1750970333,
+        failed_at=None,
+        finalizing_at=1750883938,
+        in_progress_at=1750883934,
+        metadata={"description": "nightly eval job"},
+        output_file_id="file-3BZYhmdJQ3V2oZPAtQsEax",
+        request_counts=BatchRequestCounts(completed=1, failed=0, total=1),
+        usage=None,
+    )
+
+    batch._hidden_params = {
+        "litellm_call_id": "dcd789e0-c0ad-4244-9564-4e611448d650",
+        "api_base": "https://api.openai.com",
+        "model_id": "12345679",
+        "response_cost": 0.0,
+        "additional_headers": {},
+        "litellm_model_name": "gpt-4o",
+        "unified_batch_id": "litellm_proxy;model_id:12345679;llm_batch_id:batch_685c5e5d63988190b85bdb2147ba131d",
+    }
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=MagicMock()
+    )
+
+    response = await proxy_managed_files.async_post_call_success_hook(
+        data={},
+        user_api_key_dict=MagicMock(),
+        response=batch,
+    )
+
+    assert not cast(LiteLLMBatch, response).output_file_id.startswith("file-")
