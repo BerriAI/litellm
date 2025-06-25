@@ -3,10 +3,12 @@ from fastapi import APIRouter, Depends, Request, Response
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from fastapi import APIRouter, Depends, Request
 
 router = APIRouter(
     tags=["google genai endpoints"],
 )
+
 
 @router.post("/v1beta/models/{model_name}:generateContent", dependencies=[Depends(user_api_key_auth)])
 @router.post("/models/{model_name}:generateContent", dependencies=[Depends(user_api_key_auth)])
