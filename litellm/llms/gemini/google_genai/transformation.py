@@ -120,7 +120,88 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             or get_secret_str("GEMINI_API_KEY")
             or litellm.api_key
         )
+    
+    def _get_common_auth_components(
+        self,
+        litellm_params: dict,
+    ) -> Tuple[Any, Optional[str], Optional[str]]:
+        """
+        Get common authentication components used by both sync and async methods.
+        
+        Returns:
+            Tuple of (vertex_credentials, vertex_project, vertex_location)
+        """
+        vertex_credentials = self.get_vertex_ai_credentials(litellm_params)
+        vertex_project = self.get_vertex_ai_project(litellm_params)
+        vertex_location = self.get_vertex_ai_location(litellm_params)
+        return vertex_credentials, vertex_project, vertex_location
+    
+    def _build_final_headers_and_url(
+        self,
+        model: str,
+        auth_header: Optional[str],
+        vertex_project: Optional[str],
+        vertex_location: Optional[str],
+        vertex_credentials: Any,
+        stream: bool,
+        api_base: Optional[str],
+        litellm_params: dict,
+    ) -> Tuple[dict, str]:
+        """
+        Build final headers and API URL from auth components.
+        """
+        gemini_api_key = self._get_google_ai_studio_api_key(litellm_params)
+        
+        auth_header, api_base = self._get_token_and_url(
+            model=model,
+            gemini_api_key=gemini_api_key,
+            auth_header=auth_header,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_credentials=vertex_credentials,
+            stream=stream,
+            custom_llm_provider=self.custom_llm_provider,
+            api_base=api_base,
+            should_use_v1beta1_features=True,
+        )
 
+        headers = self.validate_environment(
+            api_key=auth_header,
+            headers=None,
+            model=model,
+            litellm_params=litellm_params,
+        )
+
+        return headers, api_base
+
+    def sync_get_auth_token_and_url(
+        self,
+        api_base: Optional[str],
+        model: str,
+        litellm_params: dict,
+        stream: bool,
+    ) -> Tuple[dict, str]:
+        """
+        Sync version of get_auth_token_and_url.
+        """
+        vertex_credentials, vertex_project, vertex_location = self._get_common_auth_components(litellm_params)
+
+        _auth_header, vertex_project = self._ensure_access_token(
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+            custom_llm_provider=self.custom_llm_provider,
+        )
+
+        return self._build_final_headers_and_url(
+            model=model,
+            auth_header=_auth_header,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_credentials=vertex_credentials,
+            stream=stream,
+            api_base=api_base,
+            litellm_params=litellm_params,
+        )
 
     async def get_auth_token_and_url(
         self,
@@ -140,10 +221,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         Returns:
             Tuple of headers and API base
         """
-
-        vertex_credentials = self.get_vertex_ai_credentials(litellm_params)
-        vertex_project = self.get_vertex_ai_project(litellm_params)
-        vertex_location = self.get_vertex_ai_location(litellm_params)
+        vertex_credentials, vertex_project, vertex_location = self._get_common_auth_components(litellm_params)
 
         _auth_header, vertex_project = await self._ensure_access_token_async(
             credentials=vertex_credentials,
@@ -151,27 +229,16 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             custom_llm_provider=self.custom_llm_provider,
         )
 
-        auth_header, api_base = self._get_token_and_url(
+        return self._build_final_headers_and_url(
             model=model,
-            gemini_api_key=self._get_google_ai_studio_api_key(litellm_params),
             auth_header=_auth_header,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
             vertex_credentials=vertex_credentials,
             stream=stream,
-            custom_llm_provider=self.custom_llm_provider,
             api_base=api_base,
-            should_use_v1beta1_features=True,
-        )
-
-        headers = self.validate_environment(
-            api_key=auth_header,
-            headers=None,
-            model=model,
             litellm_params=litellm_params,
         )
-
-        return headers, api_base
     
 
     def transform_generate_content_request(
@@ -184,7 +251,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         typed_generate_content_request = GenerateContentRequestDict(
             model=model,
             contents=contents,
-            config=GenerateContentConfigDict(**generate_content_config_dict),
+            generationConfig=GenerateContentConfigDict(**generate_content_config_dict),
         )
 
         request_dict = cast(dict, typed_generate_content_request)
