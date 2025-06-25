@@ -371,7 +371,7 @@ async def test_output_file_id_for_batch_retrieve():
         "unified_batch_id": "litellm_proxy;model_id:12345679;llm_batch_id:batch_685c5e5d63988190b85bdb2147ba131d",
     }
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
-        DualCache(), prisma_client=MagicMock()
+        DualCache(), prisma_client=AsyncMock()
     )
 
     response = await proxy_managed_files.async_post_call_success_hook(
