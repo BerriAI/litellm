@@ -167,6 +167,18 @@ curl "localhost:9200/_search?pretty&size=1"
 
 You should see OpenTelemetry trace data with structured fields for your LLM requests.
 
+### 7. Visualize in Kibana
+
+Start Kibana to visualize your LLM telemetry data:
+
+```bash
+docker run -d --name kibana --link elasticsearch:elasticsearch -p 5601:5601 docker.elastic.co/kibana/kibana:8.18.2
+```
+
+Open Kibana at http://localhost:5601 and create an index pattern for your LiteLLM traces:
+
+![Elasticsearch Demo](../../img/elasticsearch_demo.png)
+
 ## Production Setup
 
 **With Elasticsearch Cloud:**
