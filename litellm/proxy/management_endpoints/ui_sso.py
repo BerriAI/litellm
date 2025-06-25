@@ -201,11 +201,12 @@ async def get_generic_sso_response(
     ],  # sso specific jwt handler - used for restricted sso group access control
     generic_client_id: str,
     redirect_url: str,
-) -> Union[OpenID, dict]:
+) -> Tuple[Union[OpenID, dict], Optional[dict]]:  # return received response
     # make generic sso provider
     from fastapi_sso.sso.base import DiscoveryDocument
     from fastapi_sso.sso.generic import create_provider
 
+    received_response: Optional[dict] = None
     generic_client_secret = os.getenv("GENERIC_CLIENT_SECRET", None)
     generic_scope = os.getenv("GENERIC_SCOPE", "openid email profile").split(" ")
     generic_authorization_endpoint = os.getenv("GENERIC_AUTHORIZATION_ENDPOINT", None)
@@ -256,6 +257,8 @@ async def get_generic_sso_response(
     )
 
     def response_convertor(response, client):
+        nonlocal received_response  # return for user debugging
+        received_response = response
         return generic_response_convertor(
             response=response,
             jwt_handler=jwt_handler,
@@ -299,7 +302,7 @@ async def get_generic_sso_response(
         )
         raise e
     verbose_proxy_logger.debug("generic result: %s", result)
-    return result or {}
+    return result or {}, received_response
 
 
 async def create_team_member_add_task(team_id, user_info):
@@ -537,6 +540,7 @@ async def auth_callback(request: Request):  # noqa: PLR0915
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
     generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
+    received_response: Optional[dict] = None
     # get url from request
     if master_key is None:
         raise ProxyException(
@@ -564,7 +568,7 @@ async def auth_callback(request: Request):  # noqa: PLR0915
             redirect_url=redirect_url,
         )
     elif generic_client_id is not None:
-        result = await get_generic_sso_response(
+        result, received_response = await get_generic_sso_response(
             request=request,
             jwt_handler=jwt_handler,
             generic_client_id=generic_client_id,
@@ -648,7 +652,9 @@ async def auth_callback(request: Request):  # noqa: PLR0915
 
     # (IF SET) Verify user is in restricted SSO group
     SSOAuthenticationHandler.verify_user_in_restricted_sso_group(
-        general_settings=general_settings, result=result
+        general_settings=general_settings,
+        result=result,
+        received_response=received_response,
     )
 
     user_info = await get_user_info_from_db(
@@ -1098,6 +1104,7 @@ class SSOAuthenticationHandler:
     def verify_user_in_restricted_sso_group(
         general_settings: Dict,
         result: Optional[Union[CustomOpenID, OpenID, dict]],
+        received_response: Optional[dict],
     ) -> Literal[True]:
         """
         when ui_access_mode.type == "restricted_sso_group":
@@ -1124,7 +1131,7 @@ class SSOAuthenticationHandler:
             restricted_sso_group = ui_access_mode.get("restricted_sso_group")
             if restricted_sso_group not in team_ids:
                 raise ProxyException(
-                    message=f"User is not in the restricted SSO group: {restricted_sso_group}. User groups: {team_ids}",
+                    message=f"User is not in the restricted SSO group: {restricted_sso_group}. User groups: {team_ids}. Received SSO response: {received_response}",
                     type=ProxyErrorTypes.auth_error,
                     param="restricted_sso_group",
                     code=status.HTTP_403_FORBIDDEN,
@@ -1678,7 +1685,7 @@ async def debug_sso_callback(request: Request):
         )
 
     elif generic_client_id is not None:
-        result = await get_generic_sso_response(
+        result, _ = await get_generic_sso_response(
             request=request,
             jwt_handler=jwt_handler,
             generic_client_id=generic_client_id,
