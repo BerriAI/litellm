@@ -1,16 +1,11 @@
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 
-import httpx
-
-import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
-from litellm.utils import _add_path_to_api_base
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
