@@ -5,3 +5,10 @@ ContentListUnion = types.ContentListUnion
 ContentListUnionDict = types.ContentListUnionDict
 GenerateContentConfigOrDict = types.GenerateContentConfigOrDict
 GenerateContentResponse = types.GenerateContentResponse
+
+########################################################
+# Request Type
+########################################################
+GenerateContentRequestDict = types._GenerateContentParametersDict
+GenerateContentContentListUnionDict = types.ContentListUnionDict
+GenerateContentConfigDict = types.GenerateContentConfigDict

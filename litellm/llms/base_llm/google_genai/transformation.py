@@ -4,7 +4,11 @@ from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
-from litellm.types.google_genai.main import GenerateContentResponse
+from litellm.types.google_genai.main import (
+    GenerateContentConfigDict,
+    GenerateContentContentListUnionDict,
+    GenerateContentResponse,
+)
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -112,11 +116,11 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
     def transform_generate_content_request(
         self,
         model: str,
-        contents: Union[str, List[Dict[str, Any]]],
-        generate_content_request_params: Dict[str, Any],
+        contents: GenerateContentContentListUnionDict,
+        generate_content_config_dict: GenerateContentConfigDict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Dict[str, Any]:
+    ) -> dict:
         """
         Transform the request parameters for the generate content API.
 

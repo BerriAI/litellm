@@ -1,7 +1,7 @@
 """
 Transformation for Calling Google models in their native format.
 """
-from typing import Any, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 import httpx
 
@@ -11,7 +11,12 @@ from litellm.llms.base_llm.google_genai.transformation import (
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.google_genai.main import GenerateContentResponse
+from litellm.types.google_genai.main import (
+    GenerateContentConfigDict,
+    GenerateContentContentListUnionDict,
+    GenerateContentRequestDict,
+    GenerateContentResponse,
+)
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -103,6 +108,26 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         )
 
         return headers, api_base
+    
+
+    def transform_generate_content_request(
+        self,
+        model: str,
+        contents: GenerateContentContentListUnionDict,
+        generate_content_config_dict: GenerateContentConfigDict,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> dict:
+
+        typed_generate_content_request = GenerateContentRequestDict(
+            model=model,
+            contents=contents,
+            config=generate_content_config_dict,
+        )
+
+        request_dict = cast(dict, typed_generate_content_request)
+
+        return request_dict
     
     def transform_generate_content_response(
         self,
