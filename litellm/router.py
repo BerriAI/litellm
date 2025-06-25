@@ -1934,6 +1934,83 @@ class Router:
                 self.fail_calls[model_name] += 1
             raise e
 
+    def transcription(self, file: FileTypes, model: str, **kwargs):
+        """
+        Example Usage:
+
+        ```
+        from litellm import Router
+        client = Router(model_list = [
+            {
+                "model_name": "whisper",
+                "litellm_params": {
+                    "model": "whisper-1",
+                },
+            },
+        ])
+
+        audio_file = open("speech.mp3", "rb")
+        transcript = client.transcription(
+        model="whisper",
+        file=audio_file
+        )
+
+        ```
+        """
+        try:
+            kwargs["model"] = model
+            kwargs["file"] = file
+            kwargs["original_function"] = self._transcription
+            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
+            response = self.function_with_fallbacks(**kwargs)
+
+            return response
+        except Exception as e:
+            raise e
+
+    def _transcription(self, file: FileTypes, model: str, **kwargs):
+        model_name = model
+        try:
+            verbose_router_logger.debug(
+                f"Inside _transcription()- model: {model}; kwargs: {kwargs}"
+            )
+            # pick the one that is available (lowest TPM/RPM)
+            deployment = self.get_available_deployment(
+                model=model,
+                messages=[{"role": "user", "content": "prompt"}],
+                specific_deployment=kwargs.pop("specific_deployment", None),
+                request_kwargs=kwargs,
+            )
+            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+            data = deployment["litellm_params"].copy()
+            model_client = self._get_client(
+                deployment=deployment, kwargs=kwargs
+            )
+
+            ### DEPLOYMENT-SPECIFIC PRE-CALL CHECKS ### (e.g. update rpm pre-call. Raise error, if deployment over limit)
+            ## only run if model group given, not model id
+            if model not in self.get_model_ids():
+                self.routing_strategy_pre_call_checks(deployment=deployment)
+
+            self.total_calls[model_name] += 1
+            response = litellm.transcription(
+                **{
+                    **data,
+                    "file": file,
+                    "caching": self.cache_responses,
+                    "client": model_client,
+                    **kwargs,
+                }
+            )
+
+            self.success_calls[model_name] += 1
+
+            return response
+        except Exception as e:
+            self.fail_calls[model_name] += 1
+            raise e
+
     async def atranscription(self, file: FileTypes, model: str, **kwargs):
         """
         Example Usage:
