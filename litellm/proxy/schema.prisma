@@ -468,7 +468,8 @@ model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use t
   unified_object_id String @unique // The base64 encoded unified file ID
   model_object_id String @unique // the id returned by the backend API provider 
   file_object Json // Stores the OpenAIFileObject
-  file_purpose String // either 'batch' or 'fine-tune' 
+  file_purpose String // either 'batch' or 'fine-tune'
+  status String? // check if batch cost has been tracked  
   created_at DateTime @default(now())
   created_by String?
   updated_at DateTime @updatedAt
