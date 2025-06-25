@@ -1,14 +1,20 @@
 import types
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
 
-from litellm.types.google_genai.main import (
-    GenerateContentConfigDict,
-    GenerateContentContentListUnionDict,
-    GenerateContentResponse,
-)
+if TYPE_CHECKING:
+    from litellm.types.google_genai.main import (
+        GenerateContentConfigDict,
+        GenerateContentContentListUnionDict,
+        GenerateContentResponse,
+    )
+else:
+    GenerateContentConfigDict = Any
+    GenerateContentContentListUnionDict = Any
+    GenerateContentResponse = Any
+    
 from litellm.types.router import GenericLiteLLMParams
 
 

@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, AsyncIterator, Dict, Iterator, Optional, Union
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Iterator, Optional, Union
 
 import httpx
 from pydantic import BaseModel
@@ -13,13 +13,20 @@ from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.types.google_genai.main import (
-    GenerateContentConfigDict,
-    GenerateContentContentListUnionDict,
-)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
+if TYPE_CHECKING:
+    from litellm.types.google_genai.main import (
+        GenerateContentConfigDict,
+        GenerateContentContentListUnionDict,
+        GenerateContentResponse,
+    )
+else:
+    GenerateContentConfigDict = Any
+    GenerateContentContentListUnionDict = Any
+    GenerateContentResponse = Any
+    
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
 base_llm_http_handler = BaseLLMHTTPHandler()
