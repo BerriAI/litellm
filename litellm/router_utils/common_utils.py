@@ -1,6 +1,6 @@
 import hashlib
 import json
-from typing import TYPE_CHECKING, Dict, List, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import OpenAIFileObject
@@ -38,3 +38,27 @@ def add_model_file_id_mappings(
         for model_id, file_id in healthy_deployments.items():
             model_file_id_mapping[model_id] = file_id
     return model_file_id_mapping
+
+
+def filter_team_based_models(
+    healthy_deployments: Union[List[Dict], Dict],
+    request_kwargs: Optional[Dict] = None,
+) -> Union[List[Dict], Dict]:
+    """
+    Filter the healthy deployments to only include models that are associated with the given team_id
+    """
+    if request_kwargs is None:
+        return healthy_deployments
+
+    metadata = request_kwargs.get("metadata", {})
+    request_team_id = metadata.get("user_api_key_team_id")
+    ids_to_remove = []
+    for deployment in healthy_deployments:
+        if deployment.get("model_info", {}).get("team_id") != request_team_id:
+            ids_to_remove.append(deployment.get("model_info", {}).get("id"))
+
+    return [
+        deployment
+        for deployment in healthy_deployments
+        if deployment.get("model_info", {}).get("id") not in ids_to_remove
+    ]

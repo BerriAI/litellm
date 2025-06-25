@@ -423,3 +423,41 @@ async def test_router_aretrieve_file_content():
         print(mock_afile_content.call_args.kwargs)
         assert mock_afile_content.call_args.kwargs["api_key"] == "my-custom-key"
         assert mock_afile_content.call_args.kwargs["api_base"] == "my-custom-base"
+
+
+@pytest.mark.asyncio
+async def test_router_filter_team_based_models():
+    """
+    Test that router.filter_team_based_models filters out models that are not in the team
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+                "model_info": {
+                    "team_id": "test-team",
+                },
+            }
+        ],
+    )
+
+    # WORKS
+    result = await router.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        metadata={"user_api_key_team_id": "test-team"},
+        mock_response="Hello, world!",
+    )
+
+    assert result is not None
+
+    # FAILS
+    with pytest.raises(Exception) as e:
+        result = await router.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            metadata={"user_api_key_team_id": "test-team-2"},
+            mock_response="Hello, world!",
+        )
+    assert "No deployments available" in str(e.value)
