@@ -55,19 +55,19 @@ async def test_ssl_verify_false(monkeypatch):
     # Get the transport (should be LiteLLMAiohttpTransport)
     transport = client.client._transport
 
-    # Get the aiohttp ClientSession
-    client_session = transport._get_valid_client_session()
+    # Get the transport (should be LiteLLMAiohttpTransport)
+    transport = client.client._transport
 
-    # Get the connector from the session
-    connector = client_session.connector
+    # Get the ConnectionPool
+    connection_pool = transport._pool
 
-    # Get the SSL context from the connector
-    ssl_context = connector._ssl
+    # Get the SSL context from the ConnectionPool
+    ssl_context = connection_pool._ssl_context
     print("ssl_context", ssl_context)
 
     # Verify that the SSL context exists and has the correct verify mode
     assert isinstance(ssl_context, ssl.SSLContext)
-    assert ssl_context.verify_mode == ssl.CERT_OPTIONAL
+    assert ssl_context.verify_mode == ssl.CERT_NONE
 
 @pytest.mark.asyncio
 async def test_ssl_verify_true(monkeypatch):
@@ -80,14 +80,14 @@ async def test_ssl_verify_true(monkeypatch):
     # Get the transport (should be LiteLLMAiohttpTransport)
     transport = client.client._transport
 
-    # Get the aiohttp ClientSession
-    client_session = transport._get_valid_client_session()
+    # Get the transport (should be LiteLLMAiohttpTransport)
+    transport = client.client._transport
 
-    # Get the connector from the session
-    connector = client_session.connector
+    # Get the ConnectionPool
+    connection_pool = transport._pool
 
-    # Get the SSL context from the connector
-    ssl_context = connector._ssl
+    # Get the SSL context from the ConnectionPool
+    ssl_context = connection_pool._ssl_context
     print("ssl_context", ssl_context)
 
     # Verify that the SSL context exists and has the correct verify mode
@@ -105,14 +105,14 @@ async def test_ssl_verify_none(monkeypatch):
     # Get the transport (should be LiteLLMAiohttpTransport)
     transport = client.client._transport
 
-    # Get the aiohttp ClientSession
-    client_session = transport._get_valid_client_session()
+    # Get the transport (should be LiteLLMAiohttpTransport)
+    transport = client.client._transport
 
-    # Get the connector from the session
-    connector = client_session.connector
+    # Get the ConnectionPool
+    connection_pool = transport._pool
 
-    # Get the SSL context from the connector
-    ssl_context = connector._ssl
+    # Get the SSL context from the ConnectionPool
+    ssl_context = connection_pool._ssl_context
     print("ssl_context", ssl_context)
 
     # Verify that the SSL context exists and has the correct verify mode
