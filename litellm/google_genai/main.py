@@ -431,7 +431,7 @@ def generate_content_stream(
     local_vars = locals()
     try:
         # Remove any async-related flags since this is the sync function
-        kwargs.pop("agenerate_content_stream", None)
+        _is_async = kwargs.pop("agenerate_content_stream", False)
 
         # Setup the call
         setup_result = GenerateContentHelper.setup_generate_content_call(
@@ -451,7 +451,7 @@ def generate_content_stream(
                 contents=contents,  # type: ignore
                 config=setup_result.generate_content_config_dict,
                 stream=True,
-                _is_async=False,
+                _is_async=_is_async,
                 **kwargs
             )
 
@@ -467,7 +467,7 @@ def generate_content_stream(
             extra_headers=extra_headers,
             extra_body=extra_body,
             timeout=timeout or request_timeout,
-            _is_async=False,
+            _is_async=_is_async,
             client=kwargs.get("client"),
             stream=True,
             litellm_metadata=kwargs.get("litellm_metadata", {}),
