@@ -599,8 +599,59 @@ class LiteLLMCompletionResponsesConfig:
         responses_output: List[
             Union[GenericResponseOutputItem, OutputFunctionToolCall]
         ] = []
+
+        responses_output.extend(
+            LiteLLMCompletionResponsesConfig._extract_reasoning_output_items(
+                chat_completion_response, choices
+            )
+        )
+        responses_output.extend(
+            LiteLLMCompletionResponsesConfig._extract_message_output_items(
+                chat_completion_response, choices
+            )
+        )
+        responses_output.extend(
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+                chat_completion_response=chat_completion_response
+            )
+        )
+        return responses_output
+
+    @staticmethod
+    def _extract_reasoning_output_items(
+        chat_completion_response: ModelResponse,
+        choices: List[Choices],
+    ) -> List[GenericResponseOutputItem]:
         for choice in choices:
-            responses_output.append(
+            if hasattr(choice, "message") and choice.message:
+                message = choice.message
+                if hasattr(message, "reasoning_content") and message.reasoning_content:
+                    # Only check the first choice for reasoning content
+                    return [
+                        GenericResponseOutputItem(
+                            type="reasoning",
+                            id=f"{chat_completion_response.id}_reasoning",
+                            status=choice.finish_reason,
+                            role="assistant",
+                            content=[
+                                OutputText(
+                                    type="output_text",
+                                    text=message.reasoning_content,
+                                    annotations=[],
+                                )
+                            ],
+                        )
+                    ]
+        return []
+
+    @staticmethod
+    def _extract_message_output_items(
+        chat_completion_response: ModelResponse,
+        choices: List[Choices],
+    ) -> List[GenericResponseOutputItem]:
+        message_output_items = []
+        for choice in choices:
+            message_output_items.append(
                 GenericResponseOutputItem(
                     type="message",
                     id=chat_completion_response.id,
@@ -613,12 +664,7 @@ class LiteLLMCompletionResponsesConfig:
                     ],
                 )
             )
-
-        tool_calls = LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
-            chat_completion_response=chat_completion_response
-        )
-        responses_output.extend(tool_calls)
-        return responses_output
+        return message_output_items
 
     @staticmethod
     def _transform_responses_api_outputs_to_chat_completion_messages(
@@ -711,6 +757,7 @@ class LiteLLMCompletionResponsesConfig:
             # Handle other annotation types here
 
         return response_output_annotations
+
 
     @staticmethod
     def _transform_chat_completion_usage_to_responses_usage(
