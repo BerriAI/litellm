@@ -129,6 +129,9 @@ from litellm.litellm_core_utils.redact_messages import (
 from litellm.litellm_core_utils.rules import Rules
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
+from litellm.llms.base_llm.google_genai.transformation import (
+    BaseGoogleGenAIGenerateContentConfig,
+)
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.router_utils.get_retry_from_policy import (
@@ -6980,6 +6983,21 @@ class ProviderConfigManager:
             )
 
             return AzureImageEditConfig()
+        return None
+    
+    @staticmethod
+    def get_provider_google_genai_generate_content_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseGoogleGenAIGenerateContentConfig]:
+        if litellm.LlmProviders.GEMINI == provider:
+            from litellm.llms.gemini.google_genai.transformation import (
+                GoogleGenAIConfig,
+            )
+
+            return GoogleGenAIConfig()
+        elif litellm.LlmProviders.VERTEX_AI == provider:
+            pass
         return None
 
 
