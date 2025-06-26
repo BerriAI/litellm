@@ -3010,6 +3010,7 @@ class BaseLLMHTTPHandler:
         return generate_content_provider_config.transform_generate_content_response(
             model=model,
             raw_response=response,
+            logging_obj=logging_obj,
         )
 
     async def async_generate_content_handler(
@@ -3111,4 +3112,5 @@ class BaseLLMHTTPHandler:
         return generate_content_provider_config.transform_generate_content_response(
             model=model,
             raw_response=response,
+            logging_obj=logging_obj,
         )

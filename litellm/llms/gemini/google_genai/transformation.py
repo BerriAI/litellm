@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Uni
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
@@ -271,6 +272,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         self,
         model: str,
         raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
     ) -> GenerateContentResponse:
         """
         Transform the raw response from the generate content API.
@@ -291,5 +293,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
+        
+        logging_obj.model_call_details["httpx_response"] = raw_response
         
         return GenerateContentResponse(**response)
