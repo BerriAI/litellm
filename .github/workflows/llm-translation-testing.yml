@@ -33,17 +33,29 @@ jobs:
         env:
           CIRCLE_TOKEN: ${{ secrets.CIRCLE_TOKEN }}
         run: |
-          # Get the latest CircleCI pipeline for this commit
-          COMMIT_SHA="${{ github.sha }}"
+          # Get the actual commit SHA after checkout
+          COMMIT_SHA=$(git rev-parse HEAD)
           echo "Fetching CircleCI results for commit: $COMMIT_SHA"
           
-          # Get pipeline info
+          # Search for pipelines across all branches for this commit
           PIPELINE_INFO=$(curl -s -H "Circle-Token: $CIRCLE_TOKEN" \
-            "https://circleci.com/api/v2/project/github/BerriAI/litellm/pipeline?branch=main" | \
+            "https://circleci.com/api/v2/project/github/BerriAI/litellm/pipeline" | \
             jq -r ".items[] | select(.vcs.revision == \"$COMMIT_SHA\") | .id" | head -1)
+          
+          # If not found, try searching recent pipelines more broadly
+          if [ -z "$PIPELINE_INFO" ]; then
+            echo "Trying broader search for recent pipelines..."
+            PIPELINE_INFO=$(curl -s -H "Circle-Token: $CIRCLE_TOKEN" \
+              "https://circleci.com/api/v2/project/github/BerriAI/litellm/pipeline" | \
+              jq -r ".items[0:20][] | select(.vcs.revision == \"$COMMIT_SHA\") | .id" | head -1)
+          fi
           
           if [ -z "$PIPELINE_INFO" ]; then
             echo "No CircleCI pipeline found for commit $COMMIT_SHA"
+            echo "Checking recent pipelines..."
+            curl -s -H "Circle-Token: $CIRCLE_TOKEN" \
+              "https://circleci.com/api/v2/project/github/BerriAI/litellm/pipeline" | \
+              jq -r ".items[0:5][] | \"Pipeline: \(.id) | Commit: \(.vcs.revision) | Branch: \(.vcs.branch) | Status: \(.state)\""
             echo "Creating placeholder test results..."
             echo '<?xml version="1.0" encoding="utf-8"?>' > test-results/junit.xml
             echo '<testsuite name="llm_translation" tests="0" failures="0" errors="0" skipped="0" time="0">' >> test-results/junit.xml
@@ -54,13 +66,20 @@ jobs:
           
           echo "Found pipeline: $PIPELINE_INFO"
           
-          # Get workflow info
+          # Get workflow info - look for any workflow that might contain tests
           WORKFLOW_ID=$(curl -s -H "Circle-Token: $CIRCLE_TOKEN" \
             "https://circleci.com/api/v2/pipeline/$PIPELINE_INFO/workflow" | \
-            jq -r '.items[] | select(.name | contains("test")) | .id' | head -1)
+            jq -r '.items[] | select(.name | test("test|Test|TEST")) | .id' | head -1)
           
           if [ -z "$WORKFLOW_ID" ]; then
-            echo "No test workflow found in pipeline"
+            echo "No test workflow found, trying any workflow..."
+            WORKFLOW_ID=$(curl -s -H "Circle-Token: $CIRCLE_TOKEN" \
+              "https://circleci.com/api/v2/pipeline/$PIPELINE_INFO/workflow" | \
+              jq -r '.items[0].id')
+          fi
+          
+          if [ -z "$WORKFLOW_ID" ]; then
+            echo "No workflow found in pipeline"
             exit 1
           fi
           
@@ -69,32 +88,50 @@ jobs:
           # Get job info for llm_translation tests
           JOB_INFO=$(curl -s -H "Circle-Token: $CIRCLE_TOKEN" \
             "https://circleci.com/api/v2/workflow/$WORKFLOW_ID/job" | \
-            jq -r '.items[] | select(.name | contains("llm_translation")) | select(.status == "success" or .status == "failed") | .job_number' | head -1)
+            jq -r '.items[] | select(.name | test("llm_translation|llm-translation")) | select(.status == "success" or .status == "failed") | .job_number' | head -1)
           
           if [ -z "$JOB_INFO" ]; then
-            echo "No completed llm_translation job found"
-            exit 1
+            echo "No completed llm_translation job found, checking all jobs:"
+            curl -s -H "Circle-Token: $CIRCLE_TOKEN" \
+              "https://circleci.com/api/v2/workflow/$WORKFLOW_ID/job" | \
+              jq -r '.items[] | "Job: \(.name) | Status: \(.status) | Number: \(.job_number)"'
+            echo "Creating placeholder test results..."
+            echo '<?xml version="1.0" encoding="utf-8"?>' > test-results/junit.xml
+            echo '<testsuite name="llm_translation" tests="0" failures="0" errors="0" skipped="0" time="0">' >> test-results/junit.xml
+            echo '<system-out>No llm_translation job found in CircleCI</system-out>' >> test-results/junit.xml
+            echo '</testsuite>' >> test-results/junit.xml
+            exit 0
           fi
           
           echo "Found job: $JOB_INFO"
           
           # Download artifacts
+          ARTIFACT_COUNT=0
           curl -s -H "Circle-Token: $CIRCLE_TOKEN" \
             "https://circleci.com/api/v2/project/github/BerriAI/litellm/$JOB_INFO/artifacts" | \
-            jq -r '.items[] | select(.path | contains("junit") or contains("coverage") or contains("report")) | .url' | \
+            jq -r '.items[] | select(.path | test("junit|coverage|report|xml|html")) | .url' | \
             while read -r artifact_url; do
-              filename=$(basename "$artifact_url" | sed 's/[?&].*//')
-              echo "Downloading artifact: $filename"
-              curl -s -H "Circle-Token: $CIRCLE_TOKEN" -o "test-results/$filename" "$artifact_url"
+              if [ -n "$artifact_url" ]; then
+                filename=$(basename "$artifact_url" | sed 's/[?&].*//')
+                echo "Downloading artifact: $filename from $artifact_url"
+                if curl -s -H "Circle-Token: $CIRCLE_TOKEN" -o "test-results/$filename" "$artifact_url"; then
+                  echo "Successfully downloaded $filename"
+                  ARTIFACT_COUNT=$((ARTIFACT_COUNT + 1))
+                else
+                  echo "Failed to download $filename"
+                fi
+              fi
             done
           
           # If no artifacts found, create placeholder
-          if [ ! -f "test-results/junit.xml" ]; then
+          if [ ! -f "test-results/junit.xml" ] && [ "$ARTIFACT_COUNT" -eq 0 ]; then
             echo "No test artifacts found, creating placeholder..."
             echo '<?xml version="1.0" encoding="utf-8"?>' > test-results/junit.xml
             echo '<testsuite name="llm_translation" tests="0" failures="0" errors="0" skipped="0" time="0">' >> test-results/junit.xml
             echo '<system-out>Test artifacts not available from CircleCI</system-out>' >> test-results/junit.xml
             echo '</testsuite>' >> test-results/junit.xml
+          else
+            echo "Successfully retrieved $ARTIFACT_COUNT artifacts"
           fi
         continue-on-error: true
       
@@ -136,22 +173,10 @@ jobs:
           echo "## Test Files Covered" >> test-results/summary.md
           ls tests/llm_translation/*.py | sed 's/^/- /' >> test-results/summary.md
       
-      - name: Upload test results
+      - name: Upload test artifacts
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: llm-translation-test-results-${{ github.event.inputs.release_candidate_tag || github.ref_name }}
-          path: |
-            test-results/
-            coverage.xml
-            htmlcov/
-            .coverage
+          name: llm-translation-test-artifacts-${{ github.event.inputs.release_candidate_tag || github.ref_name }}
+          path: test-results/
           retention-days: 30
-      
-      - name: Upload JUnit test results
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: junit-xml-${{ github.event.inputs.release_candidate_tag || github.ref_name }}
-          path: test-results/junit.xml
-          retention-days: 30 

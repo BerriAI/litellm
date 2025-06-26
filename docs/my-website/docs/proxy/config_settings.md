@@ -307,6 +307,7 @@ router_settings:
 | AGENTOPS_SERVICE_NAME | Service Name for AgentOps logging integration
 | AISPEND_ACCOUNT_ID | Account ID for AI Spend
 | AISPEND_API_KEY | API Key for AI Spend
+| AIOHTTP_TRUST_ENV | Flag to enable aiohttp trust environment. When this is set to True, aiohttp will respect HTTP(S)_PROXY env vars. **Default is False**
 | ALLOWED_EMAIL_DOMAINS | List of email domains allowed for access
 | ARIZE_API_KEY | API key for Arize platform integration
 | ARIZE_SPACE_KEY | Space key for Arize platform

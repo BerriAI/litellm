@@ -1,18 +1,13 @@
 import json
 import os
 import sys
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
-
-from unittest.mock import AsyncMock, MagicMock, patch
-
-from enterprise.enterprise_hooks.managed_files import _PROXY_LiteLLMManagedFiles
 from litellm.caching import DualCache
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
@@ -269,3 +264,115 @@ async def test_can_user_call_unified_file_id(call_type):
             data={"file_id": unified_file_id},
             call_type=call_type,
         )
+
+
+@pytest.mark.asyncio
+async def test_router_acreate_batch_only_selects_from_file_id_mapping(monkeypatch):
+    """
+    Test that router.acreate_batch only selects model_id from the file_id_mapping
+    """
+    import litellm
+
+    prisma_client = AsyncMock()
+    return_value = MagicMock()
+    return_value.created_by = "123"
+    prisma_client.db.litellm_managedobjecttable.find_first.return_value = return_value
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=prisma_client
+    )
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [proxy_managed_files],
+    )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+                "model_info": {"id": "1234"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+                "model_info": {"id": "5678"},
+            },
+        ],
+    )
+
+    file_id = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9vY3RldC1zdHJlYW07dW5pZmllZF9pZCw2YmQ4ZjhhYS02NmEzLTRmY2MtOTIxZS1lMTYwYzIzZWZjNzU7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00bztsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1MTENVRkI1MnVUTWE5aE5ZanRldzlWO2xsbV9vdXRwdXRfZmlsZV9tb2RlbF9pZCxmMzJlNWQ0OC05YWZmLTQ5YjMtOWE1Ny0zYzJhN2JjN2NjMmE"
+
+    model_file_id_mapping = {file_id: {"5678": "file-LLCUFB52uTMa9hNYjtew9V"}}
+
+    with patch.object(
+        litellm, "acreate_batch", return_value=AsyncMock()
+    ) as mock_acreate_batch:
+        for _ in range(1000):
+            response = await router.acreate_batch(
+                model="gpt-3.5-turbo",
+                input_file_id=file_id,
+                model_file_id_mapping=model_file_id_mapping,
+            )
+
+            mock_acreate_batch.assert_called()
+            assert "5678" in json.dumps(mock_acreate_batch.call_args.kwargs)
+
+
+@pytest.mark.asyncio
+async def test_output_file_id_for_batch_retrieve():
+    """
+    Test that the output file id is the same as the input file id
+    """
+    from typing import cast
+
+    from openai.types.batch import BatchRequestCounts
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.utils import LiteLLMBatch
+
+    batch = LiteLLMBatch(
+        id="bGl0ZWxsbV9wcm94eTttb2RlbF9pZDoxMjM0NTY3OTtsbG1fYmF0Y2hfaWQ6YmF0Y2hfNjg1YzVlNWQ2Mzk4ODE5MGI4NWJkYjIxNDdiYTEzMWQ",
+        completion_window="24h",
+        created_at=1750883933,
+        endpoint="/v1/chat/completions",
+        input_file_id="file-8ci8gux8s7oES7GydYvnMG",
+        object="batch",
+        status="completed",
+        cancelled_at=None,
+        cancelling_at=None,
+        completed_at=1750883939,
+        error_file_id=None,
+        errors=None,
+        expired_at=None,
+        expires_at=1750970333,
+        failed_at=None,
+        finalizing_at=1750883938,
+        in_progress_at=1750883934,
+        metadata={"description": "nightly eval job"},
+        output_file_id="file-3BZYhmdJQ3V2oZPAtQsEax",
+        request_counts=BatchRequestCounts(completed=1, failed=0, total=1),
+        usage=None,
+    )
+
+    batch._hidden_params = {
+        "litellm_call_id": "dcd789e0-c0ad-4244-9564-4e611448d650",
+        "api_base": "https://api.openai.com",
+        "model_id": "12345679",
+        "response_cost": 0.0,
+        "additional_headers": {},
+        "litellm_model_name": "gpt-4o",
+        "unified_batch_id": "litellm_proxy;model_id:12345679;llm_batch_id:batch_685c5e5d63988190b85bdb2147ba131d",
+    }
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=AsyncMock()
+    )
+
+    response = await proxy_managed_files.async_post_call_success_hook(
+        data={},
+        user_api_key_dict=MagicMock(),
+        response=batch,
+    )
+
+    assert not cast(LiteLLMBatch, response).output_file_id.startswith("file-")

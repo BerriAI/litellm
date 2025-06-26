@@ -1,6 +1,6 @@
 import base64
 import re
-from typing import List, Literal, Union
+from typing import List, Literal, Optional, Union
 
 from litellm.types.utils import SpecialEnums
 
@@ -43,3 +43,24 @@ def get_models_from_unified_file_id(unified_file_id: str) -> List[str]:
         return []
     except Exception:
         return []
+
+
+def get_model_id_from_unified_batch_id(file_id: str) -> Optional[str]:
+    """
+    Get the model_id from the file_id
+
+    Expected format: litellm_proxy;model_id:{};llm_batch_id:{};llm_output_file_id:{}
+    """
+    ## use regex to get the model_id from the file_id
+    try:
+        return file_id.split("model_id:")[1].split(";")[0]
+    except Exception:
+        return None
+
+
+def get_batch_id_from_unified_batch_id(file_id: str) -> str:
+    ## use regex to get the batch_id from the file_id
+    if "llm_batch_id" in file_id:
+        return file_id.split("llm_batch_id:")[1].split(",")[0]
+    else:
+        return file_id.split("generic_response_id:")[1].split(",")[0]

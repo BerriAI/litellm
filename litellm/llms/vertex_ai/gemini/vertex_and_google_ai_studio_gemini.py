@@ -1261,6 +1261,30 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 status_code=422,
                 headers=raw_response.headers,
             )
+        
+
+        return self._transform_google_generate_content_to_openai_model_response(
+            completion_response=completion_response,
+            model_response=model_response,
+            model=model,
+            logging_obj=logging_obj,
+            raw_response=raw_response,
+        )
+    
+
+    def _transform_google_generate_content_to_openai_model_response(
+        self,
+        completion_response: Union[GenerateContentResponseBody, dict],
+        model_response: ModelResponse,
+        model: str,
+        logging_obj: LoggingClass,
+        raw_response: httpx.Response,
+    ) -> ModelResponse:
+        """
+        Transforms a Google GenAI generate content response to an OpenAI model response.
+        """
+        if isinstance(completion_response, dict):
+            completion_response = GenerateContentResponseBody(**completion_response)  # type: ignore
 
         ## GET MODEL ##
         model_response.model = model

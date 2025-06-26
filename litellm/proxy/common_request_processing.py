@@ -1,5 +1,6 @@
 import asyncio
 import json
+import traceback
 import uuid
 from datetime import datetime
 from typing import (
@@ -20,9 +21,13 @@ from fastapi.responses import Response, StreamingResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE
+from litellm.constants import (
+    DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
+    STREAM_SSE_DATA_PREFIX,
+)
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
 from litellm.proxy.common_utils.callback_utils import (
@@ -252,6 +257,8 @@ class ProxyBaseLLMRequestProcessing:
             "aretrieve_fine_tuning_job",
             "alist_input_items",
             "aimage_edit",
+            "agenerate_content",
+            "agenerate_content_stream",
         ],
         version: Optional[str] = None,
         user_model: Optional[str] = None,
@@ -331,6 +338,8 @@ class ProxyBaseLLMRequestProcessing:
             "atext_completion",
             "aimage_edit",
             "alist_input_items",
+            "agenerate_content",
+            "agenerate_content_stream",
         ],
         proxy_logging_obj: ProxyLogging,
         general_settings: dict,
@@ -344,6 +353,7 @@ class ProxyBaseLLMRequestProcessing:
         user_max_tokens: Optional[int] = None,
         user_api_base: Optional[str] = None,
         version: Optional[str] = None,
+        is_streaming_request: Optional[bool] = False,
     ) -> Any:
         """
         Common request processing logic for both chat completions and responses API endpoints
@@ -418,9 +428,7 @@ class ProxyBaseLLMRequestProcessing:
                 litellm_call_id=self.data.get("litellm_call_id", ""), status="success"
             )
         )
-        if (
-            "stream" in self.data and self.data["stream"] is True
-        ):  # use generate_responses to stream responses
+        if self._is_streaming_request(data=self.data, is_streaming_request=is_streaming_request):  # use generate_responses to stream responses
             custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 call_id=logging_obj.litellm_call_id,
@@ -475,6 +483,22 @@ class ProxyBaseLLMRequestProcessing:
         await check_response_size_is_safe(response=response)
 
         return response
+
+    def _is_streaming_request(
+        self, data: dict, is_streaming_request: Optional[bool] = False
+    ) -> bool:
+        """
+        Check if the request is a streaming request.
+
+        1. is_streaming_request is a dynamic param passed in
+        2. if "stream" in data and data["stream"] is True
+        """
+        if is_streaming_request is True:
+            return True
+        if "stream" in data and data["stream"] is True:
+            return True
+        return False
+
 
     async def _handle_llm_api_exception(
         self,
@@ -545,3 +569,80 @@ class ProxyBaseLLMRequestProcessing:
             return "completion"
         elif route_type == "aresponses":
             return "responses"
+    
+    #########################################################
+    # Proxy Level Streaming Data Generator
+    #########################################################
+
+    @staticmethod
+    def return_sse_chunk(chunk: Any) -> str:
+        """
+        Helper function to format streaming chunks for Anthropic API format
+
+        Args:
+            chunk: A string or dictionary to be returned in SSE format
+
+        Returns:
+            str: A properly formatted SSE chunk string
+        """
+        if isinstance(chunk, dict):
+            # Use safe_dumps for proper JSON serialization with circular reference detection
+            chunk_str = safe_dumps(chunk)
+            return f"{STREAM_SSE_DATA_PREFIX}{chunk_str}\n\n"
+        else:
+            return chunk
+
+    @staticmethod
+    async def async_sse_data_generator(
+        response,
+        user_api_key_dict: UserAPIKeyAuth,
+        request_data: dict,
+        proxy_logging_obj: ProxyLogging,
+    ):
+        """
+        Anthropic /messages and Google /generateContent streaming data generator require SSE events
+        """
+        verbose_proxy_logger.debug("inside generator")
+        try:
+            async for chunk in response:
+                verbose_proxy_logger.debug(
+                    "async_data_generator: received streaming chunk - {}".format(chunk)
+                )
+                ### CALL HOOKS ### - modify outgoing data
+                chunk = await proxy_logging_obj.async_post_call_streaming_hook(
+                    user_api_key_dict=user_api_key_dict, response=chunk
+                )
+
+                # Format chunk using helper function
+                yield ProxyBaseLLMRequestProcessing.return_sse_chunk(chunk)
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
+                    str(e)
+                )
+            )
+            await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=e,
+                request_data=request_data,
+            )
+            verbose_proxy_logger.debug(
+                f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
+            )
+
+            if isinstance(e, HTTPException):
+                raise e
+            else:
+                error_traceback = traceback.format_exc()
+                error_msg = f"{str(e)}\n\n{error_traceback}"
+
+            proxy_exception = ProxyException(
+                message=getattr(e, "message", error_msg),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", 500),
+            )
+            error_returned = json.dumps({"error": proxy_exception.to_dict()})
+            yield f"{STREAM_SSE_DATA_PREFIX}{error_returned}\n\n"
+
+

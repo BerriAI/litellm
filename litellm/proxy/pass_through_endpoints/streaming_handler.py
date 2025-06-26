@@ -70,6 +70,7 @@ class PassThroughStreamingHandler:
         start_time: datetime,
         raw_bytes: List[bytes],
         end_time: datetime,
+        model: Optional[str] = None,
     ):
         """
         Route the logging for the collected chunks to the appropriate handler
@@ -111,6 +112,7 @@ class PassThroughStreamingHandler:
                     start_time=start_time,
                     all_chunks=all_chunks,
                     end_time=end_time,
+                    model=model,
                 )
             )
             standard_logging_response_object = (
@@ -122,7 +124,6 @@ class PassThroughStreamingHandler:
             standard_logging_response_object = StandardPassThroughResponseObject(
                 response=f"cannot parse chunks to standard response object. Chunks={all_chunks}"
             )
-
         await litellm_logging_obj.async_success_handler(
             result=standard_logging_response_object,
             start_time=start_time,
