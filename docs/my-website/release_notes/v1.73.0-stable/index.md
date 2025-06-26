@@ -66,7 +66,8 @@ pip install litellm==1.73.0.post1
 * **Risk of Upgrade**
     - **Low**
         - No major breaking changes to existing functionality.
-
+- **Major Changes**
+    - `User Agent` will be auto-tracked as a tag in LiteLLM UI Logs Page. This means for all LLM requests you will see a `User Agent` tag in the logs page.
 
 ---
 
