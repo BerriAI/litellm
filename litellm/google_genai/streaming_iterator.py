@@ -55,7 +55,7 @@ class GoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContent
         self.litellm_metadata = litellm_metadata
         self.custom_llm_provider = custom_llm_provider
         # Store the iterator once to avoid multiple stream consumption
-        self.stream_iterator = response.iter_lines()
+        self.stream_iterator = response.iter_bytes()
 
     def __iter__(self):
         return self
@@ -103,7 +103,7 @@ class AsyncGoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateCo
         self.litellm_metadata = litellm_metadata
         self.custom_llm_provider = custom_llm_provider
         # Store the async iterator once to avoid multiple stream consumption
-        self.stream_iterator = response.aiter_lines()
+        self.stream_iterator = response.aiter_bytes()
 
     def __aiter__(self):
         return self
