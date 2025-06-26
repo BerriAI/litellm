@@ -437,6 +437,7 @@ replicate_models: List = [
     "replit/replit-code-v1-3b:b84f4c074b807211cd75e3e8b1589b6399052125b4c27106e43d47189e8415ad",
 ]
 
+# curl -X POST https://api.asksage.ai/server/get-models -H "x-access-tokens: $ASKSAGE_API_KEY" -H 'Content-Type: application/json'
 asksage_models: List = [
     "asksage/aws-bedrock-claude-35-sonnet-gov",
     "asksage/llma3",
