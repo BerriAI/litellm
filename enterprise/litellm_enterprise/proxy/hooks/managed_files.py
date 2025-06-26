@@ -23,6 +23,8 @@ from litellm.proxy._types import (
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     convert_b64_uid_to_unified_uid,
+    get_batch_id_from_unified_batch_id,
+    get_model_id_from_unified_batch_id,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -39,6 +41,10 @@ from litellm.types.utils import (
     LLMResponseTypes,
     SpecialEnums,
 )
+
+if TYPE_CHECKING:
+    from litellm.types.llms.openai import HttpxBinaryResponseContent
+
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -66,7 +72,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     async def store_unified_file_id(
         self,
         file_id: str,
-        file_object: OpenAIFileObject,
+        file_object: Optional[OpenAIFileObject],
         litellm_parent_otel_span: Optional[Span],
         model_mappings: Dict[str, str],
         user_api_key_dict: UserAPIKeyAuth,
@@ -74,31 +80,39 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         verbose_logger.info(
             f"Storing LiteLLM Managed File object with id={file_id} in cache"
         )
-        litellm_managed_file_object = LiteLLM_ManagedFileTable(
-            unified_file_id=file_id,
-            file_object=file_object,
-            model_mappings=model_mappings,
-            flat_model_file_ids=list(model_mappings.values()),
-            created_by=user_api_key_dict.user_id,
-            updated_by=user_api_key_dict.user_id,
-        )
-        await self.internal_usage_cache.async_set_cache(
-            key=file_id,
-            value=litellm_managed_file_object.model_dump(),
-            litellm_parent_otel_span=litellm_parent_otel_span,
-        )
+        if file_object is not None:
+            litellm_managed_file_object = LiteLLM_ManagedFileTable(
+                unified_file_id=file_id,
+                file_object=file_object,
+                model_mappings=model_mappings,
+                flat_model_file_ids=list(model_mappings.values()),
+                created_by=user_api_key_dict.user_id,
+                updated_by=user_api_key_dict.user_id,
+            )
+            await self.internal_usage_cache.async_set_cache(
+                key=file_id,
+                value=litellm_managed_file_object.model_dump(),
+                litellm_parent_otel_span=litellm_parent_otel_span,
+            )
 
         ## STORE MODEL MAPPINGS IN DB
 
-        await self.prisma_client.db.litellm_managedfiletable.create(
-            data={
-                "unified_file_id": file_id,
-                "file_object": file_object.model_dump_json(),
-                "model_mappings": json.dumps(model_mappings),
-                "flat_model_file_ids": list(model_mappings.values()),
-                "created_by": user_api_key_dict.user_id,
-                "updated_by": user_api_key_dict.user_id,
-            }
+        db_data = {
+            "unified_file_id": file_id,
+            "model_mappings": json.dumps(model_mappings),
+            "flat_model_file_ids": list(model_mappings.values()),
+            "created_by": user_api_key_dict.user_id,
+            "updated_by": user_api_key_dict.user_id,
+        }
+
+        if file_object is not None:
+            db_data["file_object"] = file_object.model_dump_json()
+
+        result = await self.prisma_client.db.litellm_managedfiletable.create(
+            data=db_data
+        )
+        verbose_logger.debug(
+            f"LiteLLM Managed File object with id={file_id} stored in db: {result}"
         )
 
     async def store_unified_object_id(
@@ -133,6 +147,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 "file_purpose": file_purpose,
                 "created_by": user_api_key_dict.user_id,
                 "updated_by": user_api_key_dict.user_id,
+                "status": file_object.status,
             }
         )
 
@@ -184,10 +199,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         self, unified_file_id: str, user_api_key_dict: UserAPIKeyAuth
     ) -> bool:
         ## check if the user has access to the unified file id
+
         user_id = user_api_key_dict.user_id
         managed_file = await self.prisma_client.db.litellm_managedfiletable.find_first(
             where={"unified_file_id": unified_file_id}
         )
+
         if managed_file:
             return managed_file.created_by == user_id
         return False
@@ -349,7 +366,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     )
 
                 ## for managed batch id - get the model id
-                potential_model_id = self.get_model_id_from_unified_batch_id(
+                potential_model_id = get_model_id_from_unified_batch_id(
                     potential_llm_object_id
                 )
                 if potential_model_id is None:
@@ -357,7 +374,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         f"LiteLLM Managed {accessor_key} with id={retrieve_object_id} is invalid - does not contain encoded model_id."
                     )
                 data["model"] = potential_model_id
-                data[accessor_key] = self.get_batch_id_from_unified_batch_id(
+                data[accessor_key] = get_batch_id_from_unified_batch_id(
                     potential_llm_object_id
                 )
         elif call_type == CallTypes.acreate_fine_tuning_job.value:
@@ -613,13 +630,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         return base64.urlsafe_b64encode(unified_batch_id.encode()).decode().rstrip("=")
 
     def get_unified_output_file_id(
-        self, output_file_id: str, model_id: str, model_name: str
+        self, output_file_id: str, model_id: str, model_name: Optional[str]
     ) -> str:
         unified_output_file_id = (
             SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
                 "application/json",
                 str(uuid.uuid4()),
-                model_name,
+                model_name or "",
                 output_file_id,
                 model_id,
             )
@@ -636,25 +653,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     def get_output_file_id_from_unified_file_id(self, file_id: str) -> str:
         return file_id.split("llm_output_file_id,")[1].split(";")[0]
 
-    def get_model_id_from_unified_batch_id(self, file_id: str) -> Optional[str]:
-        """
-        Get the model_id from the file_id
-
-        Expected format: litellm_proxy;model_id:{};llm_batch_id:{};llm_output_file_id:{}
-        """
-        ## use regex to get the model_id from the file_id
-        try:
-            return file_id.split("model_id:")[1].split(";")[0]
-        except Exception:
-            return None
-
-    def get_batch_id_from_unified_batch_id(self, file_id: str) -> str:
-        ## use regex to get the batch_id from the file_id
-        if "llm_batch_id" in file_id:
-            return file_id.split("llm_batch_id:")[1].split(",")[0]
-        else:
-            return file_id.split("generic_response_id:")[1].split(",")[0]
-
     async def async_post_call_success_hook(
         self, data: Dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
     ) -> Any:
@@ -669,18 +667,27 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             model_id = cast(Optional[str], response._hidden_params.get("model_id"))
             model_name = cast(Optional[str], response._hidden_params.get("model_name"))
             original_response_id = response.id
+
             if (unified_batch_id or unified_file_id) and model_id:
                 response.id = self.get_unified_batch_id(
                     batch_id=response.id, model_id=model_id
                 )
 
                 if (
-                    response.output_file_id and model_name and model_id
+                    response.output_file_id and model_id
                 ):  # return a file id with the model_id and output_file_id
+                    original_output_file_id = response.output_file_id
                     response.output_file_id = self.get_unified_output_file_id(
                         output_file_id=response.output_file_id,
                         model_id=model_id,
                         model_name=model_name,
+                    )
+                    await self.store_unified_file_id(  # need to store otherwise any retrieve call will fail
+                        file_id=response.output_file_id,
+                        file_object=None,
+                        litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                        model_mappings={model_id: original_output_file_id},
+                        user_api_key_dict=user_api_key_dict,
                     )
             asyncio.create_task(
                 self.store_unified_object_id(
@@ -793,12 +800,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         litellm_parent_otel_span: Optional[Span],
         llm_router: Router,
         **data: Dict,
-    ) -> str:
+    ) -> "HttpxBinaryResponseContent":
         """
         Get the content of a file from first model that has it
         """
-        model_file_id_mapping = await self.get_model_file_id_mapping(
-            [file_id], litellm_parent_otel_span
+        model_file_id_mapping = data.pop("model_file_id_mapping", None)
+        model_file_id_mapping = (
+            model_file_id_mapping
+            or await self.get_model_file_id_mapping([file_id], litellm_parent_otel_span)
         )
         specific_model_file_id_mapping = model_file_id_mapping.get(file_id)
 

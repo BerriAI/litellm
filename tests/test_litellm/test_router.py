@@ -425,7 +425,6 @@ async def test_router_aretrieve_file_content():
         assert mock_afile_content.call_args.kwargs["api_base"] == "my-custom-base"
 
 
-
 @pytest.mark.asyncio
 async def test_router_filter_team_based_models():
     """
