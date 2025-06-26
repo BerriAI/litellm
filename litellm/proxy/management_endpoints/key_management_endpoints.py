@@ -1835,6 +1835,21 @@ async def _rotate_master_key(
                 )
 
 
+def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
+    if data and data.new_key is not None:
+        new_token = data.new_key
+        if not data.new_key.startswith("sk-"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "New key must start with 'sk-'. This is to distinguish a key hash (used by litellm for logging / internal logic) from the actual key."
+                },
+            )
+    else:
+        new_token = f"sk-{secrets.token_urlsafe(LENGTH_OF_LITELLM_GENERATED_KEY)}"
+    return new_token
+
+
 @router.post(
     "/key/{key:path}/regenerate",
     tags=["key management"],
@@ -1987,17 +2002,7 @@ async def regenerate_key_fn(
 
         verbose_proxy_logger.debug("key_in_db: %s", _key_in_db)
 
-        if data and data.new_key is not None:
-            new_token = data.new_key
-            if not data.new_key.startswith("sk-"):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={
-                        "error": "New key must start with 'sk-'. This is to distinguish a key hash (used by litellm for logging / internal logic) from the actual key."
-                    },
-                )
-        else:
-            new_token = f"sk-{secrets.token_urlsafe(LENGTH_OF_LITELLM_GENERATED_KEY)}"
+        new_token = get_new_token(data=data)
 
         new_token_hash = hash_token(new_token)
         new_token_key_name = f"sk-...{new_token[-4:]}"
