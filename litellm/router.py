@@ -6215,12 +6215,21 @@ class Router:
         *OR*
         - Dict, if specific model chosen
         """
+        from litellm.router_utils.common_utils import filter_team_based_models
+
         model, healthy_deployments = self._common_checks_available_deployment(
             model=model,
             messages=messages,
             input=input,
             specific_deployment=specific_deployment,
         )  # type: ignore
+
+        # IF TEAM ID SPECIFIED ON MODEL, AND REQUEST CONTAINS USER_API_KEY_TEAM_ID, FILTER OUT MODELS THAT ARE NOT IN THE TEAM
+        ## THIS PREVENTS WRITING FILES OF OTHER TEAMS TO MODELS THAT ARE TEAM-ONLY MODELS
+        healthy_deployments = filter_team_based_models(
+            healthy_deployments=healthy_deployments,
+            request_kwargs=request_kwargs,
+        )
 
         if isinstance(healthy_deployments, dict):
             return healthy_deployments
