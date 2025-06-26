@@ -69,6 +69,7 @@ const sidebars = {
       items: [
         "tutorials/openweb_ui",
         "tutorials/openai_codex",
+        "tutorials/litellm_gemini_cli",
         "tutorials/claude_responses_api",
       ]
     },
