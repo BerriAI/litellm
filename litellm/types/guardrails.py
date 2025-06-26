@@ -30,6 +30,7 @@ class SupportedGuardrailIntegrations(Enum):
     AIM = "aim"
     PANGEA = "pangea"
     LASSO = "lasso"
+    PANW_PRISMA_AIRS = "panw_prisma_airs"
 
 
 class Role(Enum):
