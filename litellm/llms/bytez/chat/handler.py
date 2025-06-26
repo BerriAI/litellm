@@ -11,6 +11,7 @@ from functools import lru_cache
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import (
+    version,
     AsyncHTTPHandler,
     get_async_httpx_client,
 )
@@ -177,7 +178,7 @@ class BytezChatCompletion:
                 "accept": "application/json",
                 "content-type": "application/json",
                 "Authorization": f"Key {api_key}",
-                "User-Agent": "litellm-client",
+                "user-agent": f"litellm/{version}",
             }
         )
 
