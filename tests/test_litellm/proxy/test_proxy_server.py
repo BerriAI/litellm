@@ -458,3 +458,84 @@ def test_add_team_models_to_all_models():
         llm_router=llm_router,
     )
     assert result == {"gpt-4-model-2": {"team1"}}
+
+
+@pytest.mark.asyncio
+async def test_delete_deployment_type_mismatch():
+    """
+    Test that the _delete_deployment function handles type mismatches correctly.
+    Specifically test that models 12345678 and 12345679 are NOT deleted when
+    they exist in both combined_id_list (as integers) and router_model_ids (as strings).
+
+    This test reproduces the bug where type mismatch causes valid models to be deleted.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    # Create mock ProxyConfig instance
+    pc = ProxyConfig()
+
+    pc.get_config = MagicMock(
+        return_value={
+            "model_list": [
+                {
+                    "model_name": "openai-gpt-4o",
+                    "litellm_params": {"model": "gpt-4o"},
+                    "model_info": {"id": 12345678},
+                },
+                {
+                    "model_name": "openai-gpt-4o",
+                    "litellm_params": {"model": "gpt-4o"},
+                    "model_info": {"id": 12345679},
+                },
+            ]
+        }
+    )
+
+    # Mock llm_router with string IDs (this is the source of the type mismatch)
+    mock_llm_router = MagicMock()
+    mock_llm_router.get_model_ids.return_value = [
+        "a96e12e76b36a57cfae57a41288eb41567629cac89b4828c6f7074afc3534695",
+        "a40186dd0fdb9b7282380277d7f57044d29de95bfbfcd7f4322b3493702d5cd3",
+        "12345678",  # String ID
+        "12345679",  # String ID
+    ]
+
+    # Track which deployments were deleted
+    deleted_ids = []
+
+    def mock_delete_deployment(id):
+        deleted_ids.append(id)
+        return True  # Simulate successful deletion
+
+    mock_llm_router.delete_deployment = MagicMock(side_effect=mock_delete_deployment)
+
+    # Mock get_config to return empty config (no config models)
+    async def mock_get_config(config_file_path):
+        return {}
+
+    pc.get_config = MagicMock(side_effect=mock_get_config)
+
+    # Patch the global llm_router
+    with patch("litellm.proxy.proxy_server.llm_router", mock_llm_router), patch(
+        "litellm.proxy.proxy_server.user_config_file_path", "test_config.yaml"
+    ):
+
+        # Call the function under test
+        deleted_count = await pc._delete_deployment(db_models=[])
+
+        # Assertions: Models 12345678 and 12345679 should NOT be deleted
+        # because they exist in combined_id_list (as integers) even though
+        # router has them as strings
+
+        # The function should delete the other 2 models that are not in combined_id_list
+        assert deleted_count == 0, f"Expected 0 deletions, got {deleted_count}"
+
+        # Verify that 12345678 and 12345679 were NOT deleted
+        assert (
+            "12345678" not in deleted_ids
+        ), f"Model 12345678 should NOT be deleted. Deleted IDs: {deleted_ids}"
+        assert (
+            "12345679" not in deleted_ids
+        ), f"Model 12345679 should NOT be deleted. Deleted IDs: {deleted_ids}"
