@@ -91,15 +91,15 @@ litellm --config /path/to/config.yaml
 | Vertex AI   |   [Usage](../docs/providers/vertex#text-to-speech-apis)                 |
 | Gemini      |   [Usage](#gemini-text-to-speech)                 |
 
-## **/speech to /chat/completions Bridge**
+## `/audio/speech` to `/chat/completions` Bridge
 
 LiteLLM allows you to use `/chat/completions` models to generate speech through the `/audio/speech` endpoint. This is useful for models like Gemini's TTS-enabled models that are only accessible via `/chat/completions`.
 
-### **Gemini Text-to-Speech**
+### Gemini Text-to-Speech
 
 #### Python SDK Usage
 
-```python
+```python showLineNumbers title="Gemini Text-to-Speech SDK Usage"
 import litellm
 import os
 
@@ -124,7 +124,7 @@ test_audio_speech_gemini()
 
 #### Async Usage
 
-```python
+```python showLineNumbers title="Gemini Text-to-Speech Async Usage"
 import litellm
 import asyncio
 import os
@@ -149,7 +149,7 @@ asyncio.run(test_async_gemini_speech())
 
 **Setup Config:**
 
-```yaml
+```yaml showLineNumbers title="Gemini Proxy Configuration"
 model_list:
 - model_name: gemini-tts
   litellm_params:
@@ -159,7 +159,7 @@ model_list:
 
 **Start Proxy:**
 
-```bash
+```bash showLineNumbers title="Start LiteLLM Proxy"
 litellm --config /path/to/config.yaml
 
 # RUNNING on http://0.0.0.0:4000
@@ -167,7 +167,7 @@ litellm --config /path/to/config.yaml
 
 **Make Request:**
 
-```bash
+```bash showLineNumbers title="Gemini TTS Request"
 curl http://0.0.0.0:4000/v1/audio/speech \
   -H "Authorization: Bearer sk-1234" \
   -H "Content-Type: application/json" \
@@ -179,11 +179,11 @@ curl http://0.0.0.0:4000/v1/audio/speech \
   --output gemini_speech.mp3
 ```
 
-### **Vertex AI Text-to-Speech**
+### Vertex AI Text-to-Speech
 
 #### Python SDK Usage
 
-```python
+```python showLineNumbers title="Vertex AI Text-to-Speech SDK Usage"
 import litellm
 import os
 from pathlib import Path
@@ -209,7 +209,7 @@ test_audio_speech_vertex()
 
 **Setup Config:**
 
-```yaml
+```yaml showLineNumbers title="Vertex AI Proxy Configuration"
 model_list:
 - model_name: vertex-tts
   litellm_params:
@@ -220,7 +220,7 @@ model_list:
 
 **Make Request:**
 
-```bash
+```bash showLineNumbers title="Vertex AI TTS Request"
 curl http://0.0.0.0:4000/v1/audio/speech \
   -H "Authorization: Bearer sk-1234" \
   -H "Content-Type: application/json" \
