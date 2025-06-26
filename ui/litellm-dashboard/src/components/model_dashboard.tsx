@@ -43,6 +43,7 @@ import {
   MultiSelectItem,
   DateRangePickerValue,
 } from "@tremor/react";
+import UsageDatePicker from "./shared/usage_date_picker";
 import {
   modelInfoCall,
   userGetRequesedtModelsCall,
@@ -305,15 +306,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     if (selected_customer === undefined) {
       selected_customer = null;
     }
-
-    // make startTime and endTime to last hour of the day
-    startTime.setHours(0);
-    startTime.setMinutes(0);
-    startTime.setSeconds(0);
-
-    endTime.setHours(23);
-    endTime.setMinutes(59);
-    endTime.setSeconds(59);
 
     try {
       const modelMetricsResponse = await modelMetricsCall(
@@ -1387,9 +1379,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             <TabPanel>
               <Grid numItems={4} className="mt-2 mb-2">
                 <Col>
-                  <Text>Select Time Range</Text>
-                  <DateRangePicker
-                    enableSelect={true}
+                  <UsageDatePicker
                     value={dateValue}
                     className="mr-2"
                     onValueChange={(value) => {
@@ -1398,7 +1388,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                         selectedModelGroup,
                         value.from,
                         value.to
-                      ); // Call updateModelMetrics with the new date range
+                      );
                     }}
                   />
                 </Col>

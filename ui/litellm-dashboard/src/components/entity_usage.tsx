@@ -6,6 +6,7 @@ import {
   DonutChart,
   TabPanel, TabGroup, TabList, Tab, TabPanels
 } from "@tremor/react";
+import UsageDatePicker from "./shared/usage_date_picker";
 import { Select } from 'antd';
 import { ActivityMetrics, processActivityData } from './activity_metrics';
 import { DailyData, KeyMetricWithMetadata, EntityMetricWithMetadata } from './usage/types';
@@ -94,8 +95,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
   const fetchSpendData = async () => {
     if (!accessToken || !dateValue.from || !dateValue.to) return;
-    const startTime = dateValue.from;
-    const endTime = dateValue.to;
+    // Create new Date objects to avoid mutating the original dates
+    const startTime = new Date(dateValue.from);
+    const endTime = new Date(dateValue.to);
     
     if (entityType === 'tag') {
       const data = await tagDailyActivityCall(
@@ -287,9 +289,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     <div style={{ width: "100%" }}>
       <Grid numItems={2} className="gap-2 w-full mb-4">
           <Col>
-            <Text>Select Time Range</Text>
-            <DateRangePicker
-              enableSelect={true}
+            <UsageDatePicker
               value={dateValue}
               onValueChange={setDateValue}
             />
