@@ -123,6 +123,34 @@ async def test_ssl_verification_with_aiohttp_transport():
     assert transport_connector._ssl == aiohttp_session.connector._ssl
 
 
+@pytest.mark.asyncio
+async def test_aiohttp_transport_trust_env_setting(monkeypatch):
+    """Test that trust_env setting is properly configured in aiohttp transport"""
+    # Test 1: Default trust_env behavior
+    transport = AsyncHTTPHandler._create_aiohttp_transport()
+    client_session = transport._get_valid_client_session()
+    
+    # Default should be False (litellm.aiohttp_trust_env default)
+    default_trust_env = getattr(litellm, 'aiohttp_trust_env', False)
+    assert client_session._trust_env == default_trust_env
+    
+    # Test 2: Environment variable override
+    monkeypatch.setenv("AIOHTTP_TRUST_ENV", "True")
+    transport_with_env = AsyncHTTPHandler._create_aiohttp_transport()
+    client_session_with_env = transport_with_env._get_valid_client_session()
+    
+    # Should be True when environment variable is set
+    assert client_session_with_env._trust_env is True
+    
+    # Test 3: Verify environment variable with False value
+    monkeypatch.setenv("AIOHTTP_TRUST_ENV", "False")
+    transport_with_false_env = AsyncHTTPHandler._create_aiohttp_transport()
+    client_session_with_false_env = transport_with_false_env._get_valid_client_session()
+    
+    # Should respect the litellm.aiohttp_trust_env setting when env var is False
+    assert client_session_with_false_env._trust_env == default_trust_env
+
+
 def test_get_ssl_context():
     """Test that _get_ssl_context() returns a proper SSL context with certifi CA bundle"""
     with patch('ssl.create_default_context') as mock_create_context:
