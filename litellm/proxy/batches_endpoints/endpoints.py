@@ -500,7 +500,7 @@ async def cancel_batch(
         _cancel_batch_data = CancelBatchRequest(batch_id=batch_id, **data)
         response = await litellm.acancel_batch(
             custom_llm_provider=custom_llm_provider,  # type: ignore
-            **_cancel_batch_data
+            **_cancel_batch_data,
         )
 
         ### ALERTING ###
