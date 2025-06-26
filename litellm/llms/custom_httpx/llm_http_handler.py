@@ -31,6 +31,9 @@ from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.files.transformation import BaseFilesConfig
+from litellm.llms.base_llm.google_genai.transformation import (
+    BaseGoogleGenAIGenerateContentConfig,
+)
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
@@ -2349,7 +2352,7 @@ class BaseLLMHTTPHandler:
         self,
         e: Exception,
         provider_config: Union[
-            BaseConfig, BaseRerankConfig, BaseResponsesAPIConfig, BaseImageEditConfig, BaseVectorStoreConfig
+            BaseConfig, BaseRerankConfig, BaseResponsesAPIConfig, BaseImageEditConfig, BaseVectorStoreConfig, BaseGoogleGenAIGenerateContentConfig
         ],
     ):
         status_code = getattr(e, "status_code", 500)
@@ -2887,4 +2890,225 @@ class BaseLLMHTTPHandler:
         return vector_store_provider_config.transform_create_vector_store_response(
             response=response,
         )
+    
+    #####################################################################
+    ################ Google GenAI GENERATE CONTENT HANDLER ###########################
+    #####################################################################
+    def generate_content_handler(
+        self,
+        model: str,
+        contents: Any,
+        generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
+        generate_content_config_dict: Dict,
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        _is_async: bool = False,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        stream: bool = False,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        """
+        Handles Google GenAI generate content requests.
+        When _is_async=True, returns a coroutine instead of making the call directly.
+        """
+        from litellm.google_genai.streaming_iterator import (
+            GoogleGenAIGenerateContentStreamingIterator,
+        )
+        
+        if _is_async:
+            return self.async_generate_content_handler(
+                model=model,
+                contents=contents,
+                generate_content_provider_config=generate_content_provider_config,
+                generate_content_config_dict=generate_content_config_dict,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+                timeout=timeout,
+                client=client if isinstance(client, AsyncHTTPHandler) else None,
+                stream=stream,
+                litellm_metadata=litellm_metadata,
+            )
 
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        # Get headers and URL from the provider config
+        headers, api_base = generate_content_provider_config.sync_get_auth_token_and_url(
+            api_base=litellm_params.api_base,
+            model=model,
+            litellm_params=dict(litellm_params),
+            stream=stream,
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        # Get the request body from the provider config
+        data = generate_content_provider_config.transform_generate_content_request(
+            model=model,
+            contents=contents,
+            generate_content_config_dict=generate_content_config_dict,
+        )
+
+        if extra_body:
+            data.update(extra_body)
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=contents,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        try:
+            if stream:
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout,
+                    stream=True,
+                )
+                # Return streaming iterator
+                return GoogleGenAIGenerateContentStreamingIterator(
+                    response=response,
+                    model=model,
+                    logging_obj=logging_obj,
+                    generate_content_provider_config=generate_content_provider_config,
+                    litellm_metadata=litellm_metadata or {},
+                    custom_llm_provider=custom_llm_provider,
+                    request_body=data,
+                )
+            else:
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout,
+                )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=generate_content_provider_config,
+            )
+
+        return generate_content_provider_config.transform_generate_content_response(
+            model=model,
+            raw_response=response,
+        )
+
+    async def async_generate_content_handler(
+        self,
+        model: str,
+        contents: Any,
+        generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
+        generate_content_config_dict: Dict,
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[AsyncHTTPHandler] = None,
+        stream: bool = False,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        """
+        Async version of the generate content handler.
+        Uses async HTTP client to make requests.
+        """
+        from litellm.google_genai.streaming_iterator import (
+            AsyncGoogleGenAIGenerateContentStreamingIterator,
+        )
+
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        # Get headers and URL from the provider config
+        headers, api_base = await generate_content_provider_config.get_auth_token_and_url(
+            model=model,
+            litellm_params=dict(litellm_params),
+            stream=stream, 
+            api_base=litellm_params.api_base,
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        # Get the request body from the provider config
+        data = generate_content_provider_config.transform_generate_content_request(
+            model=model,
+            contents=contents,
+            generate_content_config_dict=generate_content_config_dict,
+        )
+
+        if extra_body:
+            data.update(extra_body)
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=contents,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        try:
+            if stream:
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout,
+                    stream=True,
+                )
+                # Return async streaming iterator
+                return AsyncGoogleGenAIGenerateContentStreamingIterator(
+                    response=response,
+                    model=model,
+                    logging_obj=logging_obj,
+                    generate_content_provider_config=generate_content_provider_config,
+                    litellm_metadata=litellm_metadata or {},
+                    custom_llm_provider=custom_llm_provider,
+                    request_body=data,
+                )
+            else:
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout,
+                )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=generate_content_provider_config,
+            )
+
+        return generate_content_provider_config.transform_generate_content_response(
+            model=model,
+            raw_response=response,
+        )

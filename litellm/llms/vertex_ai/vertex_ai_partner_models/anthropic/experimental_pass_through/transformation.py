@@ -1,10 +1,8 @@
 from typing import Any, Dict, List, Optional, Tuple
 
-import litellm
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
 from litellm.types.router import GenericLiteLLMParams
 
@@ -28,25 +26,9 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         Validate the environment for the request
         """
         if "Authorization" not in headers:
-            vertex_ai_project = (
-                litellm_params.pop("vertex_project", None)
-                or litellm_params.pop("vertex_ai_project", None)
-                or litellm.vertex_project
-                or get_secret_str("VERTEXAI_PROJECT")
-            )
-            vertex_credentials = (
-                litellm_params.pop("vertex_credentials", None)
-                or litellm_params.pop("vertex_ai_credentials", None)
-                or get_secret_str("VERTEXAI_CREDENTIALS")
-            )
-
-            vertex_ai_location = (
-                litellm_params.pop("vertex_location", None)
-                or litellm_params.pop("vertex_ai_location", None)
-                or litellm.vertex_location
-                or get_secret_str("VERTEXAI_LOCATION")
-                or get_secret_str("VERTEX_LOCATION")
-            )
+            vertex_ai_project = VertexBase.get_vertex_ai_project(litellm_params)
+            vertex_credentials = VertexBase.get_vertex_ai_credentials(litellm_params)
+            vertex_ai_location = VertexBase.get_vertex_ai_location(litellm_params)
 
             access_token, project_id = self._ensure_access_token(
                 credentials=vertex_credentials,
