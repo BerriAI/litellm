@@ -79,6 +79,21 @@ const config = {
         },
         docs: {
           sidebarPath: require.resolve('./sidebars.js'),
+          // Versioning configuration
+          includeCurrentVersion: true,
+          lastVersion: '1.0',
+          versions: {
+            current: {
+              label: 'Next 🚧',
+              path: 'next',
+              banner: 'unreleased',
+            },
+            '1.0': {
+              label: '1.0.x (Stable)',
+              path: '/',
+              banner: 'none',
+            },
+          },
         },
         theme: {
           customCss: require.resolve('./src/css/custom.css'),
@@ -132,6 +147,25 @@ const config = {
             to: "docs/enterprise"
           },
           { to: '/release_notes', label: 'Release Notes', position: 'left' },
+          {
+            type: 'docsVersionDropdown',
+            position: 'left',
+            dropdownItemsAfter: [
+              {
+                type: 'html',
+                value: '<hr class="dropdown-separator">',
+              },
+              {
+                type: 'html',
+                className: 'dropdown-archived-versions',
+                value: '<b>Archived versions</b>',
+              },
+              {
+                to: 'https://v1-docs.litellm.ai',
+                label: 'v1.x.x',
+              },
+            ],
+          },
           {
             href: 'https://models.litellm.ai/',
             label: '💸 LLM Model Cost Map',
