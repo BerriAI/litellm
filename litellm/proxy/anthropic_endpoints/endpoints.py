@@ -19,11 +19,11 @@ from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
 router = APIRouter()
 
+
 @router.post(
     "/v1/messages",
     tags=["[beta] Anthropic `/v1/messages`"],
     dependencies=[Depends(user_api_key_auth)],
-    include_in_schema=False,
 )
 async def anthropic_response(  # noqa: PLR0915
     fastapi_response: Response,
@@ -167,11 +167,13 @@ async def anthropic_response(  # noqa: PLR0915
         if (
             "stream" in data and data["stream"] is True
         ):  # use generate_responses to stream responses
-            selected_data_generator = ProxyBaseLLMRequestProcessing.async_sse_data_generator(
-                response=response,
-                user_api_key_dict=user_api_key_dict,
-                request_data=data,
-                proxy_logging_obj=proxy_logging_obj,
+            selected_data_generator = (
+                ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+                    response=response,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=data,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
             )
 
             return await create_streaming_response(
