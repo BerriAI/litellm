@@ -1270,11 +1270,13 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["log_event_type"] = "successful_api_call"
             self.model_call_details["end_time"] = end_time
             self.model_call_details["cache_hit"] = cache_hit
-
             if self.call_type == CallTypes.anthropic_messages.value:
                 result = self._handle_anthropic_messages_response_logging(result=result)
-            elif (self.call_type == CallTypes.generate_content.value or CallTypes.agenerate_content.value):
-                result = self._handle_google_genai_generate_content_response_logging(result=result)
+            elif (
+                self.call_type == CallTypes.generate_content.value or 
+                self.call_type == CallTypes.agenerate_content.value
+            ):
+                result = self._handle_non_streaming_google_genai_generate_content_response_logging(result=result)
             ## if model in model cost map - log the response cost
             ## else set cost to None
 
@@ -2740,7 +2742,7 @@ class Logging(LiteLLMLoggingBaseClass):
             )
         return result
     
-    def _handle_google_genai_generate_content_response_logging(self, result: Any) -> ModelResponse:
+    def _handle_non_streaming_google_genai_generate_content_response_logging(self, result: Any) -> ModelResponse:
         """
         Handles logging for Google GenAI generate content responses.
         """
