@@ -1149,20 +1149,14 @@ async def team_member_add(
 
         # Check if member already exists in team before adding
         member_already_exists = False
-        verbose_proxy_logger.info(f"Checking if member exists. New member - ID: {new_member.user_id}, Email: {new_member.user_email}")
-        verbose_proxy_logger.info(f"Existing members in team: {[(m.user_id, m.user_email) for m in complete_team_data.members_with_roles]}")
-        
         for existing_member in complete_team_data.members_with_roles:
             if (new_member.user_id is not None and existing_member.user_id == new_member.user_id) or \
                (new_member.user_email is not None and existing_member.user_email == new_member.user_email):
                 member_already_exists = True
-                verbose_proxy_logger.info(f"DUPLICATE FOUND! Member already exists in team. User ID: {new_member.user_id}, Email: {new_member.user_email}")
                 break
         
         if not member_already_exists:
             complete_team_data.members_with_roles.append(new_member)
-        else:
-            verbose_proxy_logger.info(f"Skipping duplicate member addition for team {data.team_id}")
 
     elif isinstance(data.member, List):
         # add to team db
