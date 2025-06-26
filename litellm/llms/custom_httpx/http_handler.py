@@ -588,7 +588,8 @@ class AsyncHTTPHandler:
         verbose_logger.debug("Creating AiohttpTransport...")
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
-                connector=TCPConnector(**connector_kwargs)
+                connector=TCPConnector(**connector_kwargs),
+                trust_env=litellm.aiohttp_trust_env,
             ),
         )
     
