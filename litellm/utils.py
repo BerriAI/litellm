@@ -775,7 +775,7 @@ def function_setup(  # noqa: PLR0915
         stream = False
         if _is_streaming_request(
             kwargs=kwargs,
-            call_type=CallTypes(call_type),
+            call_type=call_type,
         ):
             stream = True
         logging_obj = LiteLLMLogging(
@@ -1032,7 +1032,7 @@ def client(original_function):  # noqa: PLR0915
             result = original_function(*args, **kwargs)
             if _is_streaming_request(
                 kwargs=kwargs,
-                call_type=CallTypes(call_type),
+                call_type=call_type,
             ):
                 if (
                     "complete_response" in kwargs
@@ -1179,7 +1179,7 @@ def client(original_function):  # noqa: PLR0915
             end_time = datetime.datetime.now()
             if _is_streaming_request(
                 kwargs=kwargs,
-                call_type=CallTypes(call_type),
+                call_type=call_type,
             ):
                 if (
                     "complete_response" in kwargs
@@ -1555,7 +1555,10 @@ def _is_async_request(
     return False
 
 
-def _is_streaming_request(kwargs: Dict[str, Any], call_type: CallTypes) -> bool:
+def _is_streaming_request(
+    kwargs: Dict[str, Any],
+    call_type: Union[CallTypes, str],
+) -> bool:
     """
     Returns True if the call type is a streaming request.
     Returns True if:
@@ -1564,8 +1567,20 @@ def _is_streaming_request(kwargs: Dict[str, Any], call_type: CallTypes) -> bool:
     """
     if "stream" in kwargs and kwargs["stream"] is True:
         return True
-    elif call_type == CallTypes.generate_content_stream.value or call_type == CallTypes.agenerate_content_stream.value:
+
+    #########################################################
+    # Check if it's a google genai streaming request
+    if isinstance(call_type, str):
+        # check if it can be casted to CallTypes
+        try:
+            call_type = CallTypes(call_type)
+        except ValueError:
+            return False
+
+    if call_type == CallTypes.generate_content_stream or call_type == CallTypes.agenerate_content_stream:
         return True
+    #########################################################
+    
     return False
 
 
