@@ -30,10 +30,13 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
     """
     
     sent_first_chunk: bool = False
+    # State tracking for accumulating partial tool calls
+    accumulated_tool_calls: Dict[str, Dict[str, Any]]
     
     def __init__(self, completion_stream: Any):
         super().__init__(completion_stream)
         self.sent_first_chunk = False
+        self.accumulated_tool_calls = {}
     
     def __next__(self):
         try:
@@ -42,8 +45,9 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
                     continue
                     
                 # Transform OpenAI streaming chunk to Google GenAI format
-                transformed_chunk = GoogleGenAIAdapter().translate_streaming_completion_to_generate_content(chunk)
-                return transformed_chunk
+                transformed_chunk = GoogleGenAIAdapter().translate_streaming_completion_to_generate_content(chunk, self)
+                if transformed_chunk:  # Only return non-empty chunks
+                    return transformed_chunk
                 
             raise StopIteration
         except StopIteration:
@@ -58,8 +62,9 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
                     continue
                     
                 # Transform OpenAI streaming chunk to Google GenAI format  
-                transformed_chunk = GoogleGenAIAdapter().translate_streaming_completion_to_generate_content(chunk)
-                return transformed_chunk
+                transformed_chunk = GoogleGenAIAdapter().translate_streaming_completion_to_generate_content(chunk, self)
+                if transformed_chunk:  # Only return non-empty chunks
+                    return transformed_chunk
                 
             raise StopAsyncIteration
         except StopAsyncIteration:
@@ -369,13 +374,14 @@ class GoogleGenAIAdapter:
         return generate_content_response
 
     def translate_streaming_completion_to_generate_content(
-        self, response: ModelResponse
+        self, response: ModelResponse, wrapper: GoogleGenAIStreamWrapper
     ) -> Dict[str, Any]:
         """
         Transform streaming litellm completion chunk to Google GenAI generate_content format
         
         Args:
             response: Streaming ModelResponse chunk from litellm.completion
+            wrapper: GoogleGenAIStreamWrapper instance
             
         Returns:
             Dict in Google GenAI streaming generate_content response format
@@ -390,7 +396,7 @@ class GoogleGenAIAdapter:
         # Handle streaming choice
         if isinstance(choice, StreamingChoices):
             if choice.delta:
-                parts = self._transform_openai_delta_to_google_genai_parts(choice.delta)
+                parts = self._transform_openai_delta_to_google_genai_parts_with_accumulation(choice.delta, wrapper)
             else:
                 parts = []
             finish_reason = getattr(choice, 'finish_reason', None)
@@ -399,6 +405,10 @@ class GoogleGenAIAdapter:
             message_content = getattr(choice, 'delta', {}).get('content', '')
             parts = [{"text": message_content}] if message_content else []
             finish_reason = getattr(choice, 'finish_reason', None)
+        
+        # Only create response chunk if we have parts or it's the final chunk
+        if not parts and not finish_reason:
+            return {}
         
         # Create Google GenAI streaming format response
         streaming_chunk: Dict[str, Any] = {
@@ -488,6 +498,66 @@ class GoogleGenAIAdapter:
                         }
                     }
                     parts.append(function_call_part)
+                    
+        return parts
+
+    def _transform_openai_delta_to_google_genai_parts_with_accumulation(
+        self, delta: Any, wrapper: GoogleGenAIStreamWrapper
+    ) -> List[Dict[str, Any]]:
+        """Transform OpenAI delta to Google GenAI parts format with tool call accumulation"""
+        parts: List[Dict[str, Any]] = []
+        
+        # Add text content if present
+        if hasattr(delta, 'content') and delta.content:
+            parts.append({"text": delta.content})
+            
+        # Handle tool calls with accumulation for streaming
+        if hasattr(delta, 'tool_calls') and delta.tool_calls:
+            for tool_call in delta.tool_calls:
+                if hasattr(tool_call, 'function') and tool_call.function:
+                    tool_call_id = getattr(tool_call, 'id', '') or 'call_unknown'
+                    function_name = getattr(tool_call.function, 'name', '') or ''
+                    args_str = getattr(tool_call.function, 'arguments', '') or ''
+                    
+                    # Initialize accumulation for this tool call if not exists
+                    if tool_call_id not in wrapper.accumulated_tool_calls:
+                        wrapper.accumulated_tool_calls[tool_call_id] = {
+                            'name': '',
+                            'arguments': '',
+                            'complete': False
+                        }
+                    
+                    # Accumulate function name if provided
+                    if function_name:
+                        wrapper.accumulated_tool_calls[tool_call_id]['name'] = function_name
+                    
+                    # Accumulate arguments if provided
+                    if args_str:
+                        wrapper.accumulated_tool_calls[tool_call_id]['arguments'] += args_str
+                    
+                    # Try to parse the accumulated arguments as JSON
+                    accumulated_args = wrapper.accumulated_tool_calls[tool_call_id]['arguments']
+                    try:
+                        if accumulated_args:
+                            parsed_args = json.loads(accumulated_args)
+                            # JSON is valid, mark as complete and create function call part
+                            wrapper.accumulated_tool_calls[tool_call_id]['complete'] = True
+                            
+                            function_call_part = {
+                                "functionCall": {
+                                    "name": wrapper.accumulated_tool_calls[tool_call_id]['name'],
+                                    "args": parsed_args
+                                }
+                            }
+                            parts.append(function_call_part)
+                            
+                            # Clean up completed tool call
+                            del wrapper.accumulated_tool_calls[tool_call_id]
+                            
+                    except json.JSONDecodeError:
+                        # JSON is still incomplete, continue accumulating
+                        # Don't add to parts yet
+                        pass
                     
         return parts
 

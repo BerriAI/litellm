@@ -400,7 +400,10 @@ def test_completion_to_generate_content_with_tool_calls():
 
 def test_streaming_tool_calls_transformation():
     """Test streaming transformation with tool calls"""
-    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+    from litellm.google_genai.adapters.transformation import (
+        GoogleGenAIAdapter,
+        GoogleGenAIStreamWrapper,
+    )
     from litellm.types.utils import (
         ChatCompletionDeltaToolCall,
         Delta,
@@ -445,8 +448,11 @@ def test_streaming_tool_calls_transformation():
         object="chat.completion.chunk"
     )
     
+    # Create mock wrapper for accumulation state
+    mock_wrapper = GoogleGenAIStreamWrapper(completion_stream=None)
+    
     # Transform streaming chunk
-    streaming_chunk = adapter.translate_streaming_completion_to_generate_content(mock_response)
+    streaming_chunk = adapter.translate_streaming_completion_to_generate_content(mock_response, mock_wrapper)
     
     # Verify the transformation
     assert "candidates" in streaming_chunk
@@ -462,6 +468,99 @@ def test_streaming_tool_calls_transformation():
     function_call = function_part["functionCall"]
     assert function_call["name"] == "get_weather"
     assert function_call["args"]["location"] == "SF"
+
+def test_streaming_partial_tool_calls_accumulation():
+    """Test accumulation of partial tool call arguments across streaming chunks"""
+    from litellm.google_genai.adapters.transformation import (
+        GoogleGenAIAdapter,
+        GoogleGenAIStreamWrapper,
+    )
+    from litellm.types.utils import (
+        ChatCompletionDeltaToolCall,
+        Delta,
+        Function,
+        ModelResponse,
+        StreamingChoices,
+    )
+    
+    adapter = GoogleGenAIAdapter()
+    mock_wrapper = GoogleGenAIStreamWrapper(completion_stream=None)
+    
+    # Simulate partial chunks like in the user's example
+    partial_chunks = [
+        '{"path"',
+        '": "/Users',
+        '/is',
+        'haanjaffe',
+        'r/Github/li',
+        'tel',
+        'lm/README.md',
+        '"}'
+    ]
+    
+    # Process each partial chunk
+    final_chunk = None
+    for i, partial_args in enumerate(partial_chunks):
+        mock_function = Function(
+            name="read_file" if i == 0 else "",  # Only set name in first chunk
+            arguments=partial_args
+        )
+        
+        mock_tool_call_delta = ChatCompletionDeltaToolCall(
+            id="call_123",
+            type="function",
+            function=mock_function,
+            index=0
+        )
+        
+        mock_delta = Delta(
+            content=None,
+            tool_calls=[mock_tool_call_delta]
+        )
+        
+        mock_choice = StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=mock_delta
+        )
+        
+        mock_response = ModelResponse(
+            id="test-streaming",
+            choices=[mock_choice],
+            created=1234567890,
+            model="gpt-3.5-turbo",
+            object="chat.completion.chunk"
+        )
+        
+        # Transform streaming chunk
+        streaming_chunk = adapter.translate_streaming_completion_to_generate_content(mock_response, mock_wrapper)
+        
+        # Only the final chunk should have parts (when JSON is complete)
+        if i < len(partial_chunks) - 1:
+            # Intermediate chunks should be empty since JSON is incomplete
+            assert streaming_chunk == {} or (
+                "candidates" in streaming_chunk and 
+                len(streaming_chunk["candidates"][0]["content"]["parts"]) == 0
+            )
+        else:
+            # Final chunk should have the complete tool call
+            final_chunk = streaming_chunk
+    
+    # Verify the final complete chunk
+    assert final_chunk is not None
+    assert "candidates" in final_chunk
+    candidate = final_chunk["candidates"][0]
+    
+    # Check parts
+    parts = candidate["content"]["parts"]
+    assert len(parts) == 1
+    
+    # Check function call part
+    function_part = parts[0]
+    assert "functionCall" in function_part
+    function_call = function_part["functionCall"]
+    assert function_call["name"] == "read_file"
+    assert function_call["args"]["path"] == "/Users/ishaanjaffer/Github/litellm/README.md"
 
 def test_mixed_content_transformation():
     """Test transformation of mixed content (text + function calls)"""
