@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Iterator, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterator, Optional, Union
 
 import httpx
 from pydantic import BaseModel

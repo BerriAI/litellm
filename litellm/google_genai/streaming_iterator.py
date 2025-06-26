@@ -1,7 +1,12 @@
+import asyncio
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.proxy.pass_through_endpoints.success_handler import (
+    PassThroughEndpointLogging,
+)
+from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
 if TYPE_CHECKING:
     from litellm.llms.base_llm.google_genai.transformation import (
@@ -9,6 +14,8 @@ if TYPE_CHECKING:
     )
 else:
     BaseGoogleGenAIGenerateContentConfig = Any
+
+GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ = PassThroughEndpointLogging()
 
 class BaseGoogleGenAIGenerateContentStreamingIterator:
     """
@@ -20,14 +27,35 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
         self,
         litellm_logging_obj: LiteLLMLoggingObj,
         request_body: dict,
+        model: str,
     ):
         self.litellm_logging_obj = litellm_logging_obj
         self.request_body = request_body
         self.start_time = datetime.now()
+        self.collected_chunks: List[bytes] = []
+        self.model = model
 
-    async def _handle_streaming_logging(self, collected_chunks: List[bytes]):
+    async def _handle_async_streaming_logging(
+        self,
+    ):
         """Handle the logging after all chunks have been collected."""
-        pass
+        from litellm.proxy.pass_through_endpoints.streaming_handler import (
+            PassThroughStreamingHandler,
+        )
+        end_time = datetime.now()
+        asyncio.create_task(
+            PassThroughStreamingHandler._route_streaming_logging_to_handler(
+                litellm_logging_obj=self.litellm_logging_obj,
+                passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
+                url_route="/v1/generateContent",
+                request_body=self.request_body or {},
+                endpoint_type=EndpointType.VERTEX_AI,
+                start_time=self.start_time,
+                raw_bytes=self.collected_chunks,
+                end_time=end_time,
+                model=self.model,
+            )
+        )
 
 
 class GoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContentStreamingIterator):
@@ -48,6 +76,7 @@ class GoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContent
         super().__init__(
             litellm_logging_obj=logging_obj,
             request_body=request_body or {},
+            model=model,
         )
         self.response = response
         self.model = model
@@ -64,6 +93,7 @@ class GoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContent
         try:
             # Get the next chunk from the stored iterator
             chunk = next(self.stream_iterator)
+            self.collected_chunks.append(chunk)
             # Just yield raw bytes
             return chunk
         except StopIteration:
@@ -96,6 +126,7 @@ class AsyncGoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateCo
         super().__init__(
             litellm_logging_obj=logging_obj,
             request_body=request_body or {},
+            model=model,
         )
         self.response = response
         self.model = model
@@ -112,7 +143,9 @@ class AsyncGoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateCo
         try:
             # Get the next chunk from the stored async iterator
             chunk = await self.stream_iterator.__anext__()
+            self.collected_chunks.append(chunk)
             # Just yield raw bytes
             return chunk
         except StopAsyncIteration:
+            await self._handle_async_streaming_logging()
             raise StopAsyncIteration 

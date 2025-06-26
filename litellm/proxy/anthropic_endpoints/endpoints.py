@@ -3,16 +3,11 @@ Unified /v1/messages endpoint - (Anthropic Spec)
 """
 
 import asyncio
-import json
-import time
-import traceback
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import STREAM_SSE_DATA_PREFIX
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
@@ -21,7 +16,6 @@ from litellm.proxy.common_request_processing import (
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
-from litellm.proxy.utils import ProxyLogging
 
 router = APIRouter()
 
