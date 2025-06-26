@@ -3196,7 +3196,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
                 raise e
 
-
         elif custom_llm_provider == "bytez":
             bytez_key = (
                 api_key
@@ -3216,10 +3215,9 @@ def completion(  # type: ignore # noqa: PLR0915
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 timeout=timeout,  # type: ignore
-                encoding=encoding,
                 stream=stream,
             )
-            
+
             response = _model_response
 
         elif custom_llm_provider == "custom":

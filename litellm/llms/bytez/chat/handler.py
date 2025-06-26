@@ -1,13 +1,13 @@
 # What is this?
 ## Controller file for Predibase Integration - https://predibase.com/
-from typing import Any, Dict
-from dataclasses import dataclass, field
+from typing import Dict
 import json
 import time
 from functools import partial
-from typing import Callable, Optional, Union
+from typing import Optional, Union
 
 import httpx  # type: ignore
+from functools import lru_cache
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import (
@@ -17,104 +17,23 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.utils import LiteLLMLoggingBaseClass
 from litellm.utils import CustomStreamWrapper, ModelResponse
 
-from ..common_utils import BytezError
+from ..common_utils import BytezError, validate_environment
+from ..openai_to_bytez_param_map import map_openai_params_to_bytez_params
 
 CUSTOM_LLM_PROVIDER = "bytez"
 
 API_BASE = "https://api.bytez.com/models/v2"
 
 
-@dataclass
-class CacheEntry:
-    value: Any
-    lru_counter: int
-
-
-@dataclass
-class SupportedModelCache:
-    max_items: int = 100
-    cache: Dict[str, CacheEntry] = field(default_factory=dict, init=True)
-    counter: int = 0
-
-    @property
-    def item_count(self):
-        return len(self.cache.keys())
-
-    def increment_counter(self):
-        self.counter += 1
-        return self.counter
-
-    def get(self, key: str) -> Any:
-        cache_entry = self.cache[key]
-
-        cache_entry.lru_counter = self.increment_counter()
-
-        return cache_entry.value
-
-    def has(self, key: str) -> bool:
-        cache_entry = self.cache.get(key)
-
-        return bool(cache_entry)
-
-    def set(self, key: str, value: Any) -> None:
-        lru_counter = self.increment_counter()
-
-        cache_entry = CacheEntry(value=value, lru_counter=lru_counter)
-
-        # evict
-        if self.item_count + 1 > self.max_items:
-            # find the oldest lru stamp and remove it
-            key, cache_entry = min(
-                [(key, cache_entry) for key, cache_entry in self.cache.items()],
-                key=lambda item: item[1].lru_counter,
-            )
-
-            del self.cache[key]
-
-        self.cache[key] = cache_entry
-
-
 class BytezChatCompletion:
     def __init__(self) -> None:
         super().__init__()
-        self.cache = SupportedModelCache()
-
-    def to_model_id(self, model):
-        # remove bytez off of the front of the model
-        model = "/".join(model.split("/")[1:])
-        return model
-
-    def validate_model_is_supported(self, model_id: str, headers: Dict):
-        if self.cache.has(model_id):
-            return self.cache.get(model_id)
-
-        url = f"{API_BASE}/list/models?modelId={model_id}"
-
-        response = httpx.request(method="GET", url=url, headers=headers)
-
-        json = response.json()
-
-        error = json.get("error")
-
-        if error:
-            raise Exception(error)
-
-        models = json.get("output")
-
-        if len(models) > 0 and models[0].get("task") == "chat":
-            self.cache.set(model_id, True)
-            return True
-
-        self.cache.set(model_id, False)
-        return False
 
     def completion(
         self,
         model: str,
         messages: list,
         model_response: ModelResponse,
-        print_verbose: Callable,
-        encoding,
         api_key: str,
         logging_obj,
         optional_params: dict,
@@ -122,26 +41,19 @@ class BytezChatCompletion:
         timeout: Union[float, httpx.Timeout],
         stream=False,
         acompletion=None,
-        logger_fn=None,
         headers: dict = {},
     ) -> Union[ModelResponse, CustomStreamWrapper]:
+        # throws if there is a problem
+        validate_environment(api_key=api_key, messages=messages)
 
-        # we add stream not as an additional param, but as a primary prop on the request body
+        self.update_headers(headers, api_key)
+
+        # this will remap openai params if we can, otherwise it will throw
+        optional_params = map_openai_params_to_bytez_params(optional_params)
+
+        # we add stream not as an additional param, but as a primary prop on the request body, this is always defined if stream == True
         if stream:
-            # this is always defined if stream == True
             del optional_params["stream"]
-
-        api_base = API_BASE
-        # api_base = "http://localhost:8080/models/v2"
-
-        headers = litellm.BytezChatConfig().validate_environment(
-            api_key=api_key,
-            headers=headers,
-            messages=messages,
-            optional_params=optional_params,
-            model=model,
-            litellm_params=litellm_params,
-        )
 
         model_id = self.to_model_id(model)
 
@@ -150,7 +62,7 @@ class BytezChatCompletion:
         if not is_supported:
             raise Exception(f"Model: {model} does not support chat")
 
-        completion_url = f"{api_base}/{model_id}"
+        completion_url = f"{API_BASE}/{model_id}"
 
         data = {
             "messages": messages,
@@ -178,14 +90,7 @@ class BytezChatCompletion:
                     messages=messages,
                     data=data,
                     api_base=completion_url,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    encoding=encoding,
-                    api_key=api_key,
                     logging_obj=logging_obj,
-                    optional_params=optional_params,
-                    litellm_params=litellm_params,
-                    logger_fn=logger_fn,
                     headers=headers,
                     timeout=timeout,
                 )  # type: ignore
@@ -197,14 +102,8 @@ class BytezChatCompletion:
                 data=data,
                 api_base=completion_url,
                 model_response=model_response,
-                print_verbose=print_verbose,
-                encoding=encoding,
                 api_key=api_key,
                 logging_obj=logging_obj,
-                optional_params=optional_params,
-                stream=False,
-                litellm_params=litellm_params,
-                logger_fn=logger_fn,
                 headers=headers,
                 timeout=timeout,
             )  # type: ignore
@@ -237,14 +136,49 @@ class BytezChatCompletion:
             model=model,
             response=response,
             model_response=model_response,
-            stream=optional_params.get("stream", False),
             logging_obj=logging_obj,  # type: ignore
-            optional_params=optional_params,
             api_key=api_key,
             data=data,
             messages=messages,
-            print_verbose=print_verbose,
-            encoding=encoding,
+        )
+
+    def to_model_id(self, model):
+        # remove bytez off of the front of the model
+        model = "/".join(model.split("/")[1:])
+        return model
+
+    def validate_model_is_supported(self, model_id: str, headers: Dict) -> bool:
+        headers_tuple = tuple(headers.items())
+        return self._validate_model_is_supported_cached(model_id, headers_tuple)
+
+    @lru_cache(maxsize=128)
+    def _validate_model_is_supported_cached(
+        self, model_id: str, headers_tuple: tuple
+    ) -> bool:
+        headers = dict(headers_tuple)
+
+        url = f"{API_BASE}/list/models?modelId={model_id}"
+
+        response = httpx.request(method="GET", url=url, headers=headers)
+        response_data = response.json()
+
+        error = response_data.get("error")
+        if error:
+            raise Exception(error)
+
+        models = response_data.get("output", [])
+        is_supported = len(models) > 0 and models[0].get("task") == "chat"
+
+        return is_supported
+
+    def update_headers(self, headers: dict, api_key: str) -> None:
+        headers.update(
+            {
+                "accept": "application/json",
+                "content-type": "application/json",
+                "Authorization": f"Key {api_key}",
+                "User-Agent": "litellm-client",
+            }
         )
 
     async def async_completion(
@@ -253,16 +187,10 @@ class BytezChatCompletion:
         messages: list,
         api_base: str,
         model_response: ModelResponse,
-        print_verbose: Callable,
-        encoding,
         api_key,
         logging_obj,
-        stream,
         data: dict,
-        optional_params: dict,
         timeout: Union[float, httpx.Timeout],
-        litellm_params=None,
-        logger_fn=None,
         headers={},
     ) -> ModelResponse:
         async_handler = get_async_httpx_client(
@@ -291,14 +219,10 @@ class BytezChatCompletion:
             model=model,
             response=response,
             model_response=model_response,
-            stream=stream,
             logging_obj=logging_obj,
             api_key=api_key,
             data=data,
             messages=messages,
-            print_verbose=print_verbose,
-            optional_params=optional_params,
-            encoding=encoding,
         )
 
     async def async_streaming(
@@ -306,16 +230,9 @@ class BytezChatCompletion:
         model: str,
         messages: list,
         api_base: str,
-        model_response: ModelResponse,
-        print_verbose: Callable,
-        encoding,
-        api_key,
         logging_obj,
         data: dict,
         timeout: Union[float, httpx.Timeout],
-        optional_params=None,
-        litellm_params=None,
-        logger_fn=None,
         headers={},
     ) -> CustomStreamWrapper:
         data["stream"] = True
@@ -327,7 +244,6 @@ class BytezChatCompletion:
                 api_base=api_base,
                 headers=headers,
                 data=json.dumps(data),
-                model=model,
                 messages=messages,
                 logging_obj=logging_obj,
                 timeout=timeout,
@@ -338,22 +254,15 @@ class BytezChatCompletion:
         )
         return streamwrapper
 
-    def embedding(self, *args, **kwargs):
-        pass
-
-    def process_response(  # noqa: PLR0915
+    def process_response(
         self,
         model: str,
         response: httpx.Response,
         model_response: ModelResponse,
-        stream: bool,
         logging_obj: LiteLLMLoggingBaseClass,
-        optional_params: dict,
         api_key: str,
         data: Union[dict, str],
         messages: list,
-        print_verbose,
-        encoding,
     ) -> ModelResponse:
         ## LOGGING
         logging_obj.post_call(
@@ -362,7 +271,6 @@ class BytezChatCompletion:
             original_response=response.text,
             additional_args={"complete_input_dict": data},
         )
-        print_verbose(f"raw model_response: {response.text}")
         ## RESPONSE OBJECT
 
         json = response.json()
@@ -413,7 +321,6 @@ async def make_call(
     api_base: str,
     headers: dict,
     data: str,
-    model: str,
     messages: list,
     logging_obj,
     timeout: Optional[Union[float, httpx.Timeout]],
