@@ -95,8 +95,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
   const fetchSpendData = async () => {
     if (!accessToken || !dateValue.from || !dateValue.to) return;
-    const startTime = dateValue.from;
-    const endTime = dateValue.to;
+    // Create new Date objects to avoid mutating the original dates
+    const startTime = new Date(dateValue.from);
+    const endTime = new Date(dateValue.to);
     
     if (entityType === 'tag') {
       const data = await tagDailyActivityCall(

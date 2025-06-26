@@ -23,19 +23,26 @@ const UsageDatePicker: React.FC<UsageDatePickerProps> = ({
 }) => {
   const handleDateChange = (newValue: DateRangePickerValue) => {
     // Handle the case where "Today" or same-day selection is made
-    if (newValue.from && newValue.to) {
+    if (newValue.from) {
       const adjustedValue = { ...newValue };
       
       // Create new Date objects to avoid mutating the original dates
       const adjustedStartTime = new Date(newValue.from);
-      const adjustedEndTime = new Date(newValue.to);
+      let adjustedEndTime: Date;
       
-      // Check if it's the same day (Today selection)
+      if (newValue.to) {
+        adjustedEndTime = new Date(newValue.to);
+      } else {
+        // If no end date is provided (like "Today" from dropdown), use the same date
+        adjustedEndTime = new Date(newValue.from);
+      }
+      
+      // Check if it's the same day (Today selection or single day selection)
       const isSameDay = 
         adjustedStartTime.toDateString() === adjustedEndTime.toDateString();
       
       if (isSameDay) {
-        // For same-day selections (like "Today"), set proper time boundaries
+        // For same-day selections, set proper time boundaries
         // Use local timezone boundaries that will be converted to UTC properly
         adjustedStartTime.setHours(0, 0, 0, 0); // Start of day in local time
         adjustedEndTime.setHours(23, 59, 59, 999); // End of day in local time
@@ -50,7 +57,7 @@ const UsageDatePicker: React.FC<UsageDatePickerProps> = ({
       
       onValueChange(adjustedValue);
     } else {
-      // If either date is missing, pass through as-is
+      // If no from date, pass through as-is
       onValueChange(newValue);
     }
   };
