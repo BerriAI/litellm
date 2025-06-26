@@ -942,14 +942,33 @@ def team_member_add_duplication_check(
     data: TeamMemberAddRequest,
     existing_team_row: LiteLLM_TeamTable,
 ):
+    """
+    Check if a member already exists in the team.
+    This check is done BEFORE we create/fetch the user, so it only prevents
+    obvious duplicates where both user_id and user_email match exactly.
+    """
     def _check_member_duplication(member: Member):
-        if member.user_id in [m.user_id for m in existing_team_row.members_with_roles]:
-            raise ProxyException(
-                message=f"User={member.user_id} already in team. Existing members={existing_team_row.members_with_roles}",
-                type=ProxyErrorTypes.team_member_already_in_team,
-                param="user_id",
-                code="400",
-            )
+        # Check by user_id if provided
+        if member.user_id is not None:
+            for existing_member in existing_team_row.members_with_roles:
+                if existing_member.user_id == member.user_id:
+                    raise ProxyException(
+                        message=f"User with user_id={member.user_id} already in team. Existing members={existing_team_row.members_with_roles}",
+                        type=ProxyErrorTypes.team_member_already_in_team,
+                        param="user_id",
+                        code="400",
+                    )
+        
+        # Check by user_email if provided
+        if member.user_email is not None:
+            for existing_member in existing_team_row.members_with_roles:
+                if existing_member.user_email == member.user_email:
+                    raise ProxyException(
+                        message=f"User with user_email={member.user_email} already in team. Existing members={existing_team_row.members_with_roles}",
+                        type=ProxyErrorTypes.team_member_already_in_team,
+                        param="user_email",
+                        code="400",
+                    )
 
     if isinstance(data.member, Member):
         _check_member_duplication(data.member)
@@ -1117,7 +1136,7 @@ async def team_member_add(
     ## ADD TO TEAM ##
     if isinstance(data.member, Member):
         # add to team db
-        new_member = data.member
+        new_member = data.member.model_copy()  # Create a copy to avoid modifying the original
 
         # get user id
         if new_member.user_id is None and new_member.user_email is not None:
@@ -1128,7 +1147,22 @@ async def team_member_add(
                 ):
                     new_member.user_id = user.user_id
 
-        complete_team_data.members_with_roles.append(new_member)
+        # Check if member already exists in team before adding
+        member_already_exists = False
+        verbose_proxy_logger.info(f"Checking if member exists. New member - ID: {new_member.user_id}, Email: {new_member.user_email}")
+        verbose_proxy_logger.info(f"Existing members in team: {[(m.user_id, m.user_email) for m in complete_team_data.members_with_roles]}")
+        
+        for existing_member in complete_team_data.members_with_roles:
+            if (new_member.user_id is not None and existing_member.user_id == new_member.user_id) or \
+               (new_member.user_email is not None and existing_member.user_email == new_member.user_email):
+                member_already_exists = True
+                verbose_proxy_logger.info(f"DUPLICATE FOUND! Member already exists in team. User ID: {new_member.user_id}, Email: {new_member.user_email}")
+                break
+        
+        if not member_already_exists:
+            complete_team_data.members_with_roles.append(new_member)
+        else:
+            verbose_proxy_logger.info(f"Skipping duplicate member addition for team {data.team_id}")
 
     elif isinstance(data.member, List):
         # add to team db
@@ -1140,7 +1174,16 @@ async def team_member_add(
                     if user.user_email is not None and user.user_email == nm.user_email:
                         nm.user_id = user.user_id
 
-        complete_team_data.members_with_roles.extend(new_members)
+            # Check if member already exists in team before adding
+            member_already_exists = False
+            for existing_member in complete_team_data.members_with_roles:
+                if (nm.user_id is not None and existing_member.user_id == nm.user_id) or \
+                   (nm.user_email is not None and existing_member.user_email == nm.user_email):
+                    member_already_exists = True
+                    break
+            
+            if not member_already_exists:
+                complete_team_data.members_with_roles.append(nm)
 
     # ADD MEMBER TO TEAM
     _db_team_members = [m.model_dump() for m in complete_team_data.members_with_roles]
