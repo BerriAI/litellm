@@ -271,14 +271,6 @@ class AskSageConfig(BaseConfig):
             )
         ]
 
-        # Ask Sage does not provide usage tokens
-        # from litellm.types.utils import Usage
-        # model_response.usage = Usage(
-        #     prompt_tokens=0,
-        #     completion_tokens=0,
-        #     total_tokens=0,
-        # )
-
         model_response._hidden_params["original_response"] = response_json
 
         return model_response

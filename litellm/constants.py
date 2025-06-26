@@ -243,6 +243,7 @@ LITELLM_CHAT_PROVIDERS = [
     "featherless_ai",
     "nscale",
     "nebius",
+    "asksage",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
