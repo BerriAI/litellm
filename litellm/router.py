@@ -782,6 +782,28 @@ class Router:
             litellm.allm_passthrough_route, call_type="allm_passthrough_route"
         )
 
+        #########################################################
+        # Gemini Native routes
+        #########################################################
+        from litellm.google_genai import (
+            agenerate_content,
+            agenerate_content_stream,
+            generate_content,
+            generate_content_stream,
+        )
+        self.agenerate_content = self.factory_function(
+            agenerate_content, call_type="agenerate_content"
+        )
+        self.generate_content = self.factory_function(
+            generate_content, call_type="generate_content"
+        )
+        self.agenerate_content_stream = self.factory_function(
+            agenerate_content_stream, call_type="agenerate_content_stream"
+        )
+        self.generate_content_stream = self.factory_function(
+            generate_content_stream, call_type="generate_content_stream"
+        )
+
     def validate_fallbacks(self, fallback_param: Optional[List]):
         """
         Validate the fallbacks parameter.
@@ -3242,6 +3264,10 @@ class Router:
             "aimage_edit",
             "allm_passthrough_route",
             "alist_input_items",
+            "agenerate_content",
+            "generate_content",
+            "agenerate_content_stream",
+            "generate_content_stream",
         ] = "assistants",
     ):
         """
@@ -3252,7 +3278,7 @@ class Router:
             - An asynchronous function for asynchronous call types
         """
         # Handle synchronous call types
-        if call_type == "responses":
+        if call_type in ("responses", "generate_content", "generate_content_stream"):
 
             def sync_wrapper(
                 custom_llm_provider: Optional[
@@ -3297,6 +3323,8 @@ class Router:
                 "alist_files",
                 "aimage_edit",
                 "allm_passthrough_route",
+                "agenerate_content",
+                "agenerate_content_stream",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
@@ -4120,20 +4148,26 @@ class Router:
                 original_exception=exception
             )
 
-            _time_to_cooldown = kwargs.get("litellm_params", {}).get(
-                "cooldown_time", self.cooldown_time
-            )
-
+            # Determine cooldown time with priority: deployment config > response header > router default
+            deployment_cooldown = kwargs.get("litellm_params", {}).get("cooldown_time", None)
+            
+            header_cooldown = None
             if exception_headers is not None:
-                _time_to_cooldown = (
-                    litellm.utils._get_retry_after_from_exception_header(
-                        response_headers=exception_headers
-                    )
+                header_cooldown = litellm.utils._get_retry_after_from_exception_header(
+                    response_headers=exception_headers
                 )
-
-                if _time_to_cooldown is None or _time_to_cooldown < 0:
-                    # if the response headers did not read it -> set to default cooldown time
-                    _time_to_cooldown = self.cooldown_time
+            ##############################################
+            # Logic to determine cooldown time
+            # 1. Check if a cooldown time is set in the deployment config
+            # 2. Check if a cooldown time is set in the response header
+            # 3. If no cooldown time is set, use the router default cooldown time
+            ##############################################
+            if deployment_cooldown is not None and deployment_cooldown >= 0:
+                _time_to_cooldown = deployment_cooldown
+            elif header_cooldown is not None and header_cooldown >= 0:
+                _time_to_cooldown = header_cooldown
+            else:
+                _time_to_cooldown = self.cooldown_time
 
             if isinstance(_model_info, dict):
                 deployment_id = _model_info.get("id", None)

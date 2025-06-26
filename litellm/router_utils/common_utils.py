@@ -1,6 +1,10 @@
 import hashlib
 import json
+<<<<<<< litellm_dev_06_25_2025_p2
 from typing import TYPE_CHECKING, Dict, List, Optional, Union
+=======
+from typing import TYPE_CHECKING, Dict, List, Union
+>>>>>>> main
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import OpenAIFileObject
@@ -38,6 +42,7 @@ def add_model_file_id_mappings(
         for model_id, file_id in healthy_deployments.items():
             model_file_id_mapping[model_id] = file_id
     return model_file_id_mapping
+<<<<<<< litellm_dev_06_25_2025_p2
 
 
 def filter_team_based_models(
@@ -73,3 +78,5 @@ def filter_team_based_models(
         for deployment in healthy_deployments
         if deployment.get("model_info", {}).get("id") not in ids_to_remove
     ]
+=======
+>>>>>>> main

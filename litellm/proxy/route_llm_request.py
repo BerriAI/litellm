@@ -73,6 +73,8 @@ async def route_request(
         "alist_input_items",
         "_arealtime",  # private function for realtime API
         "aimage_edit",
+        "agenerate_content",
+        "agenerate_content_stream",
     ],
 ):
     """
