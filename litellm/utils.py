@@ -242,6 +242,7 @@ from litellm.llms.base_llm.image_variations.transformation import (
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.asksage.chat.transformation import AskSageConfig
 
 from ._logging import _is_debugging_on, verbose_logger
 from .caching.caching import (
@@ -3493,6 +3494,17 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
+    elif custom_llm_provider == "asksage":
+        optional_params = litellm.AskSageConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
     elif custom_llm_provider == "nlp_cloud":
         optional_params = litellm.NLPCloudConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -4145,6 +4157,11 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
     elif llm_provider == "aleph_alpha":
         api_key = (
             api_key or litellm.aleph_alpha_key or get_secret("ALEPH_ALPHA_API_KEY")
+        )
+    # asksage
+    elif llm_provider == "asksage":
+        api_key = (
+            api_key or litellm.asksage_api_key or get_secret("ASKSAGE_API_KEY")
         )
     # baseten
     elif llm_provider == "baseten":
@@ -6731,6 +6748,8 @@ class ProviderConfigManager:
             return litellm.OpenAIGPTConfig()
         elif litellm.LlmProviders.NSCALE == provider:
             return litellm.NscaleConfig()
+        elif litellm.LlmProviders.ASKSAGE == provider:
+            return AskSageConfig()
         return None
 
     @staticmethod

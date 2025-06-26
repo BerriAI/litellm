@@ -437,6 +437,40 @@ replicate_models: List = [
     "replit/replit-code-v1-3b:b84f4c074b807211cd75e3e8b1589b6399052125b4c27106e43d47189e8415ad",
 ]
 
+asksage_models: List = [
+    "asksage/aws-bedrock-claude-35-sonnet-gov",
+    "asksage/llma3",
+    "asksage/claude-35-sonnet",
+    "asksage/claude-37-sonnet",
+    "asksage/claude-4-sonnet",
+    "asksage/claude-4-opus",
+    "asksage/gpt-gov",
+    "asksage/gpt4-gov",
+    "asksage/gpt",
+    "asksage/gpt4",
+    "asksage/gpt35-16k",
+    "asksage/gpt-4o",
+    "asksage/gpt-4o-mini",
+    "asksage/dall-e-3",
+    "asksage/gpt-4.5-preview",
+    "asksage/google-gemini-20-flash",
+    "asksage/google-imagen-3",
+    "asksage/google-gemini-2.5-pro",
+    "asksage/gpt-4o-gov",
+    "asksage/gpt-4o-mini-gov",
+    "asksage/groq-70b",
+    "asksage/groq-llama33",
+    "asksage/groq-llama4-scout",
+    "asksage/groq-deepseek",
+    "asksage/gpt-o1",
+    "asksage/gpt-o3-mini",
+    "asksage/gpt-4.1",
+    "asksage/gpt-4.1-mini",
+    "asksage/gpt-4.1-nano",
+    "asksage/gpt-image-1",
+    "asksage/xai-grok"
+]
+
 clarifai_models: List = [
     "clarifai/meta.Llama-3.Llama-3-8B-Instruct",
     "clarifai/gcp.generate.gemma-1_1-7b-it",

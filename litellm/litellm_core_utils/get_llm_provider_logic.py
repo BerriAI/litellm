@@ -144,7 +144,7 @@ def get_llm_provider(  # noqa: PLR0915
         if api_key and api_key.startswith("os.environ/"):
             dynamic_api_key = get_secret_str(api_key)
         # check if llm provider part of model name
-
+        
         if (
             model.split("/", 1)[0] in litellm.provider_list
             and model.split("/", 1)[0] not in litellm.model_list_set
@@ -228,6 +228,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.featherless.ai/v1":
                         custom_llm_provider = "featherless_ai"
                         dynamic_api_key = get_secret_str("FEATHERLESS_AI_API_KEY")
+                    elif endpoint == "https://api.asksage.ai/server":
+                        custom_llm_provider = "asksage"
+                        dynamic_api_key = get_secret_str("ASKSAGE_API_KEY")
                     elif endpoint == litellm.NscaleConfig.API_BASE_URL:
                         custom_llm_provider = "nscale"
                         dynamic_api_key = litellm.NscaleConfig.get_api_key()
@@ -336,6 +339,8 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "openai"
         elif model in litellm.empower_models:
             custom_llm_provider = "empower"
+        elif model in litellm.asksage_models:
+            custom_llm_provider = "asksage"
         elif model == "*":
             custom_llm_provider = "openai"
         if not custom_llm_provider:
@@ -636,6 +641,14 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or f"https://{get_secret('SNOWFLAKE_ACCOUNT_ID')}.snowflakecomputing.com/api/v2/cortex/inference:complete"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("SNOWFLAKE_JWT")
+    elif custom_llm_provider == "asksage":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.AskSageConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+        dynamic_api_key = api_key or get_secret_str("ASKSAGE_API_KEY")
     elif custom_llm_provider == "featherless_ai":
         (
             api_base,
