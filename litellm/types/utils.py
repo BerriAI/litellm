@@ -277,14 +277,6 @@ class CallTypes(Enum):
     aresponses = "aresponses"
     alist_input_items = "alist_input_items"
 
-    #########################################################
-    # Google GenAI Native Call Types
-    #########################################################
-    generate_content = "generate_content"
-    agenerate_content = "agenerate_content"
-    generate_content_stream = "generate_content_stream"
-    agenerate_content_stream = "agenerate_content_stream"
-
 
 CallTypesLiteral = Literal[
     "embedding",
@@ -312,10 +304,6 @@ CallTypesLiteral = Literal[
     "anthropic_messages",
     "aretrieve_batch",
     "retrieve_batch",
-    "generate_content",
-    "agenerate_content",
-    "generate_content_stream",
-    "agenerate_content_stream",
 ]
 
 
