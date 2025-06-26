@@ -384,3 +384,42 @@ async def test_router_aretrieve_batch():
         print(mock_aretrieve_batch.call_args.kwargs)
         assert mock_aretrieve_batch.call_args.kwargs["api_key"] == "my-custom-key"
         assert mock_aretrieve_batch.call_args.kwargs["api_base"] == "my-custom-base"
+
+
+@pytest.mark.asyncio
+async def test_router_aretrieve_file_content():
+    """
+    Test that router.acreate_file with JSONL file returns the correct response
+    """
+
+    with patch.object(
+        litellm, "afile_content", return_value=AsyncMock()
+    ) as mock_afile_content:
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-3.5-turbo",
+                    "litellm_params": {
+                        "model": "gpt-3.5-turbo",
+                        "custom_llm_provider": "azure",
+                        "api_key": "my-custom-key",
+                        "api_base": "my-custom-base",
+                    },
+                }
+            ],
+        )
+        try:
+            response = await router.afile_content(
+                **{
+                    "model": "gpt-3.5-turbo",
+                    "file_id": "my-unique-file-id",
+                }
+            )  # type: ignore
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_afile_content.assert_called_once()
+
+        print(mock_afile_content.call_args.kwargs)
+        assert mock_afile_content.call_args.kwargs["api_key"] == "my-custom-key"
+        assert mock_afile_content.call_args.kwargs["api_base"] == "my-custom-base"
