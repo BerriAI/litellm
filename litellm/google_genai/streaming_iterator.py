@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.success_handler import (
@@ -32,7 +32,7 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
         self.litellm_logging_obj = litellm_logging_obj
         self.request_body = request_body
         self.start_time = datetime.now()
-        self.collected_chunks = []
+        self.collected_chunks: List[bytes] = []
         self.model = model
 
     async def _handle_async_streaming_logging(
