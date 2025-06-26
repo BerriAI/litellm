@@ -225,23 +225,31 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
       }
 
       // If only one page, just set the data
-      if (firstPageData.metadata.total_pages === 1) {
+      if (firstPageData.metadata.total_pages <= 1) {
         setUserSpendData(firstPageData);
         return;
       }
 
       // Fetch all pages
       const allResults = [...firstPageData.results];
+      const aggregatedMetadata = { ...firstPageData.metadata };
       
       for (let page = 2; page <= firstPageData.metadata.total_pages; page++) {
         const pageData = await userDailyActivityCall(accessToken, startTime, endTime, page);
         allResults.push(...pageData.results);
+        if (pageData.metadata) {
+            aggregatedMetadata.total_spend += pageData.metadata.total_spend || 0;
+            aggregatedMetadata.total_api_requests += pageData.metadata.total_api_requests || 0;
+            aggregatedMetadata.total_successful_requests += pageData.metadata.total_successful_requests || 0;
+            aggregatedMetadata.total_failed_requests += pageData.metadata.total_failed_requests || 0;
+            aggregatedMetadata.total_tokens += pageData.metadata.total_tokens || 0;
+        }
       }
 
       // Combine all results with the first page's metadata
       setUserSpendData({
         results: allResults,
-        metadata: firstPageData.metadata
+        metadata: aggregatedMetadata
       });
     } catch (error) {
       console.error("Error fetching user spend data:", error);
