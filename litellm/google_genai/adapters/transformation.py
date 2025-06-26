@@ -1,6 +1,7 @@
 import json
 from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Union, cast
 
+from litellm.litellm_core_utils.json_validation_rule import normalize_tool_schema
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -95,6 +96,8 @@ class GoogleGenAIAdapter:
     def __init__(self) -> None:
         pass
 
+
+
     def translate_generate_content_to_completion(
         self,
         model: str,
@@ -147,9 +150,14 @@ class GoogleGenAIAdapter:
                 
         # Handle tools transformation
         if "tools" in kwargs:
-            openai_tools = self._transform_google_genai_tools_to_openai(kwargs["tools"])
-            if openai_tools:
-                completion_request["tools"] = openai_tools
+            tools = kwargs["tools"]
+            
+            # Check if tools are already in OpenAI format or Google GenAI format
+            if isinstance(tools, list) and len(tools) > 0:
+                # Tools are in Google GenAI format, transform them
+                openai_tools = self._transform_google_genai_tools_to_openai(tools)
+                if openai_tools:
+                    completion_request["tools"] = openai_tools
                 
         # Handle tool_config (tool choice)
         if "tool_config" in kwargs:
@@ -178,39 +186,45 @@ class GoogleGenAIAdapter:
 
     def _transform_google_genai_tools_to_openai(self, tools: List[Dict[str, Any]]) -> List[ChatCompletionToolParam]:
         """Transform Google GenAI tools to OpenAI tools format"""
-        openai_tools: List[ChatCompletionToolParam] = []
+        openai_tools: List[Dict[str, Any]] = []
         
         for tool in tools:
             if "functionDeclarations" in tool:
                 for func_decl in tool["functionDeclarations"]:
-                    function_chunk = ChatCompletionToolParamFunctionChunk(
-                        name=func_decl.get("name", ""),
-                    )
+                    function_chunk: Dict[str, Any] = {
+                        "name": func_decl.get("name", ""),
+                    }
                     
                     if "description" in func_decl:
                         function_chunk["description"] = func_decl["description"]
                     if "parameters" in func_decl:
                         function_chunk["parameters"] = func_decl["parameters"]
                         
-                    openai_tools.append(
-                        ChatCompletionToolParam(type="function", function=function_chunk)
-                    )
+                    openai_tool = {
+                        "type": "function",
+                        "function": function_chunk
+                    }
+                    openai_tools.append(openai_tool)
+        
+
+        # normalize the tool schemas
+        normalized_tools = [normalize_tool_schema(tool) for tool in openai_tools]
                     
-        return openai_tools
+        return cast(List[ChatCompletionToolParam], normalized_tools)
 
     def _transform_google_genai_tool_config_to_openai(self, tool_config: Dict[str, Any]) -> Optional[ChatCompletionToolChoiceValues]:
         """Transform Google GenAI tool_config to OpenAI tool_choice"""
         function_calling_config = tool_config.get("functionCallingConfig", {})
         mode = function_calling_config.get("mode", "AUTO")
         
-        if mode == "AUTO":
-            return cast(ChatCompletionToolChoiceValues, "auto")
-        elif mode == "ANY":
-            return cast(ChatCompletionToolChoiceValues, "required")
-        elif mode == "NONE":
-            return cast(ChatCompletionToolChoiceValues, "none")
-        else:
-            return cast(ChatCompletionToolChoiceValues, "auto")
+        mode_mapping = {
+            "AUTO": "auto",
+            "ANY": "required", 
+            "NONE": "none"
+        }
+        
+        tool_choice = mode_mapping.get(mode, "auto")
+        return cast(ChatCompletionToolChoiceValues, tool_choice)
 
     def _transform_contents_to_messages(self, contents: List[Dict[str, Any]]) -> List[AllMessageValues]:
         """Transform Google GenAI contents to OpenAI messages format"""

@@ -34,27 +34,7 @@ class GenerateContentToCompletionHandler:
         
         if stream:
             completion_kwargs["stream"] = stream
-            
-        # Add any additional kwargs that aren't already in the completion request
-        # Exclude Google GenAI-specific parameters that shouldn't be passed to completion
-        excluded_keys = {
-            "generate_content", 
-            "agenerate_content_stream", 
-            "generate_content_stream",
-            "contents",  # This is already transformed to messages
-            "config",    # This is already processed above
-            "tools",     # This is handled by the adapter transformation
-            "tool_config",  # This is transformed to tool_choice by the adapter
-        }
-        extra_kwargs = extra_kwargs or {}
-        for key, value in extra_kwargs.items():
-            if (
-                key not in excluded_keys
-                and key not in completion_kwargs
-                and value is not None
-            ):
-                completion_kwargs[key] = value
-                
+                            
         return completion_kwargs
 
     @staticmethod

@@ -507,17 +507,17 @@ def test_mixed_content_transformation():
     assert len(assistant_msg["tool_calls"]) == 2
     
     # Check first tool call
-    tool_call_1 = assistant_msg["tool_calls"][0]
-    assert tool_call_1["function"]["name"] == "get_weather"
-    args_1 = json.loads(tool_call_1["function"]["arguments"])
-    assert args_1["location"] == "San Francisco"
+    tool_call1 = assistant_msg["tool_calls"][0]
+    assert tool_call1["function"]["name"] == "get_weather"
+    args1 = json.loads(tool_call1["function"]["arguments"])
+    assert args1["location"] == "San Francisco"
     
     # Check second tool call
-    tool_call_2 = assistant_msg["tool_calls"][1]
-    assert tool_call_2["function"]["name"] == "get_forecast"
-    args_2 = json.loads(tool_call_2["function"]["arguments"])
-    assert args_2["location"] == "San Francisco"
-    assert args_2["days"] == 3
+    tool_call2 = assistant_msg["tool_calls"][1]
+    assert tool_call2["function"]["name"] == "get_forecast"
+    args2 = json.loads(tool_call2["function"]["arguments"])
+    assert args2["location"] == "San Francisco"
+    assert args2["days"] == 3
 
 def test_completion_to_generate_content_transformation():
     """Test transforming a completion response back to generate_content format"""
@@ -655,3 +655,83 @@ def test_handler_parameter_exclusion():
     assert completion_kwargs["model"] == "gpt-3.5-turbo"
     assert "temperature" in completion_kwargs
     assert completion_kwargs["temperature"] == 0.7
+
+def test_shared_schema_normalization_utilities():
+    """Test the shared schema normalization utility functions work correctly"""
+    from litellm.litellm_core_utils.json_validation_rule import (
+        normalize_json_schema_types,
+        normalize_tool_schema,
+    )
+
+    # Test normalize_json_schema_types with nested structures
+    schema_with_uppercase_types = {
+        "type": "OBJECT",
+        "properties": {
+            "name": {"type": "STRING"},
+            "age": {"type": "INTEGER"},
+            "active": {"type": "BOOLEAN"},
+            "scores": {
+                "type": "ARRAY",
+                "items": {"type": "NUMBER"}
+            },
+            "metadata": {
+                "type": "OBJECT",
+                "properties": {
+                    "nested_field": {"type": "STRING"}
+                }
+            }
+        },
+        "required": ["name", "age"]
+    }
+    
+    normalized_schema = normalize_json_schema_types(schema_with_uppercase_types)
+    
+    # Check top-level type normalization
+    assert normalized_schema["type"] == "object"
+    
+    # Check properties normalization
+    props = normalized_schema["properties"]
+    assert props["name"]["type"] == "string"
+    assert props["age"]["type"] == "integer"
+    assert props["active"]["type"] == "boolean"
+    assert props["scores"]["type"] == "array"
+    assert props["scores"]["items"]["type"] == "number"
+    assert props["metadata"]["type"] == "object"
+    assert props["metadata"]["properties"]["nested_field"]["type"] == "string"
+    
+    # Check non-type fields are preserved
+    assert normalized_schema["required"] == ["name", "age"]
+    
+    # Test normalize_tool_schema
+    tool_with_uppercase_types = {
+        "type": "function",
+        "function": {
+            "name": "test_function",
+            "description": "A test function",
+            "parameters": {
+                "type": "OBJECT",
+                "properties": {
+                    "param1": {"type": "STRING"},
+                    "param2": {"type": "BOOLEAN"}
+                }
+            }
+        }
+    }
+    
+    normalized_tool = normalize_tool_schema(tool_with_uppercase_types)
+    
+    # Check that function info is preserved
+    assert normalized_tool["type"] == "function"
+    assert normalized_tool["function"]["name"] == "test_function"
+    assert normalized_tool["function"]["description"] == "A test function"
+    
+    # Check that parameters are normalized
+    params = normalized_tool["function"]["parameters"]
+    assert params["type"] == "object"
+    assert params["properties"]["param1"]["type"] == "string"
+    assert params["properties"]["param2"]["type"] == "boolean"
+    
+    # Test edge cases
+    assert normalize_json_schema_types("not_a_dict") == "not_a_dict"
+    assert normalize_json_schema_types([{"type": "STRING"}]) == [{"type": "string"}]
+    assert normalize_tool_schema("not_a_dict") == "not_a_dict"
