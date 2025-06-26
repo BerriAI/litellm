@@ -88,6 +88,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             litellm_parent_otel_span=litellm_parent_otel_span,
         )
 
+        ## STORE MODEL MAPPINGS IN DB
+
         await self.prisma_client.db.litellm_managedfiletable.create(
             data={
                 "unified_file_id": file_id,
@@ -367,6 +369,36 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         return data
 
+    async def async_filter_deployments(
+        self,
+        model: str,
+        healthy_deployments: List,
+        messages: Optional[List[AllMessageValues]],
+        request_kwargs: Optional[Dict] = None,
+        parent_otel_span: Optional[Span] = None,
+    ) -> List[Dict]:
+        if request_kwargs is None:
+            return healthy_deployments
+
+        input_file_id = cast(Optional[str], request_kwargs.get("input_file_id"))
+        model_file_id_mapping = cast(
+            Optional[Dict[str, Dict[str, str]]],
+            request_kwargs.get("model_file_id_mapping"),
+        )
+        allowed_model_ids = []
+        if input_file_id and model_file_id_mapping:
+            model_id_dict = model_file_id_mapping.get(input_file_id, {})
+            allowed_model_ids = list(model_id_dict.keys())
+
+        if len(allowed_model_ids) == 0:
+            return healthy_deployments
+
+        return [
+            deployment
+            for deployment in healthy_deployments
+            if deployment.get("model_info", {}).get("id") in allowed_model_ids
+        ]
+
     async def async_pre_call_deployment_hook(
         self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
     ) -> Optional[dict]:
@@ -500,15 +532,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         ## STORE MODEL MAPPINGS IN DB
         model_mappings: Dict[str, str] = {}
+
         for file_object in responses:
-            model_id = file_object._hidden_params.get("model_id")
-            if model_id is None:
-                verbose_logger.warning(
-                    f"Skipping file_object: {file_object} because model_id in hidden_params={file_object._hidden_params} is None"
-                )
-                continue
-            file_id = file_object.id
-            model_mappings[model_id] = file_id
+            model_file_id_mapping = file_object._hidden_params.get(
+                "model_file_id_mapping"
+            )
+            if model_file_id_mapping and isinstance(model_file_id_mapping, dict):
+                model_mappings.update(model_file_id_mapping)
 
         await self.store_unified_file_id(
             file_id=response.id,

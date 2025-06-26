@@ -269,3 +269,57 @@ async def test_can_user_call_unified_file_id(call_type):
             data={"file_id": unified_file_id},
             call_type=call_type,
         )
+
+
+@pytest.mark.asyncio
+async def test_router_acreate_batch_only_selects_from_file_id_mapping(monkeypatch):
+    """
+    Test that router.acreate_batch only selects model_id from the file_id_mapping
+    """
+    import litellm
+
+    prisma_client = AsyncMock()
+    return_value = MagicMock()
+    return_value.created_by = "123"
+    prisma_client.db.litellm_managedobjecttable.find_first.return_value = return_value
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=prisma_client
+    )
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [proxy_managed_files],
+    )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+                "model_info": {"id": "1234"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+                "model_info": {"id": "5678"},
+            },
+        ],
+    )
+
+    file_id = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9vY3RldC1zdHJlYW07dW5pZmllZF9pZCw2YmQ4ZjhhYS02NmEzLTRmY2MtOTIxZS1lMTYwYzIzZWZjNzU7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00bztsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1MTENVRkI1MnVUTWE5aE5ZanRldzlWO2xsbV9vdXRwdXRfZmlsZV9tb2RlbF9pZCxmMzJlNWQ0OC05YWZmLTQ5YjMtOWE1Ny0zYzJhN2JjN2NjMmE"
+
+    model_file_id_mapping = {file_id: {"5678": "file-LLCUFB52uTMa9hNYjtew9V"}}
+
+    with patch.object(
+        litellm, "acreate_batch", return_value=AsyncMock()
+    ) as mock_acreate_batch:
+        for _ in range(1000):
+            response = await router.acreate_batch(
+                model="gpt-3.5-turbo",
+                input_file_id=file_id,
+                model_file_id_mapping=model_file_id_mapping,
+            )
+
+            mock_acreate_batch.assert_called()
+            assert "5678" in json.dumps(mock_acreate_batch.call_args.kwargs)
