@@ -3,16 +3,11 @@ Unified /v1/messages endpoint - (Anthropic Spec)
 """
 
 import asyncio
-import json
-import time
-import traceback
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import STREAM_SSE_DATA_PREFIX
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
@@ -21,79 +16,8 @@ from litellm.proxy.common_request_processing import (
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
-from litellm.proxy.utils import ProxyLogging
 
 router = APIRouter()
-
-
-def return_anthropic_chunk(chunk: Any) -> str:
-    """
-    Helper function to format streaming chunks for Anthropic API format
-
-    Args:
-        chunk: A string or dictionary to be returned in SSE format
-
-    Returns:
-        str: A properly formatted SSE chunk string
-    """
-    if isinstance(chunk, dict):
-        # Use safe_dumps for proper JSON serialization with circular reference detection
-        chunk_str = safe_dumps(chunk)
-        return f"{STREAM_SSE_DATA_PREFIX}{chunk_str}\n\n"
-    else:
-        return chunk
-
-
-async def async_data_generator_anthropic(
-    response,
-    user_api_key_dict: UserAPIKeyAuth,
-    request_data: dict,
-    proxy_logging_obj: ProxyLogging,
-):
-    verbose_proxy_logger.debug("inside generator")
-    try:
-        time.time()
-        async for chunk in response:
-            verbose_proxy_logger.debug(
-                "async_data_generator: received streaming chunk - {}".format(chunk)
-            )
-            ### CALL HOOKS ### - modify outgoing data
-            chunk = await proxy_logging_obj.async_post_call_streaming_hook(
-                user_api_key_dict=user_api_key_dict, response=chunk
-            )
-
-            # Format chunk using helper function
-            yield return_anthropic_chunk(chunk)
-    except Exception as e:
-        verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
-                str(e)
-            )
-        )
-        await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict,
-            original_exception=e,
-            request_data=request_data,
-        )
-        verbose_proxy_logger.debug(
-            f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
-        )
-
-        if isinstance(e, HTTPException):
-            raise e
-        else:
-            error_traceback = traceback.format_exc()
-            error_msg = f"{str(e)}\n\n{error_traceback}"
-
-        proxy_exception = ProxyException(
-            message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
-        )
-        error_returned = json.dumps({"error": proxy_exception.to_dict()})
-        yield f"{STREAM_SSE_DATA_PREFIX}{error_returned}\n\n"
-
 
 @router.post(
     "/v1/messages",
@@ -243,7 +167,7 @@ async def anthropic_response(  # noqa: PLR0915
         if (
             "stream" in data and data["stream"] is True
         ):  # use generate_responses to stream responses
-            selected_data_generator = async_data_generator_anthropic(
+            selected_data_generator = ProxyBaseLLMRequestProcessing.async_sse_data_generator(
                 response=response,
                 user_api_key_dict=user_api_key_dict,
                 request_data=data,

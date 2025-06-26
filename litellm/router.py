@@ -743,6 +743,7 @@ class Router:
         self.afile_delete = self.factory_function(
             litellm.afile_delete, call_type="afile_delete"
         )
+
         self.afile_content = self.factory_function(
             litellm.afile_content, call_type="afile_content"
         )
@@ -779,6 +780,28 @@ class Router:
         )
         self.allm_passthrough_route = self.factory_function(
             litellm.allm_passthrough_route, call_type="allm_passthrough_route"
+        )
+
+        #########################################################
+        # Gemini Native routes
+        #########################################################
+        from litellm.google_genai import (
+            agenerate_content,
+            agenerate_content_stream,
+            generate_content,
+            generate_content_stream,
+        )
+        self.agenerate_content = self.factory_function(
+            agenerate_content, call_type="agenerate_content"
+        )
+        self.generate_content = self.factory_function(
+            generate_content, call_type="generate_content"
+        )
+        self.agenerate_content_stream = self.factory_function(
+            agenerate_content_stream, call_type="agenerate_content_stream"
+        )
+        self.generate_content_stream = self.factory_function(
+            generate_content_stream, call_type="generate_content_stream"
         )
 
     def validate_fallbacks(self, fallback_param: Optional[List]):
@@ -2458,9 +2481,9 @@ class Router:
         self._update_kwargs_before_fallbacks(
             model=model,
             kwargs=kwargs,
-            metadata_variable_name = _get_router_metadata_variable_name(
+            metadata_variable_name=_get_router_metadata_variable_name(
                 function_name=function_name
-            )
+            ),
         )
         try:
             verbose_router_logger.debug(
@@ -2790,6 +2813,8 @@ class Router:
         **kwargs,
     ) -> OpenAIFileObject:
         try:
+            from litellm.router_utils.common_utils import add_model_file_id_mappings
+
             verbose_router_logger.debug(
                 f"Inside _atext_completion()- model: {model}; kwargs: {kwargs}"
             )
@@ -2884,6 +2909,7 @@ class Router:
                 return response
 
             tasks = []
+
             if isinstance(healthy_deployments, dict):
                 tasks.append(create_file_for_deployment(healthy_deployments))
             else:
@@ -2894,7 +2920,15 @@ class Router:
 
             if len(responses) == 0:
                 raise Exception("No healthy deployments found.")
-            return responses[0]
+
+            model_file_id_mapping = add_model_file_id_mappings(
+                healthy_deployments=healthy_deployments, responses=responses
+            )
+            returned_response = cast(OpenAIFileObject, responses[0])
+            returned_response._hidden_params["model_file_id_mapping"] = (
+                model_file_id_mapping
+            )
+            return returned_response
         except Exception as e:
             verbose_router_logger.exception(
                 f"litellm.acreate_file(model={model}, {kwargs})\033[31m Exception {str(e)}\033[0m"
@@ -3230,6 +3264,10 @@ class Router:
             "aimage_edit",
             "allm_passthrough_route",
             "alist_input_items",
+            "agenerate_content",
+            "generate_content",
+            "agenerate_content_stream",
+            "generate_content_stream",
         ] = "assistants",
     ):
         """
@@ -3240,7 +3278,7 @@ class Router:
             - An asynchronous function for asynchronous call types
         """
         # Handle synchronous call types
-        if call_type == "responses":
+        if call_type in ("responses", "generate_content", "generate_content_stream"):
 
             def sync_wrapper(
                 custom_llm_provider: Optional[
@@ -3285,6 +3323,8 @@ class Router:
                 "alist_files",
                 "aimage_edit",
                 "allm_passthrough_route",
+                "agenerate_content",
+                "agenerate_content_stream",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
@@ -4108,20 +4148,26 @@ class Router:
                 original_exception=exception
             )
 
-            _time_to_cooldown = kwargs.get("litellm_params", {}).get(
-                "cooldown_time", self.cooldown_time
-            )
-
+            # Determine cooldown time with priority: deployment config > response header > router default
+            deployment_cooldown = kwargs.get("litellm_params", {}).get("cooldown_time", None)
+            
+            header_cooldown = None
             if exception_headers is not None:
-                _time_to_cooldown = (
-                    litellm.utils._get_retry_after_from_exception_header(
-                        response_headers=exception_headers
-                    )
+                header_cooldown = litellm.utils._get_retry_after_from_exception_header(
+                    response_headers=exception_headers
                 )
-
-                if _time_to_cooldown is None or _time_to_cooldown < 0:
-                    # if the response headers did not read it -> set to default cooldown time
-                    _time_to_cooldown = self.cooldown_time
+            ##############################################
+            # Logic to determine cooldown time
+            # 1. Check if a cooldown time is set in the deployment config
+            # 2. Check if a cooldown time is set in the response header
+            # 3. If no cooldown time is set, use the router default cooldown time
+            ##############################################
+            if deployment_cooldown is not None and deployment_cooldown >= 0:
+                _time_to_cooldown = deployment_cooldown
+            elif header_cooldown is not None and header_cooldown >= 0:
+                _time_to_cooldown = header_cooldown
+            else:
+                _time_to_cooldown = self.cooldown_time
 
             if isinstance(_model_info, dict):
                 deployment_id = _model_info.get("id", None)
@@ -6169,12 +6215,21 @@ class Router:
         *OR*
         - Dict, if specific model chosen
         """
+        from litellm.router_utils.common_utils import filter_team_based_models
+
         model, healthy_deployments = self._common_checks_available_deployment(
             model=model,
             messages=messages,
             input=input,
             specific_deployment=specific_deployment,
         )  # type: ignore
+
+        # IF TEAM ID SPECIFIED ON MODEL, AND REQUEST CONTAINS USER_API_KEY_TEAM_ID, FILTER OUT MODELS THAT ARE NOT IN THE TEAM
+        ## THIS PREVENTS WRITING FILES OF OTHER TEAMS TO MODELS THAT ARE TEAM-ONLY MODELS
+        healthy_deployments = filter_team_based_models(
+            healthy_deployments=healthy_deployments,
+            request_kwargs=request_kwargs,
+        )
 
         if isinstance(healthy_deployments, dict):
             return healthy_deployments
