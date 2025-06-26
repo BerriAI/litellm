@@ -1,11 +1,8 @@
 model_list:
-  - model_name: vertex_ai/*
+  - model_name: azure_ai/*
     litellm_params:
-      model: vertex_ai/*
-  - model_name: "anthropic/*"
-    litellm_params:
-      model: "anthropic/*"
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: azure_ai/*
+
 
 mcp_servers:
   deepwiki_mcp:
@@ -18,3 +15,6 @@ general_settings:
 
 litellm_settings:
   callbacks: ["langfuse", "datadog"]
+  cache: True
+  cache_params:        # set cache params for redis
+    type: redis
