@@ -1297,6 +1297,12 @@ def completion(  # type: ignore # noqa: PLR0915
         except Exception as e:
             verbose_logger.debug("Error getting model info: {}".format(e))
             model_info = {}
+            if model.startswith(
+                "responses/"
+            ):  # handle azure models - `azure/responses/<deployment-name>`
+                model = model.split("/")[1]
+                mode = "responses"
+                model_info["mode"] = mode
 
         if model_info.get("mode") == "responses":
             from litellm.completion_extras import responses_api_bridge

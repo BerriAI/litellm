@@ -2156,6 +2156,66 @@
         "supports_tool_choice": true,
         "supports_native_streaming": true
     },
+    "azure/o3-pro": {
+        "max_tokens": 100000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 2e-05,
+        "output_cost_per_token": 8e-05,
+        "input_cost_per_token_batches": 1e-05,
+        "output_cost_per_token_batches": 4e-05,
+        "litellm_provider": "azure",
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": false,
+        "supports_vision": true,
+        "supports_prompt_caching": false,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "azure/o3-pro-2025-06-10": {
+        "max_tokens": 100000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 2e-05,
+        "output_cost_per_token": 8e-05,
+        "input_cost_per_token_batches": 1e-05,
+        "output_cost_per_token_batches": 4e-05,
+        "litellm_provider": "azure",
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": false,
+        "supports_vision": true,
+        "supports_prompt_caching": false,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
     "azure/o3": {
         "max_tokens": 100000,
         "max_input_tokens": 200000,
@@ -3986,7 +4046,8 @@
         "litellm_provider": "mistral",
         "mode": "chat",
         "supports_assistant_prefill": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "mistral/mistral-small": {
         "max_tokens": 8191,
@@ -3998,7 +4059,8 @@
         "supports_function_calling": true,
         "mode": "chat",
         "supports_assistant_prefill": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "mistral/mistral-small-latest": {
         "max_tokens": 8191,
@@ -4010,7 +4072,8 @@
         "supports_function_calling": true,
         "mode": "chat",
         "supports_assistant_prefill": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "mistral/mistral-medium": {
         "max_tokens": 8191,
@@ -4021,7 +4084,8 @@
         "litellm_provider": "mistral",
         "mode": "chat",
         "supports_assistant_prefill": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "mistral/mistral-medium-latest": {
         "max_tokens": 8191,
@@ -4033,7 +4097,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "mistral/mistral-medium-2505": {
         "max_tokens": 8191,
@@ -4045,7 +4110,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "mistral/mistral-medium-2312": {
         "max_tokens": 8191,
@@ -4056,7 +4122,8 @@
         "litellm_provider": "mistral",
         "mode": "chat",
         "supports_assistant_prefill": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "mistral/mistral-large-latest": {
         "max_tokens": 128000,
@@ -4068,7 +4135,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "mistral/mistral-large-2411": {
         "max_tokens": 128000,
@@ -4080,7 +4148,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "mistral/mistral-large-2402": {
         "max_tokens": 8191,
@@ -4092,7 +4161,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "mistral/mistral-large-2407": {
         "max_tokens": 128000,
@@ -4104,7 +4174,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "mistral/pixtral-large-latest": {
         "max_tokens": 128000,
@@ -4117,7 +4188,8 @@
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
         "supports_vision": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "mistral/pixtral-large-2411": {
         "max_tokens": 128000,
@@ -4130,7 +4202,8 @@
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
         "supports_vision": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "mistral/pixtral-12b-2409": {
         "max_tokens": 128000,
@@ -4143,7 +4216,8 @@
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
         "supports_vision": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "mistral/open-mistral-7b": {
         "max_tokens": 8191,
@@ -4154,7 +4228,8 @@
         "litellm_provider": "mistral",
         "mode": "chat",
         "supports_assistant_prefill": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "mistral/open-mixtral-8x7b": {
         "max_tokens": 8191,
@@ -4166,7 +4241,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "mistral/open-mixtral-8x22b": {
         "max_tokens": 8191,
@@ -4178,7 +4254,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "mistral/codestral-latest": {
         "max_tokens": 8191,
@@ -4189,7 +4266,8 @@
         "litellm_provider": "mistral",
         "mode": "chat",
         "supports_assistant_prefill": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "mistral/codestral-2405": {
         "max_tokens": 8191,
@@ -4200,7 +4278,8 @@
         "litellm_provider": "mistral",
         "mode": "chat",
         "supports_assistant_prefill": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "mistral/open-mistral-nemo": {
         "max_tokens": 128000,
@@ -4212,7 +4291,8 @@
         "mode": "chat",
         "source": "https://mistral.ai/technology/",
         "supports_assistant_prefill": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "mistral/open-mistral-nemo-2407": {
         "max_tokens": 128000,
@@ -4224,7 +4304,8 @@
         "mode": "chat",
         "source": "https://mistral.ai/technology/",
         "supports_assistant_prefill": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "mistral/open-codestral-mamba": {
         "max_tokens": 256000,
@@ -4261,7 +4342,8 @@
         "source": "https://mistral.ai/news/devstral",
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "mistral/magistral-medium-latest": {
         "max_tokens": 40000,
@@ -4275,7 +4357,8 @@
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
         "supports_tool_choice": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true
     },
     "mistral/magistral-medium-2506": {
         "max_tokens": 40000,
@@ -4289,7 +4372,8 @@
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
         "supports_tool_choice": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true
     },
     "mistral/magistral-small-latest": {
         "max_tokens": 40000,
@@ -4303,7 +4387,8 @@
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
         "supports_tool_choice": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true
     },
     "mistral/magistral-small-2506": {
         "max_tokens": 40000,
@@ -4317,7 +4402,8 @@
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
         "supports_tool_choice": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_response_schema": true
     },
     "mistral/mistral-embed": {
         "max_tokens": 8192,
