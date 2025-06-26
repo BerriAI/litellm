@@ -6997,7 +6997,11 @@ class ProviderConfigManager:
 
             return GoogleGenAIConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:
-            pass
+            from litellm.llms.vertex_ai.google_genai.transformation import (
+                VertexAIGoogleGenAIConfig,
+            )
+
+            return VertexAIGoogleGenAIConfig()
         return None
 
 

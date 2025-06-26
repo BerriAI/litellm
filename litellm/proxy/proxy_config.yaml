@@ -1,8 +1,7 @@
 model_list:
-  - model_name: gemini/*
+  - model_name: vertex_ai/*
     litellm_params:
-      model: gemini/*
-      api_key: os.environ/GEMINI_API_KEY
+      model: vertex_ai/*
   - model_name: "anthropic/*"
     litellm_params:
       model: "anthropic/*"

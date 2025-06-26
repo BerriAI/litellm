@@ -30,7 +30,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
     Configuration for calling Google models in their native format.
     """
     @property
-    def custom_llm_provider(self) -> Literal["gemini"]:
+    def custom_llm_provider(self) -> Literal["gemini", "vertex_ai"]:
         return "gemini"
     
     def __init__(self):

@@ -58,6 +58,7 @@ class BaseGoogleGenAITest:
                     text="Hello, can you tell me a short joke?"
                 )
             ],
+            role="user",
         )
         litellm._turn_on_debug()
 
@@ -93,6 +94,7 @@ class BaseGoogleGenAITest:
                     text="Hello, can you tell me a short joke?"
                 )
             ],
+            role="user",
         )
 
         print(f"Testing {'async' if is_async else 'sync'} streaming with model config: {request_params}")
@@ -102,18 +104,20 @@ class BaseGoogleGenAITest:
         
         if is_async:
             print("\n--- Testing async agenerate_content_stream ---")
-            async for chunk in agenerate_content_stream(
+            response = await agenerate_content_stream(
                 contents=contents,
                 **request_params
-            ):
+            )
+            async for chunk in response:
                 print(f"Async chunk: {chunk}")
                 chunks.append(chunk)
         else:
             print("\n--- Testing sync generate_content_stream ---")
-            for chunk in generate_content_stream(
+            response = generate_content_stream(
                 contents=contents,
                 **request_params
-            ):
+            )
+            for chunk in response:
                 print(f"Sync chunk: {chunk}")
                 chunks.append(chunk)
         
