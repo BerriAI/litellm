@@ -1,16 +1,16 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Llamafile
+# AskSage
 
 LiteLLM supports all models on AskSage.
 
 | Property                  | Details                                                                                                                              |
 |---------------------------|--------------------------------------------------------------------------------------------------------------------------------------|
-| Description               | llamafile lets you distribute and run LLMs with a single file. [Docs](https://github.com/Mozilla-Ocho/llamafile/blob/main/README.md) |
-| Provider Route on LiteLLM | `llamafile/` (for OpenAI compatible server)                                                                                          |
-| Provider Doc              | [llamafile ↗](https://github.com/Mozilla-Ocho/llamafile/blob/main/llama.cpp/server/README.md#api-endpoints)                          |
-| Supported Endpoints       | `/chat/completions`, `/embeddings`, `/completions`                                                                                   |
+| Description               | Ask Sage is a LLM agnostic, versatile and extensible Generative AI platform, on any cloud or on-premise, for commercial and government teams. [Docs](asksage.ai) |
+| Provider Route on LiteLLM | `asksage/` (for OpenAI compatible server)                                                                                          |
+| Provider Doc              | [asksage ↗](https://docs.asksage.ai/docs/api-documentation/api-endpoints.html)                          |
+| Supported Endpoints       | `/server/query`                                                                                  |
 
 
 # Quick Start
@@ -20,7 +20,7 @@ AskSage Provides an OpenAI compatible endpoint for chat completions - here's how
 
 To use litellm to call AskSage add the following to your completion call
 
-* `model="asksage/<your-llamafile-model-name>"` 
+* `model="asksage/<your-asksage-model-name>"` 
 * `api_base = "your-hosted-asksage"`
 
 ```python
