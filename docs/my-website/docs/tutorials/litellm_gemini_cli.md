@@ -17,14 +17,7 @@ Before you begin, ensure you have:
 Clone the Gemini CLI repository and navigate to the project directory:
 
 ```bash
-git clone https://github.com/ishaan-jaff/gemini-cli.git
-cd gemini-cli
-```
-
-Install the required dependencies:
-
-```bash
-npm install
+npm install -g @google/gemini-cli
 ```
 
 ### Step 2: Configure Gemini CLI for LiteLLM Proxy
@@ -32,7 +25,7 @@ npm install
 Configure the Gemini CLI to point to your LiteLLM Proxy instance by setting the required environment variables:
 
 ```bash
-export BASE_URL=http://localhost:4000
+export GOOGLE_GEMINI_BASE_URL="http://localhost:4000"
 export GEMINI_API_KEY=sk-1234567890
 ```
 
@@ -45,7 +38,7 @@ export GEMINI_API_KEY=sk-1234567890
 Build the project and start the CLI:
 
 ```bash
-npm run build && npm start
+gemini
 ```
 
 ### Step 4: Test the Integration
@@ -62,7 +55,7 @@ The CLI will now use LiteLLM Proxy as the backend, giving you access to LiteLLM'
 
 If you encounter issues:
 
-1. **Connection errors**: Verify that your LiteLLM Proxy is running and accessible at the configured `BASE_URL`
+1. **Connection errors**: Verify that your LiteLLM Proxy is running and accessible at the configured `GOOGLE_GEMINI_BASE_URL`
 2. **Authentication errors**: Ensure your `GEMINI_API_KEY` is valid and has the necessary permissions
 3. **Build failures**: Make sure all dependencies are installed with `npm install`
 
