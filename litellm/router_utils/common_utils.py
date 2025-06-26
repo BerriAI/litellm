@@ -52,9 +52,14 @@ def filter_team_based_models(
     if request_kwargs is None:
         return healthy_deployments
 
-    metadata = request_kwargs.get("metadata", {})
-    request_team_id = metadata.get("user_api_key_team_id")
+    metadata = request_kwargs.get("metadata") or {}
+    litellm_metadata = request_kwargs.get("litellm_metadata") or {}
+    request_team_id = metadata.get("user_api_key_team_id") or litellm_metadata.get(
+        "user_api_key_team_id"
+    )
     ids_to_remove = []
+    if isinstance(healthy_deployments, dict):
+        return healthy_deployments
     for deployment in healthy_deployments:
         _model_info = deployment.get("model_info") or {}
         model_team_id = _model_info.get("team_id")
