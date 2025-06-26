@@ -3,7 +3,6 @@ from fastapi import APIRouter, Depends, Request, Response
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from fastapi import APIRouter, Depends, Request
 
 router = APIRouter(
     tags=["google genai endpoints"],
@@ -68,6 +67,22 @@ async def google_generate_content(
         )
 
 
+class GoogleAIStudioDataGenerator:
+    """
+    Ensures SSE data generator is used for Google AI Studio streaming responses
+
+    Thin wrapper around ProxyBaseLLMRequestProcessing.async_sse_data_generator
+    """
+    @staticmethod
+    def _select_data_generator(response, user_api_key_dict, request_data):
+        from litellm.proxy.proxy_server import proxy_logging_obj
+        return ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
 @router.post("/v1beta/models/{model_name}:streamGenerateContent", dependencies=[Depends(user_api_key_auth)])
 @router.post("/models/{model_name}:streamGenerateContent", dependencies=[Depends(user_api_key_auth)])
 async def google_stream_generate_content(
@@ -85,7 +100,6 @@ async def google_stream_generate_content(
         llm_router,
         proxy_config,
         proxy_logging_obj,
-        select_data_generator,
         user_api_base,
         user_max_tokens,
         user_model,
@@ -110,7 +124,7 @@ async def google_stream_generate_content(
             llm_router=llm_router,
             general_settings=general_settings,
             proxy_config=proxy_config,
-            select_data_generator=select_data_generator,
+            select_data_generator=GoogleAIStudioDataGenerator._select_data_generator,
             model=None,
             user_model=user_model,
             user_temperature=user_temperature,
