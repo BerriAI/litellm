@@ -804,8 +804,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         """
         Get the content of a file from first model that has it
         """
-        model_file_id_mapping = await self.get_model_file_id_mapping(
-            [file_id], litellm_parent_otel_span
+        model_file_id_mapping = data.pop("model_file_id_mapping", None)
+        model_file_id_mapping = (
+            model_file_id_mapping
+            or await self.get_model_file_id_mapping([file_id], litellm_parent_otel_span)
         )
         specific_model_file_id_mapping = model_file_id_mapping.get(file_id)
 

@@ -3443,16 +3443,17 @@ class ProxyStartupEvent:
         scheduler.start()
 
         ## PROXY BATCH COST CHECKER ###
-        # from litellm_enterprise.proxy.common_utils.check_batch_cost import (
-        #     CheckBatchCost,
-        # )
+        from litellm_enterprise.proxy.common_utils.check_batch_cost import (
+            CheckBatchCost,
+        )
 
-        # check_batch_cost_job = CheckBatchCost(
-        #     proxy_logging_obj=proxy_logging_obj,
-        #     prisma_client=prisma_client,
-        #     llm_router=llm_router,
-        # )
-        # await check_batch_cost_job.check_batch_cost()
+        if llm_router is not None:
+            check_batch_cost_job = CheckBatchCost(
+                proxy_logging_obj=proxy_logging_obj,
+                prisma_client=prisma_client,
+                llm_router=llm_router,
+            )
+            await check_batch_cost_job.check_batch_cost()
 
     @classmethod
     async def _setup_prisma_client(

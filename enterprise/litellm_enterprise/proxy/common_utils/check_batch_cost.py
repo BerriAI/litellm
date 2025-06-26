@@ -93,21 +93,15 @@ class CheckBatchCost:
                 and response.output_file_id is not None
                 and managed_files_obj is not None
             ):
-                is_base64_unified_file_id = _is_base64_encoded_unified_file_id(
-                    response.output_file_id
-                )
-
-                if not is_base64_unified_file_id:
-                    verbose_proxy_logger.info(
-                        f"Skipping job {response.output_file_id} because it is not a valid unified file id"
-                    )
-                    continue
-
                 # track cost
+                model_file_id_mapping = {
+                    response.output_file_id: {model_id: response.output_file_id}
+                }
                 _file_content = await managed_files_obj.afile_content(
                     file_id=response.output_file_id,
                     litellm_parent_otel_span=None,
                     llm_router=self.llm_router,
+                    model_file_id_mapping=model_file_id_mapping,
                 )
 
                 file_content_as_dict = _get_file_content_as_dictionary(
