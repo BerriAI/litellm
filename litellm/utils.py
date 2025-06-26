@@ -129,6 +129,9 @@ from litellm.litellm_core_utils.redact_messages import (
 from litellm.litellm_core_utils.rules import Rules
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
+from litellm.llms.base_llm.google_genai.transformation import (
+    BaseGoogleGenAIGenerateContentConfig,
+)
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.router_utils.get_retry_from_policy import (
@@ -769,7 +772,12 @@ def function_setup(  # noqa: PLR0915
             messages = args[0] if len(args) > 0 else kwargs["input"]
         else:
             messages = "default-message-value"
-        stream = True if "stream" in kwargs and kwargs["stream"] is True else False
+        stream = False
+        if _is_streaming_request(
+            kwargs=kwargs,
+            call_type=call_type,
+        ):
+            stream = True
         logging_obj = LiteLLMLogging(
             model=model,  # type: ignore
             messages=messages,
@@ -1022,7 +1030,10 @@ def client(original_function):  # noqa: PLR0915
 
             # MODEL CALL
             result = original_function(*args, **kwargs)
-            if "stream" in kwargs and kwargs["stream"] is True:
+            if _is_streaming_request(
+                kwargs=kwargs,
+                call_type=call_type,
+            ):
                 if (
                     "complete_response" in kwargs
                     and kwargs["complete_response"] is True
@@ -1166,7 +1177,10 @@ def client(original_function):  # noqa: PLR0915
             # MODEL CALL
             result = original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
-            if "stream" in kwargs and kwargs["stream"] is True:
+            if _is_streaming_request(
+                kwargs=kwargs,
+                call_type=call_type,
+            ):
                 if (
                     "complete_response" in kwargs
                     and kwargs["complete_response"] is True
@@ -1358,7 +1372,10 @@ def client(original_function):  # noqa: PLR0915
             # MODEL CALL
             result = await original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
-            if "stream" in kwargs and kwargs["stream"] is True:
+            if _is_streaming_request(
+                kwargs=kwargs,
+                call_type=call_type,
+            ):
                 if (
                     "complete_response" in kwargs
                     and kwargs["complete_response"] is True
@@ -1535,6 +1552,35 @@ def _is_async_request(
         or is_pass_through is True
     ):
         return True
+    return False
+
+
+def _is_streaming_request(
+    kwargs: Dict[str, Any],
+    call_type: Union[CallTypes, str],
+) -> bool:
+    """
+    Returns True if the call type is a streaming request.
+    Returns True if:
+        - if "stream=True" in kwargs  (litellm chat completion, litellm text completion, litellm messages)
+        - if call_type is generate_content_stream or agenerate_content_stream (litellm google genai)
+    """
+    if "stream" in kwargs and kwargs["stream"] is True:
+        return True
+
+    #########################################################
+    # Check if it's a google genai streaming request
+    if isinstance(call_type, str):
+        # check if it can be casted to CallTypes
+        try:
+            call_type = CallTypes(call_type)
+        except ValueError:
+            return False
+
+    if call_type == CallTypes.generate_content_stream or call_type == CallTypes.agenerate_content_stream:
+        return True
+    #########################################################
+    
     return False
 
 
@@ -6980,6 +7026,25 @@ class ProviderConfigManager:
             )
 
             return AzureImageEditConfig()
+        return None
+    
+    @staticmethod
+    def get_provider_google_genai_generate_content_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseGoogleGenAIGenerateContentConfig]:
+        if litellm.LlmProviders.GEMINI == provider:
+            from litellm.llms.gemini.google_genai.transformation import (
+                GoogleGenAIConfig,
+            )
+
+            return GoogleGenAIConfig()
+        elif litellm.LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.google_genai.transformation import (
+                VertexAIGoogleGenAIConfig,
+            )
+
+            return VertexAIGoogleGenAIConfig()
         return None
 
 
