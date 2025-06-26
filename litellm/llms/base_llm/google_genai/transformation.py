@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 import httpx
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.google_genai.main import (
         GenerateContentConfigDict,
         GenerateContentContentListUnionDict,
@@ -14,6 +15,7 @@ else:
     GenerateContentConfigDict = Any
     GenerateContentContentListUnionDict = Any
     GenerateContentResponse = Any
+    LiteLLMLoggingObj = Any
     
 from litellm.types.router import GenericLiteLLMParams
 
@@ -165,6 +167,7 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         self,
         model: str,
         raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
     ) -> GenerateContentResponse:
         """
         Transform the raw response from the generate content API.
