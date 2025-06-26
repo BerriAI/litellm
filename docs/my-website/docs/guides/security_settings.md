@@ -1,14 +1,14 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# SSL Security Settings
+# SSL, HTTP Proxy Security Settings
 
 If you're in an environment using an older TTS bundle, with an older encryption, follow this guide. 
 
 
 LiteLLM uses HTTPX for network requests, unless otherwise specified. 
 
-1. Disable SSL verification
+## 1. Disable SSL verification
 
 
 <Tabs>
@@ -35,7 +35,7 @@ export SSL_VERIFY="False"
 </TabItem>
 </Tabs>
 
-2. Lower security settings
+## 2. Lower security settings
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -63,4 +63,29 @@ export SSL_CERTIFICATE="/path/to/certificate.pem"
 </TabItem>
 </Tabs>
 
+## 3. Use HTTP_PROXY environment variable
+
+Both httpx and aiohttp libraries use `urllib.request.getproxies` from environment variables. Before client initialization, you may set proxy (and optional SSL_CERT_FILE) by setting the environment variables:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+litellm.aiohttp_trust_env = True
+```
+
+```bash
+export HTTPS_PROXY='http://username:password@proxy_uri:port'
+```
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+
+```bash
+export HTTPS_PROXY='http://username:password@proxy_uri:port'
+export AIOHTTP_TRUST_ENV='True'
+```
+</TabItem>
+</Tabs>
 

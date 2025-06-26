@@ -580,15 +580,24 @@ class AsyncHTTPHandler:
         - True: use default SSL verification (equivalent to ssl.create_default_context())
         """
         from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
+        from litellm.secret_managers.main import str_to_bool
 
         connector_kwargs = AsyncHTTPHandler._get_ssl_connector_kwargs(
             ssl_verify=ssl_verify, ssl_context=ssl_context
         )
+        #########################################################
+        # Check if user enabled aiohttp trust env
+        # use for HTTP_PROXY, HTTPS_PROXY, etc.
+        ########################################################
+        trust_env: bool = litellm.aiohttp_trust_env
+        if str_to_bool(os.getenv("AIOHTTP_TRUST_ENV", "False")) is True:
+            trust_env = True
 
         verbose_logger.debug("Creating AiohttpTransport...")
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
-                connector=TCPConnector(**connector_kwargs)
+                connector=TCPConnector(**connector_kwargs),
+                trust_env=trust_env,
             ),
         )
     
