@@ -781,6 +781,28 @@ class Router:
             litellm.allm_passthrough_route, call_type="allm_passthrough_route"
         )
 
+        #########################################################
+        # Gemini Native routes
+        #########################################################
+        from litellm.google_genai import (
+            agenerate_content,
+            agenerate_content_stream,
+            generate_content,
+            generate_content_stream,
+        )
+        self.agenerate_content = self.factory_function(
+            agenerate_content, call_type="agenerate_content"
+        )
+        self.generate_content = self.factory_function(
+            generate_content, call_type="generate_content"
+        )
+        self.agenerate_content_stream = self.factory_function(
+            agenerate_content_stream, call_type="agenerate_content_stream"
+        )
+        self.generate_content_stream = self.factory_function(
+            generate_content_stream, call_type="generate_content_stream"
+        )
+
     def validate_fallbacks(self, fallback_param: Optional[List]):
         """
         Validate the fallbacks parameter.
@@ -3230,6 +3252,10 @@ class Router:
             "aimage_edit",
             "allm_passthrough_route",
             "alist_input_items",
+            "agenerate_content",
+            "generate_content",
+            "agenerate_content_stream",
+            "generate_content_stream",
         ] = "assistants",
     ):
         """
@@ -3240,7 +3266,7 @@ class Router:
             - An asynchronous function for asynchronous call types
         """
         # Handle synchronous call types
-        if call_type == "responses":
+        if call_type in ("responses", "generate_content", "generate_content_stream"):
 
             def sync_wrapper(
                 custom_llm_provider: Optional[
@@ -3285,6 +3311,8 @@ class Router:
                 "alist_files",
                 "aimage_edit",
                 "allm_passthrough_route",
+                "agenerate_content",
+                "agenerate_content_stream",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,

@@ -321,7 +321,7 @@ async def agenerate_content_stream(
     # LiteLLM specific params,
     custom_llm_provider: Optional[str] = None,
     **kwargs
-) -> AsyncIterator[Any]:
+) -> Any:
     """
     Async: Generate content using Google GenAI with streaming response
     """
@@ -346,7 +346,8 @@ async def agenerate_content_stream(
         )
 
         # Call the handler with async enabled and streaming
-        async_generator = await base_llm_http_handler.generate_content_handler(
+        # Return the coroutine directly for the router to handle
+        return await base_llm_http_handler.generate_content_handler(
             model=setup_result.model,
             contents=contents,
             generate_content_provider_config=setup_result.generate_content_provider_config,
@@ -362,10 +363,6 @@ async def agenerate_content_stream(
             stream=True,
             litellm_metadata=kwargs.get("litellm_metadata", {}),
         )
-
-        # Iterate over the async generator
-        async for chunk in async_generator:
-            yield chunk
             
     except Exception as e:
         raise litellm.exception_type(
