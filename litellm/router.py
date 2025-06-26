@@ -743,6 +743,7 @@ class Router:
         self.afile_delete = self.factory_function(
             litellm.afile_delete, call_type="afile_delete"
         )
+
         self.afile_content = self.factory_function(
             litellm.afile_content, call_type="afile_content"
         )
@@ -2480,9 +2481,9 @@ class Router:
         self._update_kwargs_before_fallbacks(
             model=model,
             kwargs=kwargs,
-            metadata_variable_name = _get_router_metadata_variable_name(
+            metadata_variable_name=_get_router_metadata_variable_name(
                 function_name=function_name
-            )
+            ),
         )
         try:
             verbose_router_logger.debug(
@@ -2812,6 +2813,8 @@ class Router:
         **kwargs,
     ) -> OpenAIFileObject:
         try:
+            from litellm.router_utils.common_utils import add_model_file_id_mappings
+
             verbose_router_logger.debug(
                 f"Inside _atext_completion()- model: {model}; kwargs: {kwargs}"
             )
@@ -2906,6 +2909,7 @@ class Router:
                 return response
 
             tasks = []
+
             if isinstance(healthy_deployments, dict):
                 tasks.append(create_file_for_deployment(healthy_deployments))
             else:
@@ -2916,7 +2920,15 @@ class Router:
 
             if len(responses) == 0:
                 raise Exception("No healthy deployments found.")
-            return responses[0]
+
+            model_file_id_mapping = add_model_file_id_mappings(
+                healthy_deployments=healthy_deployments, responses=responses
+            )
+            returned_response = cast(OpenAIFileObject, responses[0])
+            returned_response._hidden_params["model_file_id_mapping"] = (
+                model_file_id_mapping
+            )
+            return returned_response
         except Exception as e:
             verbose_router_logger.exception(
                 f"litellm.acreate_file(model={model}, {kwargs})\033[31m Exception {str(e)}\033[0m"
@@ -6203,12 +6215,21 @@ class Router:
         *OR*
         - Dict, if specific model chosen
         """
+        from litellm.router_utils.common_utils import filter_team_based_models
+
         model, healthy_deployments = self._common_checks_available_deployment(
             model=model,
             messages=messages,
             input=input,
             specific_deployment=specific_deployment,
         )  # type: ignore
+
+        # IF TEAM ID SPECIFIED ON MODEL, AND REQUEST CONTAINS USER_API_KEY_TEAM_ID, FILTER OUT MODELS THAT ARE NOT IN THE TEAM
+        ## THIS PREVENTS WRITING FILES OF OTHER TEAMS TO MODELS THAT ARE TEAM-ONLY MODELS
+        healthy_deployments = filter_team_based_models(
+            healthy_deployments=healthy_deployments,
+            request_kwargs=request_kwargs,
+        )
 
         if isinstance(healthy_deployments, dict):
             return healthy_deployments

@@ -17,6 +17,21 @@ from litellm.google_genai import (
     agenerate_content_stream,
 )
 from google.genai.types import ContentDict, PartDict, GenerateContentResponse
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.utils import StandardLoggingPayload
+
+
+class TestCustomLogger(CustomLogger):
+    def __init__(
+        self,
+    ):
+        self.standard_logging_object: Optional[StandardLoggingPayload] = None
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        print("in async_log_success_event")
+        print("kwargs=", json.dumps(kwargs, indent=4, default=str))
+        self.standard_logging_object = kwargs["standard_logging_object"]
+        pass
 
 
 class BaseGoogleGenAITest:
@@ -46,6 +61,35 @@ class BaseGoogleGenAITest:
         assert isinstance(chunks, list), f"Expected list of chunks, got {type(chunks)}"
         assert len(chunks) >= 0, "Should have at least 0 chunks"
         print(f"Total chunks received: {len(chunks)}")
+    
+    def _validate_standard_logging_payload(
+        self, slp: StandardLoggingPayload, response: Any
+    ):
+        """
+        Validate that a StandardLoggingPayload object matches the expected response for Google GenAI
+
+        Args:
+            slp (StandardLoggingPayload): The standard logging payload object to validate
+            response: The Google GenAI response to compare against
+        """
+        # Validate payload exists
+        assert slp is not None, "Standard logging payload should not be None"
+
+        # Validate basic structure
+        assert "prompt_tokens" in slp, "Standard logging payload should have prompt_tokens"
+        assert "completion_tokens" in slp, "Standard logging payload should have completion_tokens" 
+        assert "total_tokens" in slp, "Standard logging payload should have total_tokens"
+        assert "response_cost" in slp, "Standard logging payload should have response_cost"
+
+        # Validate token counts are reasonable (non-negative numbers)
+        assert slp["prompt_tokens"] >= 0, "Prompt tokens should be non-negative"
+        assert slp["completion_tokens"] >= 0, "Completion tokens should be non-negative"
+        assert slp["total_tokens"] >= 0, "Total tokens should be non-negative"
+
+        # Validate spend
+        assert slp["response_cost"] >= 0, "Response cost should be non-negative"
+
+        print(f"Standard logging payload validation passed: prompt_tokens={slp['prompt_tokens']}, completion_tokens={slp['completion_tokens']}, total_tokens={slp['total_tokens']}, cost={slp['response_cost']}")
     
     @pytest.mark.parametrize("is_async", [False, True])
     @pytest.mark.asyncio
@@ -124,3 +168,88 @@ class BaseGoogleGenAITest:
         self._validate_streaming_response(chunks)
         
         return chunks
+
+    @pytest.mark.asyncio
+    async def test_async_non_streaming_with_logging(self):
+        """Test async non-streaming Google GenAI generate content with logging"""
+        litellm._turn_on_debug()
+        litellm.logging_callback_manager._reset_all_callbacks()
+        litellm.set_verbose = True
+        test_custom_logger = TestCustomLogger()
+        litellm.callbacks = [test_custom_logger]
+        
+        request_params = self.model_config
+        contents = ContentDict(
+            parts=[
+                PartDict(
+                    text="Hello, can you tell me a short joke?"
+                )
+            ],
+            role="user",
+        )
+
+        print("\n--- Testing async agenerate_content with logging ---")
+        response = await agenerate_content(
+            contents=contents,
+            **request_params
+        )
+
+        print("Google GenAI response=", json.dumps(response, indent=4, default=str))
+
+        print("sleeping for 5 seconds...")
+        await asyncio.sleep(5)
+        print(
+            "standard logging payload=",
+            json.dumps(test_custom_logger.standard_logging_object, indent=4, default=str),
+        )
+
+        assert response is not None
+        assert test_custom_logger.standard_logging_object is not None
+
+        self._validate_standard_logging_payload(
+            test_custom_logger.standard_logging_object, response
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_streaming_with_logging(self):
+        """Test async streaming Google GenAI generate content with logging"""
+        litellm._turn_on_debug()
+        litellm.set_verbose = True
+        litellm.logging_callback_manager._reset_all_callbacks()
+        test_custom_logger = TestCustomLogger()
+        litellm.callbacks = [test_custom_logger]
+        
+        request_params = self.model_config
+        contents = ContentDict(
+            parts=[
+                PartDict(
+                    text="Hello, can you tell me a short joke?"
+                )
+            ],
+            role="user",
+        )
+
+        print("\n--- Testing async agenerate_content_stream with logging ---")
+        response = await agenerate_content_stream(
+            contents=contents,
+            **request_params
+        )
+        
+        chunks = []
+        async for chunk in response:
+            print(f"Google GenAI chunk: {chunk}")
+            chunks.append(chunk)
+
+        print("sleeping for 5 seconds...")
+        await asyncio.sleep(5)
+        print(
+            "standard logging payload=",
+            json.dumps(test_custom_logger.standard_logging_object, indent=4, default=str),
+        )
+
+        assert len(chunks) >= 0
+        assert test_custom_logger.standard_logging_object is not None
+
+        self._validate_standard_logging_payload(
+            test_custom_logger.standard_logging_object, chunks
+        )

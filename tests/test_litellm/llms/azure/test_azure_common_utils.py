@@ -427,6 +427,8 @@ def test_select_azure_base_url_called(setup_mocks):
             "afile_list",
             "aimage_edit",
             "image_edit",
+            "agenerate_content_stream",
+            "agenerate_content",
         ]
     ],
 )
