@@ -3,6 +3,7 @@
 Test to verify the Google GenAI generate_content adapter functionality
 """
 
+import json
 import os
 import sys
 
@@ -122,6 +123,402 @@ def test_config_parameter_mapping():
     assert completion_request["top_p"] == 0.9
     assert completion_request["stop"] == ["END", "STOP"]
 
+def test_tools_transformation():
+    """Test transformation of Google GenAI tools to OpenAI tools format"""
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+    
+    adapter = GoogleGenAIAdapter()
+    
+    model = "gpt-3.5-turbo"
+    contents = {"role": "user", "parts": [{"text": "What's the weather?"}]}
+    
+    # Google GenAI tools format
+    tools = [
+        {
+            "functionDeclarations": [
+                {
+                    "name": "get_weather",
+                    "description": "Get current weather information",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "The city name"
+                            }
+                        },
+                        "required": ["location"]
+                    }
+                },
+                {
+                    "name": "get_forecast",
+                    "description": "Get weather forecast",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {"type": "string"},
+                            "days": {"type": "integer"}
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+    
+    completion_request = adapter.translate_generate_content_to_completion(
+        model=model,
+        contents=contents,
+        tools=tools
+    )
+    
+    # Verify tools transformation
+    assert "tools" in completion_request
+    openai_tools = completion_request["tools"]
+    assert len(openai_tools) == 2
+    
+    # Check first tool
+    tool1 = openai_tools[0]
+    assert tool1["type"] == "function"
+    assert tool1["function"]["name"] == "get_weather"
+    assert tool1["function"]["description"] == "Get current weather information"
+    assert "parameters" in tool1["function"]
+    assert tool1["function"]["parameters"]["properties"]["location"]["type"] == "string"
+    
+    # Check second tool
+    tool2 = openai_tools[1]
+    assert tool2["type"] == "function"
+    assert tool2["function"]["name"] == "get_forecast"
+    assert tool2["function"]["description"] == "Get weather forecast"
+
+def test_tool_config_transformation():
+    """Test transformation of Google GenAI tool_config to OpenAI tool_choice"""
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+    
+    adapter = GoogleGenAIAdapter()
+    
+    model = "gpt-3.5-turbo"
+    contents = {"role": "user", "parts": [{"text": "Test"}]}
+    
+    # Test different tool config modes
+    test_cases = [
+        ({"functionCallingConfig": {"mode": "AUTO"}}, "auto"),
+        ({"functionCallingConfig": {"mode": "ANY"}}, "required"),
+        ({"functionCallingConfig": {"mode": "NONE"}}, "none"),
+        ({"functionCallingConfig": {"mode": "UNKNOWN"}}, "auto"),  # Default case
+    ]
+    
+    for tool_config, expected_choice in test_cases:
+        completion_request = adapter.translate_generate_content_to_completion(
+            model=model,
+            contents=contents,
+            tool_config=tool_config
+        )
+        
+        assert "tool_choice" in completion_request
+        assert completion_request["tool_choice"] == expected_choice
+
+def test_function_call_message_transformation():
+    """Test transformation of messages with function calls"""
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+    
+    adapter = GoogleGenAIAdapter()
+    
+    model = "gpt-3.5-turbo"
+    contents = [
+        {
+            "role": "user",
+            "parts": [{"text": "What's the weather in San Francisco?"}]
+        },
+        {
+            "role": "model",
+            "parts": [
+                {"text": "I'll check the weather for you."},
+                {
+                    "functionCall": {
+                        "name": "get_weather",
+                        "args": {"location": "San Francisco"}
+                    }
+                }
+            ]
+        }
+    ]
+    
+    completion_request = adapter.translate_generate_content_to_completion(
+        model=model,
+        contents=contents
+    )
+    
+    # Verify the transformation
+    messages = completion_request["messages"]
+    assert len(messages) == 2
+    
+    # Check user message
+    assert messages[0]["role"] == "user"
+    assert messages[0]["content"] == "What's the weather in San Francisco?"
+    
+    # Check assistant message with tool call
+    assistant_msg = messages[1]
+    assert assistant_msg["role"] == "assistant"
+    assert assistant_msg["content"] == "I'll check the weather for you."
+    assert "tool_calls" in assistant_msg
+    assert len(assistant_msg["tool_calls"]) == 1
+    
+    tool_call = assistant_msg["tool_calls"][0]
+    assert tool_call["type"] == "function"
+    assert tool_call["function"]["name"] == "get_weather"
+    
+    # Verify arguments are properly JSON encoded
+    args = json.loads(tool_call["function"]["arguments"])
+    assert args["location"] == "San Francisco"
+
+def test_function_response_message_transformation():
+    """Test transformation of messages with function responses"""
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+    
+    adapter = GoogleGenAIAdapter()
+    
+    model = "gpt-3.5-turbo"
+    contents = [
+        {
+            "role": "user",
+            "parts": [
+                {"text": "Here's the weather data:"},
+                {
+                    "functionResponse": {
+                        "name": "get_weather",
+                        "response": {
+                            "temperature": "72F",
+                            "condition": "sunny",
+                            "humidity": "45%"
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+    
+    completion_request = adapter.translate_generate_content_to_completion(
+        model=model,
+        contents=contents
+    )
+    
+    # Verify the transformation
+    messages = completion_request["messages"]
+    assert len(messages) == 2  # User message + tool message
+    
+    # Check user message
+    user_msg = messages[0]
+    assert user_msg["role"] == "user"
+    assert user_msg["content"] == "Here's the weather data:"
+    
+    # Check tool message
+    tool_msg = messages[1]
+    assert tool_msg["role"] == "tool"
+    assert "call_get_weather" in tool_msg["tool_call_id"]
+    
+    # Verify function response content
+    response_content = json.loads(tool_msg["content"])
+    assert response_content["temperature"] == "72F"
+    assert response_content["condition"] == "sunny"
+    assert response_content["humidity"] == "45%"
+
+def test_completion_to_generate_content_with_tool_calls():
+    """Test transforming completion response with tool calls back to generate_content format"""
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+    from litellm.types.llms.openai import (
+        ChatCompletionAssistantMessage,
+        ChatCompletionAssistantToolCall,
+        ChatCompletionToolCallFunctionChunk,
+    )
+    from litellm.types.utils import Choices, ModelResponse, Usage
+    
+    adapter = GoogleGenAIAdapter()
+    
+    # Create mock tool call
+    mock_tool_call = ChatCompletionAssistantToolCall(
+        id="call_123",
+        type="function",
+        function=ChatCompletionToolCallFunctionChunk(
+            name="get_weather",
+            arguments='{"location": "San Francisco"}'
+        )
+    )
+    
+    # Create mock assistant message with tool call
+    mock_message = ChatCompletionAssistantMessage(
+        role="assistant",
+        content="I'll check the weather for you.",
+        tool_calls=[mock_tool_call]
+    )
+    
+    mock_choice = Choices(
+        finish_reason="tool_calls",
+        index=0,
+        message=mock_message
+    )
+    
+    mock_usage = Usage(
+        prompt_tokens=15,
+        completion_tokens=25,
+        total_tokens=40
+    )
+    
+    mock_response = ModelResponse(
+        id="test-123",
+        choices=[mock_choice],
+        created=1234567890,
+        model="gpt-3.5-turbo",
+        object="chat.completion",
+        usage=mock_usage
+    )
+    
+    # Transform back to generate_content format
+    generate_content_response = adapter.translate_completion_to_generate_content(mock_response)
+    
+    # Verify the transformation
+    assert "candidates" in generate_content_response
+    candidate = generate_content_response["candidates"][0]
+    assert candidate["finishReason"] == "STOP"  # tool_calls maps to STOP
+    
+    # Check content parts
+    parts = candidate["content"]["parts"]
+    assert len(parts) == 2
+    
+    # Check text part
+    text_part = parts[0]
+    assert text_part["text"] == "I'll check the weather for you."
+    
+    # Check function call part
+    function_part = parts[1]
+    assert "functionCall" in function_part
+    function_call = function_part["functionCall"]
+    assert function_call["name"] == "get_weather"
+    assert function_call["args"]["location"] == "San Francisco"
+    
+    # Check text field
+    assert generate_content_response["text"] == "I'll check the weather for you."
+
+def test_streaming_tool_calls_transformation():
+    """Test streaming transformation with tool calls"""
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+    from litellm.types.utils import (
+        ChatCompletionDeltaToolCall,
+        Delta,
+        Function,
+        ModelResponse,
+        StreamingChoices,
+    )
+    
+    adapter = GoogleGenAIAdapter()
+    
+    # Create mock function for tool call
+    mock_function = Function(
+        name="get_weather",
+        arguments='{"location": "SF"}'
+    )
+    
+    # Create mock streaming tool call delta
+    mock_tool_call_delta = ChatCompletionDeltaToolCall(
+        id="call_123",
+        type="function",
+        function=mock_function,
+        index=0
+    )
+    
+    # Create mock delta with tool call
+    mock_delta = Delta(
+        content=None,
+        tool_calls=[mock_tool_call_delta]
+    )
+    
+    mock_choice = StreamingChoices(
+        finish_reason=None,
+        index=0,
+        delta=mock_delta
+    )
+    
+    mock_response = ModelResponse(
+        id="test-streaming",
+        choices=[mock_choice],
+        created=1234567890,
+        model="gpt-3.5-turbo",
+        object="chat.completion.chunk"
+    )
+    
+    # Transform streaming chunk
+    streaming_chunk = adapter.translate_streaming_completion_to_generate_content(mock_response)
+    
+    # Verify the transformation
+    assert "candidates" in streaming_chunk
+    candidate = streaming_chunk["candidates"][0]
+    
+    # Check parts
+    parts = candidate["content"]["parts"]
+    assert len(parts) == 1
+    
+    # Check function call part
+    function_part = parts[0]
+    assert "functionCall" in function_part
+    function_call = function_part["functionCall"]
+    assert function_call["name"] == "get_weather"
+    assert function_call["args"]["location"] == "SF"
+
+def test_mixed_content_transformation():
+    """Test transformation of mixed content (text + function calls)"""
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+    
+    adapter = GoogleGenAIAdapter()
+    
+    model = "gpt-3.5-turbo"
+    contents = [
+        {
+            "role": "model",
+            "parts": [
+                {"text": "I'll help you with that. Let me check the weather and also get the forecast."},
+                {
+                    "functionCall": {
+                        "name": "get_weather",
+                        "args": {"location": "San Francisco"}
+                    }
+                },
+                {
+                    "functionCall": {
+                        "name": "get_forecast", 
+                        "args": {"location": "San Francisco", "days": 3}
+                    }
+                }
+            ]
+        }
+    ]
+    
+    completion_request = adapter.translate_generate_content_to_completion(
+        model=model,
+        contents=contents
+    )
+    
+    # Verify the transformation
+    messages = completion_request["messages"]
+    assert len(messages) == 1
+    
+    assistant_msg = messages[0]
+    assert assistant_msg["role"] == "assistant"
+    assert assistant_msg["content"] == "I'll help you with that. Let me check the weather and also get the forecast."
+    assert "tool_calls" in assistant_msg
+    assert len(assistant_msg["tool_calls"]) == 2
+    
+    # Check first tool call
+    tool_call_1 = assistant_msg["tool_calls"][0]
+    assert tool_call_1["function"]["name"] == "get_weather"
+    args_1 = json.loads(tool_call_1["function"]["arguments"])
+    assert args_1["location"] == "San Francisco"
+    
+    # Check second tool call
+    tool_call_2 = assistant_msg["tool_calls"][1]
+    assert tool_call_2["function"]["name"] == "get_forecast"
+    args_2 = json.loads(tool_call_2["function"]["arguments"])
+    assert args_2["location"] == "San Francisco"
+    assert args_2["days"] == 3
+
 def test_completion_to_generate_content_transformation():
     """Test transforming a completion response back to generate_content format"""
     from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
@@ -223,3 +620,38 @@ def test_empty_content_handling():
     assert completion_request["model"] == "gpt-3.5-turbo"
     assert "messages" in completion_request
     assert len(completion_request["messages"]) == 0
+
+def test_handler_parameter_exclusion():
+    """Test that the handler properly excludes Google GenAI-specific parameters"""
+    from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler
+
+    # Test parameters that should be excluded
+    model = "gpt-3.5-turbo"
+    contents = {"role": "user", "parts": [{"text": "Test"}]}
+    config = {"temperature": 0.7}
+    
+    extra_kwargs = {
+        "agenerate_content_stream": True,  # Should be excluded
+        "generate_content_stream": True,   # Should be excluded
+        "user": "test_user",              # Should be included
+    }
+    
+    completion_kwargs = GenerateContentToCompletionHandler._prepare_completion_kwargs(
+        model=model,
+        contents=contents,
+        config=config,
+        stream=False,
+        extra_kwargs=extra_kwargs
+    )
+    
+    # Verify Google GenAI-specific parameters are excluded
+    assert "agenerate_content_stream" not in completion_kwargs
+    assert "generate_content_stream" not in completion_kwargs
+    
+    # Verify valid OpenAI parameters are present
+    assert "user" in completion_kwargs
+    assert completion_kwargs["user"] == "test_user"
+    assert "model" in completion_kwargs
+    assert completion_kwargs["model"] == "gpt-3.5-turbo"
+    assert "temperature" in completion_kwargs
+    assert completion_kwargs["temperature"] == 0.7

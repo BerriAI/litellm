@@ -42,7 +42,9 @@ class GenerateContentToCompletionHandler:
             "agenerate_content_stream", 
             "generate_content_stream",
             "contents",  # This is already transformed to messages
-            "config"     # This is already processed above
+            "config",    # This is already processed above
+            "tools",     # This is handled by the adapter transformation
+            "tool_config",  # This is transformed to tool_choice by the adapter
         }
         extra_kwargs = extra_kwargs or {}
         for key, value in extra_kwargs.items():

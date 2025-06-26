@@ -4,8 +4,14 @@ from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Union, ca
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
+    ChatCompletionAssistantToolCall,
     ChatCompletionRequest,
     ChatCompletionSystemMessage,
+    ChatCompletionToolCallFunctionChunk,
+    ChatCompletionToolChoiceValues,
+    ChatCompletionToolMessage,
+    ChatCompletionToolParam,
+    ChatCompletionToolParamFunctionChunk,
     ChatCompletionUserMessage,
 )
 from litellm.types.utils import (
@@ -139,10 +145,22 @@ class GoogleGenAIAdapter:
             if "stopSequences" in config:
                 completion_request["stop"] = config["stopSequences"]
                 
+        # Handle tools transformation
+        if "tools" in kwargs:
+            openai_tools = self._transform_google_genai_tools_to_openai(kwargs["tools"])
+            if openai_tools:
+                completion_request["tools"] = openai_tools
+                
+        # Handle tool_config (tool choice)
+        if "tool_config" in kwargs:
+            tool_choice = self._transform_google_genai_tool_config_to_openai(kwargs["tool_config"])
+            if tool_choice:
+                completion_request["tool_choice"] = tool_choice
+                
         # Add any additional kwargs that are valid for completion
         valid_completion_params = [
             "temperature", "max_tokens", "top_p", "frequency_penalty", 
-            "presence_penalty", "stop", "stream", "user"
+            "presence_penalty", "stop", "stream", "user", "tools", "tool_choice"
         ]
         for key, value in kwargs.items():
             if key in valid_completion_params and key not in completion_request:
@@ -158,6 +176,42 @@ class GoogleGenAIAdapter:
         # Return the SSE-wrapped version for proper event formatting
         return google_genai_wrapper.async_google_genai_sse_wrapper()
 
+    def _transform_google_genai_tools_to_openai(self, tools: List[Dict[str, Any]]) -> List[ChatCompletionToolParam]:
+        """Transform Google GenAI tools to OpenAI tools format"""
+        openai_tools: List[ChatCompletionToolParam] = []
+        
+        for tool in tools:
+            if "functionDeclarations" in tool:
+                for func_decl in tool["functionDeclarations"]:
+                    function_chunk = ChatCompletionToolParamFunctionChunk(
+                        name=func_decl.get("name", ""),
+                    )
+                    
+                    if "description" in func_decl:
+                        function_chunk["description"] = func_decl["description"]
+                    if "parameters" in func_decl:
+                        function_chunk["parameters"] = func_decl["parameters"]
+                        
+                    openai_tools.append(
+                        ChatCompletionToolParam(type="function", function=function_chunk)
+                    )
+                    
+        return openai_tools
+
+    def _transform_google_genai_tool_config_to_openai(self, tool_config: Dict[str, Any]) -> Optional[ChatCompletionToolChoiceValues]:
+        """Transform Google GenAI tool_config to OpenAI tool_choice"""
+        function_calling_config = tool_config.get("functionCallingConfig", {})
+        mode = function_calling_config.get("mode", "AUTO")
+        
+        if mode == "AUTO":
+            return cast(ChatCompletionToolChoiceValues, "auto")
+        elif mode == "ANY":
+            return cast(ChatCompletionToolChoiceValues, "required")
+        elif mode == "NONE":
+            return cast(ChatCompletionToolChoiceValues, "none")
+        else:
+            return cast(ChatCompletionToolChoiceValues, "auto")
+
     def _transform_contents_to_messages(self, contents: List[Dict[str, Any]]) -> List[AllMessageValues]:
         """Transform Google GenAI contents to OpenAI messages format"""
         messages: List[AllMessageValues] = []
@@ -167,34 +221,70 @@ class GoogleGenAIAdapter:
             parts = content.get("parts", [])
             
             if role == "user":
-                # Combine all text parts into a single user message
+                # Handle user messages with potential function responses
                 combined_text = ""
+                tool_messages: List[ChatCompletionToolMessage] = []
+                
                 for part in parts:
-                    if isinstance(part, dict) and "text" in part:
-                        combined_text += part["text"]
+                    if isinstance(part, dict):
+                        if "text" in part:
+                            combined_text += part["text"]
+                        elif "functionResponse" in part:
+                            # Transform function response to tool message
+                            func_response = part["functionResponse"]
+                            tool_message = ChatCompletionToolMessage(
+                                role="tool",
+                                tool_call_id=f"call_{func_response.get('name', 'unknown')}",
+                                content=json.dumps(func_response.get("response", {}))
+                            )
+                            tool_messages.append(tool_message)
                     elif isinstance(part, str):
                         combined_text += part
                         
+                # Add user message if there's text content
                 if combined_text:
                     messages.append(ChatCompletionUserMessage(
                         role="user",
                         content=combined_text
                     ))
                     
+                # Add tool messages
+                messages.extend(tool_messages)
+                    
             elif role == "model":
-                # Transform model response to assistant message
+                # Handle assistant messages with potential function calls
                 combined_text = ""
+                tool_calls: List[ChatCompletionAssistantToolCall] = []
+                
                 for part in parts:
-                    if isinstance(part, dict) and "text" in part:
-                        combined_text += part["text"]
+                    if isinstance(part, dict):
+                        if "text" in part:
+                            combined_text += part["text"]
+                        elif "functionCall" in part:
+                            # Transform function call to tool call
+                            func_call = part["functionCall"]
+                            tool_call = ChatCompletionAssistantToolCall(
+                                id=f"call_{func_call.get('name', 'unknown')}",
+                                type="function",
+                                function=ChatCompletionToolCallFunctionChunk(
+                                    name=func_call.get("name", ""),
+                                    arguments=json.dumps(func_call.get("args", {}))
+                                )
+                            )
+                            tool_calls.append(tool_call)
                     elif isinstance(part, str):
                         combined_text += part
                         
-                if combined_text:
-                    messages.append(ChatCompletionAssistantMessage(
-                        role="assistant",
-                        content=combined_text
-                    ))
+                # Create assistant message
+                assistant_message = ChatCompletionAssistantMessage(
+                    role="assistant",
+                    content=combined_text if combined_text else None
+                )
+                
+                if tool_calls:
+                    assistant_message["tool_calls"] = tool_calls
+                    
+                messages.append(assistant_message)
                     
         return messages
 
@@ -220,21 +310,22 @@ class GoogleGenAIAdapter:
         if isinstance(choice, Choices):
             if not choice.message:
                 raise ValueError("Invalid completion response: no message found in choice")
-            message_content = choice.message.content or ""
+            parts = self._transform_openai_message_to_google_genai_parts(choice.message)
         elif isinstance(choice, StreamingChoices):
             if not choice.delta:
                 raise ValueError("Invalid completion response: no delta found in streaming choice")
-            message_content = choice.delta.content or ""
+            parts = self._transform_openai_delta_to_google_genai_parts(choice.delta)
         else:
             # Fallback for generic choice objects
             message_content = getattr(choice, 'message', {}).get('content', '') or getattr(choice, 'delta', {}).get('content', '')
+            parts = [{"text": message_content}] if message_content else []
         
         # Create Google GenAI format response
         generate_content_response: Dict[str, Any] = {
             "candidates": [
                 {
                     "content": {
-                        "parts": [{"text": message_content}],
+                        "parts": parts,
                         "role": "model"
                     },
                     "finishReason": self._map_finish_reason(getattr(choice, 'finish_reason', None)),
@@ -254,8 +345,12 @@ class GoogleGenAIAdapter:
         }
         
         # Add text field for convenience (common in Google GenAI responses)
-        if message_content:
-            generate_content_response["text"] = message_content
+        text_content = ""
+        for part in parts:
+            if isinstance(part, dict) and "text" in part:
+                text_content += part["text"]
+        if text_content:
+            generate_content_response["text"] = text_content
             
         return generate_content_response
 
@@ -280,11 +375,15 @@ class GoogleGenAIAdapter:
             
         # Handle streaming choice
         if isinstance(choice, StreamingChoices):
-            message_content = choice.delta.content or "" if choice.delta else ""
+            if choice.delta:
+                parts = self._transform_openai_delta_to_google_genai_parts(choice.delta)
+            else:
+                parts = []
             finish_reason = getattr(choice, 'finish_reason', None)
         else:
             # Fallback for generic choice objects
             message_content = getattr(choice, 'delta', {}).get('content', '')
+            parts = [{"text": message_content}] if message_content else []
             finish_reason = getattr(choice, 'finish_reason', None)
         
         # Create Google GenAI streaming format response
@@ -292,7 +391,7 @@ class GoogleGenAIAdapter:
             "candidates": [
                 {
                     "content": {
-                        "parts": [{"text": message_content}] if message_content else [],
+                        "parts": parts,
                         "role": "model"
                     },
                     "finishReason": self._map_finish_reason(finish_reason) if finish_reason else None,
@@ -312,10 +411,71 @@ class GoogleGenAIAdapter:
             streaming_chunk["usageMetadata"] = usage_metadata
         
         # Add text field for convenience (common in Google GenAI responses)
-        if message_content:
-            streaming_chunk["text"] = message_content
+        text_content = ""
+        for part in parts:
+            if isinstance(part, dict) and "text" in part:
+                text_content += part["text"]
+        if text_content:
+            streaming_chunk["text"] = text_content
             
         return streaming_chunk
+
+    def _transform_openai_message_to_google_genai_parts(self, message: Any) -> List[Dict[str, Any]]:
+        """Transform OpenAI message to Google GenAI parts format"""
+        parts: List[Dict[str, Any]] = []
+        
+        # Add text content if present
+        if hasattr(message, 'content') and message.content:
+            parts.append({"text": message.content})
+            
+        # Add tool calls if present
+        if hasattr(message, 'tool_calls') and message.tool_calls:
+            for tool_call in message.tool_calls:
+                if hasattr(tool_call, 'function') and tool_call.function:
+                    try:
+                        args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
+                    except json.JSONDecodeError:
+                        args = {}
+                        
+                    function_call_part = {
+                        "functionCall": {
+                            "name": tool_call.function.name,
+                            "args": args
+                        }
+                    }
+                    parts.append(function_call_part)
+                    
+        return parts if parts else [{"text": ""}]
+
+    def _transform_openai_delta_to_google_genai_parts(self, delta: Any) -> List[Dict[str, Any]]:
+        """Transform OpenAI delta to Google GenAI parts format for streaming"""
+        parts: List[Dict[str, Any]] = []
+        
+        # Add text content if present
+        if hasattr(delta, 'content') and delta.content:
+            parts.append({"text": delta.content})
+            
+        # Add tool calls if present (for streaming tool calls)
+        if hasattr(delta, 'tool_calls') and delta.tool_calls:
+            for tool_call in delta.tool_calls:
+                if hasattr(tool_call, 'function') and tool_call.function:
+                    # For streaming, we might get partial function arguments
+                    args_str = getattr(tool_call.function, 'arguments', '') or ''
+                    try:
+                        args = json.loads(args_str) if args_str else {}
+                    except json.JSONDecodeError:
+                        # For partial JSON in streaming, return as text for now
+                        args = {"partial": args_str}
+                        
+                    function_call_part = {
+                        "functionCall": {
+                            "name": getattr(tool_call.function, 'name', '') or '',
+                            "args": args
+                        }
+                    }
+                    parts.append(function_call_part)
+                    
+        return parts
 
     def _map_finish_reason(self, finish_reason: Optional[str]) -> str:
         """Map OpenAI finish reasons to Google GenAI finish reasons"""

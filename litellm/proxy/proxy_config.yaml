@@ -1,12 +1,8 @@
 model_list:
-  - model_name: anthropic/*
+  - model_name: vertex_ai/*
     litellm_params:
-      model: anthropic/*
+      model: vertex_ai/*
 
-router_settings:
-  model_group_alias: {
-    "gemini-2.0-pro": "anthropic/claude-sonnet-4-20250514"
-  }
 
 mcp_servers:
   deepwiki_mcp:
