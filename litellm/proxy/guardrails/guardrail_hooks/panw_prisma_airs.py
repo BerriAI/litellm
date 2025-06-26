@@ -4,11 +4,8 @@ PANW Prisma AIRS Built-in Guardrail for LiteLLM
 
 """
 
-import os
-import sys
-import json
 import uuid
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import HTTPException
 
@@ -18,19 +15,11 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.litellm_core_utils.logging_utils import (
-    convert_litellm_response_object_to_str,
-)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_utils.callback_utils import (
-    add_guardrail_to_applied_guardrails_header,
-)
-from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
 
@@ -170,14 +159,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             # Validate response format
             if "action" not in result:
                 verbose_proxy_logger.error(f"PANW Prisma AIRS: Invalid API response format: {result}")
-                return {"action": "allow", "category": "api_error"}
+                return {"action": "block", "category": "api_error"}
                 
             verbose_proxy_logger.debug(f"PANW Prisma AIRS: Scan result - Action: {result.get('action')}, Category: {result.get('category', 'unknown')}")
             return result
             
         except Exception as e:
             verbose_proxy_logger.error(f"PANW Prisma AIRS: API call failed: {str(e)}")
-            return {"action": "allow", "category": "api_error"}
+            return {"action": "block", "category": "api_error"}
 
     def _build_error_detail(self, scan_result: Dict[str, Any], is_response: bool = False) -> Dict[str, Any]:
         """Build enhanced error detail with scan information."""

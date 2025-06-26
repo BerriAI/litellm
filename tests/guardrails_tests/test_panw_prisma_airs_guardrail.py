@@ -330,48 +330,37 @@ class TestPanwAirsAPIIntegration:
 
     @pytest.mark.asyncio
     async def test_api_error_handling(self, handler):
-        """Test API error handling (fail open)."""
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
-        ) as mock_client:
-            # Simulate API error
-            mock_client.return_value.post = AsyncMock(
-                side_effect=Exception("API Error")
-            )
+        """Test API error handling (fail closed)."""
+        # Mock the HTTP client to raise an exception
+        with patch("litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.get_async_httpx_client") as mock_client:
+            mock_async_client = AsyncMock()
+            mock_async_client.post = AsyncMock(side_effect=Exception("API Error"))
+            mock_client.return_value = mock_async_client
 
-            result = await handler._call_panw_api(
-                content="Test content",
-                is_response=False,
-                metadata={"user": "test", "model": "gpt-3.5"},
-            )
-
-        # Should fail open (allow)
-        assert result["action"] == "allow"
-        assert result["category"] == "api_error"
+            result = await handler._call_panw_api("test content")
+            
+            # Should fail closed (block) when API is unavailable
+            assert result["action"] == "block"
+            assert result["category"] == "api_error"
 
     @pytest.mark.asyncio
     async def test_invalid_api_response_handling(self, handler):
         """Test handling of invalid API responses."""
+        # Mock HTTP client to return invalid response (missing "action" field)
         mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "invalid": "response"
-        }  # Missing 'action' field
+        mock_response.json.return_value = {"invalid": "response"}  # Missing "action" field
         mock_response.raise_for_status.return_value = None
 
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
-        ) as mock_client:
-            mock_client.return_value.post = AsyncMock(return_value=mock_response)
+        with patch("litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.get_async_httpx_client") as mock_client:
+            mock_async_client = AsyncMock()
+            mock_async_client.post = AsyncMock(return_value=mock_response)
+            mock_client.return_value = mock_async_client
 
-            result = await handler._call_panw_api(
-                content="Test content",
-                is_response=False,
-                metadata={"user": "test", "model": "gpt-3.5"},
-            )
-
-        # Should fail open due to invalid response
-        assert result["action"] == "allow"
-        assert result["category"] == "api_error"
+            result = await handler._call_panw_api("test content")
+            
+            # Should fail closed (block) when API response is invalid
+            assert result["action"] == "block"
+            assert result["category"] == "api_error"
 
     @pytest.mark.asyncio
     async def test_empty_content_handling(self, handler):
@@ -423,7 +412,7 @@ class TestPanwAirsConfiguration:
     def test_default_guardrail_name(self):
         """Test default guardrail name."""
         litellm_params = {"api_key": "test_key", "profile_name": "test_profile"}
-        guardrail_config = {}  # No guardrail_name provided
+        guardrail_config = {}  
 
         with patch("litellm.logging_callback_manager.add_litellm_callback"):
             handler = initialize_panw_prisma_airs(litellm_params, guardrail_config)
