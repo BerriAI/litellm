@@ -1,0 +1,133 @@
+from typing import Any, Dict, List, Optional, Union, cast
+
+import litellm
+from litellm.types.utils import ModelResponse
+
+from .transformation import GoogleGenAIAdapter
+
+# Initialize adapter
+GOOGLE_GENAI_ADAPTER = GoogleGenAIAdapter()
+
+
+class GenerateContentToCompletionHandler:
+    """Handler for transforming generate_content calls to completion format when provider config is None"""
+    
+    @staticmethod
+    def _prepare_completion_kwargs(
+        model: str,
+        contents: Union[List[Dict[str, Any]], Dict[str, Any]],
+        config: Optional[Dict[str, Any]] = None,
+        stream: bool = False,
+        extra_kwargs: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Prepare kwargs for litellm.completion/acompletion"""
+        
+        # Transform generate_content request to completion format
+        completion_request = GOOGLE_GENAI_ADAPTER.translate_generate_content_to_completion(
+            model=model,
+            contents=contents,
+            config=config,
+            **(extra_kwargs or {})
+        )
+        
+        completion_kwargs: Dict[str, Any] = dict(completion_request)
+        
+        if stream:
+            completion_kwargs["stream"] = stream
+            
+        # Add any additional kwargs that aren't already in the completion request
+        excluded_keys = {"generate_content"}
+        extra_kwargs = extra_kwargs or {}
+        for key, value in extra_kwargs.items():
+            if (
+                key not in excluded_keys
+                and key not in completion_kwargs
+                and value is not None
+            ):
+                completion_kwargs[key] = value
+                
+        return completion_kwargs
+
+    @staticmethod
+    async def async_generate_content_handler(
+        model: str,
+        contents: Union[List[Dict[str, Any]], Dict[str, Any]],
+        config: Optional[Dict[str, Any]] = None,
+        stream: bool = False,
+        **kwargs,
+    ) -> Any:
+        """Handle generate_content call asynchronously using completion adapter"""
+        
+        completion_kwargs = GenerateContentToCompletionHandler._prepare_completion_kwargs(
+            model=model,
+            contents=contents,
+            config=config,
+            stream=stream,
+            extra_kwargs=kwargs,
+        )
+        
+        try:
+            completion_response = await litellm.acompletion(**completion_kwargs)
+            
+            if stream:
+                # TODO: Implement streaming transformation
+                # For now, just return the raw stream
+                return completion_response
+            else:
+                # Transform completion response back to generate_content format
+                generate_content_response = GOOGLE_GENAI_ADAPTER.translate_completion_to_generate_content(
+                    cast(ModelResponse, completion_response)
+                )
+                return generate_content_response
+                
+        except Exception as e:
+            raise ValueError(
+                f"Error calling litellm.acompletion for generate_content: {str(e)}"
+            )
+
+    @staticmethod
+    def generate_content_handler(
+        model: str,
+        contents: Union[List[Dict[str, Any]], Dict[str, Any]],
+        config: Optional[Dict[str, Any]] = None,
+        stream: bool = False,
+        _is_async: bool = False,
+        **kwargs,
+    ) -> Any:
+        """Handle generate_content call using completion adapter"""
+        
+        if _is_async:
+            return GenerateContentToCompletionHandler.async_generate_content_handler(
+                model=model,
+                contents=contents,
+                config=config,
+                stream=stream,
+                **kwargs,
+            )
+            
+        completion_kwargs = GenerateContentToCompletionHandler._prepare_completion_kwargs(
+            model=model,
+            contents=contents,
+            config=config,
+            stream=stream,
+            extra_kwargs=kwargs,
+        )
+        
+        try:
+            completion_response = litellm.completion(**completion_kwargs)
+            
+            if stream:
+                # TODO: Implement streaming transformation
+                # For now, just return the raw stream
+                return completion_response
+            else:
+                # Transform completion response back to generate_content format
+                generate_content_response = GOOGLE_GENAI_ADAPTER.translate_completion_to_generate_content(
+                    cast(ModelResponse, completion_response)
+                )
+                return generate_content_response
+                
+        except Exception as e:
+            raise ValueError(
+                f"Error calling litellm.completion for generate_content: {str(e)}"
+            ) 
