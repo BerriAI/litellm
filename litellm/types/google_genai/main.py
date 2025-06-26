@@ -20,6 +20,6 @@ class GenerateContentRequestDict(GenerateContentRequestParametersDict):  # type:
     generationConfig: Optional[Any]
 
 
-class GenerateContentResponse(GoogleGenAIGenerateContentResponse, BaseLiteLLMOpenAIResponseObject):
+class GenerateContentResponse(GoogleGenAIGenerateContentResponse, BaseLiteLLMOpenAIResponseObject): # type: ignore[misc]
     _hidden_params: dict = {}
     pass
