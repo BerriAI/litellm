@@ -323,6 +323,7 @@ priority_reservation: Optional[Dict[str, float]] = None
 use_aiohttp_transport: bool = (
     True  # Older variable, aiohttp is now the default. use disable_aiohttp_transport instead.
 )
+aiohttp_trust_env: bool = False # set to true to use HTTP_ Proxy settings
 disable_aiohttp_transport: bool = False  # Set this to true to use httpx instead
 disable_aiohttp_trust_env: bool = False  # When False, aiohttp will respect HTTP(S)_PROXY env vars
 force_ipv4: bool = (
