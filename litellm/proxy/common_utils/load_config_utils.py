@@ -1,4 +1,5 @@
 import yaml
+import os
 
 from litellm._logging import verbose_proxy_logger
 
@@ -36,9 +37,16 @@ def get_file_contents_from_s3(bucket_name, object_key):
             temp_file_path = temp_file.name
             verbose_proxy_logger.debug(f"File stored temporarily at: {temp_file_path}")
 
-        # Load the YAML file content
-        with open(temp_file_path, "r") as yaml_file:
-            config = yaml.safe_load(yaml_file)
+        try:
+            # Load the YAML file content
+            with open(temp_file_path, "r") as yaml_file:
+                config = yaml.safe_load(yaml_file)
+        finally:
+            try:
+                os.remove(temp_file_path)
+                verbose_proxy_logger.debug(f"Cleaned up temporary file: {temp_file_path}")
+            except OSError as cleanup_error:
+                verbose_proxy_logger.warning(f"Failed to clean up temporary file {temp_file_path}: {cleanup_error}")
 
         return config
     except ImportError as e:
