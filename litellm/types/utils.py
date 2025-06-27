@@ -2515,7 +2515,7 @@ class CallbacksByType(TypedDict):
 
 CostResponseTypes = Union[
     ModelResponse,
-    ModelResponseStream,
+    TextCompletionResponse,
     EmbeddingResponse,
     ImageResponse,
     TranscriptionResponse,

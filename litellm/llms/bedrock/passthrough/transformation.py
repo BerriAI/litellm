@@ -1,5 +1,6 @@
+import json
 from datetime import datetime
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple, cast
 
 from httpx import Response
 
@@ -8,6 +9,11 @@ from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConf
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockEventStreamDecoderBase, BedrockModelInfo
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.utils import CostResponseTypes, GenericStreamingChunk
+
 
 if TYPE_CHECKING:
     from httpx import URL
@@ -131,3 +137,68 @@ class BedrockPassthroughConfig(
                     all_chunks.append(message)
 
         return all_chunks
+
+    def handle_logging_collected_chunks(
+        self,
+        all_chunks: List[str],
+        litellm_logging_obj: "LiteLLMLoggingObj",
+        model: str,
+        custom_llm_provider: str,
+        endpoint: str,
+    ) -> Optional["CostResponseTypes"]:
+        """
+        1. Convert all_chunks to a ModelResponseStream
+        2. combine model_response_stream to model_response
+        3. Return the model_response
+        """
+
+        from litellm.litellm_core_utils.streaming_handler import (
+            convert_generic_chunk_to_model_response_stream,
+            generic_chunk_has_all_required_fields,
+        )
+        from litellm.llms.bedrock.chat import get_bedrock_event_stream_decoder
+        from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
+            AmazonInvokeConfig,
+        )
+        from litellm.main import stream_chunk_builder
+        from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
+
+        all_translated_chunks = []
+        if "invoke" in endpoint:
+            invoke_provider = AmazonInvokeConfig.get_bedrock_invoke_provider(model)
+            if invoke_provider is None:
+                raise ValueError(
+                    f"Invalid invoke provider: {invoke_provider}, for model: {model}"
+                )
+
+            obj = get_bedrock_event_stream_decoder(
+                invoke_provider=invoke_provider,
+                model=model,
+                sync_stream=True,
+                json_mode=False,
+            )
+            for chunk in all_chunks:
+                message = json.loads(chunk)
+                translated_chunk = obj._chunk_parser(chunk_data=message)
+
+                if isinstance(
+                    translated_chunk, dict
+                ) and generic_chunk_has_all_required_fields(
+                    cast(dict, translated_chunk)
+                ):
+                    chunk_obj = convert_generic_chunk_to_model_response_stream(
+                        cast(GenericStreamingChunk, translated_chunk)
+                    )
+                elif isinstance(translated_chunk, ModelResponseStream):
+                    chunk_obj = translated_chunk
+                else:
+                    continue
+
+                all_translated_chunks.append(chunk_obj)
+
+        if len(all_translated_chunks) > 0:
+            model_response = stream_chunk_builder(
+                chunks=all_translated_chunks,
+            )
+            return model_response
+        return None

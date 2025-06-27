@@ -1474,7 +1474,6 @@ class Logging(LiteLLMLoggingBaseClass):
         3. Log the complete streaming response (trigger success handler)
         This is used for passthrough endpoints
         """
-
         all_chunks = provider_config._convert_raw_bytes_to_str_lines(raw_bytes)
         complete_streaming_response = provider_config.handle_logging_collected_chunks(
             all_chunks=all_chunks,
@@ -1485,6 +1484,7 @@ class Logging(LiteLLMLoggingBaseClass):
         )
 
         if complete_streaming_response is not None:
+
             executor.submit(self.success_handler, result=complete_streaming_response)
         return
 
