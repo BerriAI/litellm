@@ -128,6 +128,7 @@ from litellm.types.router import (
     Deployment,
     DeploymentTypedDict,
     LiteLLM_Params,
+    MockRouterTestingParams,
     ModelGroupInfo,
     OptionalPreCallChecks,
     RetryPolicy,
@@ -3629,23 +3630,16 @@ class Router:
             litellm.ContextWindowExceededError: when `mock_testing_context_fallbacks=True` passed in request params
             litellm.ContentPolicyViolationError: when `mock_testing_content_policy_fallbacks=True` passed in request params
         """
-        mock_testing_fallbacks = kwargs.pop("mock_testing_fallbacks", None)
-        mock_testing_context_fallbacks = kwargs.pop(
-            "mock_testing_context_fallbacks", None
-        )
-        mock_testing_content_policy_fallbacks = kwargs.pop(
-            "mock_testing_content_policy_fallbacks", None
-        )
-
-        if mock_testing_fallbacks is not None and mock_testing_fallbacks is True:
+        mock_testing_params = MockRouterTestingParams.from_kwargs(kwargs)
+        if mock_testing_params.mock_testing_fallbacks is not None and mock_testing_params.mock_testing_fallbacks is True:
             raise litellm.InternalServerError(
                 model=model_group,
                 llm_provider="",
                 message=f"This is a mock exception for model={model_group}, to trigger a fallback. Fallbacks={fallbacks}",
             )
         elif (
-            mock_testing_context_fallbacks is not None
-            and mock_testing_context_fallbacks is True
+            mock_testing_params.mock_testing_context_fallbacks is not None
+            and mock_testing_params.mock_testing_context_fallbacks is True
         ):
             raise litellm.ContextWindowExceededError(
                 model=model_group,
@@ -3654,8 +3648,8 @@ class Router:
                     Context_Window_Fallbacks={context_window_fallbacks}",
             )
         elif (
-            mock_testing_content_policy_fallbacks is not None
-            and mock_testing_content_policy_fallbacks is True
+            mock_testing_params.mock_testing_content_policy_fallbacks is not None
+            and mock_testing_params.mock_testing_content_policy_fallbacks is True
         ):
             raise litellm.ContentPolicyViolationError(
                 model=model_group,
