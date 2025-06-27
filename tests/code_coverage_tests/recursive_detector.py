@@ -23,6 +23,7 @@ IGNORE_FUNCTIONS = [
     "_can_object_call_model", # max depth set.
     "encode_unserializable_types", # max depth set.
     "filter_value_from_dict", # max depth set.
+    "normalize_json_schema_types", # max depth set.
 ]
 
 
