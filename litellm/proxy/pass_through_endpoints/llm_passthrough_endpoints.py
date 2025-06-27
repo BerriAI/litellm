@@ -306,9 +306,11 @@ async def vllm_proxy_route(
                 content=None,
                 data=None,
                 files=None,
-                json=request_body
-                if request.headers.get("content-type") == "application/json"
-                else None,
+                json=(
+                    request_body
+                    if request.headers.get("content-type") == "application/json"
+                    else None
+                ),
                 params=None,
                 headers=None,
                 cookies=None,
@@ -462,6 +464,76 @@ async def anthropic_proxy_route(
     return received_value
 
 
+async def bedrock_llm_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Handles Bedrock LLM API calls.
+    """
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+
+    request_body = await _read_request_body(request=request)
+    data: Dict[str, Any] = {}
+    base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        model = endpoint.split("/")[1]
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Model missing from endpoint. Expected format: /model/<Model>/<endpoint>. Got: "
+                + endpoint,
+            },
+        )
+
+    data["method"] = request.method
+    data["endpoint"] = endpoint
+    data["data"] = request_body
+
+    try:
+        result = await base_llm_response_processor.base_passthrough_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=model,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+
+        return result
+    except Exception as e:
+        raise await base_llm_response_processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+
 @router.api_route(
     "/bedrock/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -474,6 +546,8 @@ async def bedrock_proxy_route(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
+    This is the v1 passthrough for Bedrock.
+    V2 is handled by the `/bedrock/v2` endpoint.
     [Docs](https://docs.litellm.ai/docs/pass_through/bedrock)
     """
     create_request_copy(request)
@@ -491,7 +565,12 @@ async def bedrock_proxy_route(
             f"https://bedrock-agent-runtime.{aws_region_name}.amazonaws.com"
         )
     else:
-        base_target_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
+        return await bedrock_llm_proxy_route(
+            endpoint=endpoint,
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+        )
     encoded_endpoint = httpx.URL(endpoint).path
 
     # Ensure endpoint starts with '/' for proper URL construction
@@ -705,6 +784,7 @@ class VertexAIPassThroughHandler(BaseVertexAIPassThroughHandler):
     ) -> str:
         return get_vertex_base_url(vertex_location)
 
+
 def get_vertex_base_url(vertex_location: Optional[str]) -> str:
     """
     Returns the base URL for Vertex AI based on the provided location.
@@ -713,8 +793,9 @@ def get_vertex_base_url(vertex_location: Optional[str]) -> str:
         return "https://aiplatform.googleapis.com/"
     return f"https://{vertex_location}-aiplatform.googleapis.com/"
 
+
 def get_vertex_pass_through_handler(
-    call_type: Literal["discovery", "aiplatform"]
+    call_type: Literal["discovery", "aiplatform"],
 ) -> BaseVertexAIPassThroughHandler:
     if call_type == "discovery":
         return VertexAIDiscoveryPassThroughHandler()

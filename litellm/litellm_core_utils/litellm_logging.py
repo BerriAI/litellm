@@ -1278,10 +1278,12 @@ class Logging(LiteLLMLoggingBaseClass):
             if self.call_type == CallTypes.anthropic_messages.value:
                 result = self._handle_anthropic_messages_response_logging(result=result)
             elif (
-                self.call_type == CallTypes.generate_content.value or 
-                self.call_type == CallTypes.agenerate_content.value
+                self.call_type == CallTypes.generate_content.value
+                or self.call_type == CallTypes.agenerate_content.value
             ):
-                result = self._handle_non_streaming_google_genai_generate_content_response_logging(result=result)
+                result = self._handle_non_streaming_google_genai_generate_content_response_logging(
+                    result=result
+                )
             ## if model in model cost map - log the response cost
             ## else set cost to None
 
@@ -2757,12 +2759,15 @@ class Logging(LiteLLMLoggingBaseClass):
                 json_mode=None,
             )
         return result
-    
-    def _handle_non_streaming_google_genai_generate_content_response_logging(self, result: Any) -> ModelResponse:
+
+    def _handle_non_streaming_google_genai_generate_content_response_logging(
+        self, result: Any
+    ) -> ModelResponse:
         """
         Handles logging for Google GenAI generate content responses.
         """
         import httpx
+
         httpx_response = self.model_call_details.get("httpx_response", None)
         if httpx_response is None:
             raise ValueError("Google GenAI Generate Content: httpx_response is None")
@@ -2775,7 +2780,7 @@ class Logging(LiteLLMLoggingBaseClass):
             raw_response=httpx.Response(
                 status_code=200,
                 headers={},
-            ),  
+            ),
         )
         return result
 

@@ -79,6 +79,7 @@ from litellm.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -2364,6 +2365,7 @@ class BaseLLMHTTPHandler:
             BaseVectorStoreConfig,
             BaseGoogleGenAIGenerateContentConfig,
             BaseAnthropicMessagesConfig,
+            "BasePassthroughConfig",
         ],
     ):
         status_code = getattr(e, "status_code", 500)
@@ -2382,6 +2384,15 @@ class BaseLLMHTTPHandler:
             error_headers = dict(error_headers)
         else:
             error_headers = {}
+
+        if provider_config is None:
+            from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+            raise BaseLLMException(
+                status_code=status_code,
+                message=error_text,
+                headers=error_headers,
+            )
 
         raise provider_config.get_error_class(
             error_message=error_text,
