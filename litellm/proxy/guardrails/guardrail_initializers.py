@@ -2,6 +2,9 @@
 import litellm
 from litellm.proxy._types import CommonProxyErrors
 from litellm.types.guardrails import *
+from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs import (
+    initialize_panw_prisma_airs,
+)
 
 
 def initialize_aporia(
