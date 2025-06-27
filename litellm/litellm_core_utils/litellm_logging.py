@@ -26,6 +26,7 @@ from typing import (
     cast,
 )
 
+from httpx import Response
 from pydantic import BaseModel
 
 import litellm
@@ -1074,6 +1075,7 @@ class Logging(LiteLLMLoggingBaseClass):
             OpenAIFileObject,
             LiteLLMRealtimeStreamLoggingObject,
             OpenAIModerationResponse,
+            Response,
         ],
         cache_hit: Optional[bool] = None,
         litellm_model_name: Optional[str] = None,

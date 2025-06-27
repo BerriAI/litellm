@@ -4,6 +4,7 @@ import time
 from functools import lru_cache
 from typing import Any, List, Literal, Optional, Tuple, Union, cast
 
+from httpx import Response
 from pydantic import BaseModel
 
 import litellm
@@ -964,6 +965,7 @@ def response_cost_calculator(
         ResponsesAPIResponse,
         LiteLLMRealtimeStreamLoggingObject,
         OpenAIModerationResponse,
+        Response,
     ],
     model: str,
     custom_llm_provider: Optional[str],
