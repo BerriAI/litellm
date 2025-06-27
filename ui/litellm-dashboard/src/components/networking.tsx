@@ -19,7 +19,7 @@ import {
 } from "./email_events/types";
 
 const isLocal = process.env.NODE_ENV === "development";
-export const defaultProxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+export const defaultProxyBaseUrl = isLocal ? "http://localhost:43845" : null;
 const defaultServerRootPath = "/";
 export let serverRootPath = defaultServerRootPath;
 export let proxyBaseUrl = defaultProxyBaseUrl;
@@ -1333,8 +1333,15 @@ export const userDailyActivityCall = async (
       ? `${proxyBaseUrl}/user/daily/activity`
       : `/user/daily/activity`;
     const queryParams = new URLSearchParams();
-    queryParams.append("start_date", startTime.toISOString());
-    queryParams.append("end_date", endTime.toISOString());
+    // Format dates as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    queryParams.append("start_date", formatDate(startTime));
+    queryParams.append("end_date", formatDate(endTime));
     queryParams.append("page_size", "1000");
     queryParams.append("page", page.toString());
     const queryString = queryParams.toString();
@@ -1379,8 +1386,15 @@ export const tagDailyActivityCall = async (
       ? `${proxyBaseUrl}/tag/daily/activity`
       : `/tag/daily/activity`;
     const queryParams = new URLSearchParams();
-    queryParams.append("start_date", startTime.toISOString());
-    queryParams.append("end_date", endTime.toISOString());
+    // Format dates as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    queryParams.append("start_date", formatDate(startTime));
+    queryParams.append("end_date", formatDate(endTime));
     queryParams.append("page_size", "1000");
     queryParams.append("page", page.toString());
     if (tags) {
@@ -1428,8 +1442,15 @@ export const teamDailyActivityCall = async (
       ? `${proxyBaseUrl}/team/daily/activity`
       : `/team/daily/activity`;
     const queryParams = new URLSearchParams();
-    queryParams.append("start_date", startTime.toISOString());
-    queryParams.append("end_date", endTime.toISOString());
+    // Format dates as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    queryParams.append("start_date", formatDate(startTime));
+    queryParams.append("end_date", formatDate(endTime));
     queryParams.append("page_size", "1000");
     queryParams.append("page", page.toString());
     if (teamIds) {

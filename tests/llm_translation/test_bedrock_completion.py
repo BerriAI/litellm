@@ -1266,6 +1266,7 @@ def test_bedrock_tools_pt_invalid_names():
 
 def test_bedrock_tools_transformation_valid_params():
     from litellm.types.llms.bedrock import ToolJsonSchemaBlock
+
     tools = [
         {
             "type": "function",
@@ -1288,14 +1289,17 @@ def test_bedrock_tools_transformation_valid_params():
     result = _bedrock_tools_pt(tools)
 
     print("bedrock tools after prompt formatting=", result)
-     # Ensure the keys for properties in the response is a subset of keys in ToolJsonSchemaBlock
+    # Ensure the keys for properties in the response is a subset of keys in ToolJsonSchemaBlock
     toolJsonSchema = result[0]["toolSpec"]["inputSchema"]["json"]
     assert toolJsonSchema is not None
     print("transformed toolJsonSchema keys=", toolJsonSchema.keys())
-    print("allowed ToolJsonSchemaBlock keys=", ToolJsonSchemaBlock.__annotations__.keys())
-    assert set(toolJsonSchema.keys()).issubset(set(ToolJsonSchemaBlock.__annotations__.keys()))
+    print(
+        "allowed ToolJsonSchemaBlock keys=", ToolJsonSchemaBlock.__annotations__.keys()
+    )
+    assert set(toolJsonSchema.keys()).issubset(
+        set(ToolJsonSchemaBlock.__annotations__.keys())
+    )
 
-    
     assert isinstance(result, list)
     assert len(result) == 1
     assert "toolSpec" in result[0]
@@ -1303,9 +1307,11 @@ def test_bedrock_tools_transformation_valid_params():
     assert result[0]["toolSpec"]["description"] == "Invalid name test"
     assert "inputSchema" in result[0]["toolSpec"]
     assert "json" in result[0]["toolSpec"]["inputSchema"]
-    assert result[0]["toolSpec"]["inputSchema"]["json"]["properties"]["test"]["type"] == "string"
+    assert (
+        result[0]["toolSpec"]["inputSchema"]["json"]["properties"]["test"]["type"]
+        == "string"
+    )
     assert "test" in result[0]["toolSpec"]["inputSchema"]["json"]["required"]
-
 
 
 def test_not_found_error():
@@ -2269,7 +2275,6 @@ class TestBedrockConverseNovaTestSuite(BaseLLMChatTest):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
 
-    
     def test_prompt_caching(self):
         """
         TODO: Ensure this test passes our base llm test suite
@@ -2479,7 +2484,9 @@ def test_bedrock_process_empty_text_blocks():
     assert modified_message["content"][0]["text"] == "Please continue."
 
 
-@pytest.mark.skip(reason="Skipping test due to bedrock changing their response schema support. Come back to this.")
+@pytest.mark.skip(
+    reason="Skipping test due to bedrock changing their response schema support. Come back to this."
+)
 def test_nova_optional_params_tool_choice():
     try:
         litellm.drop_params = True
@@ -2499,7 +2506,12 @@ def test_nova_optional_params_tool_choice():
                         "parameters": {
                             "$defs": {
                                 "TurnDurationEnum": {
-                                    "enum": ["action", "encounter", "battle", "operation"],
+                                    "enum": [
+                                        "action",
+                                        "encounter",
+                                        "battle",
+                                        "operation",
+                                    ],
                                     "title": "TurnDurationEnum",
                                     "type": "string",
                                 }
@@ -2512,10 +2524,22 @@ def test_nova_optional_params_tool_choice():
                                 },
                                 "prompt": {"title": "Prompt", "type": "string"},
                                 "name": {"title": "Name", "type": "string"},
-                                "description": {"title": "Description", "type": "string"},
-                                "competitve": {"title": "Competitve", "type": "boolean"},
-                                "players_min": {"title": "Players Min", "type": "integer"},
-                                "players_max": {"title": "Players Max", "type": "integer"},
+                                "description": {
+                                    "title": "Description",
+                                    "type": "string",
+                                },
+                                "competitve": {
+                                    "title": "Competitve",
+                                    "type": "boolean",
+                                },
+                                "players_min": {
+                                    "title": "Players Min",
+                                    "type": "integer",
+                                },
+                                "players_max": {
+                                    "title": "Players Max",
+                                    "type": "integer",
+                                },
                                 "turn_duration": {
                                     "$ref": "#/$defs/TurnDurationEnum",
                                     "description": "how long the passing of a turn should represent for a game at this scale",
@@ -2539,6 +2563,7 @@ def test_nova_optional_params_tool_choice():
         )
     except litellm.APIConnectionError:
         pass
+
 
 class TestBedrockEmbedding(BaseLLMEmbeddingTest):
     def get_base_embedding_call_args(self) -> dict:
@@ -3021,7 +3046,8 @@ def test_bedrock_application_inference_profile():
     client = HTTPHandler()
     client2 = HTTPHandler()
 
-    tools = [{
+    tools = [
+        {
             "type": "function",
             "function": {
                 "name": "get_current_weather",
@@ -3039,11 +3065,10 @@ def test_bedrock_application_inference_profile():
                         },
                     },
                     "required": ["location"],
-                }
-            }
+                },
+            },
         }
     ]
-
 
     with patch.object(client, "post") as mock_post, patch.object(
         client2, "post"
@@ -3054,7 +3079,7 @@ def test_bedrock_application_inference_profile():
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 model_id="arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
                 client=client,
-                tools=tools
+                tools=tools,
             )
         except Exception as e:
             print(e)
@@ -3064,7 +3089,7 @@ def test_bedrock_application_inference_profile():
                 model="bedrock/converse/arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 client=client2,
-                tools=tools
+                tools=tools,
             )
         except Exception as e:
             print(e)
@@ -3092,7 +3117,6 @@ def return_mocked_response(model: str):
             "stopReason": "max_tokens",
             "usage": {"inputTokens": 5, "outputTokens": 10, "totalTokens": 15},
         }
-
 
 
 @pytest.mark.parametrize(
@@ -3141,7 +3165,6 @@ async def test_bedrock_max_completion_tokens(model: str):
         }
 
 
-
 def test_bedrock_meta_llama_function_calling():
     """
     Tests that:
@@ -3149,9 +3172,10 @@ def test_bedrock_meta_llama_function_calling():
     """
     from litellm.utils import return_raw_request
     from litellm.types.utils import CallTypes
+
     tools = [
-            {
-                "type": "function",
+        {
+            "type": "function",
             "function": {
                 "name": "get_current_weather",
                 "description": "Get the current weather in a given location",
@@ -3191,4 +3215,69 @@ def test_bedrock_meta_llama_function_calling():
 
     print(response)
 
-    
+
+def test_bedrock_passthrough():
+    import litellm
+
+    litellm._turn_on_debug()
+
+    data = {
+        "max_tokens": 512,
+        "messages": [{"role": "user", "content": "Hey"}],
+        "system": [
+            {
+                "type": "text",
+                "text": "Analyze if this message indicates a new conversation topic. If it does, extract a 2-3 word title that captures the new topic. Format your response as a JSON object with two fields: 'isNewTopic' (boolean) and 'title' (string, or null if isNewTopic is false). Only include these fields, no other text.",
+            }
+        ],
+        "temperature": 0,
+        "metadata": {
+            "user_id": "5dd07c33da27e6d2968d94ea20bf47a7b090b6b158b82328d54da2909a108e84"
+        },
+        "anthropic_version": "bedrock-2023-05-31",
+        "anthropic_beta": ["claude-code-20250219"],
+    }
+
+    response = litellm.llm_passthrough_route(
+        model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        method="POST",
+        endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+        data=data,
+    )
+
+    print(response.text)
+
+    assert response.status_code == 200
+
+
+def test_bedrock_streaming_passthrough():
+    import litellm
+
+    litellm._turn_on_debug()
+
+    data = {
+        "max_tokens": 512,
+        "messages": [{"role": "user", "content": "Hey"}],
+        "system": [
+            {
+                "type": "text",
+                "text": "Analyze if this message indicates a new conversation topic. If it does, extract a 2-3 word title that captures the new topic. Format your response as a JSON object with two fields: 'isNewTopic' (boolean) and 'title' (string, or null if isNewTopic is false). Only include these fields, no other text.",
+            }
+        ],
+        "temperature": 0,
+        "metadata": {
+            "user_id": "5dd07c33da27e6d2968d94ea20bf47a7b090b6b158b82328d54da2909a108e84"
+        },
+        "anthropic_version": "bedrock-2023-05-31",
+        "anthropic_beta": ["claude-code-20250219"],
+    }
+
+    response = litellm.llm_passthrough_route(
+        model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        method="POST",
+        endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke-with-response-stream",
+        data=data,
+        stream=True,
+    )
+
+    assert response.status_code == 200
