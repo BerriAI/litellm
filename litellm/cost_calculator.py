@@ -657,7 +657,7 @@ def completion_cost(  # noqa: PLR0915
             potential_model_names.append(model)
         for idx, model in enumerate(potential_model_names):
             try:
-                verbose_logger.info(
+                verbose_logger.debug(
                     f"selected model name for cost calculation: {model}"
                 )
 
@@ -1176,7 +1176,7 @@ def batch_cost_calculator(
         model=model, custom_llm_provider=custom_llm_provider
     )
 
-    verbose_logger.info(
+    verbose_logger.debug(
         "Calculating batch cost per token. model=%s, custom_llm_provider=%s",
         model,
         custom_llm_provider,
