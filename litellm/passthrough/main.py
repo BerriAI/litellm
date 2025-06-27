@@ -14,8 +14,10 @@ from httpx._types import CookieTypes, QueryParamTypes, RequestFiles
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.utils import client
 
+base_llm_http_handler = BaseLLMHTTPHandler()
 from .utils import BasePassthroughUtils
 
 
@@ -123,37 +125,27 @@ def llm_passthrough_route(
         api_key=api_key,
     )
 
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
     from litellm.types.utils import LlmProviders
     from litellm.utils import ProviderConfigManager
 
-    provider_config = ProviderConfigManager.get_provider_model_info(
+    litellm_params_dict = get_litellm_params(**kwargs)
+
+    provider_config = ProviderConfigManager.get_provider_passthrough_config(
         provider=LlmProviders(custom_llm_provider),
         model=model,
     )
     if provider_config is None:
         raise Exception(f"Provider {custom_llm_provider} not found")
 
-    base_target_url = provider_config.get_api_base(api_base)
-
-    if base_target_url is None:
-        raise Exception(f"Provider {custom_llm_provider} api base not found")
-
-    encoded_endpoint = httpx.URL(endpoint).path
-
-    # Ensure endpoint starts with '/' for proper URL construction
-    if not encoded_endpoint.startswith("/"):
-        encoded_endpoint = "/" + encoded_endpoint
-
-    # Construct the full target URL using httpx
-    base_url = httpx.URL(base_target_url)
-    updated_url = base_url.copy_with(path=encoded_endpoint)
-
-    if request_query_params:
-        # Create a new URL with the merged query params
-        updated_url = updated_url.copy_with(
-            query=urlencode(request_query_params).encode("ascii")
-        )
-
+    updated_url, base_target_url = provider_config.get_complete_url(
+        api_base=api_base,
+        api_key=api_key,
+        model=model,
+        endpoint=endpoint,
+        request_query_params=request_query_params,
+        litellm_params=litellm_params_dict,
+    )
     # Add or update query parameters
     provider_api_key = provider_config.get_api_key(api_key)
 
@@ -173,6 +165,14 @@ def llm_passthrough_route(
         forward_headers=False,
     )
 
+    headers, signed_json_body = provider_config.sign_request(
+        headers=headers,
+        litellm_params=litellm_params_dict,
+        request_data=data if data else json,
+        api_base=str(updated_url),
+        model=model,
+    )
+
     ## SWAP MODEL IN JSON BODY
     if json and isinstance(json, dict) and "model" in json:
         json["model"] = model
@@ -180,14 +180,20 @@ def llm_passthrough_route(
     request = client.client.build_request(
         method=method,
         url=updated_url,
-        content=content,
-        data=data,
+        content=signed_json_body,
+        data=None,
         files=files,
-        json=json,
+        json=None,
         params=params,
         headers=headers,
         cookies=cookies,
     )
 
-    response = client.client.send(request=request, stream=stream)
-    return response
+    try:
+        response = client.client.send(request=request, stream=stream)
+        return response
+    except Exception as e:
+        raise base_llm_http_handler._handle_error(
+            e=e,
+            provider_config=provider_config,
+        )

@@ -79,6 +79,7 @@ from litellm.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -2352,7 +2353,13 @@ class BaseLLMHTTPHandler:
         self,
         e: Exception,
         provider_config: Union[
-            BaseConfig, BaseRerankConfig, BaseResponsesAPIConfig, BaseImageEditConfig, BaseVectorStoreConfig, BaseGoogleGenAIGenerateContentConfig
+            BaseConfig,
+            BaseRerankConfig,
+            BaseResponsesAPIConfig,
+            BaseImageEditConfig,
+            BaseVectorStoreConfig,
+            BaseGoogleGenAIGenerateContentConfig,
+            "BasePassthroughConfig",
         ],
     ):
         status_code = getattr(e, "status_code", 500)
@@ -2451,7 +2458,10 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
+    ) -> Union[
+        ImageResponse,
+        Coroutine[Any, Any, ImageResponse],
+    ]:
         """
 
         Handles image edit requests.
@@ -2649,8 +2659,7 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         headers = vector_store_provider_config.validate_environment(
-            headers=extra_headers or {}, 
-            litellm_params=litellm_params
+            headers=extra_headers or {}, litellm_params=litellm_params
         )
 
         if extra_headers:
@@ -2661,11 +2670,13 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, request_body = vector_store_provider_config.transform_search_vector_store_request(
-            vector_store_id=vector_store_id,
-            query=query,
-            vector_store_search_optional_params=vector_store_search_optional_params,
-            api_base=api_base,
+        url, request_body = (
+            vector_store_provider_config.transform_search_vector_store_request(
+                vector_store_id=vector_store_id,
+                query=query,
+                vector_store_search_optional_params=vector_store_search_optional_params,
+                api_base=api_base,
+            )
         )
 
         logging_obj.pre_call(
@@ -2679,7 +2690,9 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = await async_httpx_client.post(url=url, headers=headers, json=request_body, timeout=timeout)
+            response = await async_httpx_client.post(
+                url=url, headers=headers, json=request_body, timeout=timeout
+            )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
@@ -2701,7 +2714,9 @@ class BaseLLMHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         _is_async: bool = False,
-    ) -> Union[VectorStoreSearchResponse, Coroutine[Any, Any, VectorStoreSearchResponse]]:
+    ) -> Union[
+        VectorStoreSearchResponse, Coroutine[Any, Any, VectorStoreSearchResponse]
+    ]:
         if _is_async:
             return self.async_vector_store_search_handler(
                 vector_store_id=vector_store_id,
@@ -2725,8 +2740,7 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         headers = vector_store_provider_config.validate_environment(
-            headers=extra_headers or {}, 
-            litellm_params=litellm_params
+            headers=extra_headers or {}, litellm_params=litellm_params
         )
 
         if extra_headers:
@@ -2737,11 +2751,13 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, request_body = vector_store_provider_config.transform_search_vector_store_request(
-            vector_store_id=vector_store_id,
-            query=query,
-            vector_store_search_optional_params=vector_store_search_optional_params,
-            api_base=api_base,
+        url, request_body = (
+            vector_store_provider_config.transform_search_vector_store_request(
+                vector_store_id=vector_store_id,
+                query=query,
+                vector_store_search_optional_params=vector_store_search_optional_params,
+                api_base=api_base,
+            )
         )
 
         logging_obj.pre_call(
@@ -2755,7 +2771,9 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = sync_httpx_client.post(url=url, headers=headers, json=request_body)
+            response = sync_httpx_client.post(
+                url=url, headers=headers, json=request_body
+            )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
@@ -2785,8 +2803,7 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         headers = vector_store_provider_config.validate_environment(
-            headers=extra_headers or {}, 
-            litellm_params=litellm_params
+            headers=extra_headers or {}, litellm_params=litellm_params
         )
 
         if extra_headers:
@@ -2797,9 +2814,11 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, request_body = vector_store_provider_config.transform_create_vector_store_request(
-            vector_store_create_optional_params=vector_store_create_optional_params,
-            api_base=api_base,
+        url, request_body = (
+            vector_store_provider_config.transform_create_vector_store_request(
+                vector_store_create_optional_params=vector_store_create_optional_params,
+                api_base=api_base,
+            )
         )
 
         logging_obj.pre_call(
@@ -2813,7 +2832,9 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = await async_httpx_client.post(url=url, headers=headers, json=request_body, timeout=timeout)
+            response = await async_httpx_client.post(
+                url=url, headers=headers, json=request_body, timeout=timeout
+            )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
@@ -2833,7 +2854,9 @@ class BaseLLMHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         _is_async: bool = False,
-    ) -> Union[VectorStoreCreateResponse, Coroutine[Any, Any, VectorStoreCreateResponse]]:
+    ) -> Union[
+        VectorStoreCreateResponse, Coroutine[Any, Any, VectorStoreCreateResponse]
+    ]:
         if _is_async:
             return self.async_vector_store_create_handler(
                 vector_store_create_optional_params=vector_store_create_optional_params,
@@ -2855,8 +2878,7 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         headers = vector_store_provider_config.validate_environment(
-            headers=extra_headers or {}, 
-            litellm_params=litellm_params
+            headers=extra_headers or {}, litellm_params=litellm_params
         )
 
         if extra_headers:
@@ -2867,9 +2889,11 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, request_body = vector_store_provider_config.transform_create_vector_store_request(
-            vector_store_create_optional_params=vector_store_create_optional_params,
-            api_base=api_base,
+        url, request_body = (
+            vector_store_provider_config.transform_create_vector_store_request(
+                vector_store_create_optional_params=vector_store_create_optional_params,
+                api_base=api_base,
+            )
         )
 
         logging_obj.pre_call(
@@ -2883,14 +2907,16 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = sync_httpx_client.post(url=url, headers=headers, json=request_body)
+            response = sync_httpx_client.post(
+                url=url, headers=headers, json=request_body
+            )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
         return vector_store_provider_config.transform_create_vector_store_response(
             response=response,
         )
-    
+
     #####################################################################
     ################ Google GenAI GENERATE CONTENT HANDLER ###########################
     #####################################################################
@@ -2918,7 +2944,7 @@ class BaseLLMHTTPHandler:
         from litellm.google_genai.streaming_iterator import (
             GoogleGenAIGenerateContentStreamingIterator,
         )
-        
+
         if _is_async:
             return self.async_generate_content_handler(
                 model=model,
@@ -2944,11 +2970,13 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         # Get headers and URL from the provider config
-        headers, api_base = generate_content_provider_config.sync_get_auth_token_and_url(
-            api_base=litellm_params.api_base,
-            model=model,
-            litellm_params=dict(litellm_params),
-            stream=stream,
+        headers, api_base = (
+            generate_content_provider_config.sync_get_auth_token_and_url(
+                api_base=litellm_params.api_base,
+                model=model,
+                litellm_params=dict(litellm_params),
+                stream=stream,
+            )
         )
 
         if extra_headers:
@@ -3046,11 +3074,13 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         # Get headers and URL from the provider config
-        headers, api_base = await generate_content_provider_config.get_auth_token_and_url(
-            model=model,
-            litellm_params=dict(litellm_params),
-            stream=stream, 
-            api_base=litellm_params.api_base,
+        headers, api_base = (
+            await generate_content_provider_config.get_auth_token_and_url(
+                model=model,
+                litellm_params=dict(litellm_params),
+                stream=stream,
+                api_base=litellm_params.api_base,
+            )
         )
 
         if extra_headers:
