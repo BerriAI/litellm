@@ -142,7 +142,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         }
 
         if is_response:
-            payload["metadata"]["is_response"] = True
+            payload["metadata"]["is_response"] = True  # type: ignore[index]
 
         headers = {
             "Content-Type": "application/json",
