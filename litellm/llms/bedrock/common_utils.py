@@ -360,9 +360,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        return super().validate_environment(
-            headers, model, messages, optional_params, litellm_params, api_key, api_base
-        )
+        return headers
 
     def get_models(
         self, api_key: Optional[str] = None, api_base: Optional[str] = None

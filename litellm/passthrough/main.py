@@ -80,8 +80,8 @@ async def allm_passthrough_route(
                 response.raise_for_status()
             except httpx.HTTPStatusError as e:
                 error_text = await e.response.aread()
-                error_text = error_text.decode("utf-8")
-                raise Exception(error_text)
+                error_text_str = error_text.decode("utf-8")
+                raise Exception(error_text_str)
         else:
             response = init_response
         return response
