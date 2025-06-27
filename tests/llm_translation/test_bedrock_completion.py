@@ -3216,7 +3216,9 @@ def test_bedrock_meta_llama_function_calling():
     print(response)
 
 
-def test_bedrock_passthrough():
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_bedrock_passthrough(sync_mode: bool):
     import litellm
 
     litellm._turn_on_debug()
@@ -3238,12 +3240,20 @@ def test_bedrock_passthrough():
         "anthropic_beta": ["claude-code-20250219"],
     }
 
-    response = litellm.llm_passthrough_route(
-        model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
-        method="POST",
-        endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
-        data=data,
-    )
+    if sync_mode:
+        response = litellm.llm_passthrough_route(
+            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            method="POST",
+            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+            data=data,
+        )
+    else:
+        response = await litellm.allm_passthrough_route(
+            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            method="POST",
+            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+            data=data,
+        )
 
     print(response.text)
 

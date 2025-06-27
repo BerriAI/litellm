@@ -1107,7 +1107,10 @@ class Logging(LiteLLMLoggingBaseClass):
         )
 
         ### PASSTHROUGH COST CALCULATION ###
-        if self.call_type == "llm_passthrough_route" and isinstance(result, Response):
+        if self.call_type in [
+            "llm_passthrough_route",
+            "allm_passthrough_route",
+        ] and isinstance(result, Response):
             from litellm.cost_calculator import passthrough_cost_calculator
 
             response_cost = passthrough_cost_calculator(
