@@ -2,6 +2,18 @@
 
 This tutorial shows you how to integrate the Gemini CLI with LiteLLM Proxy, allowing you to route requests through LiteLLM's unified interface.
 
+
+:::info 
+
+This integration is supported from LiteLLMv1.73.3-nightly and above.
+
+:::
+
+<br />
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/d5dadd811ae64c70b29a16ecd558d4ba" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
+
 ## Prerequisites
 
 Before you begin, ensure you have:
