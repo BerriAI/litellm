@@ -5,6 +5,7 @@ openai_to_bytez_param_map = {
     "temperature": "temperature",
     "top_p": "top_p",
     "n": "num_return_sequences",
+    "max_retries": "max_retries",
     "seed": False,  # TODO requires backend changes
     "stop": False,  # TODO requires backend changes
     "logit_bias": False,  # TODO requires backend changes
@@ -19,7 +20,6 @@ openai_to_bytez_param_map = {
     "tool_choice": False,
     "function_call": False,
     "functions": False,
-    "max_retries": False,
     "extra_headers": False,
     "parallel_tool_calls": False,
     "audio": False,

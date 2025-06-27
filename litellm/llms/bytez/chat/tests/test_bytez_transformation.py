@@ -1,7 +1,7 @@
 import asyncio
 import litellm
 
-# litellm.log_level = "verbose"
+from messages_list import messages_list
 
 base_model = "google/gemma-3-4b-it"
 
@@ -16,8 +16,6 @@ kwargs = {
 
 results = litellm.get_supported_openai_params(model=model, custom_llm_provider="bytez")
 
-a = 2
-
 
 def test_sync_completion(messages):
     response = litellm.completion(
@@ -25,7 +23,6 @@ def test_sync_completion(messages):
     )
 
     print("Response is: ", response.choices[0].message.content)
-    pass
 
 
 def test_sync_streaming(messages):
@@ -65,46 +62,6 @@ async def test_async_streaming(messages):
     pass
 
 
-messages_list = [
-    [
-        {
-            "role": "user",
-            "content": "What color is this cat?",
-        }
-    ],
-    [
-        {
-            "role": "user",
-            "content": {"type": "text", "text": "What color is this cat?"},
-        }
-    ],
-    [
-        {
-            "role": "user",
-            "content": [
-                "What color is this cat?",
-                {
-                    "type": "image_url",
-                    "url": "https://images.squarespace-cdn.com/content/v1/5452d441e4b0c188b51fef1a/1615326541809-TW01PVTOJ4PXQUXVRLHI/male-orange-tabby-cat.jpg",
-                },
-            ],
-        }
-    ],
-    [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "What color is this cat?"},
-                {
-                    "type": "image_url",
-                    "url": "https://images.squarespace-cdn.com/content/v1/5452d441e4b0c188b51fef1a/1615326541809-TW01PVTOJ4PXQUXVRLHI/male-orange-tabby-cat.jpg",
-                },
-            ],
-        }
-    ],
-]
-
-
 for index, messages in enumerate(messages_list, 0):
     print(f"On index: {index} of message tests")
 
@@ -112,5 +69,3 @@ for index, messages in enumerate(messages_list, 0):
     test_sync_streaming(messages)
     asyncio.run(test_async_completion(messages))
     asyncio.run(test_async_streaming(messages))
-
-    a = 2

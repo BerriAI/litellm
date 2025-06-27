@@ -51,7 +51,7 @@ model_list:
 2. Start the proxy
 
 ```bash
-$ litellm --config /path/to/config.yaml --debug
+$ BYTEZ_API_KEY=YOUR_BYTEZ_API_KEY_HERE litellm --config /path/to/config.yaml --debug
 ```
 
 3. Send Request to LiteLLM Proxy Server
