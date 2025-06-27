@@ -3,7 +3,16 @@ import TabItem from '@theme/TabItem';
 
 # /audio/transcriptions
 
-Use this to loadbalance across Azure + OpenAI. 
+## Overview 
+
+| Feature | Supported | Notes | 
+|-------|-------|-------|
+| Cost Tracking | ✅ |  |
+| Logging | ✅ | works across all integrations |
+| End-user Tracking | ✅ | |
+| Fallbacks | ✅ | between supported models |
+| Loadbalancing | ✅ | between supported models |
+| Support llm providers | `openai`, `azure`, `vertex_ai`, `gemini`, `deepgram`, `groq`, `fireworks_ai` | |
 
 ## Quick Start
 
