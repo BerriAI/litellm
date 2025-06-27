@@ -2501,7 +2501,7 @@ class Router:
                 )
             except Exception as e:
                 if passthrough_on_no_deployment:
-                    return original_function(model=model, **kwargs)
+                    return await original_function(model=model, **kwargs)
                 raise e
 
             self._update_kwargs_with_deployment(

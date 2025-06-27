@@ -126,11 +126,11 @@ async def allm_passthrough_route(
         else:
             response = init_response
 
-        if hasattr(
-            response, "aiter_bytes"
-        ):  # yield the chunk, so we can store it in the logging object
+        if BasePassthroughUtils.is_async_streaming_response(response):
             return _async_streaming(response, litellm_logging_obj, provider_config)
-        return response
+        else:
+            return response
+
     except Exception as e:
         # For passthrough routes, we need to get the provider config to properly handle errors
         from litellm.types.utils import LlmProviders
@@ -293,7 +293,7 @@ def llm_passthrough_route(
         model=model,
     )
 
-    ## SWAP MODEL IN JSON BODY
+    ## SWAP MODEL IN JSON BODY [TODO: REFACTOR TO A provider_config.transform_request method]
     if json and isinstance(json, dict) and "model" in json:
         json["model"] = model
 
@@ -321,14 +321,17 @@ def llm_passthrough_route(
     try:
         response = client.client.send(request=request, stream=is_streaming_request)
         if asyncio.iscoroutine(response):
+
             return response
         response.raise_for_status()
 
-        if hasattr(
-            response, "iter_bytes"
+        if (
+            hasattr(response, "iter_bytes") and is_streaming_request
         ):  # yield the chunk, so we can store it in the logging object
+
             return _sync_streaming(response, litellm_logging_obj, provider_config)
         else:
+
             # For non-streaming responses, yield the entire response
             return response
     except Exception as e:

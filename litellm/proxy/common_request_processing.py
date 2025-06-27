@@ -465,6 +465,7 @@ class ProxyBaseLLMRequestProcessing:
             if route_type == "allm_passthrough_route":
                 # Check if response is an async generator
                 if self._is_streaming_response(response):
+
                     if asyncio.iscoroutine(response):
                         generator = await response
                     else:
@@ -598,20 +599,6 @@ class ProxyBaseLLMRequestProcessing:
 
         # Check if it implements the async iterator protocol
         if isinstance(response, (AsyncIterator, AsyncGenerator)):
-            return True
-
-        # Check for __aiter__ method (async iterator protocol)
-        if hasattr(response, "__aiter__") and callable(getattr(response, "__aiter__")):
-            return True
-
-        # Check if it's a coroutine that might yield an async generator
-        if asyncio.iscoroutine(response):
-            return True
-
-        # Check for common streaming HTTP response patterns
-        if hasattr(response, "aiter_bytes") and callable(
-            getattr(response, "aiter_bytes")
-        ):
             return True
 
         return False

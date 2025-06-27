@@ -3261,6 +3261,47 @@ async def test_bedrock_passthrough(sync_mode: bool):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [False])  # True,
+async def test_bedrock_converse_passthrough(sync_mode: bool):
+    import litellm
+
+    litellm._turn_on_debug()
+
+    data = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "text": "Write an article about impact of high inflation to GDP of a country"
+                    }
+                ],
+            }
+        ],
+        "system": [{"text": "You are an economist with access to lots of data"}],
+        "inferenceConfig": {"maxTokens": 100, "temperature": 0.5},
+    }
+    if sync_mode:
+        response = litellm.llm_passthrough_route(
+            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            method="POST",
+            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/converse",
+            data=data,
+        )
+    else:
+        response = await litellm.allm_passthrough_route(
+            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            method="POST",
+            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/converse",
+            data=data,
+        )
+
+    print(response.text)
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_bedrock_streaming_passthrough(monkeypatch):
     import litellm
     import time
