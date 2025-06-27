@@ -708,7 +708,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             _litellm_metadata
             and isinstance(_litellm_metadata, dict)
             and "user_id" in _litellm_metadata
-            and not _valid_user_id(_litellm_metadata.get("user_id", None))
+            and _litellm_metadata["user_id"] is not None
+            and not _valid_user_id(_litellm_metadata["user_id"])
         ):
             optional_params["metadata"] = {"user_id": _litellm_metadata["user_id"]}
 
@@ -805,19 +806,29 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def calculate_usage(
         self, usage_object: dict, reasoning_content: Optional[str]
     ) -> Usage:
-        prompt_tokens = usage_object.get("input_tokens", 0)
-        completion_tokens = usage_object.get("output_tokens", 0)
+        # NOTE: Sometimes the usage object has None set explicitly for token counts, meaning .get() & key access returns None, and we need to account for this
+        prompt_tokens = usage_object.get("input_tokens", 0) or 0
+        completion_tokens = usage_object.get("output_tokens", 0) or 0
         _usage = usage_object
         cache_creation_input_tokens: int = 0
         cache_read_input_tokens: int = 0
         web_search_requests: Optional[int] = None
-        if "cache_creation_input_tokens" in _usage:
+        if (
+            "cache_creation_input_tokens" in _usage
+            and _usage["cache_creation_input_tokens"] is not None
+        ):
             cache_creation_input_tokens = _usage["cache_creation_input_tokens"]
-        if "cache_read_input_tokens" in _usage:
+        if (
+            "cache_read_input_tokens" in _usage
+            and _usage["cache_read_input_tokens"] is not None
+        ):
             cache_read_input_tokens = _usage["cache_read_input_tokens"]
             prompt_tokens += cache_read_input_tokens
-        if "server_tool_use" in _usage:
-            if "web_search_requests" in _usage["server_tool_use"]:
+        if "server_tool_use" in _usage and _usage["server_tool_use"] is not None:
+            if (
+                "web_search_requests" in _usage["server_tool_use"]
+                and _usage["server_tool_use"]["web_search_requests"] is not None
+            ):
                 web_search_requests = cast(
                     int, _usage["server_tool_use"]["web_search_requests"]
                 )
