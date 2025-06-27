@@ -171,25 +171,44 @@ class AskSageConfig(BaseConfig):
         }
         """
         # Translate developer role to system role for AskSage
-        messages = self.translate_developer_role_to_system_role(messages)
+        # messages = self.translate_developer_role_to_system_role(messages)
         
-        # Convert OpenAI messages format to a single message string
-        # Take the last user message as the main message
-        message_content = ""
+        # Convert OpenAI messages format to a conversation context
+        # Combine all messages to preserve conversation history
+        conversation_parts = []
         system_prompt = ""
         
         for msg in messages:
-            if msg["role"] == "user":
+            if msg["role"] == "system":
                 if isinstance(msg["content"], str):
-                    message_content = msg["content"]
+                    system_prompt = msg["content"]
+            elif msg["role"] == "user":
+                if isinstance(msg["content"], str):
+                    conversation_parts.append(f"User: {msg['content']}")
                 elif isinstance(msg["content"], list):
                     # Handle multi-part content (text + images)
                     text_parts = [part["text"] for part in msg["content"] if part.get("type") == "text"]
-                    message_content = " ".join(text_parts)
-            elif msg["role"] == "system":
+                    if text_parts:
+                        conversation_parts.append(f"User: {' '.join(text_parts)}")
+            elif msg["role"] == "assistant":
                 if isinstance(msg["content"], str):
-                    system_prompt = msg["content"]
-
+                    conversation_parts.append(f"Assistant: {msg['content']}")
+        
+        # Join all conversation parts to maintain context
+        message_content = "\n\n".join(conversation_parts)
+        
+        # Fallback to last user message if no conversation parts found
+        if not message_content:
+            for msg in reversed(messages):
+                if msg["role"] == "user":
+                    if isinstance(msg["content"], str):
+                        message_content = msg["content"]
+                        break
+                    elif isinstance(msg["content"], list):
+                        text_parts = [part["text"] for part in msg["content"] if part.get("type") == "text"]
+                        if text_parts:
+                            message_content = " ".join(text_parts)
+                            break
         # Build the request data for AskSage /query endpoint
         data = {
             "message": message_content,
