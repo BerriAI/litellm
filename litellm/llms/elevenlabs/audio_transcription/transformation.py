@@ -139,12 +139,6 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             files=files
         )
 
-    def get_files_for_request(self) -> Optional[dict]:
-        """
-        This method is now deprecated in favor of the structured return from transform_audio_transcription_request.
-        Kept for backward compatibility.
-        """
-        return None
 
     def transform_audio_transcription_response(
         self,

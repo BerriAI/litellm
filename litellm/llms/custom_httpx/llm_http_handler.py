@@ -1008,7 +1008,12 @@ class BaseLLMHTTPHandler:
         """
         Shared logic for preparing audio transcription requests.
         Returns: (headers, complete_url, data, files)
-        """
+        """     
+        # Handle the response based on type
+        from litellm.llms.base_llm.audio_transcription.transformation import (
+            AudioTranscriptionRequestData,
+        )
+        
         headers = provider_config.validate_environment(
             api_key=api_key,
             headers=headers or {},
@@ -1033,24 +1038,16 @@ class BaseLLMHTTPHandler:
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        
-        # Handle the response based on type
-        from litellm.llms.base_llm.audio_transcription.transformation import (
-            AudioTranscriptionRequestData,
-        )
-        
         if isinstance(transformed_result, AudioTranscriptionRequestData):
             # New structured response
             data = transformed_result.data
             files = transformed_result.files
         elif isinstance(transformed_result, bytes):
-            # Legacy binary response
             data = None
             files = None
         else:
-            # Legacy dict response - get files separately for backward compatibility
             data = transformed_result
-            files = provider_config.get_files_for_request()
+            files = None
 
         ## LOGGING
         logging_obj.pre_call(
