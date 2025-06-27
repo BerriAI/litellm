@@ -184,15 +184,15 @@ class AskSageConfig(BaseConfig):
                     system_prompt = msg["content"]
             elif msg["role"] == "user":
                 if isinstance(msg["content"], str):
-                    conversation_parts.append(f"User: {msg['content']}")
+                    conversation_parts.append(msg['content'])
                 elif isinstance(msg["content"], list):
                     # Handle multi-part content (text + images)
                     text_parts = [part["text"] for part in msg["content"] if part.get("type") == "text"]
                     if text_parts:
-                        conversation_parts.append(f"User: {' '.join(text_parts)}")
+                        conversation_parts.append(' '.join(text_parts))
             elif msg["role"] == "assistant":
                 if isinstance(msg["content"], str):
-                    conversation_parts.append(f"Assistant: {msg['content']}")
+                    conversation_parts.append(msg['content'])
         
         # Join all conversation parts to maintain context
         message_content = "\n\n".join(conversation_parts)
