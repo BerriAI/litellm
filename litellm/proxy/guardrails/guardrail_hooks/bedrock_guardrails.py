@@ -39,7 +39,13 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockRequest,
     BedrockTextContent,
 )
-from litellm.types.utils import ModelResponse, ModelResponseStream
+from litellm.types.utils import (
+    Choices,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+    TextChoices,
+)
 
 GUARDRAIL_NAME = "bedrock"
 
@@ -472,6 +478,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
         )
 
+
+        ########## 3. Apply masking to response if enabled ##########
+        self._apply_masking_to_response(
+            response=response,
+            bedrock_guardrail_response=bedrock_guardrail_response,
+        )
+
         #########################################################
         ########## 3. Add the guardrail to the applied guardrails header ##########
         #########################################################
@@ -553,12 +566,20 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
             # Bedrock will raise an exception if this violates the guardrail policy
             ###################################################################
-            await self.make_bedrock_api_request(
+            bedrock_guardrail_response = await self.make_bedrock_api_request(
                 kwargs=request_data, response=assembled_model_response
             )
 
             #########################################################################
-            ########## If guardrail passed, then return the collected chunks ##########
+            ########## 2. Apply masking to response if enabled ##########
+            #########################################################################
+            self._apply_masking_to_response(
+                response=assembled_model_response,
+                bedrock_guardrail_response=bedrock_guardrail_response,
+            )
+
+            #########################################################################
+            ########## 3. Return the (potentially masked) chunks ##########
             #########################################################################
             mock_response = MockResponseIterator(
                 model_response=assembled_model_response
@@ -692,3 +713,77 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 elif isinstance(item, str):
                     message_text_content.append(item)
         return message_text_content
+
+    def _apply_masking_to_response(
+        self,
+        response: Union[ModelResponse, Any],
+        bedrock_guardrail_response: BedrockGuardrailResponse,
+    ) -> None:
+        """
+        Apply masked content from bedrock guardrail to the response object.
+        
+        Args:
+            response: The response object to modify
+            bedrock_guardrail_response: Response from Bedrock guardrail containing masked content
+        """
+        # Get masked texts from guardrail response
+        masked_texts = self._extract_masked_texts_from_response(
+            bedrock_guardrail_response
+        )
+
+        if not masked_texts:
+            verbose_proxy_logger.debug("No masked outputs found, skipping response masking")
+            return
+
+        verbose_proxy_logger.debug(
+            "Applying masking to response with %d masked texts", len(masked_texts)
+        )
+
+        # Apply masking to ModelResponse
+        if isinstance(response, litellm.ModelResponse):
+            self._apply_masking_to_model_response(response, masked_texts)
+        else:
+            verbose_proxy_logger.warning(
+                "Unsupported response type for masking: %s", type(response)
+            )
+
+    def _apply_masking_to_model_response(
+        self, response: litellm.ModelResponse, masked_texts: List[str]
+    ) -> None:
+        """
+        Apply masked texts to a ModelResponse object.
+        
+        Args:
+            response: The ModelResponse object to modify in-place
+            masked_texts: List of masked text strings from guardrail
+        """
+        masking_index = 0
+        
+        for choice in response.choices:
+            if isinstance(choice, Choices):
+                # For chat completions
+                if choice.message.content and isinstance(choice.message.content, str):
+                    if masking_index < len(masked_texts):
+                        choice.message.content = masked_texts[masking_index]
+                        masking_index += 1
+                        verbose_proxy_logger.debug(
+                            "Applied masking to choice message content"
+                        )
+            elif isinstance(choice, StreamingChoices):
+                # For streaming responses, modify delta content
+                if choice.delta.content and isinstance(choice.delta.content, str):
+                    if masking_index < len(masked_texts):
+                        choice.delta.content = masked_texts[masking_index]
+                        masking_index += 1
+                        verbose_proxy_logger.debug(
+                            "Applied masking to choice delta content"
+                        )
+            elif isinstance(choice, TextChoices):
+                # For text completions
+                if choice.text and isinstance(choice.text, str):
+                    if masking_index < len(masked_texts):
+                        choice.text = masked_texts[masking_index]
+                        masking_index += 1
+                        verbose_proxy_logger.debug(
+                            "Applied masking to choice text content"
+                        )

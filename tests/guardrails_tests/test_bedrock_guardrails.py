@@ -568,5 +568,212 @@ async def test_bedrock_guardrail_uses_masked_output_without_masking_flags():
         print("✅ Masked output was applied even without masking flags enabled")
 
 
+@pytest.mark.asyncio
+async def test_bedrock_guardrail_response_pii_masking_non_streaming():
+    """Test that PII masking is applied to response content in non-streaming scenarios"""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from litellm.proxy._types import UserAPIKeyAuth
+    
+    # Create proper mock objects
+    mock_user_api_key_dict = UserAPIKeyAuth()
+    
+    # Create guardrail with response masking enabled
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+    )
 
+    # Mock the Bedrock API response with ANONYMIZED PII
+    mock_bedrock_response = MagicMock()
+    mock_bedrock_response.status_code = 200
+    mock_bedrock_response.json.return_value = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [{
+            "text": "My credit card number is {CREDIT_DEBIT_CARD_NUMBER} and my phone is {PHONE}"
+        }],
+        "assessments": [{
+            "sensitiveInformationPolicy": {
+                "piiEntities": [
+                    {
+                        "type": "CREDIT_DEBIT_CARD_NUMBER",
+                        "match": "1234-5678-9012-3456",
+                        "action": "ANONYMIZED"
+                    },
+                    {
+                        "type": "PHONE",
+                        "match": "+1 412 555 1212", 
+                        "action": "ANONYMIZED"
+                    }
+                ]
+            }
+        }]
+    }
+
+    # Create a mock response that contains PII
+    mock_response = litellm.ModelResponse(
+        id="test-id",
+        choices=[
+            litellm.Choices(
+                index=0,
+                message=litellm.Message(
+                    role="assistant", 
+                    content="My credit card number is 1234-5678-9012-3456 and my phone is +1 412 555 1212"
+                ),
+                finish_reason="stop"
+            )
+        ],
+        created=1234567890,
+        model="gpt-4o",
+        object="chat.completion"
+    )
+
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [
+            {"role": "user", "content": "What's your credit card and phone number?"},
+        ],
+    }
+
+    # Patch the async_handler.post method
+    with patch.object(guardrail.async_handler, 'post', new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = mock_bedrock_response
         
+        # Call the post-call success hook
+        await guardrail.async_post_call_success_hook(
+            data=request_data,
+            user_api_key_dict=mock_user_api_key_dict,
+            response=mock_response
+        )
+        
+        # Verify that the response content was masked
+        assert mock_response.choices[0].message.content == "My credit card number is {CREDIT_DEBIT_CARD_NUMBER} and my phone is {PHONE}"
+        print("✓ Non-streaming response PII masking test passed")
+
+
+@pytest.mark.asyncio
+async def test_bedrock_guardrail_response_pii_masking_streaming():
+    """Test that PII masking is applied to response content in streaming scenarios"""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.utils import ModelResponseStream
+    
+    # Create proper mock objects
+    mock_user_api_key_dict = UserAPIKeyAuth()
+    
+    # Create guardrail with response masking enabled
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+    )
+
+    # Mock the Bedrock API response with ANONYMIZED PII
+    mock_bedrock_response = MagicMock()
+    mock_bedrock_response.status_code = 200
+    mock_bedrock_response.json.return_value = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [{
+            "text": "Sure! My email is {EMAIL} and SSN is {US_SSN}"
+        }],
+        "assessments": [{
+            "sensitiveInformationPolicy": {
+                "piiEntities": [
+                    {
+                        "type": "EMAIL",
+                        "match": "john@example.com",
+                        "action": "ANONYMIZED"
+                    },
+                    {
+                        "type": "US_SSN",
+                        "match": "123-45-6789", 
+                        "action": "ANONYMIZED"
+                    }
+                ]
+            }
+        }]
+    }
+
+    # Create mock streaming chunks
+    async def mock_streaming_response():
+        chunks = [
+            ModelResponseStream(
+                id="test-id",
+                choices=[
+                    litellm.utils.StreamingChoices(
+                        index=0,
+                        delta=litellm.utils.Delta(content="Sure! My email is "),
+                        finish_reason=None
+                    )
+                ],
+                created=1234567890,
+                model="gpt-4o",
+                object="chat.completion.chunk"
+            ),
+            ModelResponseStream(
+                id="test-id",
+                choices=[
+                    litellm.utils.StreamingChoices(
+                        index=0,
+                        delta=litellm.utils.Delta(content="john@example.com and SSN is "),
+                        finish_reason=None
+                    )
+                ],
+                created=1234567890,
+                model="gpt-4o",
+                object="chat.completion.chunk"
+            ),
+            ModelResponseStream(
+                id="test-id",
+                choices=[
+                    litellm.utils.StreamingChoices(
+                        index=0,
+                        delta=litellm.utils.Delta(content="123-45-6789"),
+                        finish_reason="stop"
+                    )
+                ],
+                created=1234567890,
+                model="gpt-4o",
+                object="chat.completion.chunk"
+            )
+        ]
+        for chunk in chunks:
+            yield chunk
+
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [
+            {"role": "user", "content": "What's your email and SSN?"},
+        ],
+        "stream": True,
+    }
+
+    # Patch the async_handler.post method
+    with patch.object(guardrail.async_handler, 'post', new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = mock_bedrock_response
+        
+        # Call the streaming hook
+        masked_stream = guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=mock_user_api_key_dict,
+            response=mock_streaming_response(),
+            request_data=request_data
+        )
+        
+        # Collect all chunks from the masked stream
+        masked_chunks = []
+        async for chunk in masked_stream:
+            masked_chunks.append(chunk)
+        
+        # Verify that we got chunks back
+        assert len(masked_chunks) > 0
+        
+        # Reconstruct the full response from chunks to verify masking
+        full_content = ""
+        for chunk in masked_chunks:
+            if hasattr(chunk, 'choices') and chunk.choices:
+                if hasattr(chunk.choices[0], 'delta') and chunk.choices[0].delta:
+                    if hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content:
+                        full_content += chunk.choices[0].delta.content
+        
+        # Verify that the reconstructed content contains the masked PII
+        assert "Sure! My email is {EMAIL} and SSN is {US_SSN}" == full_content
+        print("✓ Streaming response PII masking test passed")
+
