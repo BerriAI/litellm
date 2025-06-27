@@ -5,7 +5,7 @@ This module is used to pass through requests to the LLM APIs.
 import asyncio
 import contextvars
 from functools import partial
-from typing import TYPE_CHECKING, Any, Coroutine, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Coroutine, Generator, List, Optional, Union, cast
 
 import httpx
 from httpx._types import CookieTypes, QueryParamTypes, RequestFiles
@@ -43,7 +43,9 @@ async def allm_passthrough_route(
     cookies: Optional[CookieTypes] = None,
     client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     **kwargs,
-) -> Union[httpx.Response, Coroutine[Any, Any, httpx.Response]]:
+) -> Union[
+    httpx.Response, Coroutine[Any, Any, httpx.Response], Generator[Any, Any, Any]
+]:
     """
     Async: Reranks a list of documents based on their relevance to the query
     """
@@ -143,7 +145,9 @@ def llm_passthrough_route(
     cookies: Optional[CookieTypes] = None,
     client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     **kwargs,
-) -> Union[httpx.Response, Coroutine[Any, Any, httpx.Response]]:
+) -> Union[
+    httpx.Response, Coroutine[Any, Any, httpx.Response], Generator[Any, Any, Any]
+]:
     """
     Pass through requests to the LLM APIs.
 
@@ -246,11 +250,27 @@ def llm_passthrough_route(
         request_data=data or json or {},
     )
 
+    # Update logging object with streaming status
+    litellm_logging_obj.stream = is_streaming_request
+
     try:
         response = client.client.send(request=request, stream=is_streaming_request)
         if asyncio.iscoroutine(response):
             return response
         response.raise_for_status()
+
+        if hasattr(
+            response, "iter_bytes"
+        ):  # yield the chunk, so we can store it in the logging object
+            raw_bytes: List[bytes] = []
+            for chunk in response.iter_bytes():  # type: ignore
+                raw_bytes.append(chunk)
+                yield chunk
+
+            litellm_logging_obj.flush_passthrough_collected_chunks(
+                raw_bytes=raw_bytes,
+                provider_config=provider_config,
+            )
         return response
     except Exception as e:
         if provider_config is None:

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple
 
 from httpx import Response
 
@@ -7,13 +7,15 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 
 from ..base_aws_llm import BaseAWSLLM
-from ..common_utils import BedrockModelInfo
+from ..common_utils import BedrockEventStreamDecoderBase, BedrockModelInfo
 
 if TYPE_CHECKING:
     from httpx import URL
 
 
-class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BasePassthroughConfig):
+class BedrockPassthroughConfig(
+    BaseAWSLLM, BedrockModelInfo, BedrockEventStreamDecoderBase, BasePassthroughConfig
+):
     def is_streaming_request(self, endpoint: str, request_data: dict) -> bool:
         return "stream" in endpoint
 
@@ -115,3 +117,17 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BasePassthroughConf
         )
 
         return response_cost
+
+    def _convert_raw_bytes_to_str_lines(self, raw_bytes: List[bytes]) -> List[str]:
+        from botocore.eventstream import EventStreamBuffer
+
+        all_chunks = []
+        event_stream_buffer = EventStreamBuffer()
+        for chunk in raw_bytes:
+            event_stream_buffer.add_data(chunk)
+            for event in event_stream_buffer:
+                message = self._parse_message_from_event(event)
+                if message is not None:
+                    all_chunks.append(message)
+
+        return all_chunks

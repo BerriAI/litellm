@@ -3290,4 +3290,5 @@ def test_bedrock_streaming_passthrough():
         stream=True,
     )
 
-    assert response.status_code == 200
+    for chunk in response:
+        print(chunk)

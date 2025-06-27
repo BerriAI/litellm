@@ -1,6 +1,6 @@
 from abc import abstractmethod
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional, Tuple, Union
+from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 
 from ..base_utils import BaseLLMModelInfo
 
@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     from httpx import URL, Headers, Response
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.utils import CostResponseTypes
 
     from ..chat.transformation import BaseLLMException
 
@@ -118,3 +119,31 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         cache_hit: bool,
     ) -> float:
         return 0.0
+
+    def handle_logging_collected_chunks(
+        self,
+        all_chunks: List[str],
+        litellm_logging_obj: "LiteLLMLoggingObj",
+        model: str,
+        custom_llm_provider: str,
+        endpoint: str,
+    ) -> Optional["CostResponseTypes"]:
+        return None
+
+    def _convert_raw_bytes_to_str_lines(self, raw_bytes: List[bytes]) -> List[str]:
+        """
+        Converts a list of raw bytes into a list of string lines, similar to aiter_lines()
+
+        Args:
+            raw_bytes: List of bytes chunks from aiter.bytes()
+
+        Returns:
+            List of string lines, with each line being a complete data: {} chunk
+        """
+        # Combine all bytes and decode to string
+        combined_str = b"".join(raw_bytes).decode("utf-8")
+
+        # Split by newlines and filter out empty lines
+        lines = [line.strip() for line in combined_str.split("\n") if line.strip()]
+
+        return lines

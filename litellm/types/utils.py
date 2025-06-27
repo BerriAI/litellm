@@ -2511,3 +2511,12 @@ class CallbacksByType(TypedDict):
     success: List[str]
     failure: List[str]
     success_and_failure: List[str]
+
+
+CostResponseTypes = Union[
+    ModelResponse,
+    ModelResponseStream,
+    EmbeddingResponse,
+    ImageResponse,
+    TranscriptionResponse,
+]
