@@ -66,20 +66,12 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
         audio_file: FileTypes,
         optional_params: dict,
         litellm_params: dict,
-    ) -> Union[dict, bytes, AudioTranscriptionRequestData]:
+    ) -> AudioTranscriptionRequestData:
         raise NotImplementedError(
             "AudioTranscriptionConfig needs a request transformation for audio transcription models"
         )
 
-    def get_files_for_request(self) -> Optional[dict]:
-        """
-        Get files for multipart form data request.
-        Default implementation returns None (no files).
-        
-        Returns:
-            Optional[dict]: Files dict for httpx, or None if no files
-        """
-        return None
+
     
     def transform_audio_transcription_response(
         self,

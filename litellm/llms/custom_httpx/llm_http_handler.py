@@ -1038,16 +1038,13 @@ class BaseLLMHTTPHandler:
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        if isinstance(transformed_result, AudioTranscriptionRequestData):
-            # New structured response
-            data = transformed_result.data
-            files = transformed_result.files
-        elif isinstance(transformed_result, bytes):
-            data = None
-            files = None
-        else:
-            data = transformed_result
-            files = None
+        
+        # All providers now return AudioTranscriptionRequestData
+        if not isinstance(transformed_result, AudioTranscriptionRequestData):
+            raise ValueError(f"Provider {provider_config.__class__.__name__} must return AudioTranscriptionRequestData")
+        
+        data = transformed_result.data
+        files = transformed_result.files
 
         ## LOGGING
         logging_obj.pre_call(

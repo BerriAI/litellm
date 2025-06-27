@@ -17,6 +17,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import FileTypes, TranscriptionResponse
 
 from ...base_llm.audio_transcription.transformation import (
+    AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
     LiteLLMLoggingObj,
 )
@@ -55,15 +56,17 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         audio_file: FileTypes,
         optional_params: dict,
         litellm_params: dict,
-    ) -> Union[dict, bytes]:
+    ) -> AudioTranscriptionRequestData:
         """
-        Processes the audio file input based on its type and returns the binary data.
+        Processes the audio file input based on its type and returns AudioTranscriptionRequestData.
+        
+        For Deepgram, the binary audio data is sent directly as the request body.
 
         Args:
             audio_file: Can be a file path (str), a tuple (filename, file_content), or binary data (bytes).
 
         Returns:
-            The binary data of the audio file.
+            AudioTranscriptionRequestData with binary data and no files.
         """
         binary_data: bytes  # Explicitly declare the type
 
@@ -96,7 +99,12 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         else:
             raise TypeError(f"Unsupported type for audio_file: {type(audio_file)}")
 
-        return binary_data
+        # Return structured data with binary content and no files
+        # For Deepgram, we send binary data directly as request body
+        return AudioTranscriptionRequestData(
+            data=binary_data,
+            files=None
+        )
 
     def transform_audio_transcription_response(
         self,
