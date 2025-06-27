@@ -1186,3 +1186,93 @@ def test_init_responses_api_endpoints(model_list):
     assert isinstance(router.aget_responses, Callable)
     assert router.adelete_responses is not None
     assert isinstance(router.adelete_responses, Callable)
+
+
+@pytest.mark.parametrize(
+    "mock_testing_fallbacks, mock_testing_context_fallbacks, mock_testing_content_policy_fallbacks, expected_fallbacks, expected_context, expected_content_policy",
+    [
+        # Test string to bool conversion
+        ("true", "false", "True", True, False, True),
+        ("TRUE", "FALSE", "False", True, False, False),
+        ("1", "0", "yes", True, False, True),
+        ("false", "true", "no", False, True, False),
+        # Test actual boolean values (should pass through unchanged)
+        (True, False, True, True, False, True),
+        (False, True, False, False, True, False),
+        # Test None values
+        (None, None, None, None, None, None),
+        # Test mixed types
+        ("true", False, None, True, False, None),
+        (True, "false", "1", True, False, True),
+    ],
+)
+def test_mock_router_testing_params_str_to_bool_conversion(
+    mock_testing_fallbacks,
+    mock_testing_context_fallbacks,
+    mock_testing_content_policy_fallbacks,
+    expected_fallbacks,
+    expected_context,
+    expected_content_policy,
+):
+    """Test if MockRouterTestingParams.from_kwargs correctly converts string values to booleans using str_to_bool"""
+    from litellm.types.router import MockRouterTestingParams
+    
+    kwargs = {
+        "mock_testing_fallbacks": mock_testing_fallbacks,
+        "mock_testing_context_fallbacks": mock_testing_context_fallbacks,
+        "mock_testing_content_policy_fallbacks": mock_testing_content_policy_fallbacks,
+        "other_param": "should_remain",  # This should not be affected
+    }
+    
+    # Make a copy to verify kwargs are properly popped
+    original_kwargs = kwargs.copy()
+    
+    mock_params = MockRouterTestingParams.from_kwargs(kwargs)
+    
+    # Verify the converted values
+    assert mock_params.mock_testing_fallbacks == expected_fallbacks
+    assert mock_params.mock_testing_context_fallbacks == expected_context
+    assert mock_params.mock_testing_content_policy_fallbacks == expected_content_policy
+    
+    # Verify that the mock testing params were popped from kwargs
+    assert "mock_testing_fallbacks" not in kwargs
+    assert "mock_testing_context_fallbacks" not in kwargs
+    assert "mock_testing_content_policy_fallbacks" not in kwargs
+    
+    # Verify other params remain unchanged
+    assert kwargs["other_param"] == "should_remain"
+
+
+@pytest.mark.parametrize(
+    "fallback_kwarg_value, expected_error",
+    [
+        # Test string values that should convert to True and trigger exceptions
+        ("true", litellm.InternalServerError),
+        ("TRUE", litellm.InternalServerError),
+        ("1", litellm.InternalServerError),
+        ("yes", litellm.InternalServerError),
+        # Test string values that should convert to False and not trigger exceptions
+        ("false", None),
+        ("FALSE", None),
+        ("0", None),
+        ("no", None),
+        # Test actual boolean values
+        (True, litellm.InternalServerError),
+        (False, None),
+    ],
+)
+def test_handle_mock_testing_fallbacks_with_str_to_bool_integration(model_list, fallback_kwarg_value, expected_error):
+    """Test if the router's _handle_mock_testing_fallbacks correctly handles str_to_bool conversion from MockRouterTestingParams"""
+    router = Router(model_list=model_list)
+    
+    kwargs = {
+        "mock_testing_fallbacks": fallback_kwarg_value,
+    }
+    
+    if expected_error:
+        with pytest.raises(expected_error):
+            router._handle_mock_testing_fallbacks(kwargs=kwargs)
+    else:
+        # Should not raise any exception
+        router._handle_mock_testing_fallbacks(kwargs=kwargs)
+        # If we get here, no exception was raised, which is expected
