@@ -2352,15 +2352,17 @@ class BaseLLMHTTPHandler:
     def _handle_error(
         self,
         e: Exception,
-        provider_config: Union[
-            BaseConfig,
-            BaseRerankConfig,
-            BaseResponsesAPIConfig,
-            BaseImageEditConfig,
-            BaseVectorStoreConfig,
-            BaseGoogleGenAIGenerateContentConfig,
-            "BasePassthroughConfig",
-        ],
+        provider_config: Optional[
+            Union[
+                BaseConfig,
+                BaseRerankConfig,
+                BaseResponsesAPIConfig,
+                BaseImageEditConfig,
+                BaseVectorStoreConfig,
+                BaseGoogleGenAIGenerateContentConfig,
+                "BasePassthroughConfig",
+            ]
+        ] = None,
     ):
         status_code = getattr(e, "status_code", 500)
         error_headers = getattr(e, "headers", None)
@@ -2378,6 +2380,15 @@ class BaseLLMHTTPHandler:
             error_headers = dict(error_headers)
         else:
             error_headers = {}
+
+        if provider_config is None:
+            from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+            raise BaseLLMException(
+                status_code=status_code,
+                message=error_text,
+                headers=error_headers,
+            )
 
         raise provider_config.get_error_class(
             error_message=error_text,

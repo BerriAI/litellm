@@ -488,6 +488,69 @@ class ProxyBaseLLMRequestProcessing:
 
         return response
 
+    async def base_passthrough_process_llm_request(
+        self,
+        request: Request,
+        fastapi_response: Response,
+        user_api_key_dict: UserAPIKeyAuth,
+        route_type: Literal["allm_passthrough_route"],
+        proxy_logging_obj: ProxyLogging,
+        general_settings: dict,
+        proxy_config: ProxyConfig,
+        select_data_generator: Callable,
+        llm_router: Optional[Router] = None,
+        model: Optional[str] = None,
+        user_model: Optional[str] = None,
+        user_temperature: Optional[float] = None,
+        user_request_timeout: Optional[float] = None,
+        user_max_tokens: Optional[int] = None,
+        user_api_base: Optional[str] = None,
+        version: Optional[str] = None,
+        is_streaming_request: Optional[bool] = False,
+    ):
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+            HttpPassThroughEndpointHelpers,
+        )
+
+        result = await self.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="allm_passthrough_route",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=model,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+
+        if is_streaming_request:
+            return StreamingResponse(
+                content=result.aiter_bytes(),
+                status_code=result.status_code,
+                headers=HttpPassThroughEndpointHelpers.get_response_headers(
+                    headers=result.headers,
+                    custom_headers=None,
+                ),
+            )
+
+        content = await result.aread()
+        return Response(
+            content=content,
+            status_code=result.status_code,
+            headers=HttpPassThroughEndpointHelpers.get_response_headers(
+                headers=result.headers,
+                custom_headers=None,
+            ),
+        )
+
     def _is_streaming_request(
         self, data: dict, is_streaming_request: Optional[bool] = False
     ) -> bool:

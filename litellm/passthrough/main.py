@@ -5,8 +5,7 @@ This module is used to pass through requests to the LLM APIs.
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, Coroutine, Optional, Union
-from urllib.parse import urlencode
+from typing import TYPE_CHECKING, Any, Coroutine, Optional, Union, cast
 
 import httpx
 from httpx._types import CookieTypes, QueryParamTypes, RequestFiles
@@ -20,12 +19,16 @@ from litellm.utils import client
 base_llm_http_handler = BaseLLMHTTPHandler()
 from .utils import BasePassthroughUtils
 
+if TYPE_CHECKING:
+    from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+
 
 @client
 async def allm_passthrough_route(
     *,
     method: str,
     endpoint: str,
+    model: str,
     custom_llm_provider: Optional[str] = None,
     api_base: Optional[str] = None,
     api_key: Optional[str] = None,
@@ -52,6 +55,7 @@ async def allm_passthrough_route(
             llm_passthrough_route,
             method=method,
             endpoint=endpoint,
+            model=model,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             api_key=api_key,
@@ -74,11 +78,15 @@ async def allm_passthrough_route(
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
+            response.raise_for_status()
         else:
             response = init_response
         return response
     except Exception as e:
-        raise e
+        raise base_llm_http_handler._handle_error(
+            e=e,
+            provider_config=None,
+        )
 
 
 @client
@@ -131,7 +139,9 @@ def llm_passthrough_route(
 
     litellm_params_dict = get_litellm_params(**kwargs)
 
-    provider_config = ProviderConfigManager.get_provider_passthrough_config(
+    provider_config = cast(
+        Optional["BasePassthroughConfig"], kwargs.get("provider_config")
+    ) or ProviderConfigManager.get_provider_passthrough_config(
         provider=LlmProviders(custom_llm_provider),
         model=model,
     )
@@ -191,8 +201,13 @@ def llm_passthrough_route(
 
     try:
         response = client.client.send(request=request, stream=stream)
+        if asyncio.iscoroutine(response):
+            return response
+        response.raise_for_status()
         return response
     except Exception as e:
+        if provider_config is None:
+            raise e
         raise base_llm_http_handler._handle_error(
             e=e,
             provider_config=provider_config,

@@ -493,14 +493,17 @@ async def bedrock_v2_proxy_route(
         version,
     )
 
-    data = await _read_request_body(request=request)
+    request_body = await _read_request_body(request=request)
+    data = {}
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     model = endpoint.split("/")[1]
 
     data["method"] = request.method
     data["endpoint"] = endpoint
+    data["data"] = request_body
+
     try:
-        return await base_llm_response_processor.base_process_llm_request(
+        result = await base_llm_response_processor.base_passthrough_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -517,7 +520,10 @@ async def bedrock_v2_proxy_route(
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
             version=version,
+            is_streaming_request=False,
         )
+
+        return result
     except Exception as e:
         raise await base_llm_response_processor._handle_llm_api_exception(
             e=e,
