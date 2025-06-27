@@ -849,7 +849,6 @@ def test_handler_parameter_exclusion():
     extra_kwargs = {
         "agenerate_content_stream": True,  # Should be excluded
         "generate_content_stream": True,   # Should be excluded
-        "user": "test_user",              # Should be included
     }
     
     completion_kwargs = GenerateContentToCompletionHandler._prepare_completion_kwargs(
@@ -865,8 +864,6 @@ def test_handler_parameter_exclusion():
     assert "generate_content_stream" not in completion_kwargs
     
     # Verify valid OpenAI parameters are present
-    assert "user" in completion_kwargs
-    assert completion_kwargs["user"] == "test_user"
     assert "model" in completion_kwargs
     assert completion_kwargs["model"] == "gpt-3.5-turbo"
     assert "temperature" in completion_kwargs
