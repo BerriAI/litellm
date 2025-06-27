@@ -100,24 +100,6 @@ class GoogleGenAIAdapter:
         pass
     
 
-    def supported_openai_chat_completion_params(self) -> List[str]:
-        """
-        Return a list of OpenAI chat completion parameters that are supported by Google GenAI
-        """
-        return [
-            "temperature", 
-            "max_tokens", 
-            "top_p", 
-            "frequency_penalty", 
-            "presence_penalty", 
-            "stop", 
-            "stream", 
-            "user", 
-            "tools", 
-        ]
-
-
-
     def translate_generate_content_to_completion(
         self,
         model: str,
@@ -148,10 +130,22 @@ class GoogleGenAIAdapter:
         messages = self._transform_contents_to_messages(contents_list)
         
         # Create base request
-        completion_request: ChatCompletionRequest = {
-            "model": model,
-            "messages": messages,
-        }
+        completion_request: ChatCompletionRequest = ChatCompletionRequest(
+            model=model,
+            messages=messages,
+        )
+
+        #########################################################
+        # Supported OpenAI chat completion params
+        # - temperature
+        # - max_tokens
+        # - top_p
+        # - frequency_penalty
+        # - presence_penalty
+        # - stop
+        # - tools
+        # - tool_choice
+        #########################################################
         
         # Add config parameters if provided
         if config:
@@ -184,12 +178,7 @@ class GoogleGenAIAdapter:
             tool_choice = self._transform_google_genai_tool_config_to_openai(kwargs["tool_config"])
             if tool_choice:
                 completion_request["tool_choice"] = tool_choice
-                
-        # Add any additional kwargs that are valid for completion
-        for key, value in kwargs.items():
-            if key in self.supported_openai_chat_completion_params() and key not in completion_request:
-                completion_request[key] = value
-                
+                                
         return completion_request
 
     def translate_completion_output_params_streaming(
