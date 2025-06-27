@@ -1,5 +1,9 @@
+from datetime import datetime
 from typing import TYPE_CHECKING, Optional, Tuple
 
+from httpx import Response
+
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 
 from ..base_aws_llm import BaseAWSLLM
@@ -51,3 +55,63 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BasePassthroughConf
             api_base=api_base,
             model=model,
         )
+
+    def passthrough_cost_calculator(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        httpx_response: Response,
+        request_data: dict,
+        logging_obj: Logging,
+        endpoint: str,
+        start_time: datetime,
+        end_time: datetime,
+        cache_hit: bool,
+    ) -> float:
+        """
+        1. Check if request is invoke or converse
+        2. If invoke, get invoke chat config
+        3. If converse, get converse chat config
+        4. Convert response to ModelResponse
+        5. Use completion_cost to calculate cost
+        6. Return the cost
+        """
+        from litellm import completion_cost, encoding
+        from litellm.types.utils import LlmProviders, ModelResponse
+        from litellm.utils import ProviderConfigManager
+
+        if "invoke" in endpoint:
+            chat_config_model = "invoke/" + model
+        elif "converse" in endpoint:
+            chat_config_model = "converse/" + model
+        else:
+            return 0.0
+
+        provider_chat_config = ProviderConfigManager.get_provider_chat_config(
+            provider=LlmProviders(custom_llm_provider),
+            model=chat_config_model,
+        )
+
+        if provider_chat_config is None:
+            raise ValueError(f"No provider config found for model: {model}")
+
+        litellm_model_response: ModelResponse = provider_chat_config.transform_response(
+            model=model,
+            messages=[{"role": "user", "content": "no-message-pass-through-endpoint"}],
+            raw_response=httpx_response,
+            model_response=ModelResponse(),
+            logging_obj=logging_obj,
+            optional_params={},
+            litellm_params={},
+            api_key="",
+            request_data=request_data,
+            encoding=encoding,
+        )
+
+        response_cost = completion_cost(
+            completion_response=litellm_model_response,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        return response_cost

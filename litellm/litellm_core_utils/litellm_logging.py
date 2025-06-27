@@ -1112,6 +1112,9 @@ class Logging(LiteLLMLoggingBaseClass):
 
             response_cost = passthrough_cost_calculator(
                 response=result,
+                request_data=cast(
+                    dict, self.model_call_details.get("request_data") or {}
+                ),
                 logging_obj=self,
                 model=self.model,
                 custom_llm_provider=cast(
@@ -1126,6 +1129,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 ),
                 cache_hit=self.model_call_details.get("cache_hit", False),
             )
+
+            verbose_logger.debug(f"response_cost: {response_cost}")
 
             return response_cost
 

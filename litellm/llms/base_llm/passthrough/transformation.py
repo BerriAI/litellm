@@ -107,7 +107,10 @@ class BasePassthroughConfig(BaseLLMModelInfo):
 
     def passthrough_cost_calculator(
         self,
+        model: str,
+        custom_llm_provider: str,
         httpx_response: "Response",
+        request_data: dict,
         logging_obj: "LiteLLMLoggingObj",
         endpoint: str,
         start_time: datetime,

@@ -177,6 +177,7 @@ def llm_passthrough_route(
         optional_params={},
         endpoint=endpoint,
         custom_llm_provider=custom_llm_provider,
+        request_data=data if data else json,
     )
 
     provider_config = cast(

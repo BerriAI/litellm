@@ -660,6 +660,7 @@ def completion_cost(  # noqa: PLR0915
         potential_model_names = [selected_model]
         if model is not None:
             potential_model_names.append(model)
+
         for idx, model in enumerate(potential_model_names):
             try:
                 verbose_logger.info(
@@ -1043,6 +1044,7 @@ def passthrough_cost_calculator(
     custom_llm_provider: str,
     logging_obj: "LiteLLMLoggingObj",
     endpoint: str,
+    request_data: dict,
     start_time: datetime,
     end_time: datetime,
     cache_hit: bool,
@@ -1064,7 +1066,10 @@ def passthrough_cost_calculator(
         )
 
     return provider_config.passthrough_cost_calculator(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
         httpx_response=response,
+        request_data=request_data,
         logging_obj=logging_obj,
         endpoint=endpoint,
         start_time=start_time,
