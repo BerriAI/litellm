@@ -383,7 +383,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                 url=url,
                 headers=headers,
                 params=requested_query_params,
-                data=_parsed_body,
+                json=_parsed_body,
             )
         return response
 
