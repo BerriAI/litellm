@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 
 import httpx
 
@@ -10,6 +10,7 @@ from litellm.types.router import GenericLiteLLMParams
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -109,3 +110,10 @@ class BaseAnthropicMessagesConfig(ABC):
         litellm_logging_obj: LiteLLMLoggingObj,
     ) -> AsyncIterator:
         raise NotImplementedError("Subclasses must implement this method")
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> "BaseLLMException":
+        return BaseLLMException(
+            message=error_message, status_code=status_code, headers=headers
+        )
