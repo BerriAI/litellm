@@ -51,6 +51,7 @@ class ExceptionCheckers:
         """
         Check if an error string indicates a context window exceeded error.
         """
+        _error_str_lowercase = error_str.lower()
         known_exception_substrings = [
             "exceed context limit",
             "this model's maximum context length is",
@@ -59,7 +60,7 @@ class ExceptionCheckers:
             "is longer than the model's context length",
         ]
         for substring in known_exception_substrings:
-            if substring in error_str.lower():
+            if substring in _error_str_lowercase:
                 return True
         return False
 
