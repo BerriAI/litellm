@@ -351,12 +351,10 @@ class LiteLLMRoutes(enum.Enum):
         "/v1beta/models/{model_name}:countTokens",
         "/v1beta/models/{model_name}:generateContent",
         "/v1beta/models/{model_name}:streamGenerateContent",
-
         "/models/{model_name}:countTokens",
         "/models/{model_name}:generateContent",
         "/models/{model_name}:streamGenerateContent",
     ]
-
 
     apply_guardrail_routes = [
         "/guardrails/apply_guardrail",
@@ -789,6 +787,7 @@ class UpdateKeyRequest(KeyRequestBase):
 class RegenerateKeyRequest(GenerateKeyRequest):
     # This needs to be different from UpdateKeyRequest, because "key" is optional for this
     key: Optional[str] = None
+    new_key: Optional[str] = None
     duration: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
