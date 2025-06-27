@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import HTTPException
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
