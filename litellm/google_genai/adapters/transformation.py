@@ -98,6 +98,23 @@ class GoogleGenAIAdapter:
     
     def __init__(self) -> None:
         pass
+    
+
+    def supported_openai_chat_completion_params(self) -> List[str]:
+        """
+        Return a list of OpenAI chat completion parameters that are supported by Google GenAI
+        """
+        return [
+            "temperature", 
+            "max_tokens", 
+            "top_p", 
+            "frequency_penalty", 
+            "presence_penalty", 
+            "stop", 
+            "stream", 
+            "user", 
+            "tools", 
+        ]
 
 
 
@@ -169,12 +186,8 @@ class GoogleGenAIAdapter:
                 completion_request["tool_choice"] = tool_choice
                 
         # Add any additional kwargs that are valid for completion
-        valid_completion_params = [
-            "temperature", "max_tokens", "top_p", "frequency_penalty", 
-            "presence_penalty", "stop", "stream", "user", "tools", "tool_choice"
-        ]
         for key, value in kwargs.items():
-            if key in valid_completion_params and key not in completion_request:
+            if key in self.supported_openai_chat_completion_params() and key not in completion_request:
                 completion_request[key] = value
                 
         return completion_request
