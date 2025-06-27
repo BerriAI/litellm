@@ -1,19 +1,9 @@
 model_list:
-  - model_name: anthropic/*
+  - model_name: groq/*
     litellm_params:
-      model: anthropic/*
+      model: groq/*
+      api_key: bad
   - model_name: openai/*
     litellm_params:
       model: openai/*
 
-router_settings:
-  model_group_alias: {
-    "gemini-2.5-pro": "anthropic/claude-sonnet-4-20250514",
-    "gemini-2.5-flash": "anthropic/claude-sonnet-4-20250514",
-    # "gemini-2.5-pro": "openai/gpt-4o-mini"
-  }
-
-mcp_servers:
-  deepwiki_mcp:
-    url: "https://mcp.deepwiki.com/mcp"
-    transport: "http"
