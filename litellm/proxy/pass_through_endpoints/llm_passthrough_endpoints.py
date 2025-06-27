@@ -464,19 +464,14 @@ async def anthropic_proxy_route(
     return received_value
 
 
-@router.api_route(
-    "/bedrock/v2/{endpoint:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
-    tags=["Google AI Studio Pass-through", "pass-through"],
-)
-async def bedrock_v2_proxy_route(
+async def bedrock_llm_proxy_route(
     endpoint: str,
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    V2 Passthrough for Bedrock.
+    Handles Bedrock LLM API calls.
     """
     from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
     from litellm.proxy.proxy_server import (
@@ -496,7 +491,16 @@ async def bedrock_v2_proxy_route(
     request_body = await _read_request_body(request=request)
     data: Dict[str, Any] = {}
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
-    model = endpoint.split("/")[1]
+    try:
+        model = endpoint.split("/")[1]
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Model missing from endpoint. Expected format: /model/<Model>/<endpoint>. Got: "
+                + endpoint,
+            },
+        )
 
     data["method"] = request.method
     data["endpoint"] = endpoint
@@ -561,7 +565,12 @@ async def bedrock_proxy_route(
             f"https://bedrock-agent-runtime.{aws_region_name}.amazonaws.com"
         )
     else:
-        base_target_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
+        return await bedrock_llm_proxy_route(
+            endpoint=endpoint,
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+        )
     encoded_endpoint = httpx.URL(endpoint).path
 
     # Ensure endpoint starts with '/' for proper URL construction
