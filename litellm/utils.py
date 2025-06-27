@@ -6942,6 +6942,7 @@ class ProviderConfigManager:
             )
 
             return VLLMPassthroughConfig()
+
         return None
 
     @staticmethod
