@@ -75,6 +75,7 @@ async def route_request(
         "aimage_edit",
         "agenerate_content",
         "agenerate_content_stream",
+        "allm_passthrough_route",
     ],
 ):
     """

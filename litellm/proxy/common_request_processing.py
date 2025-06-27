@@ -259,6 +259,7 @@ class ProxyBaseLLMRequestProcessing:
             "aimage_edit",
             "agenerate_content",
             "agenerate_content_stream",
+            "allm_passthrough_route",
         ],
         version: Optional[str] = None,
         user_model: Optional[str] = None,
@@ -340,6 +341,7 @@ class ProxyBaseLLMRequestProcessing:
             "alist_input_items",
             "agenerate_content",
             "agenerate_content_stream",
+            "allm_passthrough_route",
         ],
         proxy_logging_obj: ProxyLogging,
         general_settings: dict,
@@ -428,7 +430,9 @@ class ProxyBaseLLMRequestProcessing:
                 litellm_call_id=self.data.get("litellm_call_id", ""), status="success"
             )
         )
-        if self._is_streaming_request(data=self.data, is_streaming_request=is_streaming_request):  # use generate_responses to stream responses
+        if self._is_streaming_request(
+            data=self.data, is_streaming_request=is_streaming_request
+        ):  # use generate_responses to stream responses
             custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 call_id=logging_obj.litellm_call_id,
@@ -499,7 +503,6 @@ class ProxyBaseLLMRequestProcessing:
             return True
         return False
 
-
     async def _handle_llm_api_exception(
         self,
         e: Exception,
@@ -569,7 +572,7 @@ class ProxyBaseLLMRequestProcessing:
             return "completion"
         elif route_type == "aresponses":
             return "responses"
-    
+
     #########################################################
     # Proxy Level Streaming Data Generator
     #########################################################
@@ -644,5 +647,3 @@ class ProxyBaseLLMRequestProcessing:
             )
             error_returned = json.dumps({"error": proxy_exception.to_dict()})
             yield f"{STREAM_SSE_DATA_PREFIX}{error_returned}\n\n"
-
-
