@@ -106,7 +106,6 @@ const sidebars = {
             "proxy/model_management",
             "proxy/health",
             "proxy/debugging",
-            "proxy/spending_monitoring",
             "proxy/master_key_rotations",
           ],
         },
