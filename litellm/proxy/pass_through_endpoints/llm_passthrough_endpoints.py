@@ -478,10 +478,7 @@ async def bedrock_v2_proxy_route(
     """
     V2 Passthrough for Bedrock.
     """
-    from litellm.proxy.common_request_processing import (
-        ProxyBaseLLMRequestProcessing,
-        create_streaming_response,
-    )
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,
@@ -499,6 +496,9 @@ async def bedrock_v2_proxy_route(
     data = await _read_request_body(request=request)
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     model = endpoint.split("/")[1]
+
+    data["method"] = request.method
+    data["endpoint"] = endpoint
     try:
         return await base_llm_response_processor.base_process_llm_request(
             request=request,
