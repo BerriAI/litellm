@@ -83,6 +83,7 @@ from litellm.types.rerank import RerankResponse
 from litellm.types.router import CustomPricingLiteLLMParams
 from litellm.types.utils import (
     CallTypes,
+    CostResponseTypes,
     DynamicPromptManagementParamLiteral,
     EmbeddingResponse,
     ImageResponse,
@@ -1462,8 +1463,25 @@ class Logging(LiteLLMLoggingBaseClass):
         except Exception as e:
             raise Exception(f"[Non-Blocking] LiteLLM.Success_Call Error: {str(e)}")
 
+    def _flush_passthrough_collected_chunks_helper(
+        self,
+        raw_bytes: List[bytes],
+        provider_config: "BasePassthroughConfig",
+    ) -> Optional["CostResponseTypes"]:
+        all_chunks = provider_config._convert_raw_bytes_to_str_lines(raw_bytes)
+        complete_streaming_response = provider_config.handle_logging_collected_chunks(
+            all_chunks=all_chunks,
+            litellm_logging_obj=self,
+            model=self.model,
+            custom_llm_provider=self.model_call_details.get("custom_llm_provider", ""),
+            endpoint=self.model_call_details.get("endpoint", ""),
+        )
+        return complete_streaming_response
+
     def flush_passthrough_collected_chunks(
-        self, raw_bytes: List[bytes], provider_config: "BasePassthroughConfig"
+        self,
+        raw_bytes: List[bytes],
+        provider_config: "BasePassthroughConfig",
     ):
         """
         Flush collected chunks from the logging object
@@ -1474,18 +1492,28 @@ class Logging(LiteLLMLoggingBaseClass):
         3. Log the complete streaming response (trigger success handler)
         This is used for passthrough endpoints
         """
-        all_chunks = provider_config._convert_raw_bytes_to_str_lines(raw_bytes)
-        complete_streaming_response = provider_config.handle_logging_collected_chunks(
-            all_chunks=all_chunks,
-            litellm_logging_obj=self,
-            model=self.model,
-            custom_llm_provider=self.model_call_details.get("custom_llm_provider", ""),
-            endpoint=self.model_call_details.get("endpoint", ""),
+        complete_streaming_response = self._flush_passthrough_collected_chunks_helper(
+            raw_bytes=raw_bytes,
+            provider_config=provider_config,
         )
 
         if complete_streaming_response is not None:
 
-            executor.submit(self.success_handler, result=complete_streaming_response)
+            self.success_handler(result=complete_streaming_response)
+        return
+
+    async def async_flush_passthrough_collected_chunks(
+        self,
+        raw_bytes: List[bytes],
+        provider_config: "BasePassthroughConfig",
+    ):
+        complete_streaming_response = self._flush_passthrough_collected_chunks_helper(
+            raw_bytes=raw_bytes,
+            provider_config=provider_config,
+        )
+
+        if complete_streaming_response is not None:
+            await self.async_success_handler(result=complete_streaming_response)
         return
 
     def success_handler(  # noqa: PLR0915
@@ -2030,6 +2058,7 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["async_complete_streaming_response"] = (
                 complete_streaming_response
             )
+
             try:
                 if self.model_call_details.get("cache_hit", False) is True:
                     self.model_call_details["response_cost"] = 0.0
@@ -2109,6 +2138,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
 
         self.has_run_logging(event_type="async_success")
+
         for callback in callbacks:
             # check if callback can run for this request
             litellm_params = self.model_call_details.get("litellm_params", {})

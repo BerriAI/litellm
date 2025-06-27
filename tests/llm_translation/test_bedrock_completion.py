@@ -3260,8 +3260,19 @@ async def test_bedrock_passthrough(sync_mode: bool):
     assert response.status_code == 200
 
 
-def test_bedrock_streaming_passthrough():
+@pytest.mark.asyncio
+async def test_bedrock_streaming_passthrough(monkeypatch):
     import litellm
+    import time
+    import asyncio
+    from unittest.mock import MagicMock
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class MockCustomLogger(CustomLogger):
+        pass
+
+    mock_custom_logger = MockCustomLogger()
+    monkeypatch.setattr(litellm, "callbacks", [mock_custom_logger])
 
     litellm._turn_on_debug()
 
@@ -3282,13 +3293,20 @@ def test_bedrock_streaming_passthrough():
         "anthropic_beta": ["claude-code-20250219"],
     }
 
-    response = litellm.llm_passthrough_route(
-        model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
-        method="POST",
-        endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke-with-response-stream",
-        data=data,
-        stream=True,
-    )
+    with patch.object(mock_custom_logger, "async_log_success_event") as mock_callback:
+        response = await litellm.allm_passthrough_route(
+            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            method="POST",
+            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke-with-response-stream",
+            data=data,
+        )
+        async for chunk in response:
+            print(chunk)
 
-    for chunk in response:
-        print(chunk)
+        await asyncio.sleep(1)
+
+        mock_callback.assert_called_once()
+        # check standard logging payload created
+        print(mock_callback.call_args.kwargs.keys())
+        assert "standard_logging_object" in mock_callback.call_args.kwargs["kwargs"]
+        assert "response_cost" in mock_callback.call_args.kwargs["kwargs"]
