@@ -171,7 +171,7 @@ class AskSageConfig(BaseConfig):
         }
         """
         # Translate developer role to system role for AskSage
-        # messages = self.translate_developer_role_to_system_role(messages)
+        messages = self.translate_developer_role_to_system_role(messages)
         
         # Convert OpenAI messages format to a conversation context
         # Combine all messages to preserve conversation history
