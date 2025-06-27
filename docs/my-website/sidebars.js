@@ -611,6 +611,11 @@ const sidebars = {
         "proxy_server",
       ],
     },
+    {
+      type: "doc",
+      id: "provider_registration/index",
+      label: "Integrate as a Model Provider",
+    },
     "troubleshoot",
   ],
 };

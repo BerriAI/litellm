@@ -3,7 +3,11 @@ import TabItem from '@theme/TabItem';
 
 # Bytez
 
-LiteLLM supports all chat models on Bytez
+LiteLLM supports all chat models on [Bytez](https://www.bytez.com)!
+
+That also means multi-modal models are supported 🔥
+
+Tasks supported: `chat`, `image-text-to-text`, `audio-text-to-text`, `video-text-to-text`
 
 ## Usage
 
@@ -12,14 +16,14 @@ LiteLLM supports all chat models on Bytez
 
 ### API KEYS
 
-```python
+```py
 import os
 os.environ["BYTEZ_API_KEY"] = "YOUR_BYTEZ_KEY_GOES_HERE"
 ```
 
 ### Example Call
 
-```python
+```py
 from litellm import completion
 import os
 ## set ENV variables
@@ -56,7 +60,7 @@ $ litellm --config /path/to/config.yaml --debug
 
   <TabItem value="openai" label="OpenAI Python v1.0.0+">
 
-```python
+```py
 import openai
 client = openai.OpenAI(
     api_key="sk-1234",             # pass litellm proxy key, if you're using virtual keys
@@ -111,100 +115,22 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 </Tabs>
 
-## Advanced Usage - Prompt Formatting
+## Automatic Prompt Template Handling
 
-LiteLLM has prompt template mappings for all `meta-llama` llama3 instruct models. [**See Code**](https://github.com/BerriAI/litellm/blob/4f46b4c3975cd0f72b8c5acb2cb429d23580c18a/litellm/llms/prompt_templates/factory.py#L1360)
+All prompt formatting is handled automatically by our API when you send a messages list to it!
 
-To apply a custom prompt template:
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-import litellm
-
-import os
-os.environ["BYTEZ_API_KEY"] = ""
-
-# Create your own custom prompt template
-litellm.register_prompt_template(
-    model="bytez/google/gemma-3-4b-it",
-    initial_prompt_value="You are a good assistant", # [OPTIONAL]
-    roles={
-        "system": {
-            "pre_message": "[INST] <<SYS>>\n", # [OPTIONAL]
-            "post_message": "\n<</SYS>>\n [/INST]\n" # [OPTIONAL]
-        },
-        "user": {
-            "pre_message": "[INST] ", # [OPTIONAL]
-            "post_message": " [/INST]" # [OPTIONAL]
-        },
-        "assistant": {
-            "pre_message": "\n", # [OPTIONAL]
-            "post_message": "\n" # [OPTIONAL]
-        }
-    },
-    final_prompt_value="Now answer as best you can:" # [OPTIONAL]
-)
-
-def bytez_custom_model():
-    model = "bytez/google/gemma-3-4b-it"
-    response = completion(model=model, messages=messages)
-    print(response['choices'][0]['message']['content'])
-    return response
-
-bytez_custom_model()
-```
-
-</TabItem>
-<TabItem value="proxy" label="PROXY">
-
-```yaml
-# Model-specific parameters
-model_list:
-  - model_name: gemma-3-4b # model alias
-    litellm_params: # actual params for litellm.completion()
-      model: "bytez/google/gemma-3-4b-it"
-      api_key: os.environ/BYTEZ_API_KEY
-      initial_prompt_value: "\n"
-      roles:
-        {
-          "system":
-            {
-              "pre_message": "<|im_start|>system\n",
-              "post_message": "<|im_end|>",
-            },
-          "assistant":
-            {
-              "pre_message": "<|im_start|>assistant\n",
-              "post_message": "<|im_end|>",
-            },
-          "user":
-            {
-              "pre_message": "<|im_start|>user\n",
-              "post_message": "<|im_end|>",
-            },
-        }
-      final_prompt_value: "\n"
-      bos_token: "<s>"
-      eos_token: "</s>"
-      max_tokens: 4096
-```
-
-</TabItem>
-
-</Tabs>
+If you wish to use custom formatting, please let us know via either [help@bytez.com](mailto:help@bytez.com) or on our [Discord](https://discord.com/invite/Z723PfCFWf) and we will work to provide it!
 
 ## Passing additional params - max_tokens, temperature
 
 See all litellm.completion supported params [here](https://docs.litellm.ai/docs/completion/input)
 
-```python
+```py
 # !pip install litellm
 from litellm import completion
 import os
 ## set ENV variables
-os.environ["BYTEZ_API_KEY"] = "bytez key"
+os.environ["BYTEZ_API_KEY"] = "YOUR_BYTEZ_KEY_HERE"
 
 # bytez gemma-3 call
 response = completion(
@@ -227,25 +153,24 @@ model_list:
       temperature: 0.5
 ```
 
-## Passing Bytez-specific params - adapter_id, adapter_source
+## Passing Bytez-specific params
 
-Send params [not supported by `litellm.completion()`](https://docs.litellm.ai/docs/completion/input) but supported by Bytez by passing them to `litellm.completion`
+Any kwarg supported by huggingface we also support! (Provided the model supports it.)
 
-Example `adapter_id`, `adapter_source` - [See List](https://github.com/BerriAI/litellm/blob/main/litellm/llms/bytez.py)
+Example `repetition_penalty`
 
-```python
+```py
 # !pip install litellm
 from litellm import completion
 import os
 ## set ENV variables
-os.environ["BYTEZ_API_KEY"] = "bytez key"
+os.environ["BYTEZ_API_KEY"] = "YOUR_BYTEZ_KEY_HERE"
 
 # bytez llama3 call with additional params
 response = completion(
     model="bytez/google/gemma-3-4b-it",
     messages = [{ "content": "Hello, how are you?","role": "user"}],
-    adapter_id="my_repo/3",
-    adapter_source="bytez",
+    repetition_penalty=1.2,
 )
 ```
 
@@ -257,6 +182,5 @@ model_list:
     litellm_params:
       model: bytez/google/gemma-3-4b-it
       api_key: os.environ/BYTEZ_API_KEY
-      adapter_id: my_repo/3
-      adapter_source: bytez
+      repetition_penalty: 1.2
 ```

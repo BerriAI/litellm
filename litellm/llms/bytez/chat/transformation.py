@@ -1,5 +1,3 @@
-# NOTE litellm/llms/custom_httpx/llm_http_handler.py
-# base class follows that file
 import json
 import time
 from typing import (
@@ -139,6 +137,8 @@ class BytezChatConfig(BaseConfig):
         # we add stream not as an additional param, but as a primary prop on the request body, this is always defined if stream == True
         if optional_params.get("stream"):
             del optional_params["stream"]
+
+        messages = adapt_messages_to_bytez_standard(messages=messages)  # type: ignore
 
         data = {
             "messages": messages,
@@ -321,3 +321,98 @@ class BytezChatConfig(BaseConfig):
         is_supported = len(models) > 0 and models[0].get("task") == "chat"
 
         return is_supported
+
+
+# litellm/types/llms/openai.py is a good reference for what is supported
+open_ai_to_bytez_content_item_map = {
+    "text": {"type": "text", "value_name": "text"},
+    "image_url": {"type": "image", "value_name": "url"},
+    "input_audio": {"type": "audio", "value_name": "url"},
+    "video_url": {"type": "video", "value_name": "url"},
+    "document": None,
+    "file": None,
+}
+
+
+def adapt_messages_to_bytez_standard(messages: List[Dict]):
+
+    messages = _adapt_string_only_content_to_lists(messages)
+
+    new_messages = []
+
+    for message in messages:
+
+        role = message["role"]
+        content: list = message["content"]
+
+        new_content = []
+
+        for content_item in content:
+            content_item: dict
+            type: Union[str, None] = content_item.get("type")
+
+            if not type:
+                raise Exception("Prop `type` is not a string")
+
+            content_item_map = open_ai_to_bytez_content_item_map[type]
+
+            if not content_item_map:
+                raise Exception(f"Prop `{type}` is not supported")
+
+            content_item_map: Dict[str, str]
+
+            new_type = content_item_map["type"]
+
+            value_name = content_item_map["value_name"]
+
+            value: Union[str, None] = content_item.get(value_name)
+
+            if not value:
+                raise Exception(f"Prop `{value_name}` is not a string")
+
+            new_content.append({"type": new_type, value_name: value})
+
+        new_messages.append({"role": role, "content": new_content})
+
+    return new_messages
+
+
+# "content": "The cat ran so fast"
+# becomes
+# "content": [{"type": "text", "text": "The cat ran so fast"}]
+def _adapt_string_only_content_to_lists(messages: List[Dict]):
+    new_messages = []
+
+    for message in messages:
+
+        role = message.get("role")
+        content = message.get("content")
+
+        new_content = []
+
+        if isinstance(content, str):
+            new_content.append({"type": "text", "text": content})
+
+        elif isinstance(content, dict):
+            new_content.append(content)
+
+        elif isinstance(content, list):
+
+            new_content_items = []
+            for content_item in content:
+                if isinstance(content_item, str):
+                    new_content_items.append({"type": "text", "text": content_item})
+                elif isinstance(content_item, dict):
+                    new_content_items.append(content_item)
+                else:
+                    raise Exception(
+                        "`content` can only contain strings or openai content dicts"
+                    )
+
+            new_content += new_content_items
+        else:
+            raise Exception("Content must be a string")
+
+        new_messages.append({"role": role, "content": new_content})
+
+    return new_messages
