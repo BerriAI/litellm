@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
@@ -16,6 +17,21 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+@dataclass
+class AudioTranscriptionRequestData:
+    """
+    Structured data for audio transcription requests.
+    
+    Attributes:
+        data: The request data (form data for multipart, json data for regular requests)
+        files: Optional files dict for multipart form data
+        content_type: Optional content type override
+    """
+    data: Union[dict, bytes]
+    files: Optional[dict] = None
+    content_type: Optional[str] = None
 
 
 class BaseAudioTranscriptionConfig(BaseConfig, ABC):
@@ -50,10 +66,20 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
         audio_file: FileTypes,
         optional_params: dict,
         litellm_params: dict,
-    ) -> Union[dict, bytes]:
+    ) -> Union[dict, bytes, AudioTranscriptionRequestData]:
         raise NotImplementedError(
             "AudioTranscriptionConfig needs a request transformation for audio transcription models"
         )
+
+    def get_files_for_request(self) -> Optional[dict]:
+        """
+        Get files for multipart form data request.
+        Default implementation returns None (no files).
+        
+        Returns:
+            Optional[dict]: Files dict for httpx, or None if no files
+        """
+        return None
     
     def transform_audio_transcription_response(
         self,
