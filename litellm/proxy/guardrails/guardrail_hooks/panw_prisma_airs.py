@@ -235,17 +235,17 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             metadata=metadata
         )
 
-        action = scan_result.get("action", "allow")
+        action = scan_result.get("action", "block")
         category = scan_result.get("category", "unknown")
 
-        if action == "block":
-            error_detail = self._build_error_detail(scan_result, is_response=False)
-            verbose_proxy_logger.warning(f"PANW Prisma AIRS: {error_detail['error']['message']}")
+        if action == "allow":
+            verbose_proxy_logger.info(f"PANW Prisma AIRS: Response allowed (Category: {category})")
             
-            raise HTTPException(status_code=400, detail=error_detail)
         else:
-            verbose_proxy_logger.info(f"PANW Prisma AIRS: Prompt allowed (Category: {category})")
-            
+            error_detail = self._build_error_detail(scan_result, is_response=True)
+            verbose_proxy_logger.warning(f"PANW Prisma AIRS: {error_detail['error']['message']}")
+            raise HTTPException(status_code=400, detail=error_detail)
+
         return None
 
     @log_guardrail_information  
@@ -282,16 +282,16 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             metadata=metadata
         )
 
-        action = scan_result.get("action", "allow")
+        action = scan_result.get("action", "block")
         category = scan_result.get("category", "unknown")
 
-        if action == "block":
+        if action == "allow":
+            verbose_proxy_logger.info(f"PANW Prisma AIRS: Response allowed (Category: {category})")
+            
+        else:
             error_detail = self._build_error_detail(scan_result, is_response=True)
             verbose_proxy_logger.warning(f"PANW Prisma AIRS: {error_detail['error']['message']}")
-            
             raise HTTPException(status_code=400, detail=error_detail)
-        else:
-            verbose_proxy_logger.info(f"PANW Prisma AIRS: Response allowed (Category: {category})")
 
         return response
 
