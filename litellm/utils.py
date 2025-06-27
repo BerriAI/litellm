@@ -1580,7 +1580,6 @@ def _is_streaming_request(
     if call_type == CallTypes.generate_content_stream or call_type == CallTypes.agenerate_content_stream:
         return True
     #########################################################
-    
     return False
 
 
@@ -6592,6 +6591,8 @@ class ProviderConfigManager:
             return litellm.DeepSeekChatConfig()
         elif litellm.LlmProviders.GROQ == provider:
             return litellm.GroqChatConfig()
+        elif litellm.LlmProviders.BYTEZ == provider:
+            return litellm.BytezChatConfig()
         elif litellm.LlmProviders.DATABRICKS == provider:
             return litellm.DatabricksConfig()
         elif litellm.LlmProviders.XAI == provider:

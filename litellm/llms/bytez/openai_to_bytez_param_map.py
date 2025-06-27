@@ -27,7 +27,7 @@ openai_to_bytez_param_map = {
 }
 
 
-def map_openai_params_to_bytez_params(optional_params: dict) -> dict:
+def map_openai_params_to_bytez_params(optional_params: dict, drop_params: bool) -> dict:
     new_optional_params = {}
 
     for key, value in optional_params.items():
@@ -35,6 +35,9 @@ def map_openai_params_to_bytez_params(optional_params: dict) -> dict:
         alias = openai_to_bytez_param_map.get(key)
 
         if alias is False:
+            if drop_params:
+                continue
+
             raise Exception(f"param `{key}` is not supported on Bytez")
 
         if alias is None:

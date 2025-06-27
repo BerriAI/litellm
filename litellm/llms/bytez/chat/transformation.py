@@ -1,0 +1,323 @@
+# NOTE litellm/llms/custom_httpx/llm_http_handler.py
+# base class follows that file
+import json
+import time
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    List,
+    Optional,
+    Union,
+    Dict,
+)
+
+
+from functools import lru_cache
+
+import httpx
+
+from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.utils import CustomStreamWrapper, ModelResponse
+from litellm.types.utils import LlmProviders
+from litellm.types.llms.openai import AllMessageValues
+
+from litellm.llms.custom_httpx.http_handler import (
+    version,
+    HTTPHandler,
+    _get_httpx_client,
+    AsyncHTTPHandler,
+    get_async_httpx_client,
+)
+
+from ..common_utils import validate_environment, API_BASE, BytezError
+from ..openai_to_bytez_param_map import (
+    openai_to_bytez_param_map,
+    map_openai_params_to_bytez_params,
+)
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
+
+
+# 5 minute timeout (models may need to load)
+STREAMING_TIMEOUT = 60 * 5
+
+
+class BytezChatConfig(BaseConfig):
+    """
+    Configuration class for Bytez's API interface.
+    """
+
+    def __init__(
+        self,
+    ) -> None:
+        locals_ = locals().copy()
+        for key, value in locals_.items():
+            if key != "self" and value is not None:
+                setattr(self.__class__, key, value)
+        # mark the class as using a custom stream wrapper because the default only iterates on lines
+        setattr(self.__class__, "has_custom_stream_wrapper", True)
+
+    def get_supported_openai_params(self, model: str) -> List[str]:
+        supported_params = []
+        for key, value in openai_to_bytez_param_map.items():
+            if value:
+                supported_params.append(key)
+
+        return supported_params
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        return map_openai_params_to_bytez_params(
+            {**non_default_params, **optional_params}, drop_params=drop_params
+        )
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+
+        headers.update(
+            {
+                "content-type": "application/json",
+                "Authorization": f"Key {api_key}",
+                "user-agent": f"litellm/{version}",
+            }
+        )
+
+        model_id = model
+
+        is_supported = self.validate_model_is_supported(model_id, headers)
+
+        if not is_supported:
+            raise Exception(f"Model: {model_id} does not support chat")
+
+        validate_environment(
+            messages=messages,
+            api_key=api_key,
+        )
+
+        return headers
+
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        return f"{API_BASE}/{model}"
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        stream = optional_params.get("stream", False)
+
+        # we add stream not as an additional param, but as a primary prop on the request body, this is always defined if stream == True
+        if optional_params.get("stream"):
+            del optional_params["stream"]
+
+        data = {
+            "messages": messages,
+            "stream": stream,
+            "params": optional_params,
+        }
+
+        return data
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
+
+        json = raw_response.json()  # noqa: F811
+
+        error = json.get("error")
+
+        if error is not None:
+            raise BytezError(
+                message=str(json["error"]),
+                status_code=raw_response.status_code,
+            )
+
+        # set meta data here
+        model_response.created = int(time.time())
+        model_response.model = model
+
+        model_response._hidden_params["additional_headers"] = raw_response.headers
+
+        # TODO additional meta data such as inference time and model size, etc
+
+        # TODO usage
+
+        # usage = Usage(
+        #     prompt_tokens=prompt_tokens,
+        #     completion_tokens=completion_tokens,
+        #     total_tokens=total_tokens,
+        # )
+        # model_response.usage = usage  # type: ignore
+
+        # TODO additional data
+        # message.tool_calls
+        # message.function_call
+        # message.provider_specific_fields <-- this one is probably where we want to put our custom headers
+
+        # Add the output
+        output = json.get("output")
+
+        message = model_response.choices[0].message  # type: ignore
+
+        message.content = output
+
+        return model_response
+
+    @track_llm_api_timing()
+    def get_sync_custom_stream_wrapper(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj,
+        api_base: str,
+        headers: dict,
+        data: dict,
+        messages: list,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        json_mode: Optional[bool] = None,
+        signed_json_body: Optional[bytes] = None,
+    ) -> CustomStreamWrapper:
+        if client is None or isinstance(client, AsyncHTTPHandler):
+            client = _get_httpx_client(params={})
+
+        try:
+            response = client.post(
+                api_base,
+                headers=headers,
+                data=json.dumps(data),
+                stream=True,
+                logging_obj=logging_obj,
+                timeout=STREAMING_TIMEOUT,
+            )
+        except httpx.HTTPStatusError as e:
+            raise BytezError(
+                status_code=e.response.status_code, message=e.response.text
+            )
+
+        if response.status_code != 200:
+            raise BytezError(status_code=response.status_code, message=response.text)
+
+        completion_stream = response.iter_text(chunk_size=1)
+
+        streaming_response = CustomStreamWrapper(
+            completion_stream=completion_stream,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            logging_obj=logging_obj,
+        )
+        return streaming_response
+
+    @track_llm_api_timing()
+    async def get_async_custom_stream_wrapper(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj,
+        api_base: str,
+        headers: dict,
+        data: dict,
+        messages: list,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        json_mode: Optional[bool] = None,
+        signed_json_body: Optional[bytes] = None,
+    ) -> CustomStreamWrapper:
+        if client is None or isinstance(client, HTTPHandler):
+            client = get_async_httpx_client(llm_provider=LlmProviders.BYTEZ, params={})
+
+        try:
+            response = await client.post(
+                api_base,
+                headers=headers,
+                data=json.dumps(data),
+                stream=True,
+                logging_obj=logging_obj,
+                timeout=STREAMING_TIMEOUT,
+            )
+        except httpx.HTTPStatusError as e:
+            raise BytezError(
+                status_code=e.response.status_code, message=e.response.text
+            )
+
+        if response.status_code != 200:
+            raise BytezError(status_code=response.status_code, message=response.text)
+
+        completion_stream = response.aiter_text(chunk_size=1)
+
+        streaming_response = CustomStreamWrapper(
+            completion_stream=completion_stream,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            logging_obj=logging_obj,
+        )
+        return streaming_response
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
+        return BytezError(status_code=status_code, message=error_message)
+
+    # NOTE begin custom functions
+    def validate_model_is_supported(self, model_id: str, headers: Dict) -> bool:
+        headers_tuple = tuple(headers.items())
+        return self._validate_model_is_supported_cached(model_id, headers_tuple)
+
+    @lru_cache(maxsize=128)
+    def _validate_model_is_supported_cached(
+        self, model_id: str, headers_tuple: tuple
+    ) -> bool:
+        headers = dict(headers_tuple)
+
+        url = f"{API_BASE}/list/models?modelId={model_id}"
+
+        response = httpx.request(method="GET", url=url, headers=headers)
+        response_data = response.json()
+
+        error = response_data.get("error")
+        if error:
+            raise Exception(error)
+
+        models = response_data.get("output", [])
+        is_supported = len(models) > 0 and models[0].get("task") == "chat"
+
+        return is_supported

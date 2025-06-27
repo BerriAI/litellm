@@ -894,6 +894,7 @@ ALL_LITELLM_RESPONSE_TYPES = [
     TextCompletionResponse,
 ]
 
+from .llms.bytez.chat.transformation import BytezChatConfig
 from .llms.custom_llm import CustomLLM
 from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from .llms.openai_like.chat.handler import OpenAILikeChatConfig
