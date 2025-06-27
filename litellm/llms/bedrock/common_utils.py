@@ -3,7 +3,7 @@ Common utilities used across bedrock chat/embedding/image generation
 """
 
 import os
-from typing import List, Literal, Optional, Union
+from typing import TYPE_CHECKING, List, Literal, Optional, Union
 
 import httpx
 
@@ -11,6 +11,9 @@ import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret
+
+if TYPE_CHECKING:
+    from litellm.types.llms.openai import AllMessageValues
 
 
 class BedrockError(BaseLLMException):
@@ -332,6 +335,37 @@ def get_bedrock_tool_name(response_tool_name: str) -> str:
 class BedrockModelInfo(BaseLLMModelInfo):
     global_config = AmazonBedrockGlobalConfig()
     all_global_regions = global_config.get_all_regions()
+
+    @staticmethod
+    def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
+        """
+        Get the API base for the given model.
+        """
+        return api_base
+
+    @staticmethod
+    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+        """
+        Get the API key for the given model.
+        """
+        return api_key
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List["AllMessageValues"],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        return headers
+
+    def get_models(
+        self, api_key: Optional[str] = None, api_base: Optional[str] = None
+    ) -> List[str]:
+        return []
 
     @staticmethod
     def extract_model_name_from_arn(model: str) -> str:
