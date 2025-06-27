@@ -715,7 +715,6 @@ async def test_async_post_call_failure_hook(prometheus_logger):
     prometheus_logger.litellm_proxy_failed_requests_metric.labels.assert_called_once_with(
         end_user=None,
         hashed_api_key="test_key",
-        api_key_alias="test_alias",
         requested_model="gpt-3.5-turbo",
         team="test_team",
         team_alias="test_team_alias",
@@ -730,7 +729,6 @@ async def test_async_post_call_failure_hook(prometheus_logger):
     prometheus_logger.litellm_proxy_total_requests_metric.labels.assert_called_once_with(
         end_user=None,
         hashed_api_key="test_key",
-        api_key_alias="test_alias",
         requested_model="gpt-3.5-turbo",
         team="test_team",
         team_alias="test_team_alias",
@@ -776,7 +774,6 @@ async def test_async_post_call_success_hook(prometheus_logger):
     prometheus_logger.litellm_proxy_total_requests_metric.labels.assert_called_once_with(
         end_user=None,
         hashed_api_key="test_key",
-        api_key_alias="test_alias",
         requested_model="gpt-3.5-turbo",
         team="test_team",
         team_alias="test_team_alias",
@@ -885,7 +882,6 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
         api_provider="openai",
         requested_model="my_custom_model_group",
         hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
-        api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
         team=standard_logging_payload["metadata"]["user_api_key_team_id"],
         team_alias=standard_logging_payload["metadata"]["user_api_key_team_alias"],
     )
@@ -899,7 +895,6 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
         api_provider="openai",
         requested_model="my_custom_model_group",
         hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
-        api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
         team=standard_logging_payload["metadata"]["user_api_key_team_id"],
         team_alias=standard_logging_payload["metadata"]["user_api_key_team_alias"],
     )
