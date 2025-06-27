@@ -103,6 +103,11 @@ verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
 verbose_router_logger = logging.getLogger("LiteLLM Router")
 verbose_logger = logging.getLogger("LiteLLM")
 
+# Set the logger level based on LITELLM_LOG environment variable
+verbose_proxy_logger.setLevel(numeric_level)
+verbose_router_logger.setLevel(numeric_level)
+verbose_logger.setLevel(numeric_level)
+
 # Add the handler to the logger
 verbose_router_logger.addHandler(handler)
 verbose_proxy_logger.addHandler(handler)
