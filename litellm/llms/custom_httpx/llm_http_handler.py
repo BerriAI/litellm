@@ -1334,14 +1334,19 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        response = await async_httpx_client.post(
-            url=request_url,
-            headers=headers,
-            data=signed_json_body or json.dumps(request_body),
-            stream=stream or False,
-            logging_obj=logging_obj,
-        )
-        response.raise_for_status()
+        try:
+            response = await async_httpx_client.post(
+                url=request_url,
+                headers=headers,
+                data=signed_json_body or json.dumps(request_body),
+                stream=stream or False,
+                logging_obj=logging_obj,
+            )
+            response.raise_for_status()
+        except Exception as e:
+            raise self._handle_error(
+                e=e, provider_config=anthropic_messages_provider_config
+            )
 
         # used for logging + cost tracking
         logging_obj.model_call_details["httpx_response"] = response
@@ -2352,17 +2357,16 @@ class BaseLLMHTTPHandler:
     def _handle_error(
         self,
         e: Exception,
-        provider_config: Optional[
-            Union[
-                BaseConfig,
-                BaseRerankConfig,
-                BaseResponsesAPIConfig,
-                BaseImageEditConfig,
-                BaseVectorStoreConfig,
-                BaseGoogleGenAIGenerateContentConfig,
-                "BasePassthroughConfig",
-            ]
-        ] = None,
+        provider_config: Union[
+            BaseConfig,
+            BaseRerankConfig,
+            BaseResponsesAPIConfig,
+            BaseImageEditConfig,
+            BaseVectorStoreConfig,
+            BaseGoogleGenAIGenerateContentConfig,
+            BaseAnthropicMessagesConfig,
+            "BasePassthroughConfig",
+        ],
     ):
         status_code = getattr(e, "status_code", 500)
         error_headers = getattr(e, "headers", None)
