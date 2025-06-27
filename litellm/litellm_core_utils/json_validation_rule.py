@@ -1,8 +1,10 @@
 import json
 from typing import Any, Dict, List, Union
 
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
-def normalize_json_schema_types(schema: Union[Dict[str, Any], List[Any], Any]) -> Union[Dict[str, Any], List[Any], Any]:
+
+def normalize_json_schema_types(schema: Union[Dict[str, Any], List[Any], Any], depth: int = 0, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> Union[Dict[str, Any], List[Any], Any]:
     """
     Normalize JSON schema types from uppercase to lowercase format.
     
@@ -13,10 +15,16 @@ def normalize_json_schema_types(schema: Union[Dict[str, Any], List[Any], Any]) -
     
     Args:
         schema: The schema to normalize (dict, list, or other)
+        depth: Current recursion depth
+        max_depth: Maximum recursion depth to prevent infinite loops
         
     Returns:
         The normalized schema with lowercase types
     """
+    # Prevent infinite recursion
+    if depth >= max_depth:
+        return schema
+        
     if not isinstance(schema, (dict, list)):
         return schema
         
@@ -32,7 +40,7 @@ def normalize_json_schema_types(schema: Union[Dict[str, Any], List[Any], Any]) -
     }
     
     if isinstance(schema, list):
-        return [normalize_json_schema_types(item) for item in schema]
+        return [normalize_json_schema_types(item, depth + 1, max_depth) for item in schema]
     
     if isinstance(schema, dict):
         normalized_schema = {}
@@ -43,15 +51,15 @@ def normalize_json_schema_types(schema: Union[Dict[str, Any], List[Any], Any]) -
             elif key == 'properties' and isinstance(value, dict):
                 # Recursively normalize properties
                 normalized_schema[key] = {
-                    prop_key: normalize_json_schema_types(prop_value)
+                    prop_key: normalize_json_schema_types(prop_value, depth + 1, max_depth)
                     for prop_key, prop_value in value.items()
                 }
             elif key == 'items' and isinstance(value, (dict, list)):
                 # Recursively normalize array items
-                normalized_schema[key] = normalize_json_schema_types(value)
+                normalized_schema[key] = normalize_json_schema_types(value, depth + 1, max_depth)
             elif isinstance(value, (dict, list)):
                 # Recursively normalize any nested dict or list
-                normalized_schema[key] = normalize_json_schema_types(value)
+                normalized_schema[key] = normalize_json_schema_types(value, depth + 1, max_depth)
             else:
                 normalized_schema[key] = value
                 
