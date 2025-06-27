@@ -7,12 +7,10 @@ from litellm.types.llms.openai import (
     ChatCompletionAssistantMessage,
     ChatCompletionAssistantToolCall,
     ChatCompletionRequest,
-    ChatCompletionSystemMessage,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolChoiceValues,
     ChatCompletionToolMessage,
     ChatCompletionToolParam,
-    ChatCompletionToolParamFunctionChunk,
     ChatCompletionUserMessage,
 )
 from litellm.types.utils import (
