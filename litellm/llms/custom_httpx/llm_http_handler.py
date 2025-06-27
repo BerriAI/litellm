@@ -1064,18 +1064,9 @@ class BaseLLMHTTPHandler:
         api_key: Optional[str],
     ) -> TranscriptionResponse:
         """Shared logic for transforming audio transcription responses."""
-        if isinstance(provider_config, litellm.DeepgramAudioTranscriptionConfig):
-            return provider_config.transform_audio_transcription_response(
-                model=model,
-                raw_response=response,
-                model_response=model_response,
-                logging_obj=logging_obj,
-                request_data={},
-                optional_params=optional_params,
-                litellm_params={},
-                api_key=api_key,
-            )
-        return model_response
+        return provider_config.transform_audio_transcription_response(
+            raw_response=response,
+        )
 
     def audio_transcriptions(
         self,

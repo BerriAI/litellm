@@ -8,7 +8,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIAudioTranscriptionOptionalParams,
 )
-from litellm.types.utils import FileTypes, ModelResponse
+from litellm.types.utils import FileTypes, ModelResponse, TranscriptionResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -53,6 +53,14 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
     ) -> Union[dict, bytes]:
         raise NotImplementedError(
             "AudioTranscriptionConfig needs a request transformation for audio transcription models"
+        )
+    
+    def transform_audio_transcription_response(
+        self,
+        raw_response: httpx.Response,
+    ) -> TranscriptionResponse:
+        raise NotImplementedError(
+            "AudioTranscriptionConfig does not need a response transformation for audio transcription models"
         )
 
     def transform_request(

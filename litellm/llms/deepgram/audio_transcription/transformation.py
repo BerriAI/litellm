@@ -100,14 +100,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def transform_audio_transcription_response(
         self,
-        model: str,
         raw_response: Response,
-        model_response: TranscriptionResponse,
-        logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
-        api_key: Optional[str] = None,
     ) -> TranscriptionResponse:
         """
         Transforms the raw response from Deepgram to the TranscriptionResponse format
