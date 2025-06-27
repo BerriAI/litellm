@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 
 from httpx import Headers, Response
 
+from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -68,41 +69,13 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         Returns:
             AudioTranscriptionRequestData with binary data and no files.
         """
-        binary_data: bytes  # Explicitly declare the type
-
-        # Handle the audio file based on type
-        if isinstance(audio_file, str):
-            # If it's a file path
-            with open(audio_file, "rb") as f:
-                binary_data = f.read()  # `f.read()` always returns `bytes`
-        elif isinstance(audio_file, tuple):
-            # Handle tuple case
-            _, file_content = audio_file[:2]
-            if isinstance(file_content, str):
-                with open(file_content, "rb") as f:
-                    binary_data = f.read()  # `f.read()` always returns `bytes`
-            elif isinstance(file_content, bytes):
-                binary_data = file_content
-            else:
-                raise TypeError(
-                    f"Unexpected type in tuple: {type(file_content)}. Expected str or bytes."
-                )
-        elif isinstance(audio_file, bytes):
-            # Assume it's already binary data
-            binary_data = audio_file
-        elif isinstance(audio_file, io.BufferedReader) or isinstance(
-            audio_file, io.BytesIO
-        ):
-            # Handle file-like objects
-            binary_data = audio_file.read()
-
-        else:
-            raise TypeError(f"Unsupported type for audio_file: {type(audio_file)}")
-
+        # Use common utility to process the audio file
+        processed_audio = process_audio_file(audio_file)
+        
         # Return structured data with binary content and no files
         # For Deepgram, we send binary data directly as request body
         return AudioTranscriptionRequestData(
-            data=binary_data,
+            data=processed_audio.file_content,
             files=None
         )
 

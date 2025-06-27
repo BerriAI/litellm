@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from httpx import Headers, Response
 
+from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -69,58 +70,11 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         Returns:
             AudioTranscriptionRequestData: Structured data with form data and files
         """
-        import mimetypes
-
         # Extract model ID from the model string (e.g., "elevenlabs/scribe_v1" -> "scribe_v1")
         model_id = model.replace("elevenlabs/", "") if "/" in model else model
         
-        # Handle the audio file based on type
-        file_content = None
-        filename = None
-        
-        if isinstance(audio_file, (bytes, bytearray)):
-            # Raw bytes
-            filename = 'audio.wav'
-            file_content = bytes(audio_file)
-        elif isinstance(audio_file, (str, os.PathLike)):
-            # File path or PathLike
-            file_path = str(audio_file)
-            with open(file_path, 'rb') as f:
-                file_content = f.read()
-            filename = file_path.split('/')[-1]
-        elif isinstance(audio_file, tuple):
-            # Tuple format: (filename, content, content_type) or (filename, content)
-            if len(audio_file) >= 2:
-                filename = audio_file[0] or 'audio.wav'
-                content = audio_file[1]
-                if isinstance(content, (bytes, bytearray)):
-                    file_content = bytes(content)
-                elif isinstance(content, (str, os.PathLike)):
-                    # File path or PathLike
-                    with open(str(content), 'rb') as f:
-                        file_content = f.read()
-                elif hasattr(content, 'read'):
-                    # File-like object
-                    file_content = content.read()
-                    if hasattr(content, 'seek'):
-                        content.seek(0)
-                else:
-                    raise ValueError(f"Unsupported content type in tuple: {type(content)}")
-        elif hasattr(audio_file, 'read') and not isinstance(audio_file, (str, bytes, bytearray, tuple, os.PathLike)):
-            # File-like object (IO) - check this after all other types
-            filename = getattr(audio_file, 'name', 'audio.wav')
-            file_content = audio_file.read()  # type: ignore
-            # Reset file pointer if possible
-            if hasattr(audio_file, 'seek'):
-                audio_file.seek(0)  # type: ignore
-        else:
-            raise ValueError(f"Unsupported audio_file type: {type(audio_file)}")
-
-        if file_content is None:
-            raise ValueError("Could not extract file content from audio_file")
-
-        # Determine content type
-        content_type = mimetypes.guess_type(filename or 'audio.wav')[0] or 'audio/wav'
+        # Use common utility to process the audio file
+        processed_audio = process_audio_file(audio_file)
         
         # Prepare form data
         form_data = {"model_id": model_id}
@@ -132,7 +86,7 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 form_data[key] = str(value)
         
         # Prepare files
-        files = {"file": (filename, file_content, content_type)}
+        files = {"file": (processed_audio.filename, processed_audio.file_content, processed_audio.content_type)}
         
         return AudioTranscriptionRequestData(
             data=form_data,
