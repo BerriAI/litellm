@@ -16,7 +16,7 @@ import httpx
 
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
-from litellm.utils import CustomStreamWrapper, ModelResponse
+from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 from litellm.types.utils import LlmProviders
 from litellm.types.llms.openai import AllMessageValues
 
@@ -177,30 +177,44 @@ class BytezChatConfig(BaseConfig):
         model_response.created = int(time.time())
         model_response.model = model
 
-        model_response._hidden_params["additional_headers"] = raw_response.headers
-
-        # TODO additional meta data such as inference time and model size, etc
-
-        # TODO usage
-
-        # usage = Usage(
-        #     prompt_tokens=prompt_tokens,
-        #     completion_tokens=completion_tokens,
-        #     total_tokens=total_tokens,
-        # )
-        # model_response.usage = usage  # type: ignore
-
-        # TODO additional data
-        # message.tool_calls
-        # message.function_call
-        # message.provider_specific_fields <-- this one is probably where we want to put our custom headers
-
         # Add the output
         output = json.get("output")
 
         message = model_response.choices[0].message  # type: ignore
 
         message.content = output
+
+        messages = adapt_messages_to_bytez_standard(messages=messages)  # type: ignore
+
+        # NOTE We are approximating tokens, to get the true values we will need to update our BE
+        prompt_tokens = get_tokens_from_messages(messages)  # type: ignore
+
+        output_messages = adapt_messages_to_bytez_standard(messages=[output])
+
+        completion_tokens = get_tokens_from_messages(output_messages)
+
+        total_tokens = prompt_tokens + completion_tokens
+
+        usage = Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+        )
+
+        model_response.usage = usage  # type: ignore
+
+        model_response._hidden_params["additional_headers"] = raw_response.headers
+        message.provider_specific_fields = {
+            "ratelimit-limit": raw_response.headers.get("ratelimit-limit"),
+            "ratelimit-remaining": raw_response.headers.get("ratelimit-remaining"),
+            "ratelimit-reset": raw_response.headers.get("ratelimit-reset"),
+            "inference-meter": raw_response.headers.get("inference-meter"),
+            "inference-time": raw_response.headers.get("inference-time"),
+        }
+
+        # TODO additional data when supported
+        # message.tool_calls
+        # message.function_call
 
         return model_response
 
@@ -416,3 +430,23 @@ def _adapt_string_only_content_to_lists(messages: List[Dict]):
         new_messages.append({"role": role, "content": new_content})
 
     return new_messages
+
+
+# TODO get this from the api instead of doing it here, will require backend work
+def get_tokens_from_messages(messages: List[dict]):
+    total = 0
+
+    for message in messages:
+        content: List[dict] = message["content"]
+
+        for content_item in content:
+            type = content_item["type"]
+            if type == "text":
+                value: str = content_item["text"]
+                words = value.split(" ")
+                total += len(words)
+                continue
+            # we'll count media as single tokens for now
+            total += 1
+
+    return total
