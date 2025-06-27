@@ -1004,10 +1004,10 @@ class BaseLLMHTTPHandler:
         api_base: Optional[str],
         headers: Optional[Dict[str, Any]],
         provider_config: BaseAudioTranscriptionConfig,
-    ) -> Tuple[dict, str, Optional[bytes], Optional[dict]]:
+    ) -> Tuple[dict, str, Union[dict, bytes, None], Optional[dict]]:
         """
         Shared logic for preparing audio transcription requests.
-        Returns: (headers, complete_url, binary_data, json_data)
+        Returns: (headers, complete_url, data, files)
         """
         headers = provider_config.validate_environment(
             api_key=api_key,
@@ -1026,32 +1026,44 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
         )
 
-        # Handle the audio file based on type
-        data = provider_config.transform_audio_transcription_request(
+        # Transform the request to get data
+        transformed_result = provider_config.transform_audio_transcription_request(
             model=model,
             audio_file=audio_file,
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        binary_data: Optional[bytes] = None
-        json_data: Optional[dict] = None
-        if isinstance(data, bytes):
-            binary_data = data
+        
+        # Handle the response based on type
+        from litellm.llms.base_llm.audio_transcription.transformation import (
+            AudioTranscriptionRequestData,
+        )
+        
+        if isinstance(transformed_result, AudioTranscriptionRequestData):
+            # New structured response
+            data = transformed_result.data
+            files = transformed_result.files
+        elif isinstance(transformed_result, bytes):
+            # Legacy binary response
+            data = None
+            files = None
         else:
-            json_data = data
+            # Legacy dict response - get files separately for backward compatibility
+            data = transformed_result
+            files = provider_config.get_files_for_request()
 
         ## LOGGING
         logging_obj.pre_call(
             input=optional_params.get("query", ""),
             api_key=api_key,
             additional_args={
-                "complete_input_dict": {},
+                "complete_input_dict": data or {},
                 "api_base": complete_url,
                 "headers": headers,
             },
         )
 
-        return headers, complete_url, binary_data, json_data
+        return headers, complete_url, data, files
 
     def _transform_audio_transcription_response(
         self,
@@ -1113,8 +1125,8 @@ class BaseLLMHTTPHandler:
         (
             headers,
             complete_url,
-            binary_data,
-            json_data,
+            data,
+            files,
         ) = self._prepare_audio_transcription_request(
             model=model,
             audio_file=audio_file,
@@ -1131,12 +1143,13 @@ class BaseLLMHTTPHandler:
             client = _get_httpx_client()
 
         try:
-            # Make the POST request
+            # Make the POST request - clean and simple, always use data and files
             response = client.post(
                 url=complete_url,
                 headers=headers,
-                content=binary_data,
-                json=json_data,
+                data=data,
+                files=files,
+                json=data if files is None and isinstance(data, dict) else None,  # Use json param only when no files and data is dict
                 timeout=timeout,
             )
         except Exception as e:
@@ -1178,8 +1191,8 @@ class BaseLLMHTTPHandler:
         (
             headers,
             complete_url,
-            binary_data,
-            json_data,
+            data,
+            files,
         ) = self._prepare_audio_transcription_request(
             model=model,
             audio_file=audio_file,
@@ -1201,12 +1214,13 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         try:
-            # Make the async POST request
+            # Make the async POST request - clean and simple, always use data and files
             response = await async_httpx_client.post(
                 url=complete_url,
                 headers=headers,
-                content=binary_data,
-                json=json_data,
+                data=data,
+                files=files,
+                json=data if files is None and isinstance(data, dict) else None,  # Use json param only when no files and data is dict
                 timeout=timeout,
             )
         except Exception as e:
