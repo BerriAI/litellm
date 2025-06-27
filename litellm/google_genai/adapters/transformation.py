@@ -293,13 +293,17 @@ class GoogleGenAIAdapter:
                         combined_text += part
                         
                 # Create assistant message
-                assistant_message = ChatCompletionAssistantMessage(
-                    role="assistant",
-                    content=combined_text if combined_text else None
-                )
-                
                 if tool_calls:
-                    assistant_message["tool_calls"] = tool_calls
+                    assistant_message = ChatCompletionAssistantMessage(
+                        role="assistant",
+                        content=combined_text if combined_text else None,
+                        tool_calls=tool_calls
+                    )
+                else:
+                    assistant_message = ChatCompletionAssistantMessage(
+                        role="assistant",
+                        content=combined_text if combined_text else None
+                    )
                     
                 messages.append(assistant_message)
                     

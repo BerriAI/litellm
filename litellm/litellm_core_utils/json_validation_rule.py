@@ -43,7 +43,7 @@ def normalize_json_schema_types(schema: Union[Dict[str, Any], List[Any], Any], d
         return [normalize_json_schema_types(item, depth + 1, max_depth) for item in schema]
     
     if isinstance(schema, dict):
-        normalized_schema = {}
+        normalized_schema: Dict[str, Any] = {}
         
         for key, value in schema.items():
             if key == 'type' and isinstance(value, str) and value in type_mapping:
