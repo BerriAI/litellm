@@ -447,16 +447,23 @@ class ProxyBaseLLMRequestProcessing:
                 hidden_params=hidden_params,
                 **additional_headers,
             )
-            selected_data_generator = select_data_generator(
-                response=response,
-                user_api_key_dict=user_api_key_dict,
-                request_data=self.data,
-            )
-            return await create_streaming_response(
-                generator=selected_data_generator,
-                media_type="text/event-stream",
-                headers=custom_headers,
-            )
+            if route_type == "allm_passthrough_route":
+                return StreamingResponse(
+                    content=response.aiter_bytes(),
+                    status_code=response.status_code,
+                    headers=custom_headers,
+                )
+            else:
+                selected_data_generator = select_data_generator(
+                    response=response,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=self.data,
+                )
+                return await create_streaming_response(
+                    generator=selected_data_generator,
+                    media_type="text/event-stream",
+                    headers=custom_headers,
+                )
 
         ### CALL HOOKS ### - modify outgoing data
         response = await proxy_logging_obj.post_call_success_hook(
@@ -493,7 +500,6 @@ class ProxyBaseLLMRequestProcessing:
         request: Request,
         fastapi_response: Response,
         user_api_key_dict: UserAPIKeyAuth,
-        route_type: Literal["allm_passthrough_route"],
         proxy_logging_obj: ProxyLogging,
         general_settings: dict,
         proxy_config: ProxyConfig,
@@ -506,7 +512,6 @@ class ProxyBaseLLMRequestProcessing:
         user_max_tokens: Optional[int] = None,
         user_api_base: Optional[str] = None,
         version: Optional[str] = None,
-        is_streaming_request: Optional[bool] = False,
     ):
         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
             HttpPassThroughEndpointHelpers,
@@ -531,15 +536,9 @@ class ProxyBaseLLMRequestProcessing:
             version=version,
         )
 
-        if is_streaming_request:
-            return StreamingResponse(
-                content=result.aiter_bytes(),
-                status_code=result.status_code,
-                headers=HttpPassThroughEndpointHelpers.get_response_headers(
-                    headers=result.headers,
-                    custom_headers=None,
-                ),
-            )
+        # Check if result is actually a streaming response by inspecting its type
+        if isinstance(result, StreamingResponse):
+            return result
 
         content = await result.aread()
         return Response(
@@ -550,6 +549,41 @@ class ProxyBaseLLMRequestProcessing:
                 custom_headers=None,
             ),
         )
+
+    def _is_streaming_response(self, response: Any) -> bool:
+        """
+        Check if the response object is actually a streaming response by inspecting its type.
+
+        This uses standard Python inspection to detect streaming/async iterator objects
+        rather than relying on specific wrapper classes.
+        """
+        import asyncio
+        import inspect
+        from collections.abc import AsyncGenerator, AsyncIterator
+
+        # Check if it's an async generator (most reliable)
+        if inspect.isasyncgen(response):
+            return True
+
+        # Check if it implements the async iterator protocol
+        if isinstance(response, (AsyncIterator, AsyncGenerator)):
+            return True
+
+        # Check for __aiter__ method (async iterator protocol)
+        if hasattr(response, "__aiter__") and callable(getattr(response, "__aiter__")):
+            return True
+
+        # Check if it's a coroutine that might yield an async generator
+        if asyncio.iscoroutine(response):
+            return True
+
+        # Check for common streaming HTTP response patterns
+        if hasattr(response, "aiter_bytes") and callable(
+            getattr(response, "aiter_bytes")
+        ):
+            return True
+
+        return False
 
     def _is_streaming_request(
         self, data: dict, is_streaming_request: Optional[bool] = False

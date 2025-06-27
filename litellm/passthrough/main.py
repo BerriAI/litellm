@@ -34,7 +34,6 @@ async def allm_passthrough_route(
     api_key: Optional[str] = None,
     request_query_params: Optional[dict] = None,
     request_headers: Optional[dict] = None,
-    stream: bool = False,
     content: Optional[Any] = None,
     data: Optional[dict] = None,
     files: Optional[RequestFiles] = None,
@@ -61,7 +60,6 @@ async def allm_passthrough_route(
             api_key=api_key,
             request_query_params=request_query_params,
             request_headers=request_headers,
-            stream=stream,
             content=content,
             data=data,
             files=files,
@@ -78,7 +76,12 @@ async def allm_passthrough_route(
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                error_text = await e.response.aread()
+                error_text = error_text.decode("utf-8")
+                raise Exception(error_text)
         else:
             response = init_response
         return response
@@ -101,7 +104,6 @@ def llm_passthrough_route(
     request_query_params: Optional[dict] = None,
     request_headers: Optional[dict] = None,
     allm_passthrough_route: bool = False,
-    stream: bool = False,
     content: Optional[Any] = None,
     data: Optional[dict] = None,
     files: Optional[RequestFiles] = None,
@@ -199,8 +201,14 @@ def llm_passthrough_route(
         cookies=cookies,
     )
 
+    ## IS STREAMING REQUEST
+    is_streaming_request = provider_config.is_streaming_request(
+        endpoint=endpoint,
+        request_data=data or json or {},
+    )
+
     try:
-        response = client.client.send(request=request, stream=stream)
+        response = client.client.send(request=request, stream=is_streaming_request)
         if asyncio.iscoroutine(response):
             return response
         response.raise_for_status()

@@ -10,6 +10,13 @@ if TYPE_CHECKING:
 
 
 class BasePassthroughConfig(BaseLLMModelInfo):
+    @abstractmethod
+    def is_streaming_request(self, endpoint: str, request_data: dict) -> bool:
+        """
+        Check if the request is a streaming request
+        """
+        pass
+
     def format_url(
         self,
         endpoint: str,

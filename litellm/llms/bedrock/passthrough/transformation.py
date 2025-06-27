@@ -10,6 +10,9 @@ if TYPE_CHECKING:
 
 
 class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BasePassthroughConfig):
+    def is_streaming_request(self, endpoint: str, request_data: dict) -> bool:
+        return "stream" in endpoint
+
     def get_complete_url(
         self,
         api_base: Optional[str],

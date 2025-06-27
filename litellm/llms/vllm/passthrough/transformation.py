@@ -9,6 +9,9 @@ if TYPE_CHECKING:
 
 
 class VLLMPassthroughConfig(VLLMModelInfo, BasePassthroughConfig):
+    def is_streaming_request(self, endpoint: str, request_data: dict) -> bool:
+        return "stream" in request_data
+
     def get_complete_url(
         self,
         api_base: Optional[str],
