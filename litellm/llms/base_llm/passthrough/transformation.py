@@ -1,10 +1,13 @@
 from abc import abstractmethod
+from datetime import datetime
 from typing import TYPE_CHECKING, Optional, Tuple, Union
 
 from ..base_utils import BaseLLMModelInfo
 
 if TYPE_CHECKING:
-    from httpx import URL, Headers
+    from httpx import URL, Headers, Response
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
     from ..chat.transformation import BaseLLMException
 
@@ -101,3 +104,14 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         return BaseLLMException(
             status_code=status_code, message=error_message, headers=headers
         )
+
+    def passthrough_cost_calculator(
+        self,
+        httpx_response: "Response",
+        logging_obj: "LiteLLMLoggingObj",
+        endpoint: str,
+        start_time: datetime,
+        end_time: datetime,
+        cache_hit: bool,
+    ) -> float:
+        return 0.0

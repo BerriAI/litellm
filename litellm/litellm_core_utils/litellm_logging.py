@@ -1106,6 +1106,29 @@ class Logging(LiteLLMLoggingBaseClass):
             )
         )
 
+        ### PASSTHROUGH COST CALCULATION ###
+        if self.call_type == "llm_passthrough_route" and isinstance(result, Response):
+            from litellm.cost_calculator import passthrough_cost_calculator
+
+            response_cost = passthrough_cost_calculator(
+                response=result,
+                logging_obj=self,
+                model=self.model,
+                custom_llm_provider=cast(
+                    str, self.model_call_details.get("custom_llm_provider")
+                ),
+                endpoint=cast(str, self.model_call_details.get("endpoint")),
+                start_time=cast(
+                    datetime.datetime, self.model_call_details.get("start_time")
+                ),
+                end_time=cast(
+                    datetime.datetime, self.model_call_details.get("end_time")
+                ),
+                cache_hit=self.model_call_details.get("cache_hit", False),
+            )
+
+            return response_cost
+
         prompt = ""  # use for tts cost calc
         _input = self.model_call_details.get("input", None)
         if _input is not None and isinstance(_input, str):

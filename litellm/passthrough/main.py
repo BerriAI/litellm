@@ -20,6 +20,7 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 from .utils import BasePassthroughUtils
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 
 
@@ -89,7 +90,7 @@ async def allm_passthrough_route(
         # For passthrough routes, we need to get the provider config to properly handle errors
         from litellm.types.utils import LlmProviders
         from litellm.utils import ProviderConfigManager
-        
+
         # Get the provider using the same logic as llm_passthrough_route
         _, resolved_custom_llm_provider, _, _ = get_llm_provider(
             model=model,
@@ -97,7 +98,7 @@ async def allm_passthrough_route(
             api_base=api_base,
             api_key=api_key,
         )
-        
+
         # Get provider config if available
         provider_config = None
         if resolved_custom_llm_provider:
@@ -111,11 +112,11 @@ async def allm_passthrough_route(
             except Exception:
                 # If we can't get provider config, pass None
                 pass
-        
+
         if provider_config is None:
             # If no provider config available, raise the original exception
             raise e
-        
+
         raise base_llm_http_handler._handle_error(
             e=e,
             provider_config=provider_config,
@@ -149,14 +150,18 @@ def llm_passthrough_route(
     Step 1. Build the request
     Step 2. Send the request
     Step 3. Return the response
-
-    [TODO] Refactor this into a provider-config pattern, once we expand this to non-vllm providers.
     """
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
     if client is None:
         if allm_passthrough_route:
             client = litellm.module_level_aclient
         else:
             client = litellm.module_level_client
+
+    litellm_logging_obj = cast("LiteLLMLoggingObj", kwargs.get("litellm_logging_obj"))
 
     model, custom_llm_provider, api_key, api_base = get_llm_provider(
         model=model,
@@ -165,11 +170,14 @@ def llm_passthrough_route(
         api_key=api_key,
     )
 
-    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
-    from litellm.types.utils import LlmProviders
-    from litellm.utils import ProviderConfigManager
-
     litellm_params_dict = get_litellm_params(**kwargs)
+    litellm_logging_obj.update_environment_variables(
+        model=model,
+        litellm_params=litellm_params_dict,
+        optional_params={},
+        endpoint=endpoint,
+        custom_llm_provider=custom_llm_provider,
+    )
 
     provider_config = cast(
         Optional["BasePassthroughConfig"], kwargs.get("provider_config")

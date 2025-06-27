@@ -1,8 +1,9 @@
 # What is this?
 ## File for 'response_cost' calculation in Logging
 import time
+from datetime import datetime
 from functools import lru_cache
-from typing import Any, List, Literal, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union, cast
 
 from httpx import Response
 from pydantic import BaseModel
@@ -93,6 +94,9 @@ from litellm.utils import (
     _cached_get_model_info_helper,
     token_counter,
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 def _cost_per_token_custom_pricing_helper(
@@ -1031,6 +1035,42 @@ def response_cost_calculator(
         return response_cost
     except Exception as e:
         raise e
+
+
+def passthrough_cost_calculator(
+    response: Response,
+    model: str,
+    custom_llm_provider: str,
+    logging_obj: "LiteLLMLoggingObj",
+    endpoint: str,
+    start_time: datetime,
+    end_time: datetime,
+    cache_hit: bool,
+) -> float:
+    """
+    Returns
+    - float or None: cost of response
+    """
+    from litellm.utils import ProviderConfigManager
+
+    provider_config = ProviderConfigManager.get_provider_passthrough_config(
+        provider=LlmProviders(custom_llm_provider),
+        model=model,
+    )
+
+    if provider_config is None:
+        raise ValueError(
+            f"No passthrough provider config found for model={model} and custom_llm_provider={custom_llm_provider}"
+        )
+
+    return provider_config.passthrough_cost_calculator(
+        httpx_response=response,
+        logging_obj=logging_obj,
+        endpoint=endpoint,
+        start_time=start_time,
+        end_time=end_time,
+        cache_hit=cache_hit,
+    )
 
 
 def rerank_cost(

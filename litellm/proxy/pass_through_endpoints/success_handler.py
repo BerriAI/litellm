@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import Optional, Union
+from typing import Any, Optional, Union
 from urllib.parse import urlparse
 
 import httpx
@@ -106,7 +106,7 @@ class PassThroughEndpointLogging:
             "standard_logging_response_object": None,
             "kwargs": kwargs,
         }
-        standard_logging_response_object = None
+        standard_logging_response_object: Optional[Any] = None
         if self.is_vertex_route(url_route):
             vertex_passthrough_logging_handler_result = (
                 VertexPassthroughLoggingHandler.vertex_passthrough_handler(
