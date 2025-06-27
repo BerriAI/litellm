@@ -18,7 +18,7 @@ import TabItem from '@theme/TabItem';
 
 ### LiteLLM Python SDK
 
-```python showLineNumbers
+```python showLineNumbers title="Python SDK Example"
 from litellm import transcription
 import os 
 
@@ -39,7 +39,7 @@ print(f"response: {response}")
 <Tabs>
 <TabItem value="openai" label="OpenAI">
 
-```yaml showLineNumbers
+```yaml showLineNumbers title="OpenAI Configuration"
 model_list:
 - model_name: whisper
   litellm_params:
@@ -54,7 +54,7 @@ general_settings:
 </TabItem>
 <TabItem value="openai+azure" label="OpenAI + Azure">
 
-```yaml showLineNumbers
+```yaml showLineNumbers title="OpenAI + Azure Configuration"
 model_list:
 - model_name: whisper
   litellm_params:
@@ -80,7 +80,7 @@ general_settings:
 
 ### Start proxy 
 
-```bash
+```bash showLineNumbers title="Start Proxy Server"
 litellm --config /path/to/config.yaml 
 
 # RUNNING on http://0.0.0.0:8000
@@ -91,7 +91,7 @@ litellm --config /path/to/config.yaml
 <Tabs>
 <TabItem value="curl" label="Curl">
 
-```bash
+```bash showLineNumbers title="Test with cURL"
 curl --location 'http://0.0.0.0:8000/v1/audio/transcriptions' \
 --header 'Authorization: Bearer sk-1234' \
 --form 'file=@"/Users/krrishdholakia/Downloads/gettysburg.wav"' \
@@ -101,7 +101,7 @@ curl --location 'http://0.0.0.0:8000/v1/audio/transcriptions' \
 </TabItem>
 <TabItem value="openai" label="OpenAI Python SDK">
 
-```python showLineNumbers
+```python showLineNumbers title="Test with OpenAI Python SDK"
 from openai import OpenAI
 client = openai.OpenAI(
     api_key="sk-1234",
