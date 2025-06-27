@@ -2,6 +2,15 @@
 """
 Test to verify the Google GenAI generate_content adapter functionality
 """
+import json
+import os
+import sys
+
+import pytest
+
+sys.path.insert(
+    0, os.path.abspath("../../..")
+)  # Adds the parent directory to the system path
 
 import json
 import os
@@ -486,33 +495,38 @@ def test_streaming_partial_tool_calls_accumulation():
     adapter = GoogleGenAIAdapter()
     mock_wrapper = GoogleGenAIStreamWrapper(completion_stream=None)
     
-    # Simulate partial chunks like in the user's example
+    # Simulate partial chunks that create valid JSON when accumulated
     partial_chunks = [
-        '{"path"',
-        '": "/Users',
-        '/is',
-        'haanjaffe',
-        'r/Github/li',
-        'tel',
-        'lm/README.md',
-        '"}'
+        ('read_file', '{"path"'),     # First chunk: {"path"
+        (None, ': "/Users'),          # Second chunk: : "/Users  
+        (None, '/is'),                # Third chunk: /is
+        (None, 'haanjaffe'),          # Fourth chunk: haanjaffe
+        (None, 'r/Github/li'),        # Fifth chunk: r/Github/li
+        (None, 'tellm'),              # Sixth chunk: tellm
+        (None, '/README.md'),         # Seventh chunk: /README.md
+        (None, '"}')                  # Final chunk: "}
     ]
     
     # Process each partial chunk
-    final_chunk = None
-    for i, partial_args in enumerate(partial_chunks):
+    accumulated_results = []
+    tool_call_id = "call_read_file_123"  # Same ID for all chunks
+    
+    for function_name, chunk_args in partial_chunks:
+        # Create mock function for tool call with partial arguments
         mock_function = Function(
-            name="read_file" if i == 0 else "",  # Only set name in first chunk
-            arguments=partial_args
+            name=function_name,  # Only set in first chunk
+            arguments=chunk_args
         )
         
+        # Create mock streaming tool call delta
         mock_tool_call_delta = ChatCompletionDeltaToolCall(
-            id="call_123",
+            id=tool_call_id,  # Same ID across all chunks
             type="function",
             function=mock_function,
             index=0
         )
         
+        # Create mock delta with tool call
         mock_delta = Delta(
             content=None,
             tool_calls=[mock_tool_call_delta]
@@ -532,35 +546,138 @@ def test_streaming_partial_tool_calls_accumulation():
             object="chat.completion.chunk"
         )
         
-        # Transform streaming chunk
+        # Transform streaming chunk with accumulation
         streaming_chunk = adapter.translate_streaming_completion_to_generate_content(mock_response, mock_wrapper)
-        
-        # Only the final chunk should have parts (when JSON is complete)
-        if i < len(partial_chunks) - 1:
-            # Intermediate chunks should be empty since JSON is incomplete
-            assert streaming_chunk == {} or (
-                "candidates" in streaming_chunk and 
-                len(streaming_chunk["candidates"][0]["content"]["parts"]) == 0
-            )
-        else:
-            # Final chunk should have the complete tool call
-            final_chunk = streaming_chunk
+        accumulated_results.append(streaming_chunk)
+    
+    # Verify accumulation behavior
+    # Most chunks should be empty (because JSON is incomplete)
+    empty_chunks = [chunk for chunk in accumulated_results if not chunk]
+    non_empty_chunks = [chunk for chunk in accumulated_results if chunk]
+    
+    # Should have several empty chunks while accumulating
+    assert len(empty_chunks) > 0, "Should have empty chunks while accumulating partial JSON"
+    
+    # Should have exactly one non-empty chunk when JSON becomes complete
+    assert len(non_empty_chunks) == 1, f"Should have exactly one complete chunk, got {len(non_empty_chunks)}"
     
     # Verify the final complete chunk
-    assert final_chunk is not None
+    final_chunk = non_empty_chunks[0]
     assert "candidates" in final_chunk
     candidate = final_chunk["candidates"][0]
     
     # Check parts
     parts = candidate["content"]["parts"]
-    assert len(parts) == 1
+    assert len(parts) == 1, f"Expected 1 part, got {len(parts)}"
     
     # Check function call part
     function_part = parts[0]
-    assert "functionCall" in function_part
+    assert "functionCall" in function_part, "Should have functionCall in the final chunk"
     function_call = function_part["functionCall"]
-    assert function_call["name"] == "read_file"
-    assert function_call["args"]["path"] == "/Users/ishaanjaffer/Github/litellm/README.md"
+    assert function_call["name"] == "read_file", f"Expected function name 'read_file', got {function_call['name']}"
+    assert function_call["args"]["path"] == "/Users/ishaanjaffer/Github/litellm/README.md", f"Expected complete path, got {function_call['args']}"
+    
+    # Verify that accumulated_tool_calls is cleaned up after completion
+    assert len(mock_wrapper.accumulated_tool_calls) == 0, "Should clean up completed tool calls from accumulator"
+
+def test_streaming_multiple_partial_tool_calls():
+    """Test accumulation of multiple partial tool calls simultaneously"""
+    from litellm.google_genai.adapters.transformation import (
+        GoogleGenAIAdapter,
+        GoogleGenAIStreamWrapper,
+    )
+    from litellm.types.utils import (
+        ChatCompletionDeltaToolCall,
+        Delta,
+        Function,
+        ModelResponse,
+        StreamingChoices,
+    )
+    
+    adapter = GoogleGenAIAdapter()
+    mock_wrapper = GoogleGenAIStreamWrapper(completion_stream=None)
+    
+    # Test data for two tool calls being accumulated simultaneously
+    # Format: (tool_call_id, function_name, args_chunk)
+    test_chunks = [
+        ("call_1", "read_file", '{"file1"'),    # {"file1"
+        ("call_2", "write_file", '{"file2"'),   # {"file2"
+        ("call_1", None, ': "test1.txt"'),      # : "test1.txt"
+        ("call_2", None, ': "test2.txt"'),      # : "test2.txt"
+        ("call_1", None, '}'),                  # }
+        ("call_2", None, '}'),                  # }
+    ]
+    
+    completed_chunks = []
+    
+    for call_id, function_name, args_chunk in test_chunks:
+        # Create mock function for tool call
+        mock_function = Function(
+            name=function_name,
+            arguments=args_chunk
+        )
+        
+        # Create mock streaming tool call delta
+        mock_tool_call_delta = ChatCompletionDeltaToolCall(
+            id=call_id,
+            type="function",
+            function=mock_function,
+            index=0
+        )
+        
+        # Create mock delta with tool call
+        mock_delta = Delta(
+            content=None,
+            tool_calls=[mock_tool_call_delta]
+        )
+        
+        mock_choice = StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=mock_delta
+        )
+        
+        mock_response = ModelResponse(
+            id="test-streaming",
+            choices=[mock_choice],
+            created=1234567890,
+            model="gpt-3.5-turbo",
+            object="chat.completion.chunk"
+        )
+        
+        # Transform streaming chunk with accumulation
+        streaming_chunk = adapter.translate_streaming_completion_to_generate_content(mock_response, mock_wrapper)
+        if streaming_chunk:  # Only collect non-empty chunks
+            completed_chunks.append(streaming_chunk)
+    
+    # Should have exactly 2 completed chunks (one for each tool call)
+    assert len(completed_chunks) == 2, f"Expected 2 completed chunks, got {len(completed_chunks)}"
+    
+    # Extract function calls from completed chunks
+    function_calls = []
+    for chunk in completed_chunks:
+        parts = chunk["candidates"][0]["content"]["parts"]
+        for part in parts:
+            if "functionCall" in part:
+                function_calls.append(part["functionCall"])
+    
+    # Should have 2 function calls
+    assert len(function_calls) == 2, f"Expected 2 function calls, got {len(function_calls)}"
+    
+    # Verify both function calls are complete and correct
+    function_names = [fc["name"] for fc in function_calls]
+    assert "read_file" in function_names, "Should have read_file function call"
+    assert "write_file" in function_names, "Should have write_file function call"
+    
+    # Verify arguments are correctly assembled
+    for fc in function_calls:
+        if fc["name"] == "read_file":
+            assert fc["args"]["file1"] == "test1.txt", f"Expected file1: test1.txt, got {fc['args']}"
+        elif fc["name"] == "write_file":
+            assert fc["args"]["file2"] == "test2.txt", f"Expected file2: test2.txt, got {fc['args']}"
+    
+    # Verify cleanup
+    assert len(mock_wrapper.accumulated_tool_calls) == 0, "Should clean up all completed tool calls"
 
 def test_mixed_content_transformation():
     """Test transformation of mixed content (text + function calls)"""
