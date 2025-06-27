@@ -943,6 +943,12 @@ def _azure_tool_call_invoke_helper(
     return function_call_params
 
 
+def _azure_image_url_helper(content: ChatCompletionImageObject):
+    if isinstance(content["image_url"], str):
+        content["image_url"] = {"url": content["image_url"]}
+    return
+
+
 def convert_to_azure_openai_messages(
     messages: List[AllMessageValues],
 ) -> List[AllMessageValues]:
@@ -951,6 +957,11 @@ def convert_to_azure_openai_messages(
             function_call = m.get("function_call", None)
             if function_call is not None:
                 m["function_call"] = _azure_tool_call_invoke_helper(function_call)
+
+        if m["role"] == "user" and isinstance(m.get("content"), list):
+            for content in m.get("content", []):
+                if isinstance(content, dict) and content.get("type") == "image_url":
+                    _azure_image_url_helper(content)  # type: ignore
     return messages
 
 

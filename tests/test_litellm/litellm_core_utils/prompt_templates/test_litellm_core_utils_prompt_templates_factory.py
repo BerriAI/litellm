@@ -83,6 +83,48 @@ async def test_anthropic_bedrock_thinking_blocks_with_none_content():
     )
 
 
+def test_convert_to_azure_openai_messages():
+    """Test coverting image_url to azure_openai spec"""
+
+    from typing import List
+    from litellm.types.llms.openai import AllMessageValues
+    from litellm.litellm_core_utils.prompt_templates.factory  import  convert_to_azure_openai_messages
+
+    input: List[AllMessageValues] = [
+        {
+            "role": "user",
+            "content": [
+                            {
+                                "type": "text",
+                                "text": "What is in this image?"
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": "www.mock.com"
+                            }
+                        ]
+        }
+    ]
+
+    expected_content = [
+        {
+            "type": "text",
+            "text": "What is in this image?"  
+        },
+        {
+            "type": "image_url",
+            "image_url": {"url": "www.mock.com"}  
+        }
+    ]
+
+    output = convert_to_azure_openai_messages(input)
+
+    content = output[0].get('content')
+    assert content == expected_content
+
+
+
+
 def test_bedrock_validate_format_image_or_video():
     """Test the _validate_format method for images, videos, and documents"""
 
