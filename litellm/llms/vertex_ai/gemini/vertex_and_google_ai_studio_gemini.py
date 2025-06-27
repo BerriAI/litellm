@@ -946,15 +946,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         ## CONTENT POLICY VIOLATION ERROR
         model_response.choices[0].finish_reason = "content_filter"
 
-        _chat_completion_message = {
-            "role": "assistant",
-            "content": None,
-        }
-
         choice = litellm.Choices(
             finish_reason="content_filter",
             index=0,
-            message=_chat_completion_message,
+            message=litellm.Message(content=None, role="assistant"),
             logprobs=None,
             enhancements=None,
         )
