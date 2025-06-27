@@ -15,6 +15,7 @@ import {
   TableHeaderCell, TableBody, TableCell,
   Subtitle, DateRangePicker, DateRangePickerValue
 } from "@tremor/react";
+import UsageDatePicker from "./shared/usage_date_picker";
 import { AreaChart } from "@tremor/react";
 
 import { userDailyActivityCall, tagListCall } from "./networking";
@@ -211,8 +212,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 
   const fetchUserSpendData = async () => {
     if (!accessToken || !dateValue.from || !dateValue.to) return;
-    const startTime = dateValue.from;
-    const endTime = dateValue.to;
+    // Create new Date objects to avoid mutating the original dates
+    const startTime = new Date(dateValue.from);
+    const endTime = new Date(dateValue.to);
     
     try {
       // Get first page
@@ -281,9 +283,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
           <TabPanel>
             <Grid numItems={2} className="gap-2 w-full mb-4">
               <Col>
-                <Text>Select Time Range</Text>
-                <DateRangePicker
-                  enableSelect={true}
+                <UsageDatePicker
                   value={dateValue}
                   onValueChange={(value) => {
                     setDateValue(value);

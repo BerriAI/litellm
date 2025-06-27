@@ -8,6 +8,9 @@ from pydantic import BaseModel
 
 import litellm
 from litellm.constants import request_timeout
+
+# Import the adapter for fallback to completion format
+from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
@@ -38,7 +41,7 @@ class GenerateContentSetupResult(BaseModel):
     model: str
     request_body: Dict[str, Any]
     custom_llm_provider: str
-    generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig
+    generate_content_provider_config: Optional[BaseGoogleGenAIGenerateContentConfig]
     generate_content_config_dict: Dict[str, Any]
     litellm_params: GenericLiteLLMParams
     litellm_logging_obj: LiteLLMLoggingObj
@@ -131,9 +134,19 @@ class GenerateContentHelper:
         )
 
         if generate_content_provider_config is None:
-            operation = "streaming" if stream else ""
-            raise ValueError(
-                f"Generate content {operation} is not supported for {custom_llm_provider}".strip()
+            # Use adapter to transform to completion format when provider config is None
+            # Signal that we should use the adapter by returning special result
+            if litellm_logging_obj is None:
+                raise ValueError("litellm_logging_obj is required, but got None")
+            return GenerateContentSetupResult(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                request_body={},  # Will be handled by adapter
+                generate_content_provider_config=None,  # type: ignore
+                generate_content_config_dict=dict(config or {}),
+                litellm_params=litellm_params,
+                litellm_logging_obj=litellm_logging_obj,
+                litellm_call_id=litellm_call_id
             )
 
 
@@ -278,7 +291,19 @@ def generate_content(
             **kwargs
         )
 
-        # Call the handler
+        # Check if we should use the adapter (when provider config is None)
+        if setup_result.generate_content_provider_config is None:
+            # Use the adapter to convert to completion format
+            return GenerateContentToCompletionHandler.generate_content_handler(
+                model=setup_result.model,
+                contents=contents,  # type: ignore
+                config=setup_result.generate_content_config_dict,
+                stream=False,
+                _is_async=_is_async,
+                **kwargs
+            )
+
+        # Call the standard handler
         response = base_llm_http_handler.generate_content_handler(
             model=setup_result.model,
             contents=contents,
@@ -345,6 +370,17 @@ async def agenerate_content_stream(
             **kwargs
         )
 
+        # Check if we should use the adapter (when provider config is None)
+        if setup_result.generate_content_provider_config is None:
+            # Use the adapter to convert to completion format
+            return await GenerateContentToCompletionHandler.async_generate_content_handler(
+                model=setup_result.model,
+                contents=contents,  # type: ignore
+                config=setup_result.generate_content_config_dict,
+                stream=True,
+                **kwargs
+            )
+
         # Call the handler with async enabled and streaming
         # Return the coroutine directly for the router to handle
         return await base_llm_http_handler.generate_content_handler(
@@ -395,7 +431,7 @@ def generate_content_stream(
     local_vars = locals()
     try:
         # Remove any async-related flags since this is the sync function
-        kwargs.pop("agenerate_content_stream", None)
+        _is_async = kwargs.pop("agenerate_content_stream", False)
 
         # Setup the call
         setup_result = GenerateContentHelper.setup_generate_content_call(
@@ -406,6 +442,18 @@ def generate_content_stream(
             stream=True,
             **kwargs
         )
+
+        # Check if we should use the adapter (when provider config is None)
+        if setup_result.generate_content_provider_config is None:
+            # Use the adapter to convert to completion format
+            return GenerateContentToCompletionHandler.generate_content_handler(
+                model=setup_result.model,
+                contents=contents,  # type: ignore
+                config=setup_result.generate_content_config_dict,
+                stream=True,
+                _is_async=_is_async,
+                **kwargs
+            )
 
         # Call the handler with streaming enabled (sync version)
         return base_llm_http_handler.generate_content_handler(
@@ -419,7 +467,7 @@ def generate_content_stream(
             extra_headers=extra_headers,
             extra_body=extra_body,
             timeout=timeout or request_timeout,
-            _is_async=False,
+            _is_async=_is_async,
             client=kwargs.get("client"),
             stream=True,
             litellm_metadata=kwargs.get("litellm_metadata", {}),

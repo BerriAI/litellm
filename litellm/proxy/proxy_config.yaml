@@ -1,20 +1,19 @@
 model_list:
-  - model_name: azure_ai/*
+  - model_name: anthropic/*
     litellm_params:
-      model: azure_ai/*
+      model: anthropic/*
+  - model_name: openai/*
+    litellm_params:
+      model: openai/*
 
+router_settings:
+  model_group_alias: {
+    "gemini-2.5-pro": "anthropic/claude-sonnet-4-20250514",
+    "gemini-2.5-flash": "anthropic/claude-sonnet-4-20250514",
+    # "gemini-2.5-pro": "openai/gpt-4o-mini"
+  }
 
 mcp_servers:
   deepwiki_mcp:
     url: "https://mcp.deepwiki.com/mcp"
     transport: "http"
-
-general_settings:
-  store_model_in_db: true
-  store_prompts_in_spend_logs: true
-
-litellm_settings:
-  callbacks: ["langfuse", "datadog"]
-  cache: True
-  cache_params:        # set cache params for redis
-    type: redis

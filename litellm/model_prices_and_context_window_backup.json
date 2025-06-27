@@ -740,6 +740,72 @@
         "supports_tool_choice": true,
         "supports_reasoning": true
     },
+    "o3-deep-research": {
+        "max_tokens": 100000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 10e-06,
+        "output_cost_per_token": 40e-06,
+        "input_cost_per_token_batches": 5e-06,
+        "output_cost_per_token_batches": 20e-06,
+        "cache_read_input_token_cost": 2.5e-06,
+        "litellm_provider": "openai",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_pdf_input": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_native_streaming": true
+    },
+    "o3-deep-research-2025-06-26": {
+        "max_tokens": 100000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 10e-06,
+        "output_cost_per_token": 40e-06,
+        "input_cost_per_token_batches": 5e-06,
+        "output_cost_per_token_batches": 20e-06,
+        "cache_read_input_token_cost": 2.5e-06,
+        "litellm_provider": "openai",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_pdf_input": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_native_streaming": true
+    },
     "o3-pro": {
         "max_tokens": 100000,
         "max_input_tokens": 200000,
@@ -913,6 +979,72 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
+    },
+    "o4-mini-deep-research": {
+        "max_tokens": 100000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 8e-06,
+        "input_cost_per_token_batches": 1e-06,
+        "output_cost_per_token_batches": 4e-06,
+        "cache_read_input_token_cost": 0.5e-06,
+        "litellm_provider": "openai",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_pdf_input": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_native_streaming": true
+    },
+    "o4-mini-deep-research-2025-06-26": {
+        "max_tokens": 100000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 8e-06,
+        "input_cost_per_token_batches": 1e-06,
+        "output_cost_per_token_batches": 4e-06,
+        "cache_read_input_token_cost": 0.5e-06,
+        "litellm_provider": "openai",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_pdf_input": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_native_streaming": true
     },
     "o4-mini-2025-04-16": {
         "max_tokens": 100000,

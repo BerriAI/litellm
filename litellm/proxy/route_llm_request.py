@@ -75,6 +75,7 @@ async def route_request(
         "aimage_edit",
         "agenerate_content",
         "agenerate_content_stream",
+        "allm_passthrough_route",
     ],
 ):
     """
@@ -152,7 +153,8 @@ async def route_request(
 
     elif user_model is not None:
         return getattr(litellm, f"{route_type}")(**data)
-
+    elif route_type == "allm_passthrough_route":
+        return getattr(litellm, f"{route_type}")(**data)
     # if no route found then it's a bad request
     route_name = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
     raise ProxyModelNotFoundError(
