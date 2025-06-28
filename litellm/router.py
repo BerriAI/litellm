@@ -792,6 +792,7 @@ class Router:
             generate_content,
             generate_content_stream,
         )
+
         self.agenerate_content = self.factory_function(
             agenerate_content, call_type="agenerate_content"
         )
@@ -2479,6 +2480,7 @@ class Router:
         """
         handler_name = original_function.__name__
         function_name = "_ageneric_api_call_with_fallbacks"
+        passthrough_on_no_deployment = kwargs.pop("passthrough_on_no_deployment", False)
         self._update_kwargs_before_fallbacks(
             model=model,
             kwargs=kwargs,
@@ -2491,12 +2493,17 @@ class Router:
                 f"Inside _ageneric_api_call() - handler: {handler_name}, model: {model}; kwargs: {kwargs}"
             )
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
-            deployment = await self.async_get_available_deployment(
-                model=model,
-                request_kwargs=kwargs,
-                messages=kwargs.get("messages", None),
-                specific_deployment=kwargs.pop("specific_deployment", None),
-            )
+            try:
+                deployment = await self.async_get_available_deployment(
+                    model=model,
+                    request_kwargs=kwargs,
+                    messages=kwargs.get("messages", None),
+                    specific_deployment=kwargs.pop("specific_deployment", None),
+                )
+            except Exception as e:
+                if passthrough_on_no_deployment:
+                    return await original_function(model=model, **kwargs)
+                raise e
 
             self._update_kwargs_with_deployment(
                 deployment=deployment, kwargs=kwargs, function_name=function_name
@@ -3323,12 +3330,17 @@ class Router:
                 "aretrieve_fine_tuning_job",
                 "alist_files",
                 "aimage_edit",
-                "allm_passthrough_route",
                 "agenerate_content",
                 "agenerate_content_stream",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
+                    **kwargs,
+                )
+            elif call_type == "allm_passthrough_route":
+                return await self._ageneric_api_call_with_fallbacks(
+                    original_function=original_function,
+                    passthrough_on_no_deployment=True,
                     **kwargs,
                 )
             elif call_type in (
@@ -4143,8 +4155,10 @@ class Router:
             )
 
             # Determine cooldown time with priority: deployment config > response header > router default
-            deployment_cooldown = kwargs.get("litellm_params", {}).get("cooldown_time", None)
-            
+            deployment_cooldown = kwargs.get("litellm_params", {}).get(
+                "cooldown_time", None
+            )
+
             header_cooldown = None
             if exception_headers is not None:
                 header_cooldown = litellm.utils._get_retry_after_from_exception_header(
