@@ -22,7 +22,7 @@ from litellm.integrations.email_templates.key_created_email import (
 from litellm.integrations.email_templates.user_invitation_email import (
     USER_INVITATION_EMAIL_TEMPLATE,
 )
-from litellm.proxy._types import WebhookEvent
+from litellm.proxy._types import InvitationNew, UserAPIKeyAuth, WebhookEvent
 from litellm.types.integrations.slack_alerting import LITELLM_LOGO_URL
 
 
@@ -168,6 +168,9 @@ class BaseEmailLogger(CustomLogger):
         """
         import asyncio
 
+        from litellm.proxy.management_helpers.user_invitation import (
+            create_invitation_for_user,
+        )
         from litellm.proxy.proxy_server import prisma_client
 
         ################################################################################
@@ -192,6 +195,12 @@ class BaseEmailLogger(CustomLogger):
             where={"user_id": user_id},
             order={"created_at": "desc"},
         )
+        if invitation_rows is None or len(invitation_rows) == 0:
+            invitation_row = await create_invitation_for_user(
+                data=InvitationNew(user_id=user_id),
+                user_api_key_dict=UserAPIKeyAuth(user_id=user_id),
+            )
+
         if len(invitation_rows) > 0:
             invitation_row = invitation_rows[0]
             return self._construct_invitation_link(
