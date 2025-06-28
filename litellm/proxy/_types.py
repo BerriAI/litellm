@@ -25,6 +25,7 @@ from litellm.types.mcp import (
     MCPTransportType,
 )
 from litellm.types.router import RouterErrors, UpdateRouterConfig
+from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
     CallTypes,
     EmbeddingResponse,
@@ -183,27 +184,6 @@ def hash_token(token: str):
     hashed_token = hashlib.sha256(token.encode()).hexdigest()
 
     return hashed_token
-
-
-class LiteLLM_UpperboundKeyGenerateParams(LiteLLMPydanticObjectBase):
-    """
-    Set default upperbound to max budget a key called via `/key/generate` can be.
-
-    Args:
-        max_budget (Optional[float], optional): Max budget a key can be. Defaults to None.
-        budget_duration (Optional[str], optional): Duration of the budget. Defaults to None.
-        duration (Optional[str], optional): Duration of the key. Defaults to None.
-        max_parallel_requests (Optional[int], optional): Max number of requests that can be made in parallel. Defaults to None.
-        tpm_limit (Optional[int], optional): Tpm limit. Defaults to None.
-        rpm_limit (Optional[int], optional): Rpm limit. Defaults to None.
-    """
-
-    max_budget: Optional[float] = None
-    budget_duration: Optional[str] = None
-    duration: Optional[str] = None
-    max_parallel_requests: Optional[int] = None
-    tpm_limit: Optional[int] = None
-    rpm_limit: Optional[int] = None
 
 
 class KeyManagementRoutes(str, enum.Enum):
@@ -1396,40 +1376,6 @@ class OrganizationRequest(LiteLLMPydanticObjectBase):
 
 class DeleteOrganizationRequest(LiteLLMPydanticObjectBase):
     organization_ids: List[str]  # required
-
-
-class KeyManagementSystem(enum.Enum):
-    GOOGLE_KMS = "google_kms"
-    AZURE_KEY_VAULT = "azure_key_vault"
-    AWS_SECRET_MANAGER = "aws_secret_manager"
-    GOOGLE_SECRET_MANAGER = "google_secret_manager"
-    HASHICORP_VAULT = "hashicorp_vault"
-    LOCAL = "local"
-    AWS_KMS = "aws_kms"
-
-
-class KeyManagementSettings(LiteLLMPydanticObjectBase):
-    hosted_keys: Optional[List] = None
-    store_virtual_keys: Optional[bool] = False
-    """
-    If True, virtual keys created by litellm will be stored in the secret manager
-    """
-    prefix_for_stored_virtual_keys: str = "litellm/"
-    """
-    If set, this prefix will be used for stored virtual keys in the secret manager
-    """
-
-    access_mode: Literal["read_only", "write_only", "read_and_write"] = "read_only"
-    """
-    Access mode for the secret manager, when write_only will only use for writing secrets
-    """
-
-    primary_secret_name: Optional[str] = None
-    """
-    If set, will read secrets from this primary secret in the secret manager
-
-    eg. on AWS you can store multiple secret values as K/V pairs in a single secret
-    """
 
 
 class TeamDefaultSettings(LiteLLMPydanticObjectBase):
