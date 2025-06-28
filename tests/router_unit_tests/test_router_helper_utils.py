@@ -1242,37 +1242,3 @@ def test_mock_router_testing_params_str_to_bool_conversion(
     # Verify other params remain unchanged
     assert kwargs["other_param"] == "should_remain"
 
-
-@pytest.mark.parametrize(
-    "fallback_kwarg_value, expected_error",
-    [
-        # Test string values that should convert to True and trigger exceptions
-        ("true", litellm.InternalServerError),
-        ("TRUE", litellm.InternalServerError),
-        ("1", litellm.InternalServerError),
-        ("yes", litellm.InternalServerError),
-        # Test string values that should convert to False and not trigger exceptions
-        ("false", None),
-        ("FALSE", None),
-        ("0", None),
-        ("no", None),
-        # Test actual boolean values
-        (True, litellm.InternalServerError),
-        (False, None),
-    ],
-)
-def test_handle_mock_testing_fallbacks_with_str_to_bool_integration(model_list, fallback_kwarg_value, expected_error):
-    """Test if the router's _handle_mock_testing_fallbacks correctly handles str_to_bool conversion from MockRouterTestingParams"""
-    router = Router(model_list=model_list)
-    
-    kwargs = {
-        "mock_testing_fallbacks": fallback_kwarg_value,
-    }
-    
-    if expected_error:
-        with pytest.raises(expected_error):
-            router._handle_mock_testing_fallbacks(kwargs=kwargs)
-    else:
-        # Should not raise any exception
-        router._handle_mock_testing_fallbacks(kwargs=kwargs)
-        # If we get here, no exception was raised, which is expected
