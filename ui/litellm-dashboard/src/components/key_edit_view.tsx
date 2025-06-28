@@ -152,14 +152,16 @@ export function KeyEditView({
         </Select>
       </Form.Item>
 
-      <Form.Item label={
-                  <span>
-                    Expire Key{' '}
-                    <Tooltip title="Set when this key should expire. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days)">
-                      <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                    </Tooltip>
-                  </span>} 
-                    name="duration">
+      <Form.Item 
+        label={
+          <span>
+            Expire Key{' '}
+            <Tooltip title="Set when this key should expire. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days)">
+              <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+            </Tooltip>
+          </span>
+        }
+        name="duration">
         <TextInput style={{ width: "100%" }} placeholder="e.g., 30d"/>
       </Form.Item>
 
@@ -214,7 +216,7 @@ export function KeyEditView({
               <InfoCircleOutlined style={{ marginLeft: '4px' }} />
             </Tooltip>
           </span>
-        } 
+        }
         name="rpm_limit">
         <NumericalInput min={0}/>
       </Form.Item>
@@ -239,7 +241,7 @@ export function KeyEditView({
               <InfoCircleOutlined style={{ marginLeft: '4px' }} />
             </Tooltip>
           </span>
-        }  
+        }
         name="model_tpm_limit">
         <Input.TextArea rows={4}  placeholder='{"gpt-4": 100, "claude-v1": 200}'/>
       </Form.Item>
@@ -252,7 +254,7 @@ export function KeyEditView({
               <InfoCircleOutlined style={{ marginLeft: '4px' }} />
             </Tooltip>
           </span>
-        } 
+        }
         name="model_rpm_limit">
         <Input.TextArea rows={4}  placeholder='{"gpt-4": 100, "claude-v1": 200}'/>
       </Form.Item>
