@@ -17,6 +17,13 @@ from typing_extensions import Required, TypedDict
 
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.openai import AllMessageValues, OpenAIFileObject
+from litellm.types.mcp import (
+    MCPAuthType,
+    MCPSpecVersion,
+    MCPSpecVersionType,
+    MCPTransport,
+    MCPTransportType,
+)
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.utils import (
     CallTypes,
@@ -334,10 +341,24 @@ class LiteLLMRoutes(enum.Enum):
 
     anthropic_routes = [
         "/v1/messages",
-        # MCP routes
+    ]
+
+    mcp_routes = [
+        "/mcp",
+        "/mcp/",
+        "/mcp/{subpath}",
         "/mcp/tools",
         "/mcp/tools/list",
         "/mcp/tools/call",
+    ]
+
+    google_routes = [
+        "/v1beta/models/{model_name}:countTokens",
+        "/v1beta/models/{model_name}:generateContent",
+        "/v1beta/models/{model_name}:streamGenerateContent",
+        "/models/{model_name}:countTokens",
+        "/models/{model_name}:generateContent",
+        "/models/{model_name}:streamGenerateContent",
     ]
 
     apply_guardrail_routes = [
@@ -349,6 +370,7 @@ class LiteLLMRoutes(enum.Enum):
         + anthropic_routes
         + mapped_pass_through_routes
         + apply_guardrail_routes
+        + mcp_routes
     )
     info_routes = [
         "/key/info",
@@ -771,6 +793,7 @@ class UpdateKeyRequest(KeyRequestBase):
 class RegenerateKeyRequest(GenerateKeyRequest):
     # This needs to be different from UpdateKeyRequest, because "key" is optional for this
     key: Optional[str] = None
+    new_key: Optional[str] = None
     duration: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
@@ -831,31 +854,6 @@ class SpecialMCPServerName(str, enum.Enum):
     all_proxy_servers = "all-proxy-mcpservers"
 
 
-class MCPTransport(str, enum.Enum):
-    sse = "sse"
-    http = "http"
-
-
-class MCPSpecVersion(str, enum.Enum):
-    nov_2024 = "2024-11-05"
-    mar_2025 = "2025-03-26"
-
-
-class MCPAuth(str, enum.Enum):
-    none = "none"
-    api_key = "api_key"
-    bearer_token = "bearer_token"
-    basic = "basic"
-
-
-# MCP Literals
-MCPTransportType = Literal[MCPTransport.sse, MCPTransport.http]
-MCPSpecVersionType = Literal[MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025]
-MCPAuthType = Optional[
-    Literal[MCPAuth.none, MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.basic]
-]
-
-
 # MCP Proxy Request Types
 class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: Optional[str] = None
@@ -893,6 +891,12 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     updated_by: Optional[str] = None
 
 
+class NewUserRequestTeam(LiteLLMPydanticObjectBase):
+    team_id: str
+    max_budget_in_team: Optional[float] = None
+    user_role: Literal["user", "admin"] = "user"
+
+
 class NewUserRequest(GenerateRequestBase):
     max_budget: Optional[float] = None
     user_email: Optional[str] = None
@@ -905,7 +909,7 @@ class NewUserRequest(GenerateRequestBase):
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
         ]
     ] = None
-    teams: Optional[list] = None
+    teams: Optional[Union[List[str], List[NewUserRequestTeam]]] = None
     auto_create_key: bool = (
         True  # flag used for returning a key as part of the /user/new response
     )
@@ -1124,6 +1128,10 @@ class NewTeamRequest(TeamBase):
     tags: Optional[list] = None
     guardrails: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+    team_member_budget: Optional[float] = (
+        None  # allow user to set a budget for all team members
+    )
+    team_member_key_duration: Optional[str] = None  # e.g. "1d", "1w", "1m"
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1165,6 +1173,8 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     model_aliases: Optional[dict] = None
     guardrails: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+    team_member_budget: Optional[float] = None
+    team_member_key_duration: Optional[str] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
@@ -1444,12 +1454,25 @@ class DynamoDBArgs(LiteLLMPydanticObjectBase):
 
 
 class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
+    id: Optional[str] = Field(
+        default=None,
+        description="Optional unique identifier for the pass-through endpoint. If not provided, endpoints will be identified by path for backwards compatibility.",
+    )
     path: str = Field(description="The route to be added to the LiteLLM Proxy Server.")
     target: str = Field(
         description="The URL to which requests for this path should be forwarded."
     )
     headers: dict = Field(
-        description="Key-value pairs of headers to be forwarded with the request. You can set any key value pair here and it will be forwarded to your target endpoint"
+        default={},
+        description="Key-value pairs of headers to be forwarded with the request. You can set any key value pair here and it will be forwarded to your target endpoint",
+    )
+    include_subpath: bool = Field(
+        default=False,
+        description="If True, requests to subpaths of the path will be forwarded to the target endpoint. For example, if the path is /bria and include_subpath is True, requests to /bria/v1/text-to-image/base/2.3 will be forwarded to the target endpoint.",
+    )
+    cost_per_request: float = Field(
+        default=0.0,
+        description="The USD cost per request to the target endpoint. This is used to calculate the cost of the request to the target endpoint.",
     )
 
 
@@ -1466,6 +1489,10 @@ class ConfigFieldUpdate(LiteLLMPydanticObjectBase):
 class ConfigFieldDelete(LiteLLMPydanticObjectBase):
     config_type: Literal["general_settings"]
     field_name: str
+
+
+class CallbackDelete(LiteLLMPydanticObjectBase):
+    callback_name: str
 
 
 class FieldDetail(BaseModel):
@@ -2492,6 +2519,7 @@ class LiteLLM_TeamMembership(LiteLLMPydanticObjectBase):
     user_id: str
     team_id: str
     budget_id: Optional[str] = None
+    spend: Optional[float] = 0.0
     litellm_budget_table: Optional[LiteLLM_BudgetTable]
 
 
@@ -2643,9 +2671,13 @@ class OrganizationMemberUpdateResponse(MemberUpdateResponse):
 ##########################################
 
 
+class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
+    team_member_budget_table: Optional[LiteLLM_BudgetTable] = None
+
+
 class TeamInfoResponseObject(TypedDict):
     team_id: str
-    team_info: LiteLLM_TeamTable
+    team_info: TeamInfoResponseObjectTeamTable
     keys: List
     team_memberships: List[LiteLLM_TeamMembership]
 
@@ -2688,6 +2720,7 @@ class SpecialHeaders(enum.Enum):
     google_ai_studio_authorization = "x-goog-api-key"
     azure_apim_authorization = "Ocp-Apim-Subscription-Key"
     custom_litellm_api_key = "x-litellm-api-key"
+    mcp_auth = "x-mcp-auth"
 
 
 class LitellmDataForBackendLLMCall(TypedDict, total=False):
@@ -2777,6 +2810,7 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
 LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
     "guardrails",
     "tags",
+    "team_member_key_duration",
 ]
 
 
@@ -3022,6 +3056,11 @@ class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
         default=None, description="Default list of models that new users can access"
     )
 
+    teams: Optional[Union[List[str], List[NewUserRequestTeam]]] = Field(
+        default=None,
+        description="Default teams for new users created",
+    )
+
 
 class BaseDailySpendTransaction(TypedDict):
     date: str
@@ -3095,3 +3134,4 @@ class EnterpriseLicenseData(TypedDict, total=False):
     user_id: str
     allowed_features: List[str]
     max_users: int
+    max_teams: int

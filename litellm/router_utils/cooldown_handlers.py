@@ -7,6 +7,7 @@ Router cooldown handlers
 """
 
 import asyncio
+import math
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import litellm
@@ -96,6 +97,7 @@ def _should_run_cooldown_logic(
     deployment: Optional[str],
     exception_status: Union[str, int],
     original_exception: Any,
+    time_to_cooldown: Optional[float] = None,
 ) -> bool:
     """
     Helper that decides if cooldown logic should be run
@@ -115,6 +117,17 @@ def _should_run_cooldown_logic(
         verbose_router_logger.debug(
             "Should Not Run Cooldown Logic: deployment id is none or model group can't be found."
         )
+        return False
+    
+    #########################################################
+    # If time_to_cooldown is 0 or 0.0000000, don't run cooldown logic
+    #########################################################
+    if time_to_cooldown is not None and math.isclose(
+        a=time_to_cooldown, 
+        b=0.0, 
+        abs_tol=1e-9
+    ):
+        verbose_router_logger.debug("Should Not Run Cooldown Logic: time_to_cooldown is effectively 0")
         return False
 
     if litellm_router_instance.disable_cooldowns:
@@ -261,7 +274,11 @@ def _set_cooldown_deployments(
 
     if (
         _should_run_cooldown_logic(
-            litellm_router_instance, deployment, exception_status, original_exception
+            litellm_router_instance=litellm_router_instance,
+            deployment=deployment, 
+            exception_status=exception_status, 
+            original_exception=original_exception,
+            time_to_cooldown=time_to_cooldown,
         )
         is False
         or deployment is None
@@ -270,20 +287,19 @@ def _set_cooldown_deployments(
         return False
 
     exception_status_int = cast_exception_status_to_int(exception_status)
-
     verbose_router_logger.debug(f"Attempting to add {deployment} to cooldown list")
-    cooldown_time = litellm_router_instance.cooldown_time or 1
-    if time_to_cooldown is not None:
-        cooldown_time = time_to_cooldown
 
     if _should_cooldown_deployment(
-        litellm_router_instance, deployment, exception_status, original_exception
+        litellm_router_instance=litellm_router_instance, 
+        deployment=deployment, 
+        exception_status=exception_status, 
+        original_exception=original_exception,
     ):
         litellm_router_instance.cooldown_cache.add_deployment_to_cooldown(
             model_id=deployment,
             original_exception=original_exception,
             exception_status=exception_status_int,
-            cooldown_time=cooldown_time,
+            cooldown_time=time_to_cooldown,
         )
 
         # Trigger cooldown callback handler
@@ -292,7 +308,7 @@ def _set_cooldown_deployments(
                 litellm_router_instance=litellm_router_instance,
                 deployment_id=deployment,
                 exception_status=exception_status,
-                cooldown_time=cooldown_time,
+                cooldown_time=time_to_cooldown,
             )
         )
         return True

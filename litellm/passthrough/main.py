@@ -5,8 +5,7 @@ This module is used to pass through requests to the LLM APIs.
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, Coroutine, Optional, Union
-from urllib.parse import urlencode
+from typing import TYPE_CHECKING, Any, Coroutine, Optional, Union, cast
 
 import httpx
 from httpx._types import CookieTypes, QueryParamTypes, RequestFiles
@@ -14,9 +13,14 @@ from httpx._types import CookieTypes, QueryParamTypes, RequestFiles
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.utils import client
 
+base_llm_http_handler = BaseLLMHTTPHandler()
 from .utils import BasePassthroughUtils
+
+if TYPE_CHECKING:
+    from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 
 
 @client
@@ -24,12 +28,12 @@ async def allm_passthrough_route(
     *,
     method: str,
     endpoint: str,
+    model: str,
     custom_llm_provider: Optional[str] = None,
     api_base: Optional[str] = None,
     api_key: Optional[str] = None,
     request_query_params: Optional[dict] = None,
     request_headers: Optional[dict] = None,
-    stream: bool = False,
     content: Optional[Any] = None,
     data: Optional[dict] = None,
     files: Optional[RequestFiles] = None,
@@ -50,12 +54,12 @@ async def allm_passthrough_route(
             llm_passthrough_route,
             method=method,
             endpoint=endpoint,
+            model=model,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             api_key=api_key,
             request_query_params=request_query_params,
             request_headers=request_headers,
-            stream=stream,
             content=content,
             data=data,
             files=files,
@@ -72,11 +76,50 @@ async def allm_passthrough_route(
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                error_text = await e.response.aread()
+                error_text_str = error_text.decode("utf-8")
+                raise Exception(error_text_str)
         else:
             response = init_response
         return response
     except Exception as e:
-        raise e
+        # For passthrough routes, we need to get the provider config to properly handle errors
+        from litellm.types.utils import LlmProviders
+        from litellm.utils import ProviderConfigManager
+        
+        # Get the provider using the same logic as llm_passthrough_route
+        _, resolved_custom_llm_provider, _, _ = get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+            api_key=api_key,
+        )
+        
+        # Get provider config if available
+        provider_config = None
+        if resolved_custom_llm_provider:
+            try:
+                provider_config = cast(
+                    Optional["BasePassthroughConfig"], kwargs.get("provider_config")
+                ) or ProviderConfigManager.get_provider_passthrough_config(
+                    provider=LlmProviders(resolved_custom_llm_provider),
+                    model=model,
+                )
+            except Exception:
+                # If we can't get provider config, pass None
+                pass
+        
+        if provider_config is None:
+            # If no provider config available, raise the original exception
+            raise e
+        
+        raise base_llm_http_handler._handle_error(
+            e=e,
+            provider_config=provider_config,
+        )
 
 
 @client
@@ -91,7 +134,6 @@ def llm_passthrough_route(
     request_query_params: Optional[dict] = None,
     request_headers: Optional[dict] = None,
     allm_passthrough_route: bool = False,
-    stream: bool = False,
     content: Optional[Any] = None,
     data: Optional[dict] = None,
     files: Optional[RequestFiles] = None,
@@ -123,37 +165,29 @@ def llm_passthrough_route(
         api_key=api_key,
     )
 
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
     from litellm.types.utils import LlmProviders
     from litellm.utils import ProviderConfigManager
 
-    provider_config = ProviderConfigManager.get_provider_model_info(
+    litellm_params_dict = get_litellm_params(**kwargs)
+
+    provider_config = cast(
+        Optional["BasePassthroughConfig"], kwargs.get("provider_config")
+    ) or ProviderConfigManager.get_provider_passthrough_config(
         provider=LlmProviders(custom_llm_provider),
         model=model,
     )
     if provider_config is None:
         raise Exception(f"Provider {custom_llm_provider} not found")
 
-    base_target_url = provider_config.get_api_base(api_base)
-
-    if base_target_url is None:
-        raise Exception(f"Provider {custom_llm_provider} api base not found")
-
-    encoded_endpoint = httpx.URL(endpoint).path
-
-    # Ensure endpoint starts with '/' for proper URL construction
-    if not encoded_endpoint.startswith("/"):
-        encoded_endpoint = "/" + encoded_endpoint
-
-    # Construct the full target URL using httpx
-    base_url = httpx.URL(base_target_url)
-    updated_url = base_url.copy_with(path=encoded_endpoint)
-
-    if request_query_params:
-        # Create a new URL with the merged query params
-        updated_url = updated_url.copy_with(
-            query=urlencode(request_query_params).encode("ascii")
-        )
-
+    updated_url, base_target_url = provider_config.get_complete_url(
+        api_base=api_base,
+        api_key=api_key,
+        model=model,
+        endpoint=endpoint,
+        request_query_params=request_query_params,
+        litellm_params=litellm_params_dict,
+    )
     # Add or update query parameters
     provider_api_key = provider_config.get_api_key(api_key)
 
@@ -173,6 +207,14 @@ def llm_passthrough_route(
         forward_headers=False,
     )
 
+    headers, signed_json_body = provider_config.sign_request(
+        headers=headers,
+        litellm_params=litellm_params_dict,
+        request_data=data if data else json,
+        api_base=str(updated_url),
+        model=model,
+    )
+
     ## SWAP MODEL IN JSON BODY
     if json and isinstance(json, dict) and "model" in json:
         json["model"] = model
@@ -180,14 +222,31 @@ def llm_passthrough_route(
     request = client.client.build_request(
         method=method,
         url=updated_url,
-        content=content,
-        data=data,
+        content=signed_json_body,
+        data=data if signed_json_body is None else None,
         files=files,
-        json=json,
+        json=json if signed_json_body is None else None,
         params=params,
         headers=headers,
         cookies=cookies,
     )
 
-    response = client.client.send(request=request, stream=stream)
-    return response
+    ## IS STREAMING REQUEST
+    is_streaming_request = provider_config.is_streaming_request(
+        endpoint=endpoint,
+        request_data=data or json or {},
+    )
+
+    try:
+        response = client.client.send(request=request, stream=is_streaming_request)
+        if asyncio.iscoroutine(response):
+            return response
+        response.raise_for_status()
+        return response
+    except Exception as e:
+        if provider_config is None:
+            raise e
+        raise base_llm_http_handler._handle_error(
+            e=e,
+            provider_config=provider_config,
+        )

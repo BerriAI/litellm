@@ -1,22 +1,9 @@
 model_list:
-  - model_name: gemini/*
+  - model_name: groq/*
     litellm_params:
-      model: gemini/*
-      api_key: os.environ/GEMINI_API_KEY
-  - model_name: "anthropic/*"
+      model: groq/*
+      api_key: bad
+  - model_name: openai/*
     litellm_params:
-      model: "anthropic/*"
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: openai/*
 
-litellm_settings:
-  callbacks: ["prometheus"]
-  prometheus_metrics_config:
-    # High-cardinality metrics with minimal labels
-    - group: "proxy_metrics"
-      metrics:
-        - "litellm_proxy_total_requests_metric"
-        - "litellm_proxy_failed_requests_metric"
-      include_labels:
-        - "hashed_api_key"
-        - "requested_model"
-        - "model_group"

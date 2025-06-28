@@ -368,20 +368,37 @@ async def list_batches(
 
     ```
     """
-    from litellm.proxy.proxy_server import proxy_logging_obj, version
+    from litellm.proxy.proxy_server import llm_router, proxy_logging_obj, version
 
     verbose_proxy_logger.debug("GET /v1/batches after={} limit={}".format(after, limit))
     try:
-        custom_llm_provider = (
-            provider
-            or await get_custom_llm_provider_from_request_body(request=request)
-            or "openai"
-        )
-        response = await litellm.alist_batches(
-            custom_llm_provider=custom_llm_provider,  # type: ignore
-            after=after,
-            limit=limit,
-        )
+        if llm_router is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.no_llm_router.value},
+            )
+
+        ## check for target model names
+        data = await _read_request_body(request=request)
+        target_model_names = data.get("target_model_names", None)
+        if target_model_names:
+            model = target_model_names.split(",")[0]
+            response = await llm_router.alist_batches(
+                model=model,
+                after=after,
+                limit=limit,
+            )
+        else:
+            custom_llm_provider = (
+                provider
+                or await get_custom_llm_provider_from_request_body(request=request)
+                or "openai"
+            )
+            response = await litellm.alist_batches(
+                custom_llm_provider=custom_llm_provider,  # type: ignore
+                after=after,
+                limit=limit,
+            )
 
         ### RESPONSE HEADERS ###
         hidden_params = getattr(response, "_hidden_params", {}) or {}
@@ -483,7 +500,7 @@ async def cancel_batch(
         _cancel_batch_data = CancelBatchRequest(batch_id=batch_id, **data)
         response = await litellm.acancel_batch(
             custom_llm_provider=custom_llm_provider,  # type: ignore
-            **_cancel_batch_data
+            **_cancel_batch_data,
         )
 
         ### ALERTING ###

@@ -73,6 +73,9 @@ async def route_request(
         "alist_input_items",
         "_arealtime",  # private function for realtime API
         "aimage_edit",
+        "agenerate_content",
+        "agenerate_content_stream",
+        "allm_passthrough_route",
     ],
 ):
     """
@@ -81,7 +84,10 @@ async def route_request(
     team_id = get_team_id_from_data(data)
     router_model_names = llm_router.model_names if llm_router is not None else []
     if "api_key" in data or "api_base" in data:
-        return getattr(llm_router, f"{route_type}")(**data)
+        if llm_router is not None:
+            return getattr(llm_router, f"{route_type}")(**data)
+        else:
+            return getattr(litellm, f"{route_type}")(**data)
 
     elif "user_config" in data:
         router_config = data.pop("user_config")
@@ -147,7 +153,8 @@ async def route_request(
 
     elif user_model is not None:
         return getattr(litellm, f"{route_type}")(**data)
-
+    elif route_type == "allm_passthrough_route":
+        return getattr(litellm, f"{route_type}")(**data)
     # if no route found then it's a bad request
     route_name = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
     raise ProxyModelNotFoundError(

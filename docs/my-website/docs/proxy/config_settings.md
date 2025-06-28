@@ -307,6 +307,7 @@ router_settings:
 | AGENTOPS_SERVICE_NAME | Service Name for AgentOps logging integration
 | AISPEND_ACCOUNT_ID | Account ID for AI Spend
 | AISPEND_API_KEY | API Key for AI Spend
+| AIOHTTP_TRUST_ENV | Flag to enable aiohttp trust environment. When this is set to True, aiohttp will respect HTTP(S)_PROXY env vars. **Default is False**
 | ALLOWED_EMAIL_DOMAINS | List of email domains allowed for access
 | ARIZE_API_KEY | API key for Arize platform integration
 | ARIZE_SPACE_KEY | Space key for Arize platform
@@ -447,7 +448,7 @@ router_settings:
 | GENERIC_CLIENT_ID | Client ID for generic OAuth providers
 | GENERIC_CLIENT_SECRET | Client secret for generic OAuth providers
 | GENERIC_CLIENT_STATE | State parameter for generic client authentication
-| GENERIC_SSO_HEADERS | Comma-separated list of additional headers to add to the request - e.g. Authorization=Bearer <token>, Content-Type=application/json, etc.
+| GENERIC_SSO_HEADERS | Comma-separated list of additional headers to add to the request - e.g. Authorization=Bearer `<token>`, Content-Type=application/json, etc.
 | GENERIC_INCLUDE_CLIENT_ID | Include client ID in requests for OAuth
 | GENERIC_SCOPE | Scope settings for generic OAuth providers
 | GENERIC_TOKEN_ENDPOINT | Token endpoint for generic OAuth providers
