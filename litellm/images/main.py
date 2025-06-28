@@ -6,7 +6,7 @@ from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast
 import httpx
 
 import litellm
-from litellm import Logging, client, exception_type, get_litellm_params
+from litellm import client, exception_type, get_litellm_params
 from litellm.constants import DEFAULT_IMAGE_ENDPOINT_MODEL
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.exceptions import LiteLLMUnknownProvider
@@ -202,7 +202,7 @@ def image_generation(  # noqa: PLR0915
 
         litellm_params_dict = get_litellm_params(**kwargs)
 
-        logging: Logging = litellm_logging_obj
+        logging: LiteLLMLoggingObj = litellm_logging_obj
         logging.update_environment_variables(
             model=model,
             user=user,

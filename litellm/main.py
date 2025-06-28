@@ -46,7 +46,6 @@ from typing_extensions import overload
 
 import litellm
 from litellm import (  # type: ignore
-    Logging,
     client,
     exception_type,
     get_litellm_params,
@@ -3570,7 +3569,7 @@ def embedding(  # noqa: PLR0915
 
     litellm_params_dict = get_litellm_params(**kwargs)
 
-    logging: Logging = litellm_logging_obj  # type: ignore
+    logging: LiteLLMLoggingObj = litellm_logging_obj  # type: ignore
     logging.update_environment_variables(
         model=model,
         user=user,
@@ -5259,7 +5258,7 @@ async def ahealth_check_wildcard_models(
     model: str,
     custom_llm_provider: str,
     model_params: dict,
-    litellm_logging_obj: Logging,
+    litellm_logging_obj: LiteLLMLoggingObj,
 ) -> dict:
     # this is a wildcard model, we need to pick a random model from the provider
     cheapest_models = pick_cheapest_chat_models_from_llm_provider(
@@ -5311,6 +5310,8 @@ async def ahealth_check(
             "x-ms-region": str,
         }
     """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
     # Map modes to their corresponding health check calls
     litellm_logging_obj = Logging(
         model="",

@@ -838,7 +838,6 @@ all_embedding_models = (
 openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 
 from .timeout import timeout
-from litellm.litellm_core_utils.litellm_logging import Logging, modify_integration
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
 from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
@@ -1190,6 +1189,9 @@ _import_structure: _ImportStructure = {}
 
 # Cost Calculator
 _import_structure["cost_calculator"] = ["completion_cost", "response_cost_calculator", "cost_per_token"]
+
+# Logging
+_import_structure["litellm_core_utils.litellm_logging"] = ["Logging", "modify_integration"]
 
 
 # Only setup lazy loading if not in TYPE_CHECKING mode
