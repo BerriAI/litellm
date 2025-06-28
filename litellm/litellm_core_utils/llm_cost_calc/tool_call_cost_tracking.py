@@ -248,7 +248,7 @@ class StandardBuiltInToolCostTracking:
         )
 
     @staticmethod
-    def _extract_token_counts(computer_use_usage: Any) -> tuple[Optional[int], Optional[int]]:
+    def _extract_token_counts(computer_use_usage: Any) -> Tuple[Optional[int], Optional[int]]:
         """Extract and convert token counts safely."""
         input_tokens = None
         output_tokens = None
