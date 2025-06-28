@@ -1053,9 +1053,6 @@ async def update_cache(  # noqa: PLR0915
         verbose_proxy_logger.debug(
             f"_update_key_cache: existing_spend_obj={existing_spend_obj}"
         )
-        verbose_proxy_logger.debug(
-            f"_update_key_cache: existing spend: {existing_spend_obj}"
-        )
         if existing_spend_obj is None:
             return
         else:
