@@ -221,6 +221,7 @@ disable_streaming_logging: bool = False
 disable_token_counter: bool = False
 disable_add_transform_inline_image_block: bool = False
 disable_add_user_agent_to_request_tags: bool = False
+extra_spend_tag_headers: Optional[List[str]] = None
 in_memory_llm_clients_cache: LLMClientCache = LLMClientCache()
 safe_memory_mode: bool = False
 enable_azure_ad_token_refresh: Optional[bool] = False
@@ -323,9 +324,11 @@ priority_reservation: Optional[Dict[str, float]] = None
 use_aiohttp_transport: bool = (
     True  # Older variable, aiohttp is now the default. use disable_aiohttp_transport instead.
 )
-aiohttp_trust_env: bool = False # set to true to use HTTP_ Proxy settings
+aiohttp_trust_env: bool = False  # set to true to use HTTP_ Proxy settings
 disable_aiohttp_transport: bool = False  # Set this to true to use httpx instead
-disable_aiohttp_trust_env: bool = False  # When False, aiohttp will respect HTTP(S)_PROXY env vars
+disable_aiohttp_trust_env: bool = (
+    False  # When False, aiohttp will respect HTTP(S)_PROXY env vars
+)
 force_ipv4: bool = (
     False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 )
@@ -1157,6 +1160,7 @@ from .fine_tuning.main import *
 from .files.main import *
 from .scheduler import *
 from .cost_calculator import response_cost_calculator, cost_per_token
+
 ### ADAPTERS ###
 from .types.adapter import AdapterItem
 import litellm.anthropic_interface as anthropic
