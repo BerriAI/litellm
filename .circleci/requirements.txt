@@ -13,4 +13,4 @@ google-cloud-aiplatform==1.43.0
 fastapi-sso==0.16.0 
 uvloop==0.21.0
 mcp==1.9.3    # for MCP server  
-lazy_loader=0.4
+lazy_loader==0.4
