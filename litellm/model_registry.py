@@ -148,7 +148,7 @@ from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 
 model_cost = get_model_cost_map(url=model_cost_map_url)
 
-def add_known_models():
+def add_known_models(): # noqa: PLR0915
     for key, value in model_cost.items():
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(
             key
