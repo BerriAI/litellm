@@ -108,14 +108,26 @@ async def create_streaming_response(
     final_status_code = default_status_code
 
     try:
+
+        # Handle coroutine that returns a generator
+        if asyncio.iscoroutine(generator):
+            generator = await generator
+
+        # Now get the first chunk from the actual generator
         first_chunk_value = await generator.__anext__()
+
         if first_chunk_value is not None:
-            error_code_from_chunk = await _parse_event_data_for_error(first_chunk_value)
-            if error_code_from_chunk is not None:
-                final_status_code = error_code_from_chunk
-                verbose_proxy_logger.debug(
-                    f"Error detected in first stream chunk. Status code set to: {final_status_code}"
+            try:
+                error_code_from_chunk = await _parse_event_data_for_error(
+                    first_chunk_value
                 )
+                if error_code_from_chunk is not None:
+                    final_status_code = error_code_from_chunk
+                    verbose_proxy_logger.debug(
+                        f"Error detected in first stream chunk. Status code set to: {final_status_code}"
+                    )
+            except Exception as e:
+                verbose_proxy_logger.debug(f"Error parsing first chunk value: {e}")
 
     except StopAsyncIteration:
         # Generator was empty. Default status
@@ -152,6 +164,7 @@ async def create_streaming_response(
             with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
                 yield first_chunk_value
         async for chunk in generator:
+
             with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
                 yield chunk
 
@@ -432,6 +445,8 @@ class ProxyBaseLLMRequestProcessing:
         )
         if self._is_streaming_request(
             data=self.data, is_streaming_request=is_streaming_request
+        ) or self._is_streaming_response(
+            response
         ):  # use generate_responses to stream responses
             custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
@@ -448,11 +463,28 @@ class ProxyBaseLLMRequestProcessing:
                 **additional_headers,
             )
             if route_type == "allm_passthrough_route":
-                return StreamingResponse(
-                    content=response.aiter_bytes(),
-                    status_code=response.status_code,
-                    headers=custom_headers,
-                )
+                # Check if response is an async generator
+                if self._is_streaming_response(response):
+
+                    if asyncio.iscoroutine(response):
+                        generator = await response
+                    else:
+                        generator = response
+
+                    # For passthrough routes, stream directly without error parsing
+                    # since we're dealing with raw binary data (e.g., AWS event streams)
+                    return StreamingResponse(
+                        content=generator,
+                        status_code=status.HTTP_200_OK,
+                        headers=custom_headers,
+                    )
+                else:
+                    # Traditional HTTP response with aiter_bytes
+                    return StreamingResponse(
+                        content=response.aiter_bytes(),
+                        status_code=response.status_code,
+                        headers=custom_headers,
+                    )
             else:
                 selected_data_generator = select_data_generator(
                     response=response,
@@ -557,7 +589,6 @@ class ProxyBaseLLMRequestProcessing:
         This uses standard Python inspection to detect streaming/async iterator objects
         rather than relying on specific wrapper classes.
         """
-        import asyncio
         import inspect
         from collections.abc import AsyncGenerator, AsyncIterator
 
@@ -567,20 +598,6 @@ class ProxyBaseLLMRequestProcessing:
 
         # Check if it implements the async iterator protocol
         if isinstance(response, (AsyncIterator, AsyncGenerator)):
-            return True
-
-        # Check for __aiter__ method (async iterator protocol)
-        if hasattr(response, "__aiter__") and callable(getattr(response, "__aiter__")):
-            return True
-
-        # Check if it's a coroutine that might yield an async generator
-        if asyncio.iscoroutine(response):
-            return True
-
-        # Check for common streaming HTTP response patterns
-        if hasattr(response, "aiter_bytes") and callable(
-            getattr(response, "aiter_bytes")
-        ):
             return True
 
         return False

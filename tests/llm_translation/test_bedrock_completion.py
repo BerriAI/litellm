@@ -3216,7 +3216,9 @@ def test_bedrock_meta_llama_function_calling():
     print(response)
 
 
-def test_bedrock_passthrough():
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_bedrock_passthrough(sync_mode: bool):
     import litellm
 
     litellm._turn_on_debug()
@@ -3238,20 +3240,86 @@ def test_bedrock_passthrough():
         "anthropic_beta": ["claude-code-20250219"],
     }
 
-    response = litellm.llm_passthrough_route(
-        model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
-        method="POST",
-        endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
-        data=data,
-    )
+    if sync_mode:
+        response = litellm.llm_passthrough_route(
+            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            method="POST",
+            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+            data=data,
+        )
+    else:
+        response = await litellm.allm_passthrough_route(
+            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            method="POST",
+            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+            data=data,
+        )
 
     print(response.text)
 
     assert response.status_code == 200
 
 
-def test_bedrock_streaming_passthrough():
+@pytest.mark.asyncio
+async def test_bedrock_converse__streaming_passthrough(monkeypatch):
     import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+    import asyncio
+
+    class MockCustomLogger(CustomLogger):
+        pass
+
+    mock_custom_logger = MockCustomLogger()
+    monkeypatch.setattr(litellm, "callbacks", [mock_custom_logger])
+
+    litellm._turn_on_debug()
+
+    data = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "text": "Write an article about impact of high inflation to GDP of a country"
+                    }
+                ],
+            }
+        ],
+        "system": [{"text": "You are an economist with access to lots of data"}],
+        "inferenceConfig": {"maxTokens": 100, "temperature": 0.5},
+    }
+    with patch.object(mock_custom_logger, "async_log_success_event") as mock_callback:
+        response = await litellm.allm_passthrough_route(
+            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            method="POST",
+            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/converse-stream",
+            data=data,
+        )
+        async for chunk in response:
+            print(chunk)
+
+        await asyncio.sleep(1)
+
+        mock_callback.assert_called_once()
+        print(mock_callback.call_args.kwargs.keys())
+        assert "response_cost" in mock_callback.call_args.kwargs["kwargs"]
+        assert mock_callback.call_args.kwargs["kwargs"]["response_cost"] > 0
+        assert "standard_logging_object" in mock_callback.call_args.kwargs["kwargs"]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_streaming_passthrough(monkeypatch):
+    import litellm
+    import time
+    import asyncio
+    from unittest.mock import MagicMock
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class MockCustomLogger(CustomLogger):
+        pass
+
+    mock_custom_logger = MockCustomLogger()
+    monkeypatch.setattr(litellm, "callbacks", [mock_custom_logger])
 
     litellm._turn_on_debug()
 
@@ -3272,12 +3340,72 @@ def test_bedrock_streaming_passthrough():
         "anthropic_beta": ["claude-code-20250219"],
     }
 
-    response = litellm.llm_passthrough_route(
-        model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
-        method="POST",
-        endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke-with-response-stream",
-        data=data,
-        stream=True,
-    )
+    with patch.object(mock_custom_logger, "async_log_success_event") as mock_callback:
+        response = await litellm.allm_passthrough_route(
+            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            method="POST",
+            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke-with-response-stream",
+            data=data,
+        )
+        async for chunk in response:
+            print(chunk)
 
-    assert response.status_code == 200
+        await asyncio.sleep(1)
+
+        mock_callback.assert_called_once()
+        # check standard logging payload created
+        print(mock_callback.call_args.kwargs.keys())
+        assert "standard_logging_object" in mock_callback.call_args.kwargs["kwargs"]
+        assert "response_cost" in mock_callback.call_args.kwargs["kwargs"]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_streaming_passthrough(monkeypatch):
+    import litellm
+    import time
+    import asyncio
+    from unittest.mock import MagicMock
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class MockCustomLogger(CustomLogger):
+        pass
+
+    mock_custom_logger = MockCustomLogger()
+    monkeypatch.setattr(litellm, "callbacks", [mock_custom_logger])
+
+    litellm._turn_on_debug()
+
+    data = {
+        "max_tokens": 512,
+        "messages": [{"role": "user", "content": "Hey"}],
+        "system": [
+            {
+                "type": "text",
+                "text": "Analyze if this message indicates a new conversation topic. If it does, extract a 2-3 word title that captures the new topic. Format your response as a JSON object with two fields: 'isNewTopic' (boolean) and 'title' (string, or null if isNewTopic is false). Only include these fields, no other text.",
+            }
+        ],
+        "temperature": 0,
+        "metadata": {
+            "user_id": "5dd07c33da27e6d2968d94ea20bf47a7b090b6b158b82328d54da2909a108e84"
+        },
+        "anthropic_version": "bedrock-2023-05-31",
+        "anthropic_beta": ["claude-code-20250219"],
+    }
+
+    with patch.object(mock_custom_logger, "async_log_success_event") as mock_callback:
+        response = await litellm.allm_passthrough_route(
+            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            method="POST",
+            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke-with-response-stream",
+            data=data,
+        )
+        async for chunk in response:
+            print(chunk)
+
+        await asyncio.sleep(1)
+
+        mock_callback.assert_called_once()
+        # check standard logging payload created
+        print(mock_callback.call_args.kwargs.keys())
+        assert "standard_logging_object" in mock_callback.call_args.kwargs["kwargs"]
+        assert "response_cost" in mock_callback.call_args.kwargs["kwargs"]
