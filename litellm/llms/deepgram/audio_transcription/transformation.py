@@ -152,36 +152,6 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         return url
 
-    def _should_exclude_param(
-        self,
-        param_name: str,
-        model: str,
-    ) -> bool:
-        """
-        Determines if a parameter should be excluded from the query string.
-
-        Args:
-            param_name: Parameter name
-            model: Model name
-
-        Returns:
-            True if the parameter should be excluded
-        """
-        # Parameters that are handled elsewhere or not relevant to Deepgram API
-        excluded_params = {
-            "model",  # Already in the URL path
-            "OPENAI_TRANSCRIPTION_PARAMS",  # Internal litellm parameter
-        }
-
-        # Skip if it's an excluded parameter
-        if param_name in excluded_params:
-            return True
-
-        # Skip if it's an OpenAI-specific parameter that we handle separately
-        if param_name in self.get_supported_openai_params(model):
-            return True
-
-        return False
 
     def _format_param_value(self, value) -> str:
         """
@@ -209,19 +179,13 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             Dictionary of filtered and formatted query parameters
         """
         query_params = {}
+        provider_specific_params = self.get_provider_specific_params(
+            optional_params=optional_params,
+            model=model,
+            openai_params=self.get_supported_openai_params(model)
+        )
 
-        for key, value in optional_params.items():
-            # Skip None values
-            if value is None:
-                continue
-
-            # Skip excluded parameters
-            if self._should_exclude_param(
-                param_name=key,
-                model=model,
-            ):
-                continue
-
+        for key, value in provider_specific_params.items():
             # Format and add the parameter
             formatted_value = self._format_param_value(value)
             query_params[key] = formatted_value

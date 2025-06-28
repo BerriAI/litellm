@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from httpx import Headers, Response
 
+import litellm
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -26,6 +27,10 @@ from ..common_utils import ElevenLabsException
 
 
 class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
+    @property
+    def custom_llm_provider(self) -> str:
+        return litellm.LlmProviders.ELEVENLABS.value
+
     def get_supported_openai_params(
         self, model: str
     ) -> List[OpenAIAudioTranscriptionOptionalParams]:
@@ -70,20 +75,35 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         Returns:
             AudioTranscriptionRequestData: Structured data with form data and files
         """
-        # Extract model ID from the model string (e.g., "elevenlabs/scribe_v1" -> "scribe_v1")
-        model_id = model.replace("elevenlabs/", "") if "/" in model else model
         
         # Use common utility to process the audio file
         processed_audio = process_audio_file(audio_file)
         
         # Prepare form data
-        form_data = {"model_id": model_id}
+        form_data = {"model_id": model}
+
         
-        # Add optional parameters to form data
+        #########################################################
+        # Add OpenAI Compatible Parameters
+        #########################################################
         for key, value in optional_params.items():
-            if key in ["language_code", "temperature"] and value is not None:
+            if key in self.get_supported_openai_params(model) and value is not None:
                 # Convert values to strings for form data, but skip None values
                 form_data[key] = str(value)
+        
+        #########################################################
+        # Add Provider Specific Parameters
+        #########################################################
+        provider_specific_params = self.get_provider_specific_params(
+            model=model,
+            optional_params=optional_params,
+            openai_params=self.get_supported_openai_params(model)
+        )
+
+        for key, value in provider_specific_params.items():
+            form_data[key] = str(value)
+        #########################################################
+        #########################################################
         
         # Prepare files
         files = {"file": (processed_audio.filename, processed_audio.file_content, processed_audio.content_type)}
