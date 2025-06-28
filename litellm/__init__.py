@@ -76,10 +76,10 @@ import dotenv
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     dotenv.load_dotenv()
-################################################
+#################################################
 if set_verbose == True:
     _turn_on_debug()
-################################################
+#################################################
 ### Callbacks /Logging / Success / Failure Handlers #####
 CALLBACK_TYPES = Union[str, Callable, CustomLogger]
 input_callback: List[CALLBACK_TYPES] = []
