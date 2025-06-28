@@ -2123,6 +2123,32 @@ async def list_team_v2(
     }
 
 
+async def _filter_teams_by_user(
+    user_id: str,
+    response: List[LiteLLM_TeamTable],
+    prisma_client: PrismaClient
+) -> List[LiteLLM_TeamTable]:
+    """Helper function to filter teams by user ID with duplicate prevention."""
+    # Use a set to track added team IDs and prevent duplicates
+    added_team_ids = set()
+    filtered_response = []
+    
+    # Check team.members_with_roles as the source of truth for team membership
+    for team in response:
+        if team.members_with_roles and team.team_id not in added_team_ids:
+            for member in team.members_with_roles:
+                if (
+                    "user_id" in member
+                    and member["user_id"] is not None
+                    and member["user_id"] == user_id
+                ):
+                    filtered_response.append(team)
+                    added_team_ids.add(team.team_id)
+                    break  # No need to check other members once team is added
+    
+    return filtered_response
+
+
 @router.get(
     "/team/list", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
@@ -2173,62 +2199,11 @@ async def list_team(
 
     filtered_response = []
     if user_id:
-        # Use a set to track added team IDs and prevent duplicates
-        added_team_ids = set()
-        
-        # Get user object to access their teams array
-        try:
-            user_object = await prisma_client.db.litellm_usertable.find_unique(
-                where={"user_id": user_id}
-            )
-            
-            # Check both user.teams and team.members_with_roles to handle potential data drift
-            # This ensures we catch all teams the user belongs to from both sources
-            
-            # First, add teams from user.teams array
-            if user_object and user_object.teams:
-                for team in response:
-                    if team.team_id in user_object.teams and team.team_id not in added_team_ids:
-                        filtered_response.append(team)
-                        added_team_ids.add(team.team_id)
-            
-            # Then, check team.members_with_roles to catch any teams not in user.teams
-            # This handles cases where data might be out of sync
-            for team in response:
-                if team.members_with_roles and team.team_id not in added_team_ids:
-                    for member in team.members_with_roles:
-                        if (
-                            "user_id" in member
-                            and member["user_id"] is not None
-                            and member["user_id"] == user_id
-                        ):
-                            filtered_response.append(team)
-                            added_team_ids.add(team.team_id)
-                            
-                            # Log potential data drift for monitoring
-                            if user_object and user_object.teams and team.team_id not in user_object.teams:
-                                verbose_proxy_logger.warning(
-                                    f"Data drift detected: User {user_id} is in team {team.team_id} "
-                                    f"members_with_roles but not in user.teams array"
-                                )
-                            break  # No need to check other members once team is added
-                            
-        except Exception as e:
-            verbose_proxy_logger.debug(
-                f"Error fetching user for team filtering: {str(e)}"
-            )
-            # If user lookup fails, fall back to only checking members_with_roles
-            for team in response:
-                if team.members_with_roles and team.team_id not in added_team_ids:
-                    for member in team.members_with_roles:
-                        if (
-                            "user_id" in member
-                            and member["user_id"] is not None
-                            and member["user_id"] == user_id
-                        ):
-                            filtered_response.append(team)
-                            added_team_ids.add(team.team_id)
-                            break  # No need to check other members once team is added
+        filtered_response = await _filter_teams_by_user(
+            user_id=user_id,
+            response=response,
+            prisma_client=prisma_client
+        )
     else:
         filtered_response = response
 
