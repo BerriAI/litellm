@@ -10,6 +10,9 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
+from litellm.llms.base_llm.audio_transcription.transformation import (
+    AudioTranscriptionRequestData,
+)
 from litellm.llms.deepgram.audio_transcription.transformation import (
     DeepgramAudioTranscriptionConfig,
 )
@@ -49,12 +52,21 @@ def test_file():
 def test_audio_file_handling(fixture_name, request):
     handler = DeepgramAudioTranscriptionConfig()
     (audio_file, expected_output) = request.getfixturevalue(fixture_name)
-    assert expected_output == handler.transform_audio_transcription_request(
+    result = handler.transform_audio_transcription_request(
         model="deepseek-audio-transcription",
         audio_file=audio_file,
         optional_params={},
         litellm_params={},
     )
+    
+    # Check that result is AudioTranscriptionRequestData
+    assert isinstance(result, AudioTranscriptionRequestData)
+    
+    # Check that data matches expected output
+    assert result.data == expected_output
+    
+    # Check that files is None for Deepgram (binary data)
+    assert result.files is None
 
 
 def test_get_complete_url_basic():
