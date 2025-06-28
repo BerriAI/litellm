@@ -3261,9 +3261,16 @@ async def test_bedrock_passthrough(sync_mode: bool):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("sync_mode", [False])  # True,
-async def test_bedrock_converse_passthrough(sync_mode: bool):
+async def test_bedrock_converse_passthrough(monkeypatch):
     import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+    import asyncio
+
+    class MockCustomLogger(CustomLogger):
+        pass
+
+    mock_custom_logger = MockCustomLogger()
+    monkeypatch.setattr(litellm, "callbacks", [mock_custom_logger])
 
     litellm._turn_on_debug()
 
@@ -3281,14 +3288,7 @@ async def test_bedrock_converse_passthrough(sync_mode: bool):
         "system": [{"text": "You are an economist with access to lots of data"}],
         "inferenceConfig": {"maxTokens": 100, "temperature": 0.5},
     }
-    if sync_mode:
-        response = litellm.llm_passthrough_route(
-            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
-            method="POST",
-            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/converse",
-            data=data,
-        )
-    else:
+    with patch.object(mock_custom_logger, "async_log_success_event") as mock_callback:
         response = await litellm.allm_passthrough_route(
             model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
             method="POST",
@@ -3296,9 +3296,16 @@ async def test_bedrock_converse_passthrough(sync_mode: bool):
             data=data,
         )
 
-    print(response.text)
+        print(response.text)
 
-    assert response.status_code == 200
+        await asyncio.sleep(1)
+
+        assert response.status_code == 200
+        mock_callback.assert_called_once()
+        print(mock_callback.call_args.kwargs.keys())
+        assert "response_cost" in mock_callback.call_args.kwargs["kwargs"]
+        assert mock_callback.call_args.kwargs["kwargs"]["response_cost"] > 0
+        assert "standard_logging_object" in mock_callback.call_args.kwargs["kwargs"]
 
 
 @pytest.mark.asyncio

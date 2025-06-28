@@ -1357,6 +1357,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 #     litellm_model_name=self.model,
                 # )
                 # self.model_call_details["combined_usage_object"] = combined_usage_object
+
             if (
                 standard_logging_object is None
                 and result is not None
@@ -1377,6 +1378,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     or isinstance(logging_result, OpenAIFileObject)
                     or isinstance(logging_result, LiteLLMRealtimeStreamLoggingObject)
                     or isinstance(logging_result, OpenAIModerationResponse)
+                    or isinstance(logging_result, Response)
                 ):
                     ## HIDDEN PARAMS ##
                     hidden_params = getattr(logging_result, "_hidden_params", {})
