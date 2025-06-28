@@ -22,7 +22,7 @@ from litellm.integrations.email_templates.key_created_email import (
 from litellm.integrations.email_templates.user_invitation_email import (
     USER_INVITATION_EMAIL_TEMPLATE,
 )
-from litellm.proxy._types import WebhookEvent
+from litellm.proxy._types import InvitationNew, UserAPIKeyAuth, WebhookEvent
 from litellm.types.integrations.slack_alerting import LITELLM_LOGO_URL
 
 
@@ -166,39 +166,81 @@ class BaseEmailLogger(CustomLogger):
         """
         Get invitation link for the user
         """
-        import asyncio
+        # Early validation
+        if not user_id:
+            verbose_proxy_logger.debug("No user_id provided for invitation link")
+            return base_url
+            
+        if not await self._is_prisma_client_available():
+            return base_url
+            
+        # Wait for any concurrent invitation creation to complete
+        await self._wait_for_invitation_creation()
+        
+        # Get or create invitation
+        invitation = await self._get_or_create_invitation(user_id)
+        if not invitation:
+            verbose_proxy_logger.warning(f"Failed to get/create invitation for user_id: {user_id}")
+            return base_url
+            
+        return self._construct_invitation_link(invitation.id, base_url)
 
+    async def _is_prisma_client_available(self) -> bool:
+        """Check if Prisma client is available"""
         from litellm.proxy.proxy_server import prisma_client
+        
+        if prisma_client is None:
+            verbose_proxy_logger.debug("Prisma client not found. Unable to lookup invitation")
+            return False
+        return True
 
-        ################################################################################
-        ########## Sleep for 10 seconds to wait for the invitation link to be created ###
-        ################################################################################
-        # The UI, calls /invitation/new to generate the invitation link
-        # We wait 10 seconds to ensure the link is created
-        ################################################################################
+    async def _wait_for_invitation_creation(self) -> None:
+        """
+        Wait for any concurrent invitation creation to complete.
+        
+        The UI calls /invitation/new to generate the invitation link.
+        We wait to ensure any pending invitation creation is completed.
+        """
+        import asyncio
         await asyncio.sleep(10)
 
-        if prisma_client is None:
-            verbose_proxy_logger.debug(
-                f"Prisma client not found. Unable to lookup user email for user_id: {user_id}"
-            )
-            return base_url
-
-        if user_id is None:
-            return base_url
-
-        # get the latest invitation link for the user
-        invitation_rows = await prisma_client.db.litellm_invitationlink.find_many(
-            where={"user_id": user_id},
-            order={"created_at": "desc"},
+    async def _get_or_create_invitation(self, user_id: str):
+        """
+        Get existing invitation or create a new one for the user
+        
+        Returns:
+            Invitation object with id attribute, or None if failed
+        """
+        from litellm.proxy.management_helpers.user_invitation import (
+            create_invitation_for_user,
         )
-        if len(invitation_rows) > 0:
-            invitation_row = invitation_rows[0]
-            return self._construct_invitation_link(
-                invitation_id=invitation_row.id, base_url=base_url
+        from litellm.proxy.proxy_server import prisma_client
+        
+        if prisma_client is None:
+            verbose_proxy_logger.error("Prisma client is None in _get_or_create_invitation")
+            return None
+            
+        try:
+            # Try to get existing invitation
+            existing_invitations = await prisma_client.db.litellm_invitationlink.find_many(
+                where={"user_id": user_id},
+                order={"created_at": "desc"},
             )
-
-        return base_url
+            
+            if existing_invitations and len(existing_invitations) > 0:
+                verbose_proxy_logger.debug(f"Found existing invitation for user_id: {user_id}")
+                return existing_invitations[0]
+            
+            # Create new invitation if none exists
+            verbose_proxy_logger.debug(f"Creating new invitation for user_id: {user_id}")
+            return await create_invitation_for_user(
+                data=InvitationNew(user_id=user_id),
+                user_api_key_dict=UserAPIKeyAuth(user_id=user_id),
+            )
+            
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error getting/creating invitation for user_id {user_id}: {e}")
+            return None
 
     def _construct_invitation_link(self, invitation_id: str, base_url: str) -> str:
         """
