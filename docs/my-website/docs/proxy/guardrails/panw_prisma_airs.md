@@ -62,7 +62,8 @@ export OPENAI_API_KEY="sk-proj-..."
 ```
 
 ```shell
-litellm --config config.yaml --detailed_debug```
+litellm --config config.yaml --detailed_debug
+```
 
 
 ### 4. Test Request
@@ -123,7 +124,6 @@ Expected response on failure:
 ```
 
 </TabItem>
-
 <TabItem label="Successful Call" value="allowed">
 
 ```shell
