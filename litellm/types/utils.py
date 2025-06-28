@@ -1775,9 +1775,8 @@ class LoggedLiteLLMParams(TypedDict, total=False):
 
 
 class AdapterCompletionStreamWrapper:
-    def __init__(self, completion_stream, model: str):
+    def __init__(self, completion_stream):
         self.completion_stream = completion_stream
-        self.model = model
 
     def __iter__(self):
         return self

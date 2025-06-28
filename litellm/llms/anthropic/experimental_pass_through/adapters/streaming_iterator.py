@@ -17,6 +17,10 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     - finish_reason must map exactly to anthropic reason, else anthropic client won't be able to parse it.
     """
 
+    def __init__(self, completion_stream: Any, model: str):
+        super().__init__(completion_stream)
+        self.model = model
+
     sent_first_chunk: bool = False
     sent_content_block_start: bool = False
     sent_content_block_finish: bool = False
