@@ -3464,7 +3464,9 @@ class ProxyStartupEvent:
                 llm_router=llm_router,
             )
             scheduler.add_job(
-                check_batch_cost_job.check_batch_cost, "interval", seconds=10
+                check_batch_cost_job.check_batch_cost,
+                "interval",
+                seconds=3600,  # these can run infrequently, as batch jobs take time to complete
             )
 
     @classmethod
