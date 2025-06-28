@@ -478,6 +478,7 @@ nscale_models: List = []
 nebius_models: List = []
 nebius_embedding_models: List = []
 deepgram_models: List = []
+elevenlabs_models: List = []
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -651,6 +652,8 @@ def add_known_models():
             featherless_ai_models.append(key)
         elif value.get("litellm_provider") == "deepgram":
             deepgram_models.append(key)
+        elif value.get("litellm_provider") == "elevenlabs":
+            elevenlabs_models.append(key)
 
 
 add_known_models()
@@ -733,6 +736,7 @@ model_list = (
     + featherless_ai_models
     + nscale_models
     + deepgram_models
+    + elevenlabs_models
 )
 
 model_list_set = set(model_list)
@@ -797,6 +801,7 @@ models_by_provider: dict = {
     "nscale": nscale_models,
     "featherless_ai": featherless_ai_models,
     "deepgram": deepgram_models,
+    "elevenlabs": elevenlabs_models,
 }
 
 # mapping for those models which have larger equivalents
