@@ -838,7 +838,6 @@ all_embedding_models = (
 openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 
 from .timeout import timeout
-from .cost_calculator import completion_cost
 from litellm.litellm_core_utils.litellm_logging import Logging, modify_integration
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
@@ -1153,7 +1152,6 @@ from .realtime_api.main import _arealtime
 from .fine_tuning.main import *
 from .files.main import *
 from .scheduler import *
-from .cost_calculator import response_cost_calculator, cost_per_token
 ### ADAPTERS ###
 from .types.adapter import AdapterItem
 import litellm.anthropic_interface as anthropic
@@ -1180,3 +1178,33 @@ global_disable_no_log_param: bool = False
 
 ### PASSTHROUGH ###
 from .passthrough import allm_passthrough_route, llm_passthrough_route
+
+
+####### LAZY LOADING SETUP #######
+from typing import TYPE_CHECKING
+import sys
+from ._lazy_load import _LazyModule, _ImportStructure
+
+# Define the import structure for lazy loading
+_import_structure: _ImportStructure = {}
+
+# Cost Calculator
+_import_structure["cost_calculator"] = ["completion_cost", "response_cost_calculator", "cost_per_token"]
+
+
+# Only setup lazy loading if not in TYPE_CHECKING mode
+if not TYPE_CHECKING:
+    # Replace current module with lazy module
+    current_module = sys.modules[__name__]
+    lazy_module = _LazyModule.create(
+        name=__name__,
+        module_file=__file__,
+        import_structure=_import_structure,
+        module_spec=current_module.__spec__,
+        extra_object={
+            # Keep all existing variables available
+            key: value for key, value in current_module.__dict__.items()
+            if not key.startswith('_import_structure')
+        }
+    )
+    sys.modules[__name__] = lazy_module
