@@ -1,5 +1,4 @@
 import json
-from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional, Tuple, cast
 
 from httpx import Response
@@ -12,7 +11,7 @@ from ..common_utils import BedrockEventStreamDecoderBase, BedrockModelInfo
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.utils import CostResponseTypes, GenericStreamingChunk
+    from litellm.types.utils import CostResponseTypes
 
 
 if TYPE_CHECKING:

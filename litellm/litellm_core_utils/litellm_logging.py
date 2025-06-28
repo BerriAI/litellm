@@ -1259,6 +1259,46 @@ class Logging(LiteLLMLoggingBaseClass):
         self.completion_start_time = completion_start_time
         self.model_call_details["completion_start_time"] = self.completion_start_time
 
+    def normalize_logging_result(self, result: Any) -> Any:
+        """
+        Some endpoints return a different type of result than what is expected by the logging system.
+        This function is used to normalize the result to the expected type.
+        """
+        logging_result = result
+        if self.call_type == CallTypes.arealtime.value and isinstance(result, list):
+            combined_usage_object = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+                results=result
+            )
+            logging_result = (
+                RealtimeAPITokenUsageProcessor.create_logging_realtime_object(
+                    usage=combined_usage_object,
+                    results=result,
+                )
+            )
+
+        elif (
+            self.call_type == CallTypes.llm_passthrough_route.value
+            or self.call_type == CallTypes.allm_passthrough_route.value
+        ) and isinstance(result, Response):
+            from litellm.utils import ProviderConfigManager
+
+            provider_config = ProviderConfigManager.get_provider_passthrough_config(
+                provider=self.model_call_details.get("custom_llm_provider", ""),
+                model=self.model,
+            )
+            if provider_config is not None:
+                logging_result = provider_config.logging_non_streaming_response(
+                    model=self.model,
+                    custom_llm_provider=self.model_call_details.get(
+                        "custom_llm_provider", ""
+                    ),
+                    httpx_response=result,
+                    request_data=self.model_call_details.get("request_data", {}),
+                    logging_obj=self,
+                    endpoint=self.model_call_details.get("endpoint", ""),
+                )
+        return logging_result
+
     def _success_handler_helper_fn(
         self,
         result=None,
@@ -1292,40 +1332,7 @@ class Logging(LiteLLMLoggingBaseClass):
             ## if model in model cost map - log the response cost
             ## else set cost to None
 
-            logging_result = result
-
-            if self.call_type == CallTypes.arealtime.value and isinstance(result, list):
-                combined_usage_object = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
-                    results=result
-                )
-                logging_result = (
-                    RealtimeAPITokenUsageProcessor.create_logging_realtime_object(
-                        usage=combined_usage_object,
-                        results=result,
-                    )
-                )
-
-            elif (
-                self.call_type == CallTypes.llm_passthrough_route.value
-                or self.call_type == CallTypes.allm_passthrough_route.value
-            ) and isinstance(result, Response):
-                from litellm.utils import ProviderConfigManager
-
-                provider_config = ProviderConfigManager.get_provider_passthrough_config(
-                    provider=self.model_call_details.get("custom_llm_provider", ""),
-                    model=self.model,
-                )
-                if provider_config is not None:
-                    logging_result = provider_config.logging_non_streaming_response(
-                        model=self.model,
-                        custom_llm_provider=self.model_call_details.get(
-                            "custom_llm_provider", ""
-                        ),
-                        httpx_response=result,
-                        request_data=self.model_call_details.get("request_data", {}),
-                        logging_obj=self,
-                        endpoint=self.model_call_details.get("endpoint", ""),
-                    )
+            logging_result = self.normalize_logging_result(result=result)
 
             if (
                 standard_logging_object is None

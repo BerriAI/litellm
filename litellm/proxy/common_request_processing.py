@@ -589,7 +589,6 @@ class ProxyBaseLLMRequestProcessing:
         This uses standard Python inspection to detect streaming/async iterator objects
         rather than relying on specific wrapper classes.
         """
-        import asyncio
         import inspect
         from collections.abc import AsyncGenerator, AsyncIterator
 

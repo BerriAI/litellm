@@ -1,7 +1,6 @@
 # What is this?
 ## File for 'response_cost' calculation in Logging
 import time
-from datetime import datetime
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union, cast
 
@@ -96,7 +95,7 @@ from litellm.utils import (
 )
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    pass
 
 
 def _cost_per_token_custom_pricing_helper(
