@@ -3440,34 +3440,31 @@ class ProxyStartupEvent:
                 verbose_proxy_logger.error(
                     "Invalid maximum_spend_logs_retention_interval value"
                 )
-
-        scheduler.start()
-
         ### CHECK BATCH COST ###
-        if (
-            general_settings.get("check_managed_files_batch_cost", False) is True
-            and llm_router is not None
-        ):
+        if llm_router is not None:
             try:
                 from litellm_enterprise.proxy.common_utils.check_batch_cost import (
                     CheckBatchCost,
                 )
-            except Exception:
-                verbose_proxy_logger.error(
-                    "Checking batch cost for LiteLLM Managed Files is an Enterprise Feature."
-                )
-                return
 
-            check_batch_cost_job = CheckBatchCost(
-                proxy_logging_obj=proxy_logging_obj,
-                prisma_client=prisma_client,
-                llm_router=llm_router,
-            )
-            scheduler.add_job(
-                check_batch_cost_job.check_batch_cost,
-                "interval",
-                seconds=3600,  # these can run infrequently, as batch jobs take time to complete
-            )
+                check_batch_cost_job = CheckBatchCost(
+                    proxy_logging_obj=proxy_logging_obj,
+                    prisma_client=prisma_client,
+                    llm_router=llm_router,
+                )
+                scheduler.add_job(
+                    check_batch_cost_job.check_batch_cost,
+                    "interval",
+                    seconds=3600,  # these can run infrequently, as batch jobs take time to complete
+                )
+
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "Checking batch cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
+                )
+                pass
+
+        scheduler.start()
 
     @classmethod
     async def _setup_prisma_client(
