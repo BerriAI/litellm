@@ -73,7 +73,6 @@ litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     dotenv.load_dotenv()
 
-from litellm.model_registry import *
 ##################################################
 if set_verbose == True:
     _turn_on_debug()
