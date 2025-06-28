@@ -2,7 +2,6 @@
 Translates from OpenAI's `/v1/audio/transcriptions` to Deepgram's `/v1/listen`
 """
 
-import io
 from typing import List, Optional, Union
 from urllib.parse import urlencode
 
@@ -20,7 +19,6 @@ from litellm.types.utils import FileTypes, TranscriptionResponse
 from ...base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
-    LiteLLMLoggingObj,
 )
 from ..common_utils import DeepgramException
 

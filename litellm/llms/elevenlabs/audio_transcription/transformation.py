@@ -2,9 +2,7 @@
 Translates from OpenAI's `/v1/audio/transcriptions` to ElevenLabs's `/v1/speech-to-text`
 """
 
-import io
-import os
-from typing import Any, Dict, List, Optional, Union
+from typing import List, Optional, Union
 
 from httpx import Headers, Response
 
@@ -21,7 +19,6 @@ from litellm.types.utils import FileTypes, TranscriptionResponse
 from ...base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
-    LiteLLMLoggingObj,
 )
 from ..common_utils import ElevenLabsException
 
