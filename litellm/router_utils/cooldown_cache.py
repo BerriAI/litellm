@@ -65,7 +65,7 @@ class CooldownCache:
             #########################################################
             # get cooldown time
             # 1. If dynamic cooldown time is set for the model/deployment, use that
-            # 2  If no dynamic cooldown time is set, use the default cooldown time set on CooldownCache
+            # 2. If no dynamic cooldown time is set, use the default cooldown time set on CooldownCache
             _cooldown_time = cooldown_time
             if _cooldown_time is None:
                 _cooldown_time = self.default_cooldown_time
