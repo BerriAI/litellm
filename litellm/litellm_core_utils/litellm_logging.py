@@ -152,6 +152,7 @@ from .initialize_dynamic_callback_params import (
 from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 
 if TYPE_CHECKING:
+    from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 try:
     from litellm_enterprise.enterprise_callbacks.callback_controls import (
@@ -1997,18 +1998,32 @@ class Logging(LiteLLMLoggingBaseClass):
             return
 
         ## CALCULATE COST FOR BATCH JOBS
-        if (
-            self.call_type == CallTypes.aretrieve_batch.value
-            and isinstance(result, LiteLLMBatch)
-            and result.status == "completed"
+        if self.call_type == CallTypes.aretrieve_batch.value and isinstance(
+            result, LiteLLMBatch
         ):
+            litellm_params = self.litellm_params or {}
+            litellm_metadata = litellm_params.get("litellm_metadata", {})
+            if (
+                litellm_metadata.get("batch_ignore_default_logging", False) is True
+            ):  # polling job will query these frequently, don't spam db logs
+                return
+
             from litellm.proxy.openai_files_endpoints.common_utils import (
                 _is_base64_encoded_unified_file_id,
             )
 
             # check if file id is a unified file id
             is_base64_unified_file_id = _is_base64_encoded_unified_file_id(result.id)
-            if not is_base64_unified_file_id:  # only run for non-unified file ids
+
+            batch_cost = kwargs.get("batch_cost", None)
+            batch_usage = kwargs.get("batch_usage", None)
+            batch_models = kwargs.get("batch_models", None)
+            if all([batch_cost, batch_usage, batch_models]) is not None:
+                result._hidden_params["response_cost"] = batch_cost
+                result._hidden_params["batch_models"] = batch_models
+                result.usage = batch_usage
+
+            elif not is_base64_unified_file_id:  # only run for non-unified file ids
                 response_cost, batch_usage, batch_models = (
                     await _handle_completed_batch(
                         batch=result, custom_llm_provider=self.custom_llm_provider
