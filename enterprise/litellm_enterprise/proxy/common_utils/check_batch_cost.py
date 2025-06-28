@@ -2,6 +2,8 @@
 Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if the cost has been tracked.
 """
 
+import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING, Optional, cast
 
 from litellm._logging import verbose_proxy_logger
@@ -42,6 +44,7 @@ class CheckBatchCost:
             calculate_batch_cost_and_usage,
         )
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+        from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
         from litellm.proxy.openai_files_endpoints.common_utils import (
             _is_base64_encoded_unified_file_id,
             get_batch_id_from_unified_batch_id,
@@ -54,6 +57,8 @@ class CheckBatchCost:
                 "file_purpose": "batch",
             }
         )
+
+        completed_jobs = []
 
         for job in jobs:
             # get the model from the job
@@ -81,6 +86,10 @@ class CheckBatchCost:
             response = await self.llm_router.aretrieve_batch(
                 model=model_id,
                 batch_id=batch_id,
+                litellm_metadata={
+                    "user_api_key_user_id": job.created_by or "default-user-id",
+                    "batch_ignore_default_logging": True,
+                },
             )
 
             ## RETRIEVE THE BATCH JOB OUTPUT FILE
@@ -129,6 +138,38 @@ class CheckBatchCost:
                     )
                 )
 
-            if response.status != "validating":
-                # mark for updating
-                pass
+                logging_obj = LiteLLMLogging(
+                    model=batch_models[0],
+                    messages=[{"role": "user", "content": "<retrieve_batch>"}],
+                    stream=False,
+                    call_type="aretrieve_batch",
+                    start_time=datetime.now(),
+                    litellm_call_id=str(uuid.uuid4()),
+                    function_id=str(uuid.uuid4()),
+                )
+
+                logging_obj.update_environment_variables(
+                    litellm_params={
+                        "metadata": {
+                            "user_api_key_user_id": job.created_by or "default-user-id",
+                        }
+                    },
+                    optional_params={},
+                )
+
+                await logging_obj.async_success_handler(
+                    result=response,
+                    batch_cost=batch_cost,
+                    batch_usage=batch_usage,
+                    batch_models=batch_models,
+                )
+
+                # mark the job as complete
+                completed_jobs.append(job)
+
+            if len(completed_jobs) > 0:
+                # mark the jobs as complete
+                await self.prisma_client.db.litellm_managedobjecttable.update_many(
+                    where={"id": {"in": [job.id for job in completed_jobs]}},
+                    data={"status": "complete"},
+                )
