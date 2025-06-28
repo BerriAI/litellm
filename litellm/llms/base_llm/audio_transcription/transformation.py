@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
 
@@ -66,7 +66,7 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
         audio_file: FileTypes,
         optional_params: dict,
         litellm_params: dict,
-    ) -> AudioTranscriptionRequestData:
+    ) -> Union[AudioTranscriptionRequestData, Dict]:
         raise NotImplementedError(
             "AudioTranscriptionConfig needs a request transformation for audio transcription models"
         )
