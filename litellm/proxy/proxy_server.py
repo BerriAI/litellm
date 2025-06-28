@@ -3463,10 +3463,9 @@ class ProxyStartupEvent:
                 prisma_client=prisma_client,
                 llm_router=llm_router,
             )
-            # scheduler.add_job(
-            #     check_batch_cost_job.check_batch_cost, "interval", seconds=10
-            # )
-            await check_batch_cost_job.check_batch_cost()
+            scheduler.add_job(
+                check_batch_cost_job.check_batch_cost, "interval", seconds=10
+            )
 
     @classmethod
     async def _setup_prisma_client(
