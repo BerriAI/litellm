@@ -133,6 +133,10 @@ export function KeyEditView({
         </Select>
       </Form.Item>
 
+      <Form.Item label="Expire Key" name="duration">
+        <TextInput style={{ width: "100%" }} placeholder="e.g., 30d"/>
+      </Form.Item>
+
       <Form.Item label="Max Budget (USD)" name="max_budget">
         <NumericalInput step={0.01} style={{ width: "100%" }} placeholder="Enter a numerical value"/>
       </Form.Item>
