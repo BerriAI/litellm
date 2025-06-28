@@ -117,20 +117,6 @@ class BasePassthroughConfig(BaseLLMModelInfo):
     ) -> Optional["CostResponseTypes"]:
         pass
 
-    def passthrough_cost_calculator(
-        self,
-        model: str,
-        custom_llm_provider: str,
-        httpx_response: "Response",
-        request_data: dict,
-        logging_obj: "LiteLLMLoggingObj",
-        endpoint: str,
-        start_time: datetime,
-        end_time: datetime,
-        cache_hit: bool,
-    ) -> float:
-        return 0.0
-
     def handle_logging_collected_chunks(
         self,
         all_chunks: List[str],
