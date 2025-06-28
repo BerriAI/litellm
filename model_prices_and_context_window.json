@@ -15704,5 +15704,35 @@
         "metadata": {
             "notes": "Deepgram's hosted OpenAI Whisper models - pricing may differ from native Deepgram models"
         }
+    },
+    "elevenlabs/scribe_v1": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.0000611,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "elevenlabs",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://elevenlabs.io/pricing",
+        "metadata": {
+            "original_pricing_per_hour": 0.22,
+            "calculation": "$0.22/hour = $0.00366/minute = $0.0000611 per second (enterprise pricing)",
+            "notes": "ElevenLabs Scribe v1 - state-of-the-art speech recognition model with 99 language support"
+        }
+    },
+    "elevenlabs/scribe_v1_experimental": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.0000611,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "elevenlabs",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "source": "https://elevenlabs.io/pricing",
+        "metadata": {
+            "original_pricing_per_hour": 0.22,
+            "calculation": "$0.22/hour = $0.00366/minute = $0.0000611 per second (enterprise pricing)",
+            "notes": "ElevenLabs Scribe v1 experimental - enhanced version of the main Scribe model"
+        }
     }
 }
