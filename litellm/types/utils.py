@@ -623,7 +623,7 @@ class Message(OpenAIObject):
     def __init__(
         self,
         content: Optional[str] = None,
-        role: Literal["assistant"] = "assistant",
+        role: Literal["assistant", "user", "system", "tool", "function"] = "assistant",
         function_call=None,
         tool_calls: Optional[list] = None,
         audio: Optional[ChatCompletionAudioResponse] = None,
