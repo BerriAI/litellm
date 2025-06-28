@@ -62,7 +62,6 @@ from litellm.constants import (
     DEFAULT_ALLOWED_FAILS,
 )
 from litellm.types.guardrails import GuardrailItem
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.secret_managers.main import KeyManagementSystem, KeyManagementSettings
 from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams, LiteLLM_UpperboundKeyGenerateParams
 from litellm.types.utils import StandardKeyGenerationConfig, LlmProviders
