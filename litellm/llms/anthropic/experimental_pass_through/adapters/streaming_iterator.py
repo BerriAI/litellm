@@ -2,6 +2,7 @@
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import json
 import traceback
+import uuid
 from typing import Any, AsyncIterator, Iterator, Optional
 
 from litellm import verbose_logger
@@ -31,11 +32,11 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 return {
                     "type": "message_start",
                     "message": {
-                        "id": "msg_1nZdL29xx5MUA1yADyHTEsnR8uuvGzszyY",
+                        "id": "msg_{}".format(uuid.uuid4()),
                         "type": "message",
                         "role": "assistant",
                         "content": [],
-                        "model": "claude-3-5-sonnet-20240620",
+                        "model": self.model,
                         "stop_reason": None,
                         "stop_sequence": None,
                         "usage": UsageDelta(input_tokens=0, output_tokens=0),
@@ -100,11 +101,11 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 return {
                     "type": "message_start",
                     "message": {
-                        "id": "msg_1nZdL29xx5MUA1yADyHTEsnR8uuvGzszyY",
+                        "id": "msg_{}".format(uuid.uuid4()),
                         "type": "message",
                         "role": "assistant",
                         "content": [],
-                        "model": "claude-3-5-sonnet-20240620",
+                        "model": self.model,
                         "stop_reason": None,
                         "stop_sequence": None,
                         "usage": UsageDelta(input_tokens=0, output_tokens=0),
