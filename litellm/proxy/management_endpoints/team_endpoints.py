@@ -2229,7 +2229,6 @@ async def list_team(
                             filtered_response.append(team)
                             added_team_ids.add(team.team_id)
                             break  # No need to check other members once team is added
-
     else:
         filtered_response = response
 
