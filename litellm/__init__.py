@@ -1180,33 +1180,14 @@ from .passthrough import allm_passthrough_route, llm_passthrough_route
 
 
 ####### LAZY LOADING SETUP #######
-from typing import TYPE_CHECKING
-import sys
-from ._lazy_load import _LazyModule, _ImportStructure
+import lazy_loader as lazy
 
-# Define the import structure for lazy loading
-_import_structure: _ImportStructure = {}
-
-# Cost Calculator
-_import_structure["cost_calculator"] = ["completion_cost", "response_cost_calculator", "cost_per_token"]
-
-# Logging
-_import_structure["litellm_core_utils.litellm_logging"] = ["Logging", "modify_integration"]
-
-
-# Only setup lazy loading if not in TYPE_CHECKING mode
-if not TYPE_CHECKING:
-    # Replace current module with lazy module
-    current_module = sys.modules[__name__]
-    lazy_module = _LazyModule.create(
-        name=__name__,
-        module_file=__file__,
-        import_structure=_import_structure,
-        module_spec=current_module.__spec__,
-        extra_object={
-            # Keep all existing variables available
-            key: value for key, value in current_module.__dict__.items()
-            if not key.startswith('_import_structure')
-        }
-    )
-    sys.modules[__name__] = lazy_module
+# Setup lazy loading for submodules and their attributes
+__getattr__, __dir__, __all__ = lazy.attach(
+    __name__,
+    submod_attrs={
+        'litellm_core_utils.token_counter': ['encoding'],
+        'cost_calculator': ['completion_cost', 'response_cost_calculator', 'cost_per_token'],
+        'litellm_core_utils.litellm_logging': ['Logging', 'modify_integration']
+    }
+)
