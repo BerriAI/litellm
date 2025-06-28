@@ -2137,10 +2137,16 @@ async def _filter_teams_by_user(
     for team in response:
         if team.members_with_roles and team.team_id not in added_team_ids:
             for member in team.members_with_roles:
+                # Handle both Member objects and dict representations
+                member_user_id = None
+                if isinstance(member, dict):
+                    member_user_id = member.get("user_id")
+                elif hasattr(member, "user_id"):
+                    member_user_id = member.user_id
+                
                 if (
-                    "user_id" in member
-                    and member["user_id"] is not None
-                    and member["user_id"] == user_id
+                    member_user_id is not None
+                    and member_user_id == user_id
                 ):
                     filtered_response.append(team)
                     added_team_ids.add(team.team_id)
