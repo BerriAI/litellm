@@ -984,3 +984,74 @@ async def test_update_team_members_list_duplicate_prevention():
     
     # Verify member was NOT added (still only 1 member)
     assert len(mock_team.members_with_roles) == 1
+
+
+@pytest.mark.asyncio
+async def test_list_team_no_duplicates_in_fallback():
+    """
+    Test that list_team doesn't return duplicate teams when a user appears multiple times in members_with_roles
+    """
+    import asyncio
+    from litellm.proxy.management_endpoints.team_endpoints import list_team
+    from fastapi import Request
+    from litellm.proxy._types import LiteLLM_TeamTable, Member, UserAPIKeyAuth
+    
+    # Create mock request
+    mock_request = MagicMock(spec=Request)
+    
+    # Create mock user
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="test-user-123",
+        user_role=LitellmUserRoles.INTERNAL_USER.value
+    )
+    
+    # Create mock teams with duplicate user entries
+    team1 = MagicMock(spec=LiteLLM_TeamTable)
+    team1.team_id = "team-1"
+    team1.members_with_roles = [
+        {"user_id": "test-user-123", "role": "admin"},
+        {"user_id": "test-user-123", "role": "user"},  # Duplicate entry
+        {"user_id": "other-user", "role": "user"}
+    ]
+    team1.model_dump.return_value = {
+        "team_id": "team-1",
+        "members_with_roles": team1.members_with_roles
+    }
+    
+    team2 = MagicMock(spec=LiteLLM_TeamTable)
+    team2.team_id = "team-2"
+    team2.members_with_roles = [
+        {"user_id": "test-user-123", "role": "user"}
+    ]
+    team2.model_dump.return_value = {
+        "team_id": "team-2", 
+        "members_with_roles": team2.members_with_roles
+    }
+    
+    mock_teams = [team1, team2]
+    
+    # Mock prisma client
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(return_value=mock_teams)
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=Exception("User lookup failed"))
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    
+    # Mock other dependencies
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), \
+         patch("litellm.proxy.management_endpoints.team_endpoints.get_all_team_memberships", AsyncMock(return_value=[])), \
+         patch("litellm.proxy.management_endpoints.team_endpoints.allowed_route_check_inside_route", return_value=True), \
+         patch("litellm.proxy.management_endpoints.team_endpoints.verbose_proxy_logger"):
+        
+        response = await list_team(
+            http_request=mock_request,
+            user_api_key_dict=user_api_key_dict,
+            user_id="test-user-123"
+        )
+        
+        # Verify no duplicates - should only have 2 teams, not 3
+        assert len(response) == 2
+        team_ids = [team.team_id for team in response]
+        assert "team-1" in team_ids
+        assert "team-2" in team_ids
+        # Verify no duplicate team-1 entries
+        assert team_ids.count("team-1") == 1

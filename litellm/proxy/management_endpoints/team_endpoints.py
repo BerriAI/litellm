@@ -2173,23 +2173,29 @@ async def list_team(
 
     filtered_response = []
     if user_id:
+        # Use a set to track added team IDs and prevent duplicates
+        added_team_ids = set()
+        
         # Get user object to access their teams array
         try:
             user_object = await prisma_client.db.litellm_usertable.find_unique(
                 where={"user_id": user_id}
             )
+            
+            # Check both user.teams and team.members_with_roles to handle potential data drift
+            # This ensures we catch all teams the user belongs to from both sources
+            
+            # First, add teams from user.teams array
             if user_object and user_object.teams:
-                # Filter teams based on user's teams array
                 for team in response:
-                    if team.team_id in user_object.teams:
+                    if team.team_id in user_object.teams and team.team_id not in added_team_ids:
                         filtered_response.append(team)
-        except Exception as e:
-            verbose_proxy_logger.debug(
-                f"Error fetching user for team filtering: {str(e)}"
-            )
-            # Fall back to checking members_with_roles if user lookup fails
+                        added_team_ids.add(team.team_id)
+            
+            # Then, check team.members_with_roles to catch any teams not in user.teams
+            # This handles cases where data might be out of sync
             for team in response:
-                if team.members_with_roles:
+                if team.members_with_roles and team.team_id not in added_team_ids:
                     for member in team.members_with_roles:
                         if (
                             "user_id" in member
@@ -2197,6 +2203,32 @@ async def list_team(
                             and member["user_id"] == user_id
                         ):
                             filtered_response.append(team)
+                            added_team_ids.add(team.team_id)
+                            
+                            # Log potential data drift for monitoring
+                            if user_object and user_object.teams and team.team_id not in user_object.teams:
+                                verbose_proxy_logger.warning(
+                                    f"Data drift detected: User {user_id} is in team {team.team_id} "
+                                    f"members_with_roles but not in user.teams array"
+                                )
+                            break  # No need to check other members once team is added
+                            
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Error fetching user for team filtering: {str(e)}"
+            )
+            # If user lookup fails, fall back to only checking members_with_roles
+            for team in response:
+                if team.members_with_roles and team.team_id not in added_team_ids:
+                    for member in team.members_with_roles:
+                        if (
+                            "user_id" in member
+                            and member["user_id"] is not None
+                            and member["user_id"] == user_id
+                        ):
+                            filtered_response.append(team)
+                            added_team_ids.add(team.team_id)
+                            break  # No need to check other members once team is added
 
     else:
         filtered_response = response
