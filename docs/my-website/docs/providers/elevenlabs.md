@@ -73,7 +73,6 @@ async def transcribe_audio():
         response = await litellm.atranscription(
             model="elevenlabs/scribe_v1",
             file=audio_file,
-            diarize=True,
             api_key="your-elevenlabs-api-key"
         )
     
@@ -137,7 +136,6 @@ curl http://localhost:4000/v1/audio/transcriptions \
   -F file="@audio.mp3" \
   -F model="elevenlabs-transcription" \
   -F language="en" \
-  -F diarize="true" \
   -F temperature="0.3"
 ```
 
