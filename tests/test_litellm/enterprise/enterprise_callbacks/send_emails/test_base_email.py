@@ -249,6 +249,109 @@ def test_construct_invitation_link(base_email_logger):
 
 
 @pytest.mark.asyncio
+async def test_get_invitation_link_creates_new_when_none_exist(base_email_logger):
+    """Test that _get_invitation_link creates a new invitation when none exist"""
+    # Mock prisma client with no existing invitation rows
+    mock_prisma = mock.MagicMock()
+    
+    # Mock find_many to return empty list (no existing invitations)
+    async def mock_find_many_empty(*args, **kwargs):
+        return []
+    
+    mock_prisma.db.litellm_invitationlink.find_many = mock_find_many_empty
+    
+    # Mock the create_invitation_for_user function
+    mock_created_invitation = mock.MagicMock()
+    mock_created_invitation.id = "new-invitation-id"
+    
+    with mock.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        with mock.patch(
+            "litellm.proxy.management_helpers.user_invitation.create_invitation_for_user",
+            return_value=mock_created_invitation
+        ) as mock_create_invitation:
+            # Execute
+            result = await base_email_logger._get_invitation_link(
+                user_id="test-user", base_url="http://test.com"
+            )
+            
+            # Verify that create_invitation_for_user was called
+            mock_create_invitation.assert_called_once()
+            call_args = mock_create_invitation.call_args[1]
+            assert call_args["data"].user_id == "test-user"
+            assert call_args["user_api_key_dict"].user_id == "test-user"
+            
+            # Verify the returned link uses the new invitation ID
+            assert result == "http://test.com/ui?invitation_id=new-invitation-id"
+
+
+@pytest.mark.asyncio 
+async def test_get_invitation_link_uses_existing_when_available(base_email_logger):
+    """Test that _get_invitation_link uses existing invitation when available"""
+    # Mock prisma client with existing invitation row
+    mock_invitation_row = mock.MagicMock()
+    mock_invitation_row.id = "existing-invitation-id"
+    
+    mock_prisma = mock.MagicMock()
+    
+    # Mock find_many to return existing invitation
+    async def mock_find_many_existing(*args, **kwargs):
+        return [mock_invitation_row]
+    
+    mock_prisma.db.litellm_invitationlink.find_many = mock_find_many_existing
+    
+    with mock.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        with mock.patch(
+            "litellm.proxy.management_helpers.user_invitation.create_invitation_for_user"
+        ) as mock_create_invitation:
+            # Execute
+            result = await base_email_logger._get_invitation_link(
+                user_id="test-user", base_url="http://test.com"
+            )
+            
+            # Verify that create_invitation_for_user was NOT called
+            mock_create_invitation.assert_not_called()
+            
+            # Verify the returned link uses the existing invitation ID
+            assert result == "http://test.com/ui?invitation_id=existing-invitation-id"
+
+
+@pytest.mark.asyncio
+async def test_get_invitation_link_creates_new_when_list_is_none(base_email_logger):
+    """Test that _get_invitation_link creates a new invitation when invitation_rows is None"""
+    # Mock prisma client to return None
+    mock_prisma = mock.MagicMock()
+    
+    # Mock find_many to return None
+    async def mock_find_many_none(*args, **kwargs):
+        return None
+    
+    mock_prisma.db.litellm_invitationlink.find_many = mock_find_many_none
+    
+    # Mock the create_invitation_for_user function
+    mock_created_invitation = mock.MagicMock()
+    mock_created_invitation.id = "new-invitation-from-none"
+    
+    with mock.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        with mock.patch(
+            "litellm.proxy.management_helpers.user_invitation.create_invitation_for_user",
+            return_value=mock_created_invitation
+        ) as mock_create_invitation:
+            # Execute
+            result = await base_email_logger._get_invitation_link(
+                user_id="test-user", base_url="http://test.com"
+            )
+            
+            # Verify that create_invitation_for_user was called
+            mock_create_invitation.assert_called_once()
+            call_args = mock_create_invitation.call_args[1]
+            assert call_args["data"].user_id == "test-user"
+            assert call_args["user_api_key_dict"].user_id == "test-user"
+            
+            # Verify the returned link uses the new invitation ID
+            assert result == "http://test.com/ui?invitation_id=new-invitation-from-none"
+
+
+@pytest.mark.asyncio
 async def test_get_email_params_user_invitation(
     base_email_logger, mock_lookup_user_email
 ):

@@ -23,6 +23,12 @@
             "search_context_size_medium": 0.0,
             "search_context_size_high": 0.0
         },
+        "file_search_cost_per_1k_calls": 0.0,
+        "file_search_cost_per_gb_per_day": 0.0,
+        "vector_store_cost_per_gb_per_day": 0.0,
+        "computer_use_input_cost_per_1k_tokens": 0.0,
+        "computer_use_output_cost_per_1k_tokens": 0.0,
+        "code_interpreter_cost_per_session": 0.0,
         "supported_regions": [
             "global",
             "us-west-2",
@@ -4560,6 +4566,37 @@
         "supports_prompt_caching": true
     },
     "deepseek/deepseek-chat": {
+        "max_tokens": 8192,
+        "max_input_tokens": 65536,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 2.7e-07,
+        "input_cost_per_token_cache_hit": 7e-08,
+        "cache_read_input_token_cost": 7e-08,
+        "cache_creation_input_token_cost": 0.0,
+        "output_cost_per_token": 1.1e-06,
+        "litellm_provider": "deepseek",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true,
+        "supports_tool_choice": true,
+        "supports_prompt_caching": true
+    },
+    "deepseek/deepseek-r1": {
+        "max_tokens": 8192,
+        "max_input_tokens": 65536,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 5.5e-07,
+        "input_cost_per_token_cache_hit": 1.4e-07,
+        "output_cost_per_token": 2.19e-06,
+        "litellm_provider": "deepseek",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true
+    },
+    "deepseek/deepseek-v3": {
         "max_tokens": 8192,
         "max_input_tokens": 65536,
         "max_output_tokens": 8192,
