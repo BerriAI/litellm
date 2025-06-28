@@ -65,9 +65,6 @@ async def allm_passthrough_route(
     try:
         loop = asyncio.get_event_loop()
         kwargs["allm_passthrough_route"] = True
-        litellm_logging_obj = cast(
-            "LiteLLMLoggingObj", kwargs.get("litellm_logging_obj")
-        )
 
         model, custom_llm_provider, api_key, api_base = get_llm_provider(
             model=model,
@@ -126,10 +123,7 @@ async def allm_passthrough_route(
         else:
             response = init_response
 
-        if BasePassthroughUtils.is_async_streaming_response(response):
-            return _async_streaming(response, litellm_logging_obj, provider_config)
-        else:
-            return response
+        return response
 
     except Exception as e:
         # For passthrough routes, we need to get the provider config to properly handle errors
@@ -168,28 +162,6 @@ async def allm_passthrough_route(
         )
 
 
-async def _async_streaming(
-    response,
-    litellm_logging_obj: "LiteLLMLoggingObj",
-    provider_config: "BasePassthroughConfig",
-):
-    try:
-        raw_bytes: List[bytes] = []
-
-        async for chunk in response.aiter_bytes():  # type: ignore
-            raw_bytes.append(chunk)
-            yield chunk
-
-        asyncio.create_task(
-            litellm_logging_obj.async_flush_passthrough_collected_chunks(
-                raw_bytes=raw_bytes,
-                provider_config=provider_config,
-            )
-        )
-    except Exception as e:
-        raise e
-
-
 @client
 def llm_passthrough_route(
     *,
@@ -211,7 +183,10 @@ def llm_passthrough_route(
     client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     **kwargs,
 ) -> Union[
-    httpx.Response, Coroutine[Any, Any, httpx.Response], Generator[Any, Any, Any]
+    httpx.Response,
+    Coroutine[Any, Any, httpx.Response],
+    Generator[Any, Any, Any],
+    AsyncGenerator[Any, Any],
 ]:
     """
     Pass through requests to the LLM APIs.
@@ -321,8 +296,10 @@ def llm_passthrough_route(
     try:
         response = client.client.send(request=request, stream=is_streaming_request)
         if asyncio.iscoroutine(response):
-
-            return response
+            if is_streaming_request:
+                return _async_streaming(response, litellm_logging_obj, provider_config)
+            else:
+                return response
         response.raise_for_status()
 
         if (
@@ -344,7 +321,7 @@ def llm_passthrough_route(
 
 
 def _sync_streaming(
-    response,
+    response: httpx.Response,
     litellm_logging_obj: "LiteLLMLoggingObj",
     provider_config: "BasePassthroughConfig",
 ):
@@ -360,6 +337,30 @@ def _sync_streaming(
             litellm_logging_obj.flush_passthrough_collected_chunks,
             raw_bytes=raw_bytes,
             provider_config=provider_config,
+        )
+    except Exception as e:
+        raise e
+
+
+async def _async_streaming(
+    response: Coroutine[Any, Any, httpx.Response],
+    litellm_logging_obj: "LiteLLMLoggingObj",
+    provider_config: "BasePassthroughConfig",
+):
+    try:
+        iter_response = await response
+        raw_bytes: List[bytes] = []
+
+        async for chunk in iter_response.aiter_bytes():  # type: ignore
+
+            raw_bytes.append(chunk)
+            yield chunk
+
+        asyncio.create_task(
+            litellm_logging_obj.async_flush_passthrough_collected_chunks(
+                raw_bytes=raw_bytes,
+                provider_config=provider_config,
+            )
         )
     except Exception as e:
         raise e

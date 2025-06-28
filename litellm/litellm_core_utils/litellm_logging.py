@@ -1305,16 +1305,6 @@ class Logging(LiteLLMLoggingBaseClass):
                     )
                 )
 
-                # self.model_call_details[
-                #     "response_cost"
-                # ] = handle_realtime_stream_cost_calculation(
-                #     results=result,
-                #     combined_usage_object=combined_usage_object,
-                #     custom_llm_provider=self.custom_llm_provider,
-                #     litellm_model_name=self.model,
-                # )
-                # self.model_call_details["combined_usage_object"] = combined_usage_object
-
             elif (
                 self.call_type == CallTypes.llm_passthrough_route.value
                 or self.call_type == CallTypes.allm_passthrough_route.value

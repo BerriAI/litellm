@@ -153,31 +153,38 @@ class BedrockPassthroughConfig(
                 raise ValueError(
                     f"Invalid invoke provider: {invoke_provider}, for model: {model}"
                 )
-
             obj = get_bedrock_event_stream_decoder(
                 invoke_provider=invoke_provider,
                 model=model,
                 sync_stream=True,
                 json_mode=False,
             )
-            for chunk in all_chunks:
-                message = json.loads(chunk)
-                translated_chunk = obj._chunk_parser(chunk_data=message)
+        elif "converse" in endpoint:
+            obj = get_bedrock_event_stream_decoder(
+                invoke_provider=None,
+                model=model,
+                sync_stream=True,
+                json_mode=False,
+            )
+        else:
+            return None
 
-                if isinstance(
-                    translated_chunk, dict
-                ) and generic_chunk_has_all_required_fields(
-                    cast(dict, translated_chunk)
-                ):
-                    chunk_obj = convert_generic_chunk_to_model_response_stream(
-                        cast(GenericStreamingChunk, translated_chunk)
-                    )
-                elif isinstance(translated_chunk, ModelResponseStream):
-                    chunk_obj = translated_chunk
-                else:
-                    continue
+        for chunk in all_chunks:
+            message = json.loads(chunk)
+            translated_chunk = obj._chunk_parser(chunk_data=message)
 
-                all_translated_chunks.append(chunk_obj)
+            if isinstance(
+                translated_chunk, dict
+            ) and generic_chunk_has_all_required_fields(cast(dict, translated_chunk)):
+                chunk_obj = convert_generic_chunk_to_model_response_stream(
+                    cast(GenericStreamingChunk, translated_chunk)
+                )
+            elif isinstance(translated_chunk, ModelResponseStream):
+                chunk_obj = translated_chunk
+            else:
+                continue
+
+            all_translated_chunks.append(chunk_obj)
 
         if len(all_translated_chunks) > 0:
             model_response = stream_chunk_builder(

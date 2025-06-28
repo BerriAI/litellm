@@ -37,15 +37,3 @@ class BasePassthroughUtils:
             # Combine request headers with custom headers
             headers = {**request_headers, **headers}
         return headers
-
-    @staticmethod
-    def is_async_streaming_response(
-        response: Union[httpx.Response, Generator, AsyncGenerator],
-    ) -> bool:
-        if isinstance(response, Generator):
-            return True
-        if isinstance(response, AsyncGenerator):
-            return True
-        if hasattr(response, "_request"):
-            return getattr(response._request, "extensions", {}).get("stream", False)
-        return False
