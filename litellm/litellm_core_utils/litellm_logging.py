@@ -116,7 +116,6 @@ from ..integrations.argilla import ArgillaLogger
 from ..integrations.arize.arize_phoenix import ArizePhoenixLogger
 from ..integrations.athina import AthinaLogger
 from ..integrations.azure_storage.azure_storage import AzureBlobStorageLogger
-from ..integrations.braintrust_logging import BraintrustLogger
 from ..integrations.custom_prompt_management import CustomPromptManagement
 from ..integrations.datadog.datadog import DataDogLogger
 from ..integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
@@ -144,7 +143,6 @@ from ..integrations.s3 import S3Logger
 from ..integrations.s3_v2 import S3Logger as S3V2Logger
 from ..integrations.supabase import Supabase
 from ..integrations.traceloop import TraceloopLogger
-from ..integrations.weights_biases import WeightsBiasesLogger
 from .exception_mapping_utils import _get_response_headers
 from .initialize_dynamic_callback_params import (
     initialize_standard_callback_dynamic_params as _initialize_standard_callback_dynamic_params,
@@ -3022,6 +3020,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
             elif callback == "s3":
                 s3Logger = S3Logger()
             elif callback == "wandb":
+                from litellm.integrations.weights_biases import WeightsBiasesLogger
                 weightsBiasesLogger = WeightsBiasesLogger()
             elif callback == "logfire":
                 logfireLogger = LogfireLogger()
@@ -3075,6 +3074,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _in_memory_loggers.append(_openmeter_logger)
             return _openmeter_logger  # type: ignore
         elif logging_integration == "braintrust":
+            from litellm.integrations.braintrust_logging import BraintrustLogger
             for callback in _in_memory_loggers:
                 if isinstance(callback, BraintrustLogger):
                     return callback  # type: ignore
@@ -3432,6 +3432,7 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
                 if isinstance(callback, OpenMeterLogger):
                     return callback
         elif logging_integration == "braintrust":
+            from litellm.integrations.braintrust_logging import BraintrustLogger
             for callback in _in_memory_loggers:
                 if isinstance(callback, BraintrustLogger):
                     return callback
