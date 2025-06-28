@@ -22,7 +22,7 @@ async def router_cooldown_event_callback(
     litellm_router_instance: LitellmRouter,
     deployment_id: str,
     exception_status: Union[str, int],
-    cooldown_time: float,
+    cooldown_time: Optional[float],
 ):
     """
     Callback triggered when a deployment is put into cooldown by litellm
