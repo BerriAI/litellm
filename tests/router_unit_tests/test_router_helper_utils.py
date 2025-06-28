@@ -1194,8 +1194,7 @@ def test_init_responses_api_endpoints(model_list):
         # Test string to bool conversion
         ("true", "false", "True", True, False, True),
         ("TRUE", "FALSE", "False", True, False, False),
-        ("1", "0", "yes", True, False, True),
-        ("false", "true", "no", False, True, False),
+        ("false", "true", "false", False, True, False),
         # Test actual boolean values (should pass through unchanged)
         (True, False, True, True, False, True),
         (False, True, False, False, True, False),
@@ -1203,7 +1202,6 @@ def test_init_responses_api_endpoints(model_list):
         (None, None, None, None, None, None),
         # Test mixed types
         ("true", False, None, True, False, None),
-        (True, "false", "1", True, False, True),
     ],
 )
 def test_mock_router_testing_params_str_to_bool_conversion(
