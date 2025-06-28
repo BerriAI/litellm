@@ -2,7 +2,7 @@
 Helper utilities for tracking the cost of built-in tools.
 """
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import litellm
 from litellm.constants import OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
@@ -163,7 +163,7 @@ class StandardBuiltInToolCostTracking:
         return total_cost
 
     @staticmethod
-    def _extract_file_search_params(file_search_usage: Any) -> tuple[Optional[float], Optional[float]]:
+    def _extract_file_search_params(file_search_usage: Any) -> Tuple[Optional[float], Optional[float]]:
         """Extract and convert file search parameters safely."""
         storage_gb = None
         days = None
@@ -519,7 +519,10 @@ class StandardBuiltInToolCostTracking:
                     return total_cost
             
             # Azure default pricing
-            from litellm.constants import AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS, AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS
+            from litellm.constants import (
+                AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS,
+                AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS,
+            )
             total_cost = 0.0
             if input_tokens:
                 total_cost += (input_tokens / 1000.0) * AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS
