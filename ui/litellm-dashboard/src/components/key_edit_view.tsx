@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { Form, Input, Select, Button as AntdButton } from "antd";
+import { Form, Input, Select, Button as AntdButton, Tooltip } from "antd";
+import { InfoCircleOutlined } from '@ant-design/icons';
 import { Button as TremorButton, TextInput } from "@tremor/react";
 import { KeyResponse } from "./key_team_helpers/key_list";
 import { fetchTeamModels } from "../components/create_key_button";
@@ -110,11 +111,29 @@ export function KeyEditView({
       initialValues={initialValues}
       layout="vertical"
     >
-      <Form.Item label="Key Alias" name="key_alias">
+      <Form.Item 
+        label={
+          <span>
+            Key Alias{' '}
+            <Tooltip title="Descriptive name for the key">
+              <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+            </Tooltip>
+          </span>
+        }
+        name="key_alias">
         <TextInput />
       </Form.Item>
 
-      <Form.Item label="Models" name="models">
+      <Form.Item 
+        label={
+          <span>
+            Models{' '}
+            <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team">
+              <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+            </Tooltip>
+          </span>
+        }
+        name="models">
         <Select
           mode="multiple"
           placeholder="Select models"
@@ -133,15 +152,40 @@ export function KeyEditView({
         </Select>
       </Form.Item>
 
-      <Form.Item label="Expire Key" name="duration">
+      <Form.Item label={
+                  <span>
+                    Expire Key{' '}
+                    <Tooltip title="Set when this key should expire. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days)">
+                      <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                    </Tooltip>
+                  </span>} 
+                    name="duration">
         <TextInput style={{ width: "100%" }} placeholder="e.g., 30d"/>
       </Form.Item>
 
-      <Form.Item label="Max Budget (USD)" name="max_budget">
+      <Form.Item 
+        label={
+          <span>
+            Max Budget (USD){' '}
+            <Tooltip title="Maximum amount in USD this key can spend. When reached, the key will be blocked from making further requests">
+              <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+            </Tooltip>
+          </span>
+        }
+        name="max_budget">
         <NumericalInput step={0.01} style={{ width: "100%" }} placeholder="Enter a numerical value"/>
       </Form.Item>
 
-      <Form.Item label="Reset Budget" name="budget_duration">
+      <Form.Item 
+        label={
+          <span>
+            Reset Budget{' '}
+            <Tooltip title="How often the budget should reset. For example, setting 'daily' will reset the budget every 24 hours">
+              <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+            </Tooltip>
+          </span>
+        } 
+        name="budget_duration">
         <Select placeholder="n/a">
           <Select.Option value="daily">Daily</Select.Option>
           <Select.Option value="weekly">Weekly</Select.Option>
@@ -149,27 +193,87 @@ export function KeyEditView({
         </Select>
       </Form.Item>
 
-      <Form.Item label="TPM Limit" name="tpm_limit">
+      <Form.Item 
+        label={
+          <span>
+            Tokens per minute Limit (TPM){' '}
+            <Tooltip title="Maximum number of tokens this key can process per minute. Helps control usage and costs">
+              <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+            </Tooltip>
+          </span>
+        } 
+        name="tpm_limit">
         <NumericalInput min={0}/>
       </Form.Item>
 
-      <Form.Item label="RPM Limit" name="rpm_limit">
+      <Form.Item 
+        label={
+          <span>
+            Requests per minute Limit (RPM){' '}
+            <Tooltip title="Maximum number of API requests this key can make per minute. Helps prevent abuse and manage load">
+              <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+            </Tooltip>
+          </span>
+        } 
+        name="rpm_limit">
         <NumericalInput min={0}/>
       </Form.Item>
 
-      <Form.Item label="Max Parallel Requests" name="max_parallel_requests">  
+      <Form.Item 
+        label={
+          <span>
+            Max Parallel Requests{' '}
+            <Tooltip title="Limit the max concurrent calls made to a deployment.">
+              <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+            </Tooltip>
+          </span>
+        } name="max_parallel_requests">  
         <NumericalInput min={0}/>
       </Form.Item>
 
-      <Form.Item label="Model TPM Limit" name="model_tpm_limit">
+      <Form.Item 
+        label={
+          <span>
+            Model TPM Limit{' '}
+            <Tooltip title="Set per-model TPM limits.">
+              <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+            </Tooltip>
+          </span>
+        }  
+        name="model_tpm_limit">
         <Input.TextArea rows={4}  placeholder='{"gpt-4": 100, "claude-v1": 200}'/>
       </Form.Item>
 
-      <Form.Item label="Model RPM Limit" name="model_rpm_limit">
+      <Form.Item
+        label={
+          <span>
+            Model RPM Limit{' '}
+            <Tooltip title="Set per-model RPM limits.">
+              <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+            </Tooltip>
+          </span>
+        } 
+        name="model_rpm_limit">
         <Input.TextArea rows={4}  placeholder='{"gpt-4": 100, "claude-v1": 200}'/>
       </Form.Item>
 
-      <Form.Item label="Guardrails" name="guardrails">
+      <Form.Item 
+        label={
+          <span>
+            Guardrails{' '}
+            <Tooltip title="Apply safety guardrails to this key to filter content or enforce policies">
+              <a 
+                href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
+              >
+                <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+              </a>
+            </Tooltip>
+          </span>
+        }
+        name="guardrails">
         <Select
           mode="tags"
           style={{ width: "100%" }}
@@ -177,7 +281,16 @@ export function KeyEditView({
         />
       </Form.Item>
 
-      <Form.Item label="Vector Stores" name="vector_stores">
+      <Form.Item 
+        label={
+          <span>
+            Vector Stores{' '}
+            <Tooltip title="Select which vector stores this key can access. If none selected, the key will have access to all available vector stores">
+              <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+            </Tooltip>
+          </span>
+        }
+        name="vector_stores">
         <VectorStoreSelector
           onChange={(values) => form.setFieldValue('vector_stores', values)}
           value={form.getFieldValue('vector_stores')}
@@ -186,7 +299,16 @@ export function KeyEditView({
         />
       </Form.Item>
 
-      <Form.Item label="MCP Servers" name="mcp_servers">
+      <Form.Item 
+        label={
+          <span>
+            MCP Servers{' '}
+            <Tooltip title="Select which MCP servers this key can access. If none selected, the key will have access to all available MCP servers">
+              <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+            </Tooltip>
+          </span>
+        }
+        name="mcp_servers">
         <MCPServerSelector
           onChange={(values) => form.setFieldValue('mcp_servers', values)}
           value={form.getFieldValue('mcp_servers')}
@@ -195,11 +317,29 @@ export function KeyEditView({
         />
       </Form.Item>
 
-      <Form.Item label="Metadata" name="metadata">
+      <Form.Item 
+        label={
+          <span>
+            Metadata{' '}
+            <Tooltip title="JSON object with additional information about this key. Used for tracking or custom logic">
+              <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+            </Tooltip>
+          </span>
+        }
+        name="metadata">
         <Input.TextArea rows={10} />
       </Form.Item>
 
-      <Form.Item label="Team ID" name="team_id">
+      <Form.Item 
+        label={
+          <span>
+            Team{' '}
+            <Tooltip title="The team this key belongs to, which determines available models and budget limits">
+              <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+            </Tooltip>
+          </span>
+        }
+        name="team_id">
         <Select
           placeholder="Select team"
           style={{ width: "100%" }}
