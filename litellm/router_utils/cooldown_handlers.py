@@ -8,7 +8,6 @@ Router cooldown handlers
 
 import asyncio
 import math
-import time
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import litellm
