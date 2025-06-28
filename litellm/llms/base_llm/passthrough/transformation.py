@@ -106,6 +106,17 @@ class BasePassthroughConfig(BaseLLMModelInfo):
             status_code=status_code, message=error_message, headers=headers
         )
 
+    def logging_non_streaming_response(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        httpx_response: "Response",
+        request_data: dict,
+        logging_obj: "LiteLLMLoggingObj",
+        endpoint: str,
+    ) -> Optional["CostResponseTypes"]:
+        pass
+
     def passthrough_cost_calculator(
         self,
         model: str,

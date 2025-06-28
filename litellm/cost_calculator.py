@@ -1038,46 +1038,6 @@ def response_cost_calculator(
         raise e
 
 
-def passthrough_cost_calculator(
-    response: Response,
-    model: str,
-    custom_llm_provider: str,
-    logging_obj: "LiteLLMLoggingObj",
-    endpoint: str,
-    request_data: dict,
-    start_time: datetime,
-    end_time: datetime,
-    cache_hit: bool,
-) -> float:
-    """
-    Returns
-    - float or None: cost of response
-    """
-    from litellm.utils import ProviderConfigManager
-
-    provider_config = ProviderConfigManager.get_provider_passthrough_config(
-        provider=LlmProviders(custom_llm_provider),
-        model=model,
-    )
-
-    if provider_config is None:
-        raise ValueError(
-            f"No passthrough provider config found for model={model} and custom_llm_provider={custom_llm_provider}"
-        )
-
-    return provider_config.passthrough_cost_calculator(
-        model=model,
-        custom_llm_provider=custom_llm_provider,
-        httpx_response=response,
-        request_data=request_data,
-        logging_obj=logging_obj,
-        endpoint=endpoint,
-        start_time=start_time,
-        end_time=end_time,
-        cache_hit=cache_hit,
-    )
-
-
 def rerank_cost(
     model: str,
     custom_llm_provider: Optional[str],

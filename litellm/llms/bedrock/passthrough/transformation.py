@@ -64,7 +64,7 @@ class BedrockPassthroughConfig(
             model=model,
         )
 
-    def passthrough_cost_calculator(
+    def logging_non_streaming_response(
         self,
         model: str,
         custom_llm_provider: str,
@@ -72,19 +72,8 @@ class BedrockPassthroughConfig(
         request_data: dict,
         logging_obj: Logging,
         endpoint: str,
-        start_time: datetime,
-        end_time: datetime,
-        cache_hit: bool,
-    ) -> float:
-        """
-        1. Check if request is invoke or converse
-        2. If invoke, get invoke chat config
-        3. If converse, get converse chat config
-        4. Convert response to ModelResponse
-        5. Use completion_cost to calculate cost
-        6. Return the cost
-        """
-        from litellm import completion_cost, encoding
+    ) -> Optional["CostResponseTypes"]:
+        from litellm import encoding
         from litellm.types.utils import LlmProviders, ModelResponse
         from litellm.utils import ProviderConfigManager
 
@@ -93,7 +82,7 @@ class BedrockPassthroughConfig(
         elif "converse" in endpoint:
             chat_config_model = "converse/" + model
         else:
-            return 0.0
+            return None
 
         provider_chat_config = ProviderConfigManager.get_provider_chat_config(
             provider=LlmProviders(custom_llm_provider),
@@ -116,13 +105,7 @@ class BedrockPassthroughConfig(
             encoding=encoding,
         )
 
-        response_cost = completion_cost(
-            completion_response=litellm_model_response,
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-        )
-
-        return response_cost
+        return litellm_model_response
 
     def _convert_raw_bytes_to_str_lines(self, raw_bytes: List[bytes]) -> List[str]:
         from botocore.eventstream import EventStreamBuffer

@@ -276,6 +276,8 @@ class CallTypes(Enum):
     responses = "responses"
     aresponses = "aresponses"
     alist_input_items = "alist_input_items"
+    llm_passthrough_route = "llm_passthrough_route"
+    allm_passthrough_route = "allm_passthrough_route"
 
     #########################################################
     # Google GenAI Native Call Types

@@ -1079,7 +1079,6 @@ class Logging(LiteLLMLoggingBaseClass):
             OpenAIFileObject,
             LiteLLMRealtimeStreamLoggingObject,
             OpenAIModerationResponse,
-            Response,
         ],
         cache_hit: Optional[bool] = None,
         litellm_model_name: Optional[str] = None,
@@ -1109,48 +1108,6 @@ class Logging(LiteLLMLoggingBaseClass):
                 self.litellm_params if hasattr(self, "litellm_params") else None
             )
         )
-
-        ### PASSTHROUGH COST CALCULATION ###
-        from litellm.passthrough.utils import BasePassthroughUtils
-
-        if (
-            self.call_type
-            in [
-                "llm_passthrough_route",
-                "allm_passthrough_route",
-            ]
-            and isinstance(result, Response)
-            and not BasePassthroughUtils.is_async_streaming_response(result)
-        ):
-            from litellm.cost_calculator import passthrough_cost_calculator
-
-            try:
-                response_cost = passthrough_cost_calculator(
-                    response=result,
-                    request_data=cast(
-                        dict, self.model_call_details.get("request_data") or {}
-                    ),
-                    logging_obj=self,
-                    model=self.model,
-                    custom_llm_provider=cast(
-                        str, self.model_call_details.get("custom_llm_provider")
-                    ),
-                    endpoint=cast(str, self.model_call_details.get("endpoint")),
-                    start_time=cast(
-                        datetime.datetime, self.model_call_details.get("start_time")
-                    ),
-                    end_time=cast(
-                        datetime.datetime, self.model_call_details.get("end_time")
-                    ),
-                    cache_hit=self.model_call_details.get("cache_hit", False),
-                )
-            except Exception as e:
-                verbose_logger.error(f"Error calculating passthrough cost: {e}")
-                return None
-
-            verbose_logger.debug(f"response_cost: {response_cost}")
-
-            return response_cost
 
         prompt = ""  # use for tts cost calc
         _input = self.model_call_details.get("input", None)
@@ -1358,6 +1315,28 @@ class Logging(LiteLLMLoggingBaseClass):
                 # )
                 # self.model_call_details["combined_usage_object"] = combined_usage_object
 
+            elif (
+                self.call_type == CallTypes.llm_passthrough_route.value
+                or self.call_type == CallTypes.allm_passthrough_route.value
+            ) and isinstance(result, Response):
+                from litellm.utils import ProviderConfigManager
+
+                provider_config = ProviderConfigManager.get_provider_passthrough_config(
+                    provider=self.model_call_details.get("custom_llm_provider", ""),
+                    model=self.model,
+                )
+                if provider_config is not None:
+                    logging_result = provider_config.logging_non_streaming_response(
+                        model=self.model,
+                        custom_llm_provider=self.model_call_details.get(
+                            "custom_llm_provider", ""
+                        ),
+                        httpx_response=result,
+                        request_data=self.model_call_details.get("request_data", {}),
+                        logging_obj=self,
+                        endpoint=self.model_call_details.get("endpoint", ""),
+                    )
+
             if (
                 standard_logging_object is None
                 and result is not None
@@ -1378,7 +1357,6 @@ class Logging(LiteLLMLoggingBaseClass):
                     or isinstance(logging_result, OpenAIFileObject)
                     or isinstance(logging_result, LiteLLMRealtimeStreamLoggingObject)
                     or isinstance(logging_result, OpenAIModerationResponse)
-                    or isinstance(logging_result, Response)
                 ):
                     ## HIDDEN PARAMS ##
                     hidden_params = getattr(logging_result, "_hidden_params", {})
