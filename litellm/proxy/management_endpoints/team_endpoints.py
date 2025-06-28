@@ -2174,30 +2174,15 @@ async def list_team(
     filtered_response = []
     if user_id:
         # Get user object to access their teams array
-        try:
-            user_object = await prisma_client.db.litellm_usertable.find_unique(
-                where={"user_id": user_id}
-            )
-            if user_object and user_object.teams:
-                # Filter teams based on user's teams array
-                for team in response:
-                    if team.team_id in user_object.teams:
+        for team in response:
+            if team.members_with_roles:
+                for member in team.members_with_roles:
+                    if (
+                        "user_id" in member
+                        and member["user_id"] is not None
+                        and member["user_id"] == user_id
+                    ):
                         filtered_response.append(team)
-        except Exception as e:
-            verbose_proxy_logger.debug(
-                f"Error fetching user for team filtering: {str(e)}"
-            )
-            # Fall back to checking members_with_roles if user lookup fails
-            for team in response:
-                if team.members_with_roles:
-                    for member in team.members_with_roles:
-                        if (
-                            "user_id" in member
-                            and member["user_id"] is not None
-                            and member["user_id"] == user_id
-                        ):
-                            filtered_response.append(team)
-
     else:
         filtered_response = response
 
