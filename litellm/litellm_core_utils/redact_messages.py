@@ -69,6 +69,11 @@ def perform_redaction(model_call_details: dict, result):
                 elif isinstance(choice, litellm.utils.StreamingChoices):
                     choice.delta.content = "redacted-by-litellm"
         return _result
+    if result is not None and isinstance(result, litellm.EmbeddingResponse):
+        _result = copy.deepcopy(result)
+        if hasattr(_result, "data") and _result.data is not None:
+            _result.data = []
+        return _result
     else:
         return {"text": "redacted-by-litellm"}
 
