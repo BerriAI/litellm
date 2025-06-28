@@ -674,18 +674,25 @@ async def test_prepare_key_update_data():
 
 
 @pytest.mark.parametrize(
-    "env_value, expected_url",
+    "env_vars, expected_url",
     [
-        (None, "/redoc"),  # default case
-        ("/custom-redoc", "/custom-redoc"),  # custom URL
-        ("https://example.com/redoc", "https://example.com/redoc"),  # full URL
+        ({}, "/redoc"),  # default case
+        ({"REDOC_URL": "/custom-redoc"}, "/custom-redoc"),  # custom URL
+        (
+            {"REDOC_URL": "https://example.com/redoc"},
+            "https://example.com/redoc",
+        ),  # full URL
+        ({"NO_REDOC": "True"}, None), # Redoc disabled
     ],
 )
-def test_get_redoc_url(env_value, expected_url):
-    if env_value is not None:
-        os.environ["REDOC_URL"] = env_value
-    else:
-        os.environ.pop("REDOC_URL", None)  # ensure env var is not set
+def test_get_redoc_url(env_vars, expected_url):
+    # Clear relevant environment variables
+    for key in ["REDOC_URL", "NO_REDOC"]:
+        os.environ.pop(key, None)
+
+    # Set test environment variables
+    for key, value in env_vars.items():
+        os.environ[key] = value
 
     result = _get_redoc_url()
     assert result == expected_url
