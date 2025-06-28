@@ -40,6 +40,7 @@ const sidebars = {
           "proxy/guardrails/lakera_ai",
           "proxy/guardrails/pangea",
           "proxy/guardrails/pii_masking_v2",
+          "proxy/guardrails/panw_prisma_airs",
           "proxy/guardrails/secret_detection",
           "proxy/guardrails/custom_guardrail",
           "proxy/guardrails/prompt_injection",
