@@ -35,6 +35,28 @@ This release is not out yet. The pre-release will be live on Sunday and the stab
 
 ---
 
+# Claude on gemini-cli
+
+
+<Image img={require('../../img/release_notes/gemini_cli.png')} />
+
+<br/>
+
+This release brings support for using gemini-cli with LiteLLM. 
+
+You can use claude-sonnet-4, gemini-2.5-flash (Vertex AI & Google AI Studio), gpt-4.1 and any LiteLLM supported model on gemini-cli.
+
+When you use gemini-cli with LiteLLM you get the following benefits:
+
+**Developer Benefits:**
+- Universal Model Access: Use any LiteLLM supported model (Anthropic, OpenAI, Vertex AI, Bedrock, etc.) through the gemini-cli interface.
+- Higher Rate Limits & Reliability: Load balance across multiple models and providers to avoid hitting individual provider limits, with fallbacks to ensure you get responses even if one provider fails.
+
+**Proxy Admin Benefits:**
+- Centralized Management: Control access to all models through a single LiteLLM proxy instance without giving your developers API Keys to each provider.
+- Budget Controls: Set spending limits and track costs across all gemini-cli usage.
+
+
 
 ## New Models / Updated Models
 
