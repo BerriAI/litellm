@@ -38,6 +38,17 @@ This release is not out yet. The pre-release will be live on Sunday and the stab
 
 ## New Models / Updated Models
 
+### Pricing / Context Window Updates
+
+| Provider    | Model                                  | Context Window | Input ($/1M tokens) | Output ($/1M tokens) | Type |
+| ----------- | -------------------------------------- | -------------- | ------------------- | -------------------- | ---- |
+| Azure OpenAI | `azure/o3-pro` | 200k | $20.00 | $80.00 | New |
+| OpenRouter | `openrouter/mistralai/mistral-small-3.2-24b-instruct` | 32k | $0.1 | $0.3 | New |
+| OpenAI | `o3-deep-research` | 200k | $10.00 | $40.00 | New |
+| OpenAI | `o3-deep-research-2025-06-26` | 200k | $10.00 | $40.00 | New |
+| OpenAI | `o4-mini-deep-research` | 200k | $2.00 | $8.00 | New |
+| OpenAI | `o4-mini-deep-research-2025-06-26` | 200k | $2.00 | $8.00 | New |
+
 ### Updated Models
 #### Bugs
     - **Sambanova**
@@ -55,10 +66,7 @@ This release is not out yet. The pre-release will be live on Sunday and the stab
 #### Features
     - **Azure OpenAI**
         - Check if o-series model supports reasoning effort (enables drop_params to work for o1 models) 
-        - Add o3-pro model pricing 
         - Assistant + tool use cost tracking - [PR](https://github.com/BerriAI/litellm/pull/12045)
-    - **OpenRouter**
-        - Add Mistral 3.2 24B to model mapping
     - **Gemini (Google AI Studio + VertexAI)**
         - Only use accepted format values (enum and datetime) - else gemini raises errors - [PR](https://github.com/BerriAI/litellm/pull/11989) 
         - Cache tools if passed alongside cached content (else gemini raises an error) - [PR](https://github.com/BerriAI/litellm/pull/11989)
