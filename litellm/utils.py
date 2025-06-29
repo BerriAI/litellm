@@ -519,7 +519,7 @@ def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
     ### NOTICES ###
-    from litellm import Logging as LiteLLMLogging
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
     from litellm.litellm_core_utils.litellm_logging import set_callbacks
 
     if litellm.set_verbose is True:
