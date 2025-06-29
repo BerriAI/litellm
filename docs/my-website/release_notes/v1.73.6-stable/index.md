@@ -35,7 +35,10 @@ This release is not out yet. The pre-release will be live on Sunday and the stab
 
 ---
 
-# Claude on gemini-cli
+## Key Highlights 
+
+
+### Claude on gemini-cli
 
 
 <Image img={require('../../img/release_notes/gemini_cli.png')} />
@@ -56,7 +59,24 @@ When you use gemini-cli with LiteLLM you get the following benefits:
 - Centralized Management: Control access to all models through a single LiteLLM proxy instance without giving your developers API Keys to each provider.
 - Budget Controls: Set spending limits and track costs across all gemini-cli usage.
 
+[Get Started](../../docs/tutorials/litellm_gemini_cli)
 
+<br/>
+
+### Batch API Cost Tracking
+
+<Image img={require('../../img/release_notes/batch_api_cost_tracking.jpg')}/>
+
+<br/>
+
+v1.73.6 brings cost tracking for [LiteLLM Managed Batch API](../../docs/proxy/managed_batches) calls to LiteLLM. Previously, this was not being done for Batch API calls using LiteLLM Managed Files. Now, LiteLLM will store the status of each batch call in the DB and poll incomplete batch jobs in the background, emitting a spend log for cost tracking once the batch is complete.
+
+There is no new flag / change needed on your end. Over the next few weeks we hope to extend this to cover batch cost tracking for the Anthropic passthrough as well. 
+
+
+[Get Started](../../docs/proxy/managed_batches)
+
+---
 
 ## New Models / Updated Models
 
