@@ -26,6 +26,7 @@ from litellm.proxy._types import InvitationNew, UserAPIKeyAuth, WebhookEvent
 from litellm.types.integrations.slack_alerting import LITELLM_LOGO_URL
 
 
+# test
 class BaseEmailLogger(CustomLogger):
     DEFAULT_LITELLM_EMAIL = "notifications@alerts.litellm.ai"
     DEFAULT_SUPPORT_EMAIL = "support@berri.ai"
