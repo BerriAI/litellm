@@ -115,6 +115,7 @@ class BaseAnthropicMessagesConfig(ABC):
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> "BaseLLMException":
         from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
         return BaseLLMException(
             message=error_message, status_code=status_code, headers=headers
         )
