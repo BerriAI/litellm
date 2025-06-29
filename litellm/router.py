@@ -5593,9 +5593,13 @@ class Router:
         """
         Get the team-specific model name if team_id matches the deployment.
         """
-        if model_name is not None and model["model_name"] == model_name:
+        if (
+            team_id is not None
+            and model["model_info"].get("team_id") == team_id
+            and model_name == model["model_info"].get("team_public_model_name")
+        ):
             return True
-        elif team_id is not None and model["model_info"].get("team_id") == team_id:
+        elif model_name is not None and model["model_name"] == model_name:
             return True
         return False
 
