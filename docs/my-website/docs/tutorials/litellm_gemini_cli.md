@@ -5,13 +5,26 @@ This tutorial shows you how to integrate the Gemini CLI with LiteLLM Proxy, allo
 
 :::info 
 
-This integration is supported from LiteLLMv1.73.3-nightly and above.
+This integration is supported from LiteLLM v1.73.3-nightly and above.
 
 :::
 
 <br />
 
 <iframe width="840" height="500" src="https://www.loom.com/embed/d5dadd811ae64c70b29a16ecd558d4ba" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
+## Benefits of using gemini-cli with LiteLLM
+
+When you use gemini-cli with LiteLLM you get the following benefits:
+
+**Developer Benefits:**
+- Universal Model Access: Use any LiteLLM supported model (Anthropic, OpenAI, Vertex AI, Bedrock, etc.) through the gemini-cli interface.
+- Higher Rate Limits & Reliability: Load balance across multiple models and providers to avoid hitting individual provider limits, with fallbacks to ensure you get responses even if one provider fails.
+
+**Proxy Admin Benefits:**
+- Centralized Management: Control access to all models through a single LiteLLM proxy instance without giving your developers API Keys to each provider.
+- Budget Controls: Set spending limits and track costs across all gemini-cli usage.
+
 
 
 ## Prerequisites
