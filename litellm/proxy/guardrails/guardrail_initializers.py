@@ -139,10 +139,7 @@ def initialize_hide_secrets(litellm_params: LitellmParams, guardrail: Guardrail)
             _ENTERPRISE_SecretDetection,
         )
     except ImportError:
-        raise Exception(
-            "Trying to use Secret Detection"
-            + CommonProxyErrors.missing_enterprise_package.value
-        )
+        raise Exception("Trying to use Secret Detection" + CommonProxyErrors.missing_enterprise_package.value)
 
     _secret_detection_object = _ENTERPRISE_SecretDetection(
         detect_secrets_config=litellm_params.detect_secrets_config,
@@ -202,6 +199,7 @@ def initialize_lasso(
         api_base=litellm_params.api_base,
         user_id=litellm_params.lasso_user_id,
         conversation_id=litellm_params.lasso_conversation_id,
+        mask=litellm_params.mask,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
     )
@@ -214,7 +212,7 @@ def initialize_panw_prisma_airs(litellm_params, guardrail):
     from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs import (
         PanwPrismaAirsHandler,
     )
-    
+
     if not litellm_params.api_key:
         raise ValueError("PANW Prisma AIRS: api_key is required")
     if not litellm_params.profile_name:
