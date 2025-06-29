@@ -8,9 +8,6 @@ sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from unittest.mock import MagicMock, patch
 
-from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
-    AnthropicStreamWrapper,
-)
 from litellm.types.utils import Delta, ModelResponse, StreamingChoices
 
 
