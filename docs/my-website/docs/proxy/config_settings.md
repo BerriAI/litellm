@@ -330,10 +330,14 @@ router_settings:
 | AZURE_AUTHORITY_HOST | Azure authority host URL
 | AZURE_CLIENT_ID | Client ID for Azure services
 | AZURE_CLIENT_SECRET | Client secret for Azure services
+| AZURE_CODE_INTERPRETER_COST_PER_SESSION | Cost per session for Azure Code Interpreter service
+| AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS | Input cost per 1K tokens for Azure Computer Use service
+| AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS | Output cost per 1K tokens for Azure Computer Use service
 | AZURE_TENANT_ID | Tenant ID for Azure Active Directory
 | AZURE_USERNAME | Username for Azure services, use in conjunction with AZURE_PASSWORD for azure ad token with basic username/password workflow
 | AZURE_PASSWORD | Password for Azure services, use in conjunction with AZURE_USERNAME for azure ad token with basic username/password workflow
 | AZURE_FEDERATED_TOKEN_FILE | File path to Azure federated token
+| AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY | Cost per GB per day for Azure File Search service
 | AZURE_SCOPE | For EntraID Auth, Scope for Azure services, defaults to "https://cognitiveservices.azure.com/.default"
 | AZURE_KEY_VAULT_URI | URI for Azure Key Vault
 | AZURE_OPERATION_POLLING_TIMEOUT | Timeout in seconds for Azure operation polling
@@ -343,6 +347,7 @@ router_settings:
 | AZURE_STORAGE_TENANT_ID | The Application Tenant ID to use for Authentication to Azure Blob Storage logging
 | AZURE_STORAGE_CLIENT_ID | The Application Client ID to use for Authentication to Azure Blob Storage logging
 | AZURE_STORAGE_CLIENT_SECRET | The Application Client Secret to use for Authentication to Azure Blob Storage logging
+| AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY | Cost per GB per day for Azure Vector Store service
 | BATCH_STATUS_POLL_INTERVAL_SECONDS | Interval in seconds for polling batch status. Default is 3600 (1 hour)
 | BATCH_STATUS_POLL_MAX_ATTEMPTS | Maximum number of attempts for polling batch status. Default is 24 (for 24 hours)
 | BEDROCK_MAX_POLICY_SIZE | Maximum size for Bedrock policy. Default is 75
@@ -555,7 +560,8 @@ router_settings:
 | MICROSOFT_CLIENT_SECRET | Client secret for Microsoft services
 | MICROSOFT_TENANT | Tenant ID for Microsoft Azure
 | MICROSOFT_SERVICE_PRINCIPAL_ID | Service Principal ID for Microsoft Enterprise Application. (This is an advanced feature if you want litellm to auto-assign members to Litellm Teams based on their Microsoft Entra ID Groups)
-| NO_DOCS | Flag to disable documentation generation
+| NO_DOCS | Flag to disable Swagger UI documentation
+| NO_REDOC | Flag to disable Redoc documentation
 | NO_PROXY | List of addresses to bypass proxy
 | NON_LLM_CONNECTION_TIMEOUT | Timeout in seconds for non-LLM service connections. Default is 15
 | OAUTH_TOKEN_INFO_ENDPOINT | Endpoint for OAuth token info retrieval

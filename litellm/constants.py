@@ -101,6 +101,23 @@ MAX_TILE_HEIGHT = int(os.getenv("MAX_TILE_HEIGHT", 512))
 OPENAI_FILE_SEARCH_COST_PER_1K_CALLS = float(
     os.getenv("OPENAI_FILE_SEARCH_COST_PER_1K_CALLS", 2.5 / 1000)
 )
+# Azure OpenAI Assistants feature costs
+# Source: https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/
+AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY = float(
+    os.getenv("AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY", 0.1)  # $0.1 USD per 1 GB/Day
+)
+AZURE_CODE_INTERPRETER_COST_PER_SESSION = float(
+    os.getenv("AZURE_CODE_INTERPRETER_COST_PER_SESSION", 0.03)  # $0.03 USD per 1 Session
+)
+AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS = float(
+    os.getenv("AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS", 3.0)  # $0.003 USD per 1K Tokens
+)
+AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS = float(
+    os.getenv("AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS", 12.0)  # $0.012 USD per 1K Tokens
+)
+AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY = float(
+    os.getenv("AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY", 0.1)  # $0.1 USD per 1 GB/Day (same as file search)
+)
 MIN_NON_ZERO_TEMPERATURE = float(os.getenv("MIN_NON_ZERO_TEMPERATURE", 0.0001))
 #### RELIABILITY ####
 REPEATED_STREAMING_CHUNK_LIMIT = int(
