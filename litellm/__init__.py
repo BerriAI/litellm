@@ -5,11 +5,12 @@ warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*
 ### INIT VARIABLES ############
 import threading
 import os
-from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
-from litellm.caching.llm_caching_handler import LLMClientCache
-from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
+from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args, TYPE_CHECKING
+if TYPE_CHECKING:
+    from litellm.caching.caching import Cache
+    from litellm.caching.llm_caching_handler import LLMClientCache
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
 from litellm.types.utils import (
     ImageObject,
     BudgetConfig,
@@ -218,7 +219,6 @@ disable_streaming_logging: bool = False
 disable_token_counter: bool = False
 disable_add_transform_inline_image_block: bool = False
 disable_add_user_agent_to_request_tags: bool = False
-in_memory_llm_clients_cache: LLMClientCache = LLMClientCache()
 safe_memory_mode: bool = False
 enable_azure_ad_token_refresh: Optional[bool] = False
 ### DEFAULT AZURE API VERSION ###
@@ -226,7 +226,7 @@ AZURE_DEFAULT_API_VERSION = "2025-02-01-preview"  # this is updated to the lates
 ### DEFAULT WATSONX API VERSION ###
 WATSONX_DEFAULT_API_VERSION = "2024-03-13"
 ### COHERE EMBEDDINGS DEFAULT TYPE ###
-COHERE_DEFAULT_EMBEDDING_INPUT_TYPE: COHERE_EMBEDDING_INPUT_TYPES = "search_document"
+COHERE_DEFAULT_EMBEDDING_INPUT_TYPE = "search_document"
 ### CREDENTIALS ###
 credential_list: List[CredentialItem] = []
 ### GUARDRAILS ###
@@ -258,7 +258,7 @@ caching: bool = (
 caching_with_models: bool = (
     False  # # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 )
-cache: Optional[Cache] = (
+cache: Optional["Cache"] = (
     None  # cache object <- use this - https://docs.litellm.ai/docs/caching
 )
 default_in_memory_ttl: Optional[float] = None
@@ -326,10 +326,9 @@ disable_aiohttp_trust_env: bool = False  # When False, aiohttp will respect HTTP
 force_ipv4: bool = (
     False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 )
-module_level_aclient = AsyncHTTPHandler(
-    timeout=request_timeout, client_alias="module level aclient"
-)
-module_level_client = HTTPHandler(timeout=request_timeout)
+module_level_aclient: "AsyncHTTPHandler"
+module_level_client: "HTTPHandler"
+in_memory_llm_clients_cache: "LLMClientCache"
 
 #### RETRIES ####
 num_retries: Optional[int] = None  # per model endpoint
@@ -1148,8 +1147,6 @@ from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *
 from .responses.main import *
 from .realtime_api.main import _arealtime
-from .fine_tuning.main import *
-from .files.main import *
 from .scheduler import *
 ### ADAPTERS ###
 from .types.adapter import AdapterItem
@@ -1182,12 +1179,48 @@ from .passthrough import allm_passthrough_route, llm_passthrough_route
 ####### LAZY LOADING SETUP #######
 import lazy_loader as lazy
 
-# Setup lazy loading for submodules and their attributes
-__getattr__, __dir__, __all__ = lazy.attach(
+# Store the original __getattr__ from lazy_loader
+_lazy_getattr, _lazy_dir, _lazy_all = lazy.attach(
     __name__,
     submod_attrs={
         'litellm_core_utils.token_counter': ['encoding'],
         'cost_calculator': ['completion_cost', 'response_cost_calculator', 'cost_per_token'],
-        'litellm_core_utils.litellm_logging': ['Logging', 'modify_integration']
+        'litellm_core_utils.litellm_logging': ['Logging', 'modify_integration'],
+        'llms.custom_httpx.http_handler': ['AsyncHTTPHandler', 'HTTPHandler'],
+        "caching.caching": ["Cache", "DualCache", "RedisCache", "InMemoryCache"],
     }
 )
+
+#########################################################
+# Load LLM API Endpoints Here
+#########################################################
+_lazy_getattr, _lazy_dir, _lazy_all = lazy.attach(
+    __name__,
+    submod_attrs={
+        'fine_tuning.main': ['*'],
+        'files.main': ['*'],
+    }
+)
+#########################################################
+
+#########################################################
+# Module Level Clients Get Attributes Handler
+#########################################################
+def __getattr__(name: str):
+    # Handle our custom lazy-loaded HTTP clients and caches
+    if name == 'module_level_aclient':
+        from .llms.custom_httpx.module_level_clients import get_module_level_aclient
+        return get_module_level_aclient()
+    elif name == 'module_level_client':
+        from .llms.custom_httpx.module_level_clients import get_module_level_client
+        return get_module_level_client()
+    elif name == 'in_memory_llm_clients_cache':
+        from .llms.custom_httpx.module_level_clients import get_in_memory_llm_clients_cache
+        return get_in_memory_llm_clients_cache()
+    
+    # Fallback to the lazy loader's __getattr__
+    return _lazy_getattr(name)
+
+# Use the lazy loader's __dir__ and __all__
+__dir__ = _lazy_dir
+__all__ = _lazy_all
