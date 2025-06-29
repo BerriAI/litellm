@@ -67,7 +67,11 @@ const TeamMembersComponent: React.FC<TeamMembersComponentProps> = ({
     if (!userId) return null;
     const membership = teamData.team_memberships.find(tm => tm.user_id === userId);
     console.log(`membership=${membership}`);
-    return formatNumber(membership?.litellm_budget_table?.max_budget || null);
+    const maxBudget = membership?.litellm_budget_table?.max_budget;
+    if (maxBudget === null || maxBudget === undefined) {
+      return null;
+    }
+    return formatNumber(maxBudget);
   };
 
   return (

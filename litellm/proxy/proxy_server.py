@@ -5608,7 +5608,9 @@ def _add_team_models_to_all_models(
                         team_models.setdefault(model_id, set()).add(team_object.team_id)
         else:
             for model_name in team_object.models:
-                _models = llm_router.get_model_list(model_name=model_name)
+                _models = llm_router.get_model_list(
+                    model_name=model_name, team_id=team_object.team_id
+                )
                 if _models is not None:
                     for model in _models:
                         model_id = model.get("model_info", {}).get("id", None)
@@ -5644,6 +5646,7 @@ async def get_all_team_models(
         team_db_objects = await prisma_client.db.litellm_teamtable.find_many(
             where={"team_id": {"in": user_teams}}
         )
+
         team_db_objects_typed = [
             LiteLLM_TeamTable(**team_db_object.model_dump())
             for team_db_object in team_db_objects
@@ -5714,6 +5717,7 @@ async def get_all_team_and_direct_access_models(
             prisma_client=prisma_client,
             llm_router=llm_router,
         )
+
         for _model in all_models:
             model_id = _model.get("model_info", {}).get("id", None)
             team_only_model_id = _model.get("model_info", {}).get("team_id", None)
@@ -5729,9 +5733,11 @@ async def get_all_team_and_direct_access_models(
                     )
 
     ## ADD DIRECT_ACCESS TO RELEVANT MODELS
+
     for _model in all_models:
         model_id = _model.get("model_info", {}).get("id", None)
         if model_id is not None and model_id in direct_access_models:
+
             _model["model_info"]["direct_access"] = True
 
     ## FILTER OUT MODELS THAT ARE NOT IN DIRECT_ACCESS_MODELS OR ACCESS_VIA_TEAM_IDS - only show user models they can call
@@ -7523,6 +7529,7 @@ async def new_invitation(
         from litellm.proxy.management_helpers.user_invitation import (
             create_invitation_for_user,
         )
+
         global prisma_client
 
         if prisma_client is None:
@@ -7541,7 +7548,7 @@ async def new_invitation(
                     )
                 },
             )
-        
+
         response = await create_invitation_for_user(
             data=data,
             user_api_key_dict=user_api_key_dict,
@@ -7549,7 +7556,6 @@ async def new_invitation(
         return response
     except Exception as e:
         raise handle_exception_on_proxy(e)
-
 
 
 @router.get(

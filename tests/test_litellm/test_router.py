@@ -481,3 +481,124 @@ async def test_router_filter_team_based_models():
     )
 
     assert result is not None
+
+
+def test_router_should_include_deployment():
+    """
+    Test the should_include_deployment method with various scenarios
+
+    The method logic:
+    1. Returns True if: team_id matches AND model_name matches team_public_model_name
+    2. Returns True if: model_name matches AND deployment has no team_id
+    3. Otherwise returns False
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+                "model_info": {
+                    "team_id": "test-team",
+                },
+            },
+        ],
+    )
+
+    # Test deployment structures
+    deployment_with_team_and_public_name = {
+        "model_name": "gpt-3.5-turbo",
+        "model_info": {
+            "team_id": "test-team",
+            "team_public_model_name": "team-gpt-model",
+        },
+    }
+
+    deployment_with_team_no_public_name = {
+        "model_name": "gpt-3.5-turbo",
+        "model_info": {
+            "team_id": "test-team",
+        },
+    }
+
+    deployment_without_team = {
+        "model_name": "gpt-4",
+        "model_info": {},
+    }
+
+    deployment_different_team = {
+        "model_name": "claude-3",
+        "model_info": {
+            "team_id": "other-team",
+            "team_public_model_name": "team-claude-model",
+        },
+    }
+
+    # Test Case 1: Team-specific deployment - team_id and team_public_model_name match
+    result = router.should_include_deployment(
+        model_name="team-gpt-model",
+        model=deployment_with_team_and_public_name,
+        team_id="test-team",
+    )
+    assert (
+        result is True
+    ), "Should return True when team_id and team_public_model_name match"
+
+    # Test Case 2: Team-specific deployment - team_id matches but model_name doesn't match team_public_model_name
+    result = router.should_include_deployment(
+        model_name="different-model",
+        model=deployment_with_team_and_public_name,
+        team_id="test-team",
+    )
+    assert (
+        result is False
+    ), "Should return False when team_id matches but model_name doesn't match team_public_model_name"
+
+    # Test Case 3: Team-specific deployment - team_id doesn't match
+    result = router.should_include_deployment(
+        model_name="team-gpt-model",
+        model=deployment_with_team_and_public_name,
+        team_id="different-team",
+    )
+    assert result is False, "Should return False when team_id doesn't match"
+
+    # Test Case 4: Team-specific deployment with no team_public_model_name - should fail
+    result = router.should_include_deployment(
+        model_name="gpt-3.5-turbo",
+        model=deployment_with_team_no_public_name,
+        team_id="test-team",
+    )
+    assert (
+        result is True
+    ), "Should return True when team deployment has no team_public_model_name to match"
+
+    # Test Case 5: Non-team deployment - model_name matches and no team_id
+    result = router.should_include_deployment(
+        model_name="gpt-4", model=deployment_without_team, team_id=None
+    )
+    assert (
+        result is True
+    ), "Should return True when model_name matches and deployment has no team_id"
+
+    # Test Case 6: Non-team deployment - model_name matches but team_id provided (should still work)
+    result = router.should_include_deployment(
+        model_name="gpt-4", model=deployment_without_team, team_id="any-team"
+    )
+    assert (
+        result is True
+    ), "Should return True when model_name matches non-team deployment, regardless of team_id param"
+
+    # Test Case 7: Non-team deployment - model_name doesn't match
+    result = router.should_include_deployment(
+        model_name="different-model", model=deployment_without_team, team_id=None
+    )
+    assert result is False, "Should return False when model_name doesn't match"
+
+    # Test Case 8: Team deployment accessed without matching team_id
+    result = router.should_include_deployment(
+        model_name="gpt-3.5-turbo",
+        model=deployment_with_team_and_public_name,
+        team_id=None,
+    )
+    assert (
+        result is True
+    ), "Should return True when matching model with exact model_name"
