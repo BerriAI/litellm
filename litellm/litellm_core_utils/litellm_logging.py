@@ -4025,6 +4025,27 @@ class StandardLoggingPayloadSetup:
         return user_agent_tags
 
     @staticmethod
+    def _get_extra_header_tags(proxy_server_request: dict) -> Optional[List[str]]:
+        """
+        Extract additional header tags for spend tracking based on config.
+        """
+        extra_headers: List[str] = litellm.extra_spend_tag_headers or []
+        if not extra_headers:
+            return None
+
+        headers = proxy_server_request.get("headers", {})
+        if not isinstance(headers, dict):
+            return None
+
+        header_tags = []
+        for header_name in extra_headers:
+            header_value = headers.get(header_name)
+            if header_value:
+                header_tags.append(f"{header_name}: {header_value}")
+
+        return header_tags if header_tags else None
+
+    @staticmethod
     def _get_request_tags(metadata: dict, proxy_server_request: dict) -> List[str]:
         request_tags = (
             metadata.get("tags", [])
@@ -4034,8 +4055,13 @@ class StandardLoggingPayloadSetup:
         user_agent_tags = StandardLoggingPayloadSetup._get_user_agent_tags(
             proxy_server_request
         )
+        additional_header_tags = StandardLoggingPayloadSetup._get_extra_header_tags(
+            proxy_server_request
+        )
         if user_agent_tags is not None:
             request_tags.extend(user_agent_tags)
+        if additional_header_tags is not None:
+            request_tags.extend(additional_header_tags)
         return request_tags
 
 

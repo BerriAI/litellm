@@ -2,6 +2,7 @@
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import json
 import traceback
+import uuid
 from typing import Any, AsyncIterator, Iterator, Optional
 
 from litellm import verbose_logger
@@ -15,6 +16,10 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     - content block must be started and stopped
     - finish_reason must map exactly to anthropic reason, else anthropic client won't be able to parse it.
     """
+
+    def __init__(self, completion_stream: Any, model: str):
+        super().__init__(completion_stream)
+        self.model = model
 
     sent_first_chunk: bool = False
     sent_content_block_start: bool = False
@@ -31,11 +36,11 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 return {
                     "type": "message_start",
                     "message": {
-                        "id": "msg_1nZdL29xx5MUA1yADyHTEsnR8uuvGzszyY",
+                        "id": "msg_{}".format(uuid.uuid4()),
                         "type": "message",
                         "role": "assistant",
                         "content": [],
-                        "model": "claude-3-5-sonnet-20240620",
+                        "model": self.model,
                         "stop_reason": None,
                         "stop_sequence": None,
                         "usage": UsageDelta(input_tokens=0, output_tokens=0),
@@ -100,11 +105,11 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 return {
                     "type": "message_start",
                     "message": {
-                        "id": "msg_1nZdL29xx5MUA1yADyHTEsnR8uuvGzszyY",
+                        "id": "msg_{}".format(uuid.uuid4()),
                         "type": "message",
                         "role": "assistant",
                         "content": [],
-                        "model": "claude-3-5-sonnet-20240620",
+                        "model": self.model,
                         "stop_reason": None,
                         "stop_sequence": None,
                         "usage": UsageDelta(input_tokens=0, output_tokens=0),

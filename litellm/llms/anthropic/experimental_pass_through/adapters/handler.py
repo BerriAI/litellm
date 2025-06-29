@@ -153,7 +153,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             if stream:
                 transformed_stream = (
                     ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
-                        completion_response
+                        completion_response,
+                        model=model,
                     )
                 )
                 if transformed_stream is not None:
@@ -239,7 +240,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             if stream:
                 transformed_stream = (
                     ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
-                        completion_response
+                        completion_response,
+                        model=model,
                     )
                 )
                 if transformed_stream is not None:

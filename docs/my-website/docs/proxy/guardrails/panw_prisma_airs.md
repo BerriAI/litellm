@@ -124,7 +124,6 @@ Expected response on failure:
 ```
 
 </TabItem>
-
 <TabItem label="Successful Call" value="allowed">
 
 ```shell
