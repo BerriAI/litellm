@@ -4,7 +4,7 @@ import Image from '@theme/IdealImage';
 
 ## What is Langfuse?
 
-Langfuse ([GitHub](https://github.com/langfuse/langfuse)) is an open-source LLM engineering platform for model [tracing](https://langfuse.com/docs/tracing), [prompt management](https://langfuse.com/docs/prompts/get-started), and application [evaluation](https://langfuse.com/docs/scores/overview). Langfuse helps teams to collaboratively debug, analyze, and iterate on their LLM applications. 
+Langfuse ([GitHub](https://github.com/langfuse/langfuse)) is an open-source LLM engineering platform for model [tracing](https://langfuse.com/docs/tracing), [prompt management](https://langfuse.com/docs/prompts/get-started), and application [evaluation](https://langfuse.com/docs/scores/overview). Langfuse helps teams to collaboratively debug, analyze, and iterate on their LLM applications.
 
 
 Example trace in Langfuse using multiple models via LiteLLM:
@@ -37,7 +37,7 @@ litellm.success_callback = ["langfuse"]
 litellm.failure_callback = ["langfuse"] # logs errors to langfuse
 ```
 ```python
-# pip install langfuse 
+# pip install langfuse
 import litellm
 import os
 
@@ -51,8 +51,8 @@ os.environ["LANGFUSE_HOST"] # optional
 os.environ['OPENAI_API_KEY']=""
 
 # set langfuse as a callback, litellm will send the data to langfuse
-litellm.success_callback = ["langfuse"] 
- 
+litellm.success_callback = ["langfuse"]
+
 # openai call
 response = litellm.completion(
   model="gpt-3.5-turbo",
@@ -77,13 +77,13 @@ os.environ["LANGFUSE_PUBLIC_KEY"] = "pk-..."
 os.environ["LANGFUSE_SECRET_KEY"] = "sk-..."
 
 
-# OpenAI and Cohere keys 
+# OpenAI and Cohere keys
 # You can use any of the litellm supported providers: https://docs.litellm.ai/docs/providers
 os.environ['OPENAI_API_KEY']="sk-..."
 
 # set langfuse as a callback, litellm will send the data to langfuse
-litellm.success_callback = ["langfuse"] 
- 
+litellm.success_callback = ["langfuse"]
+
 # openai call
 response = completion(
   model="gpt-3.5-turbo",
@@ -93,10 +93,10 @@ response = completion(
   metadata = {
     "generation_name": "litellm-ishaan-gen", # set langfuse generation name
     # custom metadata fields
-    "project": "litellm-proxy" 
+    "project": "litellm-proxy"
   }
 )
- 
+
 print(response)
 
 ```
@@ -118,7 +118,7 @@ os.environ["LANGFUSE_SECRET_KEY"] = "sk-..."
 os.environ['OPENAI_API_KEY']="sk-..."
 
 # set langfuse as a callback, litellm will send the data to langfuse
-litellm.success_callback = ["langfuse"] 
+litellm.success_callback = ["langfuse"]
 
 # set custom langfuse trace params and generation params
 response = completion(
@@ -128,24 +128,24 @@ response = completion(
   ],
   metadata={
       "generation_name": "ishaan-test-generation",  # set langfuse Generation Name
-      "generation_id": "gen-id22",                  # set langfuse Generation ID 
-      "parent_observation_id": "obs-id9"            # set langfuse Parent Observation ID
-      "version":  "test-generation-version"         # set langfuse Generation Version
+      "generation_id": "gen-id22",                  # set langfuse Generation ID
+      "parent_observation_id": "obs-id9",           # set langfuse Parent Observation ID
+      "version":  "test-generation-version",        # set langfuse Generation Version
       "trace_user_id": "user-id2",                  # set langfuse Trace User ID
       "session_id": "session-1",                    # set langfuse Session ID
       "tags": ["tag1", "tag2"],                     # set langfuse Tags
-      "trace_name": "new-trace-name"                # set langfuse Trace Name
+      "trace_name": "new-trace-name",               # set langfuse Trace Name
       "trace_id": "trace-id22",                     # set langfuse Trace ID
       "trace_metadata": {"key": "value"},           # set langfuse Trace Metadata
       "trace_version": "test-trace-version",        # set langfuse Trace Version (if not set, defaults to Generation Version)
       "trace_release": "test-trace-release",        # set langfuse Trace Release
-      ### OR ### 
+      ### OR ###
       "existing_trace_id": "trace-id22",            # if generation is continuation of past trace. This prevents default behaviour of setting a trace name
       ### OR enforce that certain fields are trace overwritten in the trace during the continuation ###
       "existing_trace_id": "trace-id22",
       "trace_metadata": {"key": "updated_trace_value"},            # The new value to use for the langfuse Trace Metadata
       "update_trace_keys": ["input", "output", "trace_metadata"],  # Updates the trace input & output to be this generations input & output also updates the Trace Metadata to match the passed in value
-      "debug_langfuse": True,                                      # Will log the exact metadata sent to litellm for the trace/generation as `metadata_passed_to_litellm` 
+      "debug_langfuse": True,                                      # Will log the exact metadata sent to litellm for the trace/generation as `metadata_passed_to_litellm`
   },
 )
 
@@ -209,7 +209,7 @@ Any other key value pairs passed into the metadata not listed in the above spec 
 
 #### Disable Logging - Specific Calls
 
-To disable logging for specific calls use the `no-log` flag. 
+To disable logging for specific calls use the `no-log` flag.
 
 `completion(messages = ..., model = ...,  **{"no-log": True})`
 
@@ -229,7 +229,7 @@ os.environ["LANGFUSE_SECRET_KEY"] = "sk-..."
 os.environ['OPENAI_API_KEY']="sk-..."
 
 # set langfuse as a callback, litellm will send the data to langfuse
-litellm.success_callback = ["langfuse"] 
+litellm.success_callback = ["langfuse"]
 
 chat = ChatLiteLLM(
   model="gpt-3.5-turbo"
@@ -237,7 +237,7 @@ chat = ChatLiteLLM(
       "metadata": {
         "trace_user_id": "user-id2", # set langfuse Trace User ID
         "session_id": "session-1" ,  # set langfuse Session ID
-        "tags": ["tag1", "tag2"] 
+        "tags": ["tag1", "tag2"]
       }
     }
   )
@@ -249,7 +249,7 @@ messages = [
 chat(messages)
 ```
 
-### Redacting Messages, Response Content from Langfuse Logging 
+### Redacting Messages, Response Content from Langfuse Logging
 
 #### Redact Messages and Responses from all Langfuse Logging
 
@@ -259,14 +259,14 @@ Set `litellm.turn_off_message_logging=True` This will prevent the messages and r
 
 In the metadata typically passed for text completion or embedding calls you can set specific keys to mask the messages and responses for this call.
 
-Setting `mask_input` to `True` will mask the input from being logged for this call 
+Setting `mask_input` to `True` will mask the input from being logged for this call
 
 Setting `mask_output` to `True` will make the output from being logged for this call.
 
 Be aware that if you are continuing an existing trace, and you set `update_trace_keys` to include either `input` or `output` and you set the corresponding `mask_input` or `mask_output`, then that trace will have its existing input and/or output replaced with a redacted message.
 
 ## Troubleshooting & Errors
-### Data not getting logged to Langfuse ? 
+### Data not getting logged to Langfuse ?
 - Ensure you're on the latest version of langfuse `pip install langfuse -U`. The latest version allows litellm to log JSON input/outputs to langfuse
 - Follow [this checklist](https://langfuse.com/faq/all/missing-traces) if you don't see any traces in langfuse.
 
