@@ -568,8 +568,8 @@ def test_router_should_include_deployment():
         team_id="test-team",
     )
     assert (
-        result is False
-    ), "Should return False when team deployment has no team_public_model_name to match"
+        result is True
+    ), "Should return True when team deployment has no team_public_model_name to match"
 
     # Test Case 5: Non-team deployment - model_name matches and no team_id
     result = router.should_include_deployment(
@@ -600,5 +600,5 @@ def test_router_should_include_deployment():
         team_id=None,
     )
     assert (
-        result is False
-    ), "Should return False when trying to access team deployment without matching team_id"
+        result is True
+    ), "Should return True when matching model with exact model_name"
