@@ -76,40 +76,40 @@ When you use gemini-cli with LiteLLM you get the following benefits:
 
 ### Updated Models
 #### Bugs
-    - **Sambanova**
+    - **[Sambanova](../../docs/providers/sambanova)**
         - Handle float timestamps - [PR](https://github.com/BerriAI/litellm/pull/11971) s/o [@neubig](https://github.com/neubig)
-    - **Azure**
+    - **[Azure](../../docs/providers/azure)**
         - support Azure Authentication method (azure ad token, api keys) on Responses API - [PR](https://github.com/BerriAI/litellm/pull/11941) s/o [@hsuyuming](https://github.com/hsuyuming)
         - Map ‘image_url’ str as nested dict - [PR](https://github.com/BerriAI/litellm/pull/12075) s/o [@davis-featherstone](https://github.com/davis-featherstone)
-    - **Watsonx**
+    - **[Watsonx](../../docs/providers/watsonx)**
         - Set ‘model’ field to None when model is part of a custom deployment - fixes error raised by WatsonX in those cases - [PR](https://github.com/BerriAI/litellm/pull/11854) s/o [@cbjuan](https://github.com/cbjuan)
-    - **Perplexity**
+    - **[Perplexity](../../docs/providers/perplexity)**
         - Support web_search_options - [PR](https://github.com/BerriAI/litellm/pull/11983)
         - Support citation token and search queries cost calculation - [PR](https://github.com/BerriAI/litellm/pull/11938)
-    - **Anthropic**
+    - **[Anthropic](../../docs/providers/anthropic)**
         - Null value in usage block handling - [PR](https://github.com/BerriAI/litellm/pull/12068)
-    - **Gemini (Google AI Studio + VertexAI)**
+    - **Gemini ([Google AI Studio](../../docs/providers/gemini) + [VertexAI](../../docs/providers/vertex))**
         - Only use accepted format values (enum and datetime) - else gemini raises errors - [PR](https://github.com/BerriAI/litellm/pull/11989) 
         - Cache tools if passed alongside cached content (else gemini raises an error) - [PR](https://github.com/BerriAI/litellm/pull/11989)
         - Json schema translation improvement: Fix unpack_def handling of nested $ref inside anyof items - [PR](https://github.com/BerriAI/litellm/pull/11964)
-    - **Mistral**
+    - **[Mistral](../../docs/providers/mistral)**
         - Fix thinking prompt to match hugging face recommendation - [PR](https://github.com/BerriAI/litellm/pull/12007)
         - Add `supports_response_schema: true` for all mistral models except codestral-mamba - [PR](https://github.com/BerriAI/litellm/pull/12024)
-    - **Ollama**
+    - **[Ollama](../../docs/providers/ollama)**
         - Fix unnecessary await on embedding calls - [PR](https://github.com/BerriAI/litellm/pull/12024)
 #### Features
-    - **Azure OpenAI**
+    - **[Azure OpenAI](../../docs/providers/azure)**
         - Check if o-series model supports reasoning effort (enables drop_params to work for o1 models) 
         - Assistant + tool use cost tracking - [PR](https://github.com/BerriAI/litellm/pull/12045)
-    - **Nvidia Nim**
+    - **[Nvidia Nim](../../docs/providers/nvidia_nim)**
         - Add ‘response_format’ param support - [PR](https://github.com/BerriAI/litellm/pull/12003) @shagunb-acn 
-    - **ElevenLabs**
-        - New STT provider - [PR](https://github.com/BerriAI/litellm/pull/12119), [Docs](../../docs/providers/elevenlabs)
+    - **[ElevenLabs](../../docs/providers/elevenlabs)**
+        - New STT provider - [PR](https://github.com/BerriAI/litellm/pull/12119)
 
 ---
 ## LLM API Endpoints
 
-### Features
+#### Features
     - [**/mcp**](../../docs/mcp)
         - Send appropriate auth string value to `/tool/call` endpoint with `x-mcp-auth` - [PR](https://github.com/BerriAI/litellm/pull/11968) s/o [@wagnerjt](https://github.com/wagnerjt)
     - [**/v1/messages**](../../docs/anthropic_unified)
@@ -131,7 +131,7 @@ When you use gemini-cli with LiteLLM you get the following benefits:
 ---
 ## Spend Tracking / Budget Improvements
 
-### Features
+#### Features
     - [**Passthrough**](../../docs/pass_through)
         - [Bedrock](../../docs/pass_through/bedrock) - cost tracking (`/invoke` + `/converse` routes) on streaming + non-streaming - [PR](https://github.com/BerriAI/litellm/pull/12123)
         - [VertexAI](../../docs/pass_through/vertex_ai) - anthropic cost calculation support - [PR](https://github.com/BerriAI/litellm/pull/11992)
@@ -141,7 +141,7 @@ When you use gemini-cli with LiteLLM you get the following benefits:
 ---
 ## Management Endpoints / UI
 
-### Bugs
+#### Bugs
     - **General UI**
         - Fix today selector date mutation in dashboard components - [PR](https://github.com/BerriAI/litellm/pull/12042)
     - **Usage**
@@ -152,7 +152,7 @@ When you use gemini-cli with LiteLLM you get the following benefits:
         - Preserve public model name when selecting ‘test connect’ with azure model (previously would reset) - [PR](https://github.com/BerriAI/litellm/pull/11713)
     - **Invitation Links**
         - Ensure Invite links email contain the correct invite id when using tf provider - [PR](https://github.com/BerriAI/litellm/pull/12130)
-### Features
+#### Features
     - **Models**
         - Add ‘last success’ column to health check table - [PR](https://github.com/BerriAI/litellm/pull/11903)
     - **MCP**
@@ -174,10 +174,10 @@ When you use gemini-cli with LiteLLM you get the following benefits:
 
 ## Logging / Guardrail Integrations
 
-### Bugs
+#### Bugs
     - **Braintrust**
         - Adds model to metadata to enable braintrust cost estimation - [PR](https://github.com/BerriAI/litellm/pull/12022)
-### Features
+#### Features
     - **Callbacks**
         - (Enterprise) - disable logging callbacks in request headers - [PR](https://github.com/BerriAI/litellm/pull/11985)
         - Add List Callbacks API Endpoint - [PR](https://github.com/BerriAI/litellm/pull/11987)
@@ -195,12 +195,12 @@ When you use gemini-cli with LiteLLM you get the following benefits:
 
 ## Performance / Loadbalancing / Reliability improvements
 
-### Bugs
+#### Bugs
     - **Team-only models**
         - Filter team-only models from routing logic for non-team calls
     - **Context Window Exceeded error**
         - Catch anthropic exceptions - [PR](https://github.com/BerriAI/litellm/pull/12113)
-### Features
+#### Features
     - **Router**
         - allow using dynamic cooldown time for a specific deployment - [PR](https://github.com/BerriAI/litellm/pull/12037)
         - handle cooldown_time = 0 for deployments - [PR](https://github.com/BerriAI/litellm/pull/12108)
@@ -211,12 +211,12 @@ When you use gemini-cli with LiteLLM you get the following benefits:
 
 ## General Proxy Improvements
 
-### Bugs
+#### Bugs
     - **aiohttp**
         - Check HTTP_PROXY vars in networking requests
         - Allow using HTTP_ Proxy settings with trust_env
 
-### Features
+#### Features
     - **Docs**
         - Add recommended spec - [PR](https://github.com/BerriAI/litellm/pull/11980)
     - **Swagger**
