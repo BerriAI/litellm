@@ -1188,20 +1188,34 @@ _lazy_getattr, _lazy_dir, _lazy_all = lazy.attach(
         'litellm_core_utils.litellm_logging': ['Logging', 'modify_integration'],
         'llms.custom_httpx.http_handler': ['AsyncHTTPHandler', 'HTTPHandler'],
         "caching.caching": ["Cache", "DualCache", "RedisCache", "InMemoryCache"],
+
+        # LLM API Endpoints
+        "files.main": [
+            "acreate_file",
+            "create_file", 
+            "afile_retrieve",
+            "file_retrieve",
+            "afile_delete", 
+            "file_delete",
+            "afile_list",
+            "file_list",
+            "afile_content",
+            "file_content"
+        ],
+        "fine_tuning.main": [
+            "acreate_fine_tuning_job",
+            "create_fine_tuning_job",
+            "acancel_fine_tuning_job",
+            "cancel_fine_tuning_job",
+            "alist_fine_tuning_jobs",
+            "list_fine_tuning_jobs",
+            "aretrieve_fine_tuning_job",
+            "retrieve_fine_tuning_job",
+        ]
     }
 )
 
-#########################################################
-# Load LLM API Endpoints Here
-#########################################################
-_lazy_getattr, _lazy_dir, _lazy_all = lazy.attach(
-    __name__,
-    submod_attrs={
-        'fine_tuning.main': ['*'],
-        'files.main': ['*'],
-    }
-)
-#########################################################
+
 
 #########################################################
 # Module Level Clients Get Attributes Handler
