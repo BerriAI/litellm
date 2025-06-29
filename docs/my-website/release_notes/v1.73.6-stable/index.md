@@ -70,61 +70,60 @@ When you use gemini-cli with LiteLLM you get the following benefits:
 | OpenAI | `o3-deep-research-2025-06-26` | 200k | $10.00 | $40.00 | New |
 | OpenAI | `o4-mini-deep-research` | 200k | $2.00 | $8.00 | New |
 | OpenAI | `o4-mini-deep-research-2025-06-26` | 200k | $2.00 | $8.00 | New |
+| Deepseek | `deepseek-r1` | 65k | $0.55 | $2.19 | New |
+| Deepseek | `deepseek-v3` | 65k | $0.27 | $0.07 | New |
+
 
 ### Updated Models
 #### Bugs
     - **Sambanova**
-        - Handle float timestamps - [PR](https://github.com/BerriAI/litellm/pull/11971) s/o @neubig
+        - Handle float timestamps - [PR](https://github.com/BerriAI/litellm/pull/11971) s/o [@neubig](https://github.com/neubig)
     - **Azure**
-        - support Azure Authentication method (azure ad token, api keys) - [PR](https://github.com/BerriAI/litellm/pull/11941) @hsuyuming
-        - Map ‘image_url’ str as nested dict - [PR](https://github.com/BerriAI/litellm/pull/12075) s/o davis-featherstone
+        - support Azure Authentication method (azure ad token, api keys) on Responses API - [PR](https://github.com/BerriAI/litellm/pull/11941) s/o [@hsuyuming](https://github.com/hsuyuming)
+        - Map ‘image_url’ str as nested dict - [PR](https://github.com/BerriAI/litellm/pull/12075) s/o [@davis-featherstone](https://github.com/davis-featherstone)
     - **Watsonx**
-        - Set ‘model’ field to None when model is part of a custom deployment - fixes error raised by WatsonX in those cases - [PR](https://github.com/BerriAI/litellm/pull/11854) s/o @cbjuan
+        - Set ‘model’ field to None when model is part of a custom deployment - fixes error raised by WatsonX in those cases - [PR](https://github.com/BerriAI/litellm/pull/11854) s/o [@cbjuan](https://github.com/cbjuan)
     - **Perplexity**
         - Support web_search_options - [PR](https://github.com/BerriAI/litellm/pull/11983)
         - Support citation token and search queries cost calculation - [PR](https://github.com/BerriAI/litellm/pull/11938)
     - **Anthropic**
         - Null value in usage block handling - [PR](https://github.com/BerriAI/litellm/pull/12068)
-#### Features
-    - **Azure OpenAI**
-        - Check if o-series model supports reasoning effort (enables drop_params to work for o1 models) 
-        - Assistant + tool use cost tracking - [PR](https://github.com/BerriAI/litellm/pull/12045)
     - **Gemini (Google AI Studio + VertexAI)**
         - Only use accepted format values (enum and datetime) - else gemini raises errors - [PR](https://github.com/BerriAI/litellm/pull/11989) 
         - Cache tools if passed alongside cached content (else gemini raises an error) - [PR](https://github.com/BerriAI/litellm/pull/11989)
         - Json schema translation improvement: Fix unpack_def handling of nested $ref inside anyof items - [PR](https://github.com/BerriAI/litellm/pull/11964)
-    - **NVIDIA Nim**
-        - Add ‘response_format’ param support - [PR](https://github.com/BerriAI/litellm/pull/12003) @shagunb-acn 
     - **Mistral**
         - Fix thinking prompt to match hugging face recommendation - [PR](https://github.com/BerriAI/litellm/pull/12007)
         - Add `supports_response_schema: true` for all mistral models except codestral-mamba - [PR](https://github.com/BerriAI/litellm/pull/12024)
     - **Ollama**
         - Fix unnecessary await on embedding calls - [PR](https://github.com/BerriAI/litellm/pull/12024)
-    - **OpenAI**
-        - New o3 and o4-mini deep research models - [PR](https://github.com/BerriAI/litellm/pull/12109)
+#### Features
+    - **Azure OpenAI**
+        - Check if o-series model supports reasoning effort (enables drop_params to work for o1 models) 
+        - Assistant + tool use cost tracking - [PR](https://github.com/BerriAI/litellm/pull/12045)
+    - **Nvidia Nim**
+        - Add ‘response_format’ param support - [PR](https://github.com/BerriAI/litellm/pull/12003) @shagunb-acn 
     - **ElevenLabs**
-        - New STT provider - [PR](https://github.com/BerriAI/litellm/pull/12119)
-    - **Deepseek**
-        - Add deepseek-r1 + deepseek-v3 cost tracking - [PR](https://github.com/BerriAI/litellm/pull/11972)
+        - New STT provider - [PR](https://github.com/BerriAI/litellm/pull/12119), [Docs](../../docs/providers/elevenlabs)
 
 ---
 ## LLM API Endpoints
 
 ### Features
-    - **MCP**
-        - Send appropriate auth string value to `/tool/call` endpoint with `x-mcp-auth` - [PR](https://github.com/BerriAI/litellm/pull/11968) s/o @wagnerjt
-    - **/v1/messages**
-        - Custom LLM support - [PR](https://github.com/BerriAI/litellm/pull/12016)
-    - **/chat/completions**
+    - [**/mcp**](../../docs/mcp)
+        - Send appropriate auth string value to `/tool/call` endpoint with `x-mcp-auth` - [PR](https://github.com/BerriAI/litellm/pull/11968) s/o [@wagnerjt](https://github.com/wagnerjt)
+    - [**/v1/messages**](../../docs/anthropic_unified)
+        - [Custom LLM](../../docs/providers/custom_llm_server#anthropic-v1messages) support - [PR](https://github.com/BerriAI/litellm/pull/12016)
+    - [**/chat/completions**](../../docs/completion/input)
         - Azure Responses API via chat completion support - [PR](https://github.com/BerriAI/litellm/pull/12016)
-    - **/responses**
+    - [**/responses**](../../docs/response_api)
         - Add reasoning content support for non-openai providers - [PR](https://github.com/BerriAI/litellm/pull/12055)
     - **[NEW] /generateContent**
-        1. New endpoints for gemini cli support https://github.com/BerriAI/litellm/pull/12040
-        2. Support calling Google AI Studio / VertexAI Gemini models in their native format - https://github.com/BerriAI/litellm/pull/12046
-        3. Add logging + cost tracking for stream + non-stream vertex/google ai studio routes - https://github.com/BerriAI/litellm/pull/12058
-        4. Add Bridge from generateContent to /chat/completions - https://github.com/BerriAI/litellm/pull/12081
-    - **/batches**
+        - New endpoints for gemini cli support - [PR](https://github.com/BerriAI/litellm/pull/12040)
+        - Support calling Google AI Studio / VertexAI Gemini models in their native format - [PR](https://github.com/BerriAI/litellm/pull/12046)
+        - Add logging + cost tracking for stream + non-stream vertex/google ai studio routes - [PR](https://github.com/BerriAI/litellm/pull/12058)
+        - Add Bridge from generateContent to /chat/completions - [PR](https://github.com/BerriAI/litellm/pull/12081)
+    - [**/batches**](../../docs/batches)
         - Filter deployments to only those where managed file was written to - [PR](https://github.com/BerriAI/litellm/pull/12048)
         - Save all model / file id mappings in db (previously it was just the first one) - enables ‘true’ loadbalancing - [PR](https://github.com/BerriAI/litellm/pull/12048)
         - Support List Batches with target model name specified - [PR](https://github.com/BerriAI/litellm/pull/12049)
@@ -133,10 +132,10 @@ When you use gemini-cli with LiteLLM you get the following benefits:
 ## Spend Tracking / Budget Improvements
 
 ### Features
-    - **Passthrough**
-        - Bedrock cost tracking (`/invoke` + `/converse` routes) on streaming + non-streaming - [PR](https://github.com/BerriAI/litellm/pull/12123)
-        - VertexAI - anthropic cost calculation support - [PR](https://github.com/BerriAI/litellm/pull/11992)
-    - **Batches**
+    - [**Passthrough**](../../docs/pass_through)
+        - [Bedrock](../../docs/pass_through/bedrock) - cost tracking (`/invoke` + `/converse` routes) on streaming + non-streaming - [PR](https://github.com/BerriAI/litellm/pull/12123)
+        - [VertexAI](../../docs/pass_through/vertex_ai) - anthropic cost calculation support - [PR](https://github.com/BerriAI/litellm/pull/11992)
+    - [**Batches**](../../docs/batches)
         - Background job for cost tracking LiteLLM Managed batches - [PR](https://github.com/BerriAI/litellm/pull/12125)
 
 ---
@@ -157,7 +156,7 @@ When you use gemini-cli with LiteLLM you get the following benefits:
     - **Models**
         - Add ‘last success’ column to health check table - [PR](https://github.com/BerriAI/litellm/pull/11903)
     - **MCP**
-        - New UI component to support auth types: api key, bearer token, basic auth - [PR](https://github.com/BerriAI/litellm/pull/11968) s/o @wagnerjt
+        - New UI component to support auth types: api key, bearer token, basic auth - [PR](https://github.com/BerriAI/litellm/pull/11968) s/o [@wagnerjt](https://github.com/wagnerjt)
         - Ensure internal users can access /mcp and /mcp/ routes - [PR](https://github.com/BerriAI/litellm/pull/12106)
     - **SCIM**
         - Ensure default_internal_user_params are applied for new users - [PR](https://github.com/BerriAI/litellm/pull/12015)
