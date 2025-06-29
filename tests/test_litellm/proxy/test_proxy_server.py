@@ -320,7 +320,7 @@ async def test_get_all_team_models():
     # Mock router
     mock_router = MagicMock()
 
-    def mock_get_model_list(model_name):
+    def mock_get_model_list(model_name, team_id=None):
         if model_name == "gpt-4":
             return mock_models_gpt4
         elif model_name == "gpt-3.5-turbo":
@@ -355,10 +355,10 @@ async def test_get_all_team_models():
 
         # Verify router.get_model_list was called for each model
         expected_calls = [
-            mock.call(model_name="gpt-4"),
-            mock.call(model_name="gpt-3.5-turbo"),
-            mock.call(model_name="claude-3"),
-            mock.call(model_name="gpt-4"),  # Called again for team2
+            mock.call(model_name="gpt-4", team_id="team1"),
+            mock.call(model_name="gpt-3.5-turbo", team_id="team1"),
+            mock.call(model_name="claude-3", team_id="team2"),
+            mock.call(model_name="gpt-4", team_id="team2"),
         ]
         mock_router.get_model_list.assert_has_calls(expected_calls, any_order=True)
 
@@ -386,8 +386,8 @@ async def test_get_all_team_models():
 
         # Verify router.get_model_list was called only for team1 models
         expected_calls = [
-            mock.call(model_name="gpt-4"),
-            mock.call(model_name="gpt-3.5-turbo"),
+            mock.call(model_name="gpt-4", team_id="team1"),
+            mock.call(model_name="gpt-3.5-turbo", team_id="team1"),
         ]
         mock_router.get_model_list.assert_has_calls(expected_calls, any_order=True)
 
@@ -413,7 +413,7 @@ async def test_get_all_team_models():
     mock_router.reset_mock()
     mock_litellm_teamtable.find_many.return_value = [mock_team1]
 
-    def mock_get_model_list_with_none(model_name):
+    def mock_get_model_list_with_none(model_name, team_id=None):
         if model_name == "gpt-4":
             return mock_models_gpt4
         # Return None for gpt-3.5-turbo to test None handling
