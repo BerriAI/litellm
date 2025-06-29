@@ -604,6 +604,10 @@ def test_vertex_ai_transform_parts():
     """
     Test the _transform_parts method for converting Vertex AI function calls
     to OpenAI-compatible tool calls and function calls.
+    
+    Tests both:
+    1. Multiple tool calls within a single message
+    2. Multiple tool calls across different messages (cumulative indexing)
     """
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
@@ -621,34 +625,18 @@ def test_vertex_ai_transform_parts():
         HttpxPartType(text="Some text content"),
     ]
 
-    function, tools = VertexGeminiConfig._transform_parts(
-        parts=parts_with_function, is_function_call=True
+    function, tools, updated_idx = VertexGeminiConfig._transform_parts(
+        parts=parts_with_function, cumulative_tool_call_idx=0, is_function_call=True
     )
 
-    # Should return function, no tools
+    # Should return function, no tools, and incremented index
     assert function is not None
     assert function["name"] == "get_current_weather"
     assert function["arguments"] == '{"location": "Boston", "unit": "celsius"}'
     assert tools is None
+    assert updated_idx == 1  # Should be incremented from 0 to 1
 
-    # Test case 2: Tool call mode (is_function_call=False)
-    function, tools = VertexGeminiConfig._transform_parts(
-        parts=parts_with_function, is_function_call=False
-    )
-
-    # Should return tools, no function
-    assert function is None
-    assert tools is not None
-    assert len(tools) == 1
-    assert tools[0]["type"] == "function"
-    assert tools[0]["function"]["name"] == "get_current_weather"
-    assert (
-        tools[0]["function"]["arguments"] == '{"location": "Boston", "unit": "celsius"}'
-    )
-    assert tools[0]["id"].startswith("call_")
-    assert tools[0]["index"] == 0
-
-    # Test case 3: Multiple function calls
+    # Test case 2: Tool call mode (is_function_call=False) - Single message with multiple tool calls
     parts_with_multiple_functions = [
         HttpxPartType(
             functionCall={"name": "get_current_weather", "args": {"location": "Boston"}}
@@ -662,19 +650,83 @@ def test_vertex_ai_transform_parts():
         HttpxPartType(text="Some text content"),
     ]
 
-    function, tools = VertexGeminiConfig._transform_parts(
-        parts=parts_with_multiple_functions, is_function_call=False
+    function, tools, updated_idx = VertexGeminiConfig._transform_parts(
+        parts=parts_with_multiple_functions, cumulative_tool_call_idx=0, is_function_call=False
     )
 
-    # Should return multiple tools
+    # Should return multiple tools with correct indices
     assert function is None
     assert tools is not None
     assert len(tools) == 2
     assert tools[0]["function"]["name"] == "get_current_weather"
-    assert tools[0]["index"] == 0
+    assert tools[0]["index"] == 0  # First tool call should have index 0
     assert tools[1]["function"]["name"] == "get_forecast"
-    assert tools[1]["index"] == 1
+    assert tools[1]["index"] == 1  # Second tool call should have index 1
     assert tools[1]["function"]["arguments"] == '{"location": "New York", "days": 3}'
+    assert updated_idx == 2  # Should be incremented from 0 to 2 (two function calls)
+
+    # Test case 3: Simulating multiple messages - cumulative indexing across messages
+    # First message with 2 tool calls (starting from index 0)
+    first_message_parts = [
+        HttpxPartType(
+            functionCall={"name": "get_weather", "args": {"location": "Boston"}}
+        ),
+        HttpxPartType(
+            functionCall={"name": "get_time", "args": {"timezone": "EST"}}
+        ),
+    ]
+
+    function, tools, updated_idx = VertexGeminiConfig._transform_parts(
+        parts=first_message_parts, cumulative_tool_call_idx=0, is_function_call=False
+    )
+
+    assert function is None
+    assert tools is not None
+    assert len(tools) == 2
+    assert tools[0]["index"] == 0
+    assert tools[1]["index"] == 1
+    assert updated_idx == 2
+
+    # Second message with 1 tool call (continuing from previous index)
+    second_message_parts = [
+        HttpxPartType(
+            functionCall={"name": "send_email", "args": {"to": "user@example.com"}}
+        ),
+    ]
+
+    function, tools, updated_idx = VertexGeminiConfig._transform_parts(
+        parts=second_message_parts, cumulative_tool_call_idx=updated_idx, is_function_call=False
+    )
+
+    assert function is None
+    assert tools is not None
+    assert len(tools) == 1
+    assert tools[0]["index"] == 2  # Should continue from previous cumulative index
+    assert tools[0]["function"]["name"] == "send_email"
+    assert updated_idx == 3  # Should be incremented to 3
+
+    # Third message with 2 more tool calls (continuing from previous index)
+    third_message_parts = [
+        HttpxPartType(
+            functionCall={"name": "create_calendar_event", "args": {"title": "Meeting"}}
+        ),
+        HttpxPartType(
+            functionCall={"name": "set_reminder", "args": {"time": "10:00"}}
+        ),
+    ]
+
+    function, tools, final_idx = VertexGeminiConfig._transform_parts(
+        parts=third_message_parts, cumulative_tool_call_idx=updated_idx, is_function_call=False
+    )
+
+    assert function is None
+    assert tools is not None
+    assert len(tools) == 2
+    assert tools[0]["index"] == 3  # Should continue from previous cumulative index
+    assert tools[1]["index"] == 4  # Should be incremented
+    assert tools[0]["function"]["name"] == "create_calendar_event"
+    assert tools[1]["function"]["name"] == "set_reminder"
+    assert final_idx == 5  # Should be incremented to 5
 
     # Test case 4: No function calls
     parts_without_functions = [
@@ -682,30 +734,32 @@ def test_vertex_ai_transform_parts():
         HttpxPartType(text="More text"),
     ]
 
-    function, tools = VertexGeminiConfig._transform_parts(
-        parts=parts_without_functions, is_function_call=False
+    function, tools, updated_idx = VertexGeminiConfig._transform_parts(
+        parts=parts_without_functions, cumulative_tool_call_idx=5, is_function_call=False
     )
 
-    # Should return nothing
+    # Should return nothing and preserve the cumulative index
     assert function is None
     assert tools is None
+    assert updated_idx == 5  # Index should remain unchanged when no function calls
 
     # Test case 5: Empty parts list
-    function, tools = VertexGeminiConfig._transform_parts(
-        parts=[], is_function_call=False
+    function, tools, updated_idx = VertexGeminiConfig._transform_parts(
+        parts=[], cumulative_tool_call_idx=10, is_function_call=False
     )
 
-    # Should return nothing
+    # Should return nothing and preserve the cumulative index
     assert function is None
     assert tools is None
+    assert updated_idx == 10  # Index should remain unchanged
 
     # Test case 6: Function call with empty args
     parts_with_empty_args = [
         HttpxPartType(functionCall={"name": "simple_function", "args": {}})
     ]
 
-    function, tools = VertexGeminiConfig._transform_parts(
-        parts=parts_with_empty_args, is_function_call=True
+    function, tools, updated_idx = VertexGeminiConfig._transform_parts(
+        parts=parts_with_empty_args, cumulative_tool_call_idx=0, is_function_call=True
     )
 
     # Should handle empty args correctly
@@ -713,6 +767,35 @@ def test_vertex_ai_transform_parts():
     assert function["name"] == "simple_function"
     assert function["arguments"] == "{}"
     assert tools is None
+    assert updated_idx == 1
+
+    # Test case 7: Mixed content with function calls - ensuring tool call IDs are unique
+    mixed_parts = [
+        HttpxPartType(text="Before function call"),
+        HttpxPartType(
+            functionCall={"name": "function_a", "args": {"param": "value_a"}}
+        ),
+        HttpxPartType(text="Between function calls"),
+        HttpxPartType(
+            functionCall={"name": "function_b", "args": {"param": "value_b"}}
+        ),
+        HttpxPartType(text="After function calls"),
+    ]
+
+    function, tools, updated_idx = VertexGeminiConfig._transform_parts(
+        parts=mixed_parts, cumulative_tool_call_idx=100, is_function_call=False
+    )
+
+    assert function is None
+    assert tools is not None
+    assert len(tools) == 2
+    assert tools[0]["index"] == 100
+    assert tools[1]["index"] == 101
+    # Verify that tool call IDs are unique
+    assert tools[0]["id"] != tools[1]["id"]
+    assert tools[0]["id"].startswith("call_")
+    assert tools[1]["id"].startswith("call_")
+    assert updated_idx == 102
 
 
 def test_vertex_ai_usage_metadata_missing_token_count():
