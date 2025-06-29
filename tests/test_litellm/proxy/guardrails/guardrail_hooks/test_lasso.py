@@ -463,7 +463,8 @@ class TestLassoGuardrail:
             conversation_id="test-conversation"
         )
 
-        headers = guardrail._prepare_headers()
+        data = {"litellm_call_id": "test-call-id"}
+        headers = guardrail._prepare_headers(data)
         assert headers["lasso-api-key"] == "test-api-key"
         assert headers["Content-Type"] == "application/json"
         assert headers["lasso-user-id"] == "test-user"
@@ -471,11 +472,12 @@ class TestLassoGuardrail:
 
         # Test without optional fields
         guardrail_minimal = LassoGuardrail(lasso_api_key="test-api-key")
-        headers_minimal = guardrail_minimal._prepare_headers()
+        headers_minimal = guardrail_minimal._prepare_headers(data)
         assert headers_minimal["lasso-api-key"] == "test-api-key"
         assert headers_minimal["Content-Type"] == "application/json"
         assert "lasso-user-id" not in headers_minimal
-        assert "lasso-conversation-id" not in headers_minimal
+        # conversation_id should be generated when not provided globally
+        assert "lasso-conversation-id" in headers_minimal
 
     @pytest.mark.asyncio
     async def test_pre_call_with_masking_enabled(self):

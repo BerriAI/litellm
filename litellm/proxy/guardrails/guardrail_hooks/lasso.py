@@ -75,13 +75,10 @@ class LassoGuardrail(CustomGuardrail):
                 "pass it as a parameter to the guardrail in the config file"
             )
 
-        # Debug logging for guardrail initialization
-        verbose_proxy_logger.info(f"[LASSO_DEBUG] Lasso guardrail initialized:")
-        verbose_proxy_logger.info(f"[LASSO_DEBUG] - guardrail_name: {kwargs.get('guardrail_name', 'unknown')}")
-        verbose_proxy_logger.info(f"[LASSO_DEBUG] - event_hook: {kwargs.get('event_hook', 'unknown')}")
-        verbose_proxy_logger.info(f"[LASSO_DEBUG] - api_base: {self.api_base}")
-        verbose_proxy_logger.info(f"[LASSO_DEBUG] - mask: {self.mask}")
-        verbose_proxy_logger.info(f"[LASSO_DEBUG] - global conversation_id: {self.conversation_id}")
+        verbose_proxy_logger.debug(
+            f"Lasso guardrail initialized: {kwargs.get('guardrail_name', 'unknown')}, "
+            f"event_hook: {kwargs.get('event_hook', 'unknown')}, mask: {self.mask}"
+        )
 
         super().__init__(**kwargs)
 
@@ -91,13 +88,10 @@ class LassoGuardrail(CustomGuardrail):
         Falls back to UUID if ULID library is not available.
         """
         if ULID_AVAILABLE:
-            ulid_str = str(ULID())
-            verbose_proxy_logger.info(f"[LASSO_DEBUG] Generated ULID: {ulid_str}")
-            return ulid_str
+            return str(ULID())
         else:
-            uuid_str = str(uuid.uuid4())
-            verbose_proxy_logger.warning(f"[LASSO_DEBUG] ULID library not available, using UUID: {uuid_str}")
-            return uuid_str
+            verbose_proxy_logger.debug("ULID library not available, using UUID")
+            return str(uuid.uuid4())
 
     @log_guardrail_information
     async def async_pre_call_hook(
@@ -120,23 +114,16 @@ class LassoGuardrail(CustomGuardrail):
         Runs before the LLM API call to validate and potentially modify input.
         Uses 'PROMPT' messageType as this is input to the model.
         """
-        verbose_proxy_logger.info(f"[LASSO_DEBUG] Pre-call hook started for guardrail: {self.guardrail_name}")
-        verbose_proxy_logger.info(f"[LASSO_DEBUG] Pre-call litellm_call_id: {data.get('litellm_call_id', 'NOT_FOUND')}")
-
         # Check if this guardrail should run for this request
         event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
-            verbose_proxy_logger.info(f"[LASSO_DEBUG] Pre-call hook skipped - should_run_guardrail returned False")
             return data
 
         # Get or generate conversation_id and store it in data for post-call consistency
         conversation_id = self._get_or_generate_conversation_id(data, cache)
         data.setdefault("_lasso_internal", {})["conversation_id"] = conversation_id
-        verbose_proxy_logger.info(f"[LASSO_DEBUG] Stored conversation_id in data: {conversation_id}")
 
-        result = await self.run_lasso_guardrail(data, cache, message_type="PROMPT")
-        verbose_proxy_logger.info(f"[LASSO_DEBUG] Pre-call hook completed for guardrail: {self.guardrail_name}")
-        return result
+        return await self._run_lasso_guardrail(data, cache, message_type="PROMPT")
 
     @log_guardrail_information
     async def async_moderation_hook(
@@ -157,20 +144,12 @@ class LassoGuardrail(CustomGuardrail):
         This is used for during_call moderation.
         Uses 'PROMPT' messageType as this runs concurrently with input processing.
         """
-        verbose_proxy_logger.info(f"[LASSO_DEBUG] Moderation hook started for guardrail: {self.guardrail_name}")
-        verbose_proxy_logger.info(
-            f"[LASSO_DEBUG] Moderation litellm_call_id: {data.get('litellm_call_id', 'NOT_FOUND')}"
-        )
-
         # Check if this guardrail should run for this request
         event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
-            verbose_proxy_logger.info(f"[LASSO_DEBUG] Moderation hook skipped - should_run_guardrail returned False")
             return data
 
-        result = await self.run_lasso_guardrail(data, cache, message_type="PROMPT")
-        verbose_proxy_logger.info(f"[LASSO_DEBUG] Moderation hook completed for guardrail: {self.guardrail_name}")
-        return result
+        return await self._run_lasso_guardrail(data, cache, message_type="PROMPT")
 
     @log_guardrail_information
     async def async_post_call_success_hook(
@@ -183,15 +162,9 @@ class LassoGuardrail(CustomGuardrail):
         Runs after the LLM API call to validate the response.
         Uses 'COMPLETION' messageType as this is output from the model.
         """
-        verbose_proxy_logger.info(f"[LASSO_DEBUG] Post-call hook started for guardrail: {self.guardrail_name}")
-        verbose_proxy_logger.info(
-            f"[LASSO_DEBUG] Post-call litellm_call_id: {data.get('litellm_call_id', 'NOT_FOUND')}"
-        )
-
         # Check if this guardrail should run for this request
         event_type: GuardrailEventHooks = GuardrailEventHooks.post_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
-            verbose_proxy_logger.info(f"[LASSO_DEBUG] Post-call hook skipped - should_run_guardrail returned False")
             return response
 
         # Extract messages from the response for validation
@@ -210,9 +183,6 @@ class LassoGuardrail(CustomGuardrail):
                     response_data.setdefault("_lasso_internal", {})["conversation_id"] = data["_lasso_internal"][
                         "conversation_id"
                     ]
-                    verbose_proxy_logger.info(
-                        f"[LASSO_DEBUG] Using stored conversation_id from pre-call: {response_data['_lasso_internal']['conversation_id']}"
-                    )
 
                 # Handle masking for post-call
                 if self.mask:
@@ -235,14 +205,13 @@ class LassoGuardrail(CustomGuardrail):
                         raise LassoGuardrailAPIError(f"Failed to apply post-call masking: {str(e)}")
                 else:
                     # Use the same data for conversation_id consistency (no cache access needed)
-                    await self.run_lasso_guardrail_without_cache(response_data, message_type="COMPLETION")
+                    await self._run_lasso_guardrail(response_data, cache=None, message_type="COMPLETION")
                     verbose_proxy_logger.debug("Post-call Lasso validation completed")
             else:
                 verbose_proxy_logger.warning("No response messages found to validate")
         else:
             verbose_proxy_logger.warning(f"Unexpected response type for post-call hook: {type(response)}")
 
-        verbose_proxy_logger.info(f"[LASSO_DEBUG] Post-call hook completed for guardrail: {self.guardrail_name}")
         return response
 
     def _get_or_generate_conversation_id(self, data: dict, cache: DualCache) -> str:
@@ -259,59 +228,42 @@ class LassoGuardrail(CustomGuardrail):
         Returns:
             str: The conversation_id to use for this request
         """
-        verbose_proxy_logger.info(
-            f"[LASSO_DEBUG] _get_or_generate_conversation_id called for guardrail: {self.guardrail_name}"
-        )
-
         # Use global conversation_id if set
         if self.conversation_id:
-            verbose_proxy_logger.info(f"[LASSO_DEBUG] Using global conversation_id: {self.conversation_id}")
             return self.conversation_id
 
         # Get the litellm_call_id which is consistent across all hooks for this request
         litellm_call_id = data.get("litellm_call_id")
-        verbose_proxy_logger.info(f"[LASSO_DEBUG] litellm_call_id from data: {litellm_call_id}")
 
         if not litellm_call_id:
             # Fallback to generating a new ULID if no litellm_call_id available
-            generated_id = self._generate_ulid()
-            verbose_proxy_logger.warning(
-                f"[LASSO_DEBUG] No litellm_call_id found, generated new conversation_id: {generated_id}"
-            )
-            return generated_id
+            return self._generate_ulid()
 
         # Use litellm_call_id as cache key for conversation_id
         cache_key = f"lasso_conversation_id:{litellm_call_id}"
-        verbose_proxy_logger.info(f"[LASSO_DEBUG] Cache key: {cache_key}")
 
         # Try to get existing conversation_id from cache
         try:
             cached_conversation_id = cache.get_cache(cache_key)
-            verbose_proxy_logger.info(f"[LASSO_DEBUG] Cache lookup result: {cached_conversation_id}")
             if cached_conversation_id:
-                verbose_proxy_logger.info(
-                    f"[LASSO_DEBUG] Retrieved existing conversation_id from cache: {cached_conversation_id}"
-                )
                 return cached_conversation_id
         except Exception as e:
-            verbose_proxy_logger.warning(f"[LASSO_DEBUG] Cache retrieval failed: {e}")
+            verbose_proxy_logger.warning(f"Cache retrieval failed: {e}")
 
         # Generate new conversation_id and store in cache
         generated_id = self._generate_ulid()
-        verbose_proxy_logger.info(f"[LASSO_DEBUG] Generated new conversation_id: {generated_id}")
 
         try:
             cache.set_cache(cache_key, generated_id, ttl=3600)  # Cache for 1 hour
-            verbose_proxy_logger.info(f"[LASSO_DEBUG] Stored conversation_id in cache with key: {cache_key}")
         except Exception as e:
-            verbose_proxy_logger.warning(f"[LASSO_DEBUG] Cache storage failed: {e}")
+            verbose_proxy_logger.warning(f"Cache storage failed: {e}")
 
         return generated_id
 
-    async def run_lasso_guardrail(
+    async def _run_lasso_guardrail(
         self,
         data: dict,
-        cache: DualCache,
+        cache: Optional[DualCache],
         message_type: Literal["PROMPT", "COMPLETION"] = "PROMPT",
     ):
         """
@@ -319,33 +271,23 @@ class LassoGuardrail(CustomGuardrail):
 
         Args:
             data: The request data containing messages
-            cache: The cache instance for storing conversation_id
+            cache: The cache instance for storing conversation_id (optional for post-call)
             message_type: Either "PROMPT" for input or "COMPLETION" for output
 
         Raises:
             LassoGuardrailAPIError: If the Lasso API call fails
         """
-        verbose_proxy_logger.info(
-            f"[LASSO_DEBUG] run_lasso_guardrail called with message_type: {message_type} for guardrail: {self.guardrail_name}"
-        )
-
         messages: List[Dict[str, str]] = data.get("messages", [])
         if not messages:
-            verbose_proxy_logger.info(f"[LASSO_DEBUG] No messages found, returning data unchanged")
             return data
 
         try:
             headers = self._prepare_headers(data, cache)
             payload = self._prepare_payload(messages, message_type, data, cache)
 
-            # Log the sessionId being sent
-            session_id = payload.get("sessionId", "NOT_SET")
-            verbose_proxy_logger.info(f"[LASSO_DEBUG] Sending sessionId to Lasso: {session_id}")
-
             # Use classifix endpoint when masking is enabled
             if self.mask:
                 api_url = self.api_base.replace("/gateway/v3/classify", "/gateway/v1/classifix")
-                verbose_proxy_logger.info(f"[LASSO_DEBUG] Using classifix endpoint: {api_url}")
                 response = await self._call_lasso_api(headers=headers, payload=payload, api_url=api_url)
                 self._process_lasso_response(response)
 
@@ -354,62 +296,6 @@ class LassoGuardrail(CustomGuardrail):
                     data["messages"] = response["messages"]
                     verbose_proxy_logger.debug("Applied Lasso masking to messages")
             else:
-                verbose_proxy_logger.info(f"[LASSO_DEBUG] Using classify endpoint: {self.api_base}")
-                response = await self._call_lasso_api(headers=headers, payload=payload)
-                self._process_lasso_response(response)
-
-            return data
-        except Exception as e:
-            if isinstance(e, HTTPException):
-                raise e
-            verbose_proxy_logger.error(f"Error calling Lasso API: {str(e)}")
-            raise LassoGuardrailAPIError(f"Failed to verify request safety with Lasso API: {str(e)}")
-
-    async def run_lasso_guardrail_without_cache(
-        self,
-        data: dict,
-        message_type: Literal["PROMPT", "COMPLETION"] = "PROMPT",
-    ):
-        """
-        Run the Lasso guardrail without cache access (for post-call hook).
-
-        Args:
-            data: The request data containing messages
-            message_type: Either "PROMPT" for input or "COMPLETION" for output
-
-        Raises:
-            LassoGuardrailAPIError: If the Lasso API call fails
-        """
-        verbose_proxy_logger.info(
-            f"[LASSO_DEBUG] run_lasso_guardrail_without_cache called with message_type: {message_type} for guardrail: {self.guardrail_name}"
-        )
-
-        messages: List[Dict[str, str]] = data.get("messages", [])
-        if not messages:
-            verbose_proxy_logger.info(f"[LASSO_DEBUG] No messages found, returning data unchanged")
-            return data
-
-        try:
-            headers = self._prepare_headers(data)
-            payload = self._prepare_payload(messages, message_type, data)
-
-            # Log the sessionId being sent
-            session_id = payload.get("sessionId", "NOT_SET")
-            verbose_proxy_logger.info(f"[LASSO_DEBUG] Sending sessionId to Lasso: {session_id}")
-
-            # Use classifix endpoint when masking is enabled
-            if self.mask:
-                api_url = self.api_base.replace("/gateway/v3/classify", "/gateway/v1/classifix")
-                verbose_proxy_logger.info(f"[LASSO_DEBUG] Using classifix endpoint: {api_url}")
-                response = await self._call_lasso_api(headers=headers, payload=payload, api_url=api_url)
-                self._process_lasso_response(response)
-
-                # Apply masking to messages if violations detected and masked messages are available
-                if response.get("violations_detected") and response.get("messages"):
-                    data["messages"] = response["messages"]
-                    verbose_proxy_logger.debug("Applied Lasso masking to messages")
-            else:
-                verbose_proxy_logger.info(f"[LASSO_DEBUG] Using classify endpoint: {self.api_base}")
                 response = await self._call_lasso_api(headers=headers, payload=payload)
                 self._process_lasso_response(response)
 
@@ -447,7 +333,6 @@ class LassoGuardrail(CustomGuardrail):
             )
 
         headers["lasso-conversation-id"] = conversation_id
-        verbose_proxy_logger.info(f"[LASSO_DEBUG] Adding lasso-conversation-id header: {conversation_id}")
 
         return headers
 
@@ -486,10 +371,8 @@ class LassoGuardrail(CustomGuardrail):
                 )
 
             payload["sessionId"] = conversation_id
-            verbose_proxy_logger.info(f"[LASSO_DEBUG] Adding sessionId to payload: {conversation_id}")
         elif self.conversation_id:
             payload["sessionId"] = self.conversation_id
-            verbose_proxy_logger.info(f"[LASSO_DEBUG] Using global conversation_id in payload: {self.conversation_id}")
 
         return payload
 
@@ -532,7 +415,6 @@ class LassoGuardrail(CustomGuardrail):
                 verbose_proxy_logger.info(
                     f"Non-blocking Lasso violations detected, continuing with warning: {violated_deputies}"
                 )
-                return
 
     def _check_for_blocking_actions(self, response: Dict[str, Any]) -> List[str]:
         """Check findings for actions that should block the request/response."""
