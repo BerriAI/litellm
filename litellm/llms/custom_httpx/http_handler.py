@@ -920,6 +920,8 @@ def get_async_httpx_client(
 
     if params is not None:
         _new_client = AsyncHTTPHandler(**params)
+    elif litellm.module_level_aclient is not None:
+        _new_client = litellm.module_level_aclient
     else:
         _new_client = AsyncHTTPHandler(
             timeout=httpx.Timeout(timeout=600.0, connect=5.0)
@@ -956,6 +958,8 @@ def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
 
     if params is not None:
         _new_client = HTTPHandler(**params)
+    elif litellm.module_level_client is not None:
+        _new_client = litellm.module_level_client
     else:
         _new_client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
 
