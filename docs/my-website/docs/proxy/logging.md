@@ -9,6 +9,7 @@ Log Proxy input, output, and exceptions using:
 - Langfuse
 - OpenTelemetry
 - GCS, s3, Azure (Blob) Buckets
+- AWS SQS
 - Lunary
 - MLflow
 - Deepeval
@@ -1386,11 +1387,19 @@ On s3 bucket, you will see the object key as `my-test-path/my-team-alias/...`
 
 ## AWS SQS
 
+
+| Property | Details |
+|----------|---------|
+| Description | Log LLM Input/Output to AWS SQS Queue |
+| AWS Docs on SQS | [AWS SQS](https://aws.amazon.com/sqs/) |
+| Fields Logged to SQS | LiteLLM [Standard Logging Payload is logged for each LLM call](../proxy/logging_spec) |
+
+
 Log LLM Logs to [AWS Simple Queue Service (SQS)](https://aws.amazon.com/sqs/)
 
 We will use the litellm `--config` to set 
 
-- `litellm.success_callback = ["aws_sqs"]` 
+- `litellm.callbacks = ["aws_sqs"]` 
 
 This will log all successful LLM calls to AWS SQS Queue
 
@@ -1444,13 +1453,6 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     }'
 ```
 
-Your logs should be available on the specified SQS Queue
-
-### Fields Logged to SQS
-
-[**The standard logging object is logged to SQS Queue**](../proxy/logging_spec)
-
-Each message sent to SQS contains the complete `StandardLoggingPayload` as JSON, including request details, response data, usage metrics, and metadata.
 
 ## Azure Blob Storage
 
