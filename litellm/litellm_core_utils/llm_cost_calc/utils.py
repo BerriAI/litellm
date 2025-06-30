@@ -77,9 +77,8 @@ def _generic_cost_per_character(
         prompt_cost = prompt_characters * custom_prompt_cost
     except Exception as e:
         verbose_logger.exception(
-            "litellm.litellm_core_utils.llm_cost_calc.utils.py::cost_per_character(): Exception occured - {}\nDefaulting to None".format(
-                str(e)
-            )
+            f"litellm.litellm_core_utils.llm_cost_calc.utils.py::cost_per_character(): "
+            f"Exception occured - {str(e)}\nDefaulting to None"
         )
 
         prompt_cost = None
@@ -97,9 +96,8 @@ def _generic_cost_per_character(
         completion_cost = completion_characters * custom_completion_cost
     except Exception as e:
         verbose_logger.exception(
-            "litellm.litellm_core_utils.llm_cost_calc.utils.py::cost_per_character(): Exception occured - {}\nDefaulting to None".format(
-                str(e)
-            )
+            f"litellm.litellm_core_utils.llm_cost_calc.utils.py::cost_per_character(): "
+            f"Exception occured - {str(e)}\nDefaulting to None"
         )
 
         completion_cost = None
@@ -111,8 +109,8 @@ def _get_token_base_cost(model_info: ModelInfo, usage: Usage) -> Tuple[float, fl
     """
     Return prompt cost for a given model and usage.
 
-    If input_tokens > threshold and `input_cost_per_token_above_[x]k_tokens` or `input_cost_per_token_above_[x]_tokens` is set,
-    then we use the corresponding threshold cost.
+    If input_tokens > threshold and `input_cost_per_token_above_[x]k_tokens` or 
+    `input_cost_per_token_above_[x]_tokens` is set, then we use the corresponding threshold cost.
     """
     prompt_base_cost = model_info["input_cost_per_token"]
     completion_base_cost = model_info["output_cost_per_token"]
@@ -123,7 +121,8 @@ def _get_token_base_cost(model_info: ModelInfo, usage: Usage) -> Tuple[float, fl
             prompt_base_cost = float(prompt_base_cost)
         except ValueError:
             verbose_logger.exception(
-                f"litellm.litellm_core_utils.llm_cost_calc.utils.py::_get_token_base_cost(): Exception converting prompt_base_cost string to float - {prompt_base_cost}\nDefaulting to 0.0"
+                f"litellm.litellm_core_utils.llm_cost_calc.utils.py::_get_token_base_cost(): "
+                f"Exception converting prompt_base_cost string to float - {prompt_base_cost}\nDefaulting to 0.0"
             )
             prompt_base_cost = 0.0
     
@@ -132,7 +131,8 @@ def _get_token_base_cost(model_info: ModelInfo, usage: Usage) -> Tuple[float, fl
             completion_base_cost = float(completion_base_cost)
         except ValueError:
             verbose_logger.exception(
-                f"litellm.litellm_core_utils.llm_cost_calc.utils.py::_get_token_base_cost(): Exception converting completion_base_cost string to float - {completion_base_cost}\nDefaulting to 0.0"
+                f"litellm.litellm_core_utils.llm_cost_calc.utils.py::_get_token_base_cost(): "
+                f"Exception converting completion_base_cost string to float - {completion_base_cost}\nDefaulting to 0.0"
             )
             completion_base_cost = 0.0
 
@@ -159,7 +159,8 @@ def _get_token_base_cost(model_info: ModelInfo, usage: Usage) -> Tuple[float, fl
                             threshold_prompt_cost = float(threshold_prompt_cost)
                         except ValueError:
                             verbose_logger.exception(
-                                f"litellm.litellm_core_utils.llm_cost_calc.utils.py::_get_token_base_cost(): Exception converting threshold_prompt_cost string to float - {threshold_prompt_cost}\nDefaulting to base cost"
+                                f"litellm.litellm_core_utils.llm_cost_calc.utils.py::_get_token_base_cost(): "
+                                f"Exception converting threshold_prompt_cost string to float - {threshold_prompt_cost}\nDefaulting to base cost"
                             )
                             threshold_prompt_cost = prompt_base_cost
                     
@@ -168,7 +169,8 @@ def _get_token_base_cost(model_info: ModelInfo, usage: Usage) -> Tuple[float, fl
                             threshold_completion_cost = float(threshold_completion_cost)
                         except ValueError:
                             verbose_logger.exception(
-                                f"litellm.litellm_core_utils.llm_cost_calc.utils.py::_get_token_base_cost(): Exception converting threshold_completion_cost string to float - {threshold_completion_cost}\nDefaulting to base cost"
+                                f"litellm.litellm_core_utils.llm_cost_calc.utils.py::_get_token_base_cost(): "
+                                f"Exception converting threshold_completion_cost string to float - {threshold_completion_cost}\nDefaulting to base cost"
                             )
                             threshold_completion_cost = completion_base_cost
                     
@@ -205,7 +207,8 @@ def calculate_cost_component(
             cost_per_unit = float(cost_per_unit)
     except ValueError:
         verbose_logger.exception(
-            f"litellm.litellm_core_utils.llm_cost_calc.utils.py::calculate_cost_per_component(): Exception occured - {cost_per_unit}\nDefaulting to 0.0"
+            f"litellm.litellm_core_utils.llm_cost_calc.utils.py::calculate_cost_per_component(): "
+            f"Exception occured - {cost_per_unit}\nDefaulting to 0.0"
         )
         return 0.0
     
@@ -357,7 +360,8 @@ def _convert_string_cost_to_float(cost_value: Any, cost_name: str) -> Optional[f
             return float(cost_value)
         except ValueError:
             verbose_logger.exception(
-                f"litellm.litellm_core_utils.llm_cost_calc.utils.py::generic_cost_per_token(): Exception converting {cost_name} string to float - {cost_value}\nDefaulting to None"
+                f"litellm.litellm_core_utils.llm_cost_calc.utils.py::generic_cost_per_token(): "
+                f"Exception converting {cost_name} string to float - {cost_value}\nDefaulting to None"
             )
             return None
     elif isinstance(cost_value, (int, float)):
@@ -367,7 +371,8 @@ def _convert_string_cost_to_float(cost_value: Any, cost_name: str) -> Optional[f
     else:
         # For any other type, log a warning and return None
         verbose_logger.warning(
-            f"litellm.litellm_core_utils.llm_cost_calc.utils.py::_convert_string_cost_to_float(): Unexpected type for {cost_name}: {type(cost_value)}. Defaulting to None"
+            f"litellm.litellm_core_utils.llm_cost_calc.utils.py::_convert_string_cost_to_float(): "
+            f"Unexpected type for {cost_name}: {type(cost_value)}. Defaulting to None"
         )
         return None
 
