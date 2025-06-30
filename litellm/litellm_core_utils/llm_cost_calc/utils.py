@@ -163,6 +163,17 @@ def calculate_cost_component(
         float: The calculated cost
     """
     cost_per_unit = model_info.get(cost_key)
+
+    # Sometimes the cost per unit is a string (e.g.: If a value like "3e-7" was read from the config.yaml)
+    try:
+        if isinstance(cost_per_unit, str):
+            cost_per_unit = float(cost_per_unit)
+    except ValueError:
+        verbose_logger.exception(
+            f"litellm.litellm_core_utils.llm_cost_calc.utils.py::calculate_cost_per_component(): Exception occured - {cost_per_unit}\nDefaulting to 0.0"
+        )
+        return 0.0
+    
     if (
         cost_per_unit is not None
         and isinstance(cost_per_unit, float)
