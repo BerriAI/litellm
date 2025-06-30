@@ -609,6 +609,30 @@ response = litellm.acompletion(
 )
 ```
 
+### Using HTTP/HTTPS Proxy with LiteLLM
+
+This is done by setting your own `httpx.Client` 
+
+- For `litellm.completion` set `litellm.client_session=httpx.Client(proxy="http://proxy.com")`
+- For `litellm.acompletion` set `litellm.aclient_session=AsyncClient.Client(proxy="http://proxy.com")`
+```python
+import litellm, httpx
+
+# for completion
+litellm.client_session = httpx.Client(proxy="http://proxy.com")
+response = litellm.completion(
+    model="gpt-3.5-turbo",
+    messages=messages,
+)
+
+# for acompletion
+litellm.aclient_session = httpx.AsyncClient(proxy="http://proxy.com")
+response = litellm.acompletion(
+    model="gpt-3.5-turbo",
+    messages=messages,
+)
+```
+
 
 ### Using OpenAI Proxy with LiteLLM
 ```python
