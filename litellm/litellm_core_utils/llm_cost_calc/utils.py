@@ -116,6 +116,25 @@ def _get_token_base_cost(model_info: ModelInfo, usage: Usage) -> Tuple[float, fl
     """
     prompt_base_cost = model_info["input_cost_per_token"]
     completion_base_cost = model_info["output_cost_per_token"]
+    
+    # Convert string costs to floats if needed
+    if isinstance(prompt_base_cost, str):
+        try:
+            prompt_base_cost = float(prompt_base_cost)
+        except ValueError:
+            verbose_logger.exception(
+                f"litellm.litellm_core_utils.llm_cost_calc.utils.py::_get_token_base_cost(): Exception converting prompt_base_cost string to float - {prompt_base_cost}\nDefaulting to 0.0"
+            )
+            prompt_base_cost = 0.0
+    
+    if isinstance(completion_base_cost, str):
+        try:
+            completion_base_cost = float(completion_base_cost)
+        except ValueError:
+            verbose_logger.exception(
+                f"litellm.litellm_core_utils.llm_cost_calc.utils.py::_get_token_base_cost(): Exception converting completion_base_cost string to float - {completion_base_cost}\nDefaulting to 0.0"
+            )
+            completion_base_cost = 0.0
 
     ## CHECK IF ABOVE THRESHOLD
     threshold: Optional[float] = None
@@ -128,17 +147,33 @@ def _get_token_base_cost(model_info: ModelInfo, usage: Usage) -> Tuple[float, fl
                     1000 if "k" in threshold_str else 1
                 )
                 if usage.prompt_tokens > threshold:
-                    prompt_base_cost = cast(
-                        float,
-                        model_info.get(key, prompt_base_cost),
+                    threshold_prompt_cost = model_info.get(key, prompt_base_cost)
+                    threshold_completion_cost = model_info.get(
+                        f"output_cost_per_token_above_{threshold_str}_tokens",
+                        completion_base_cost,
                     )
-                    completion_base_cost = cast(
-                        float,
-                        model_info.get(
-                            f"output_cost_per_token_above_{threshold_str}_tokens",
-                            completion_base_cost,
-                        ),
-                    )
+                    
+                    # Convert string costs to floats if needed
+                    if isinstance(threshold_prompt_cost, str):
+                        try:
+                            threshold_prompt_cost = float(threshold_prompt_cost)
+                        except ValueError:
+                            verbose_logger.exception(
+                                f"litellm.litellm_core_utils.llm_cost_calc.utils.py::_get_token_base_cost(): Exception converting threshold_prompt_cost string to float - {threshold_prompt_cost}\nDefaulting to base cost"
+                            )
+                            threshold_prompt_cost = prompt_base_cost
+                    
+                    if isinstance(threshold_completion_cost, str):
+                        try:
+                            threshold_completion_cost = float(threshold_completion_cost)
+                        except ValueError:
+                            verbose_logger.exception(
+                                f"litellm.litellm_core_utils.llm_cost_calc.utils.py::_get_token_base_cost(): Exception converting threshold_completion_cost string to float - {threshold_completion_cost}\nDefaulting to base cost"
+                            )
+                            threshold_completion_cost = completion_base_cost
+                    
+                    prompt_base_cost = threshold_prompt_cost
+                    completion_base_cost = threshold_completion_cost
                     break
             except (IndexError, ValueError):
                 continue
@@ -327,13 +362,27 @@ def generic_cost_per_token(
     ## TEXT COST
     completion_cost = float(text_tokens) * completion_base_cost
 
-    _output_cost_per_audio_token: Optional[float] = model_info.get(
-        "output_cost_per_audio_token"
-    )
-
-    _output_cost_per_reasoning_token: Optional[float] = model_info.get(
-        "output_cost_per_reasoning_token"
-    )
+    _output_cost_per_audio_token = model_info.get("output_cost_per_audio_token")
+    _output_cost_per_reasoning_token = model_info.get("output_cost_per_reasoning_token")
+    
+    # Convert string costs to floats if needed
+    if isinstance(_output_cost_per_audio_token, str):
+        try:
+            _output_cost_per_audio_token = float(_output_cost_per_audio_token)
+        except ValueError:
+            verbose_logger.exception(
+                f"litellm.litellm_core_utils.llm_cost_calc.utils.py::generic_cost_per_token(): Exception converting _output_cost_per_audio_token string to float - {_output_cost_per_audio_token}\nDefaulting to None"
+            )
+            _output_cost_per_audio_token = None
+    
+    if isinstance(_output_cost_per_reasoning_token, str):
+        try:
+            _output_cost_per_reasoning_token = float(_output_cost_per_reasoning_token)
+        except ValueError:
+            verbose_logger.exception(
+                f"litellm.litellm_core_utils.llm_cost_calc.utils.py::generic_cost_per_token(): Exception converting _output_cost_per_reasoning_token string to float - {_output_cost_per_reasoning_token}\nDefaulting to None"
+            )
+            _output_cost_per_reasoning_token = None
 
     ## AUDIO COST
     if not is_text_tokens_total and audio_tokens is not None and audio_tokens > 0:
