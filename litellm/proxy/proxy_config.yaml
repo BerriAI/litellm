@@ -13,6 +13,7 @@ litellm_settings:
   prometheus_metrics_config:
     - group: totals
       metrics:
+        - litellm_spend_metric
         - litellm_total_tokens
         - litellm_input_tokens_metric
         - litellm_output_tokens_metric
