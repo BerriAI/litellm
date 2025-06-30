@@ -12,6 +12,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.utils import get_utc_datetime
 
 PROMETHEUS_URL: Optional[str] = get_secret("PROMETHEUS_URL")  # type: ignore
 PROMETHEUS_SELECTED_INSTANCE: Optional[str] = get_secret("PROMETHEUS_SELECTED_INSTANCE")  # type: ignore
@@ -97,12 +98,12 @@ async def get_daily_spend_from_prometheus(api_key: Optional[str]):
         )
 
     # Calculate the start and end dates for the last 30 days
-    end_date = datetime.utcnow()
+    end_date = get_utc_datetime()
     start_date = end_date - timedelta(days=30)
 
     # Format dates as ISO 8601 strings with UTC offset
-    start_str = start_date.isoformat() + "+00:00"
-    end_str = end_date.isoformat() + "+00:00"
+    start_str = start_date.isoformat()
+    end_str = end_date.isoformat()
 
     url = f"{PROMETHEUS_URL}/api/v1/query_range"
 
