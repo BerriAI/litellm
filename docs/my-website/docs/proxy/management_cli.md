@@ -20,7 +20,7 @@ and more, as well as making chat and HTTP requests to the proxy server.
    If you have [uv](https://github.com/astral-sh/uv) installed, you can try this:
 
    ```shell
-   uv tool install litellm[proxy]
+   uv tool install 'litellm[proxy]'
    ```
 
    If that works, you'll see something like this:
