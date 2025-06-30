@@ -44,6 +44,81 @@ async def test_ssl_security_level(monkeypatch):
     # Optionally, check the ciphers string if needed
     # assert "DEFAULT@SECLEVEL=1" in ssl_context.get_ciphers()
 
+@pytest.mark.asyncio
+async def test_ssl_verify_false(monkeypatch):
+    # Set environment variable for SSL security level
+    monkeypatch.setenv("SSL_VERIFY", "False")
+
+    # Create async client with SSL verification disabled to isolate SSL context testing
+    client = HTTPHandler()
+
+    # Get the transport (should be LiteLLMAiohttpTransport)
+    transport = client.client._transport
+
+    # Get the transport (should be LiteLLMAiohttpTransport)
+    transport = client.client._transport
+
+    # Get the ConnectionPool
+    connection_pool = transport._pool
+
+    # Get the SSL context from the ConnectionPool
+    ssl_context = connection_pool._ssl_context
+    print("ssl_context", ssl_context)
+
+    # Verify that the SSL context exists and has the correct verify mode
+    assert isinstance(ssl_context, ssl.SSLContext)
+    assert ssl_context.verify_mode == ssl.CERT_NONE
+
+@pytest.mark.asyncio
+async def test_ssl_verify_true(monkeypatch):
+    # Set environment variable for SSL security level
+    monkeypatch.setenv("SSL_VERIFY", "True")
+
+    # Create async client with SSL verification disabled to isolate SSL context testing
+    client = HTTPHandler()
+
+    # Get the transport (should be LiteLLMAiohttpTransport)
+    transport = client.client._transport
+
+    # Get the transport (should be LiteLLMAiohttpTransport)
+    transport = client.client._transport
+
+    # Get the ConnectionPool
+    connection_pool = transport._pool
+
+    # Get the SSL context from the ConnectionPool
+    ssl_context = connection_pool._ssl_context
+    print("ssl_context", ssl_context)
+
+    # Verify that the SSL context exists and has the correct verify mode
+    assert isinstance(ssl_context, ssl.SSLContext)
+    assert ssl_context.verify_mode == ssl.CERT_REQUIRED
+
+@pytest.mark.asyncio
+async def test_ssl_verify_none(monkeypatch):
+    # Ensure environment variable for SSL security level is not set. Default to checking
+    monkeypatch.setenv("SSL_VERIFY", None)
+
+    # Create async client with SSL verification disabled to isolate SSL context testing
+    client = HTTPHandler()
+
+    # Get the transport (should be LiteLLMAiohttpTransport)
+    transport = client.client._transport
+
+    # Get the transport (should be LiteLLMAiohttpTransport)
+    transport = client.client._transport
+
+    # Get the ConnectionPool
+    connection_pool = transport._pool
+
+    # Get the SSL context from the ConnectionPool
+    ssl_context = connection_pool._ssl_context
+    print("ssl_context", ssl_context)
+
+    # Verify that the SSL context exists and has the correct verify mode
+    assert isinstance(ssl_context, ssl.SSLContext)
+    assert ssl_context.verify_mode == ssl.CERT_REQUIRED
+
 
 @pytest.mark.asyncio
 async def test_force_ipv4_transport():
