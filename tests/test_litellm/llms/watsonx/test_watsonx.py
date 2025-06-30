@@ -11,6 +11,7 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from unittest.mock import patch, Mock
 import pytest
 from typing import Optional
+from litellm.utils import get_optional_params
 
 
 @pytest.fixture
@@ -203,8 +204,6 @@ def test_watsonx_completion_regular_model_includes_model_id(
     assert json_data["model_id"] == "regular-model"  # Provider prefix is stripped
     # Ensure project_id is also included for regular models
     assert "project_id" in json_data
-
-    from litellm.utils import get_optional_params
 
 
 def test_watsonx_text_moderations():
