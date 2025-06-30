@@ -212,6 +212,7 @@ from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.discovery_endpoints import ui_discovery_endpoints_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
+from litellm.proxy.google_endpoints.endpoints import router as google_router
 from litellm.proxy.guardrails.guardrail_endpoints import router as guardrails_router
 from litellm.proxy.guardrails.init_guardrails import (
     init_guardrails_v2,
@@ -322,6 +323,7 @@ from litellm.proxy.utils import (
     get_custom_url,
     get_error_message_str,
     get_server_root_path,
+    handle_exception_on_proxy,
     hash_token,
     update_spend,
 )
@@ -351,10 +353,18 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseUsageBlock,
 )
 from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.proxy.management_endpoints.ui_sso import (
+    DefaultTeamSSOParams,
+    LiteLLM_UpperboundKeyGenerateParams,
+)
 from litellm.types.router import DeploymentTypedDict
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import RouterGeneralSettings, updateDeployment
 from litellm.types.scheduler import DefaultPriorities
+from litellm.types.secret_managers.main import (
+    KeyManagementSettings,
+    KeyManagementSystem,
+)
 from litellm.types.utils import CredentialItem, CustomHuggingfaceTokenizer
 from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.types.utils import RawRequestTypedDict, StandardLoggingPayload
@@ -905,7 +915,7 @@ health_check_results: Dict[str, Union[int, List[Dict[str, Any]]]] = {}
 queue: List = []
 litellm_proxy_budget_name = "litellm-proxy-budget"
 litellm_proxy_admin_name = LITELLM_PROXY_ADMIN_NAME
-ui_access_mode: Literal["admin", "all"] = "all"
+ui_access_mode: Union[Literal["admin", "all"], Dict] = "all"
 proxy_budget_rescheduler_min_time = PROXY_BUDGET_RESCHEDULER_MIN_TIME
 proxy_budget_rescheduler_max_time = PROXY_BUDGET_RESCHEDULER_MAX_TIME
 proxy_batch_write_at = PROXY_BATCH_WRITE_AT
@@ -1051,9 +1061,6 @@ async def update_cache(  # noqa: PLR0915
         existing_spend_obj: LiteLLM_VerificationTokenView = await user_api_key_cache.async_get_cache(key=hashed_token)  # type: ignore
         verbose_proxy_logger.debug(
             f"_update_key_cache: existing_spend_obj={existing_spend_obj}"
-        )
-        verbose_proxy_logger.debug(
-            f"_update_key_cache: existing spend: {existing_spend_obj}"
         )
         if existing_spend_obj is None:
             return
@@ -1435,11 +1442,13 @@ class ProxyConfig:
         - Do not write restricted params like 'api_key' to the database
         - if api_key is passed, save that to the local environment or connected secret manage (maybe expose `litellm.save_secret()`)
         """
+
         if prisma_client is not None and (
             general_settings.get("store_model_in_db", False) is True
             or store_model_in_db
         ):
             # if using - db for config - models are in ModelTable
+
             new_config.pop("model_list", None)
             await prisma_client.insert_data(data=new_config, table_name="config")
         else:
@@ -2276,6 +2285,8 @@ class ProxyConfig:
                         model_group=model["model_name"],
                         litellm_params=model["litellm_params"],
                     )
+                else:
+                    model_id = str(model_id)
                 combined_id_list.append(model_id)  # ADD CONFIG MODEL TO COMBINED LIST
 
         router_model_ids = llm_router.get_model_ids()
@@ -2624,6 +2635,10 @@ class ProxyConfig:
             await initialize_pass_through_endpoints(
                 pass_through_endpoints=general_settings["pass_through_endpoints"]
             )
+
+        ## UI ACCESS MODE ##
+        if "ui_access_mode" in _general_settings:
+            general_settings["ui_access_mode"] = _general_settings["ui_access_mode"]
 
     def _update_config_fields(
         self,
@@ -3431,6 +3446,29 @@ class ProxyStartupEvent:
                 verbose_proxy_logger.error(
                     "Invalid maximum_spend_logs_retention_interval value"
                 )
+        ### CHECK BATCH COST ###
+        if llm_router is not None:
+            try:
+                from litellm_enterprise.proxy.common_utils.check_batch_cost import (
+                    CheckBatchCost,
+                )
+
+                check_batch_cost_job = CheckBatchCost(
+                    proxy_logging_obj=proxy_logging_obj,
+                    prisma_client=prisma_client,
+                    llm_router=llm_router,
+                )
+                scheduler.add_job(
+                    check_batch_cost_job.check_batch_cost,
+                    "interval",
+                    seconds=3600,  # these can run infrequently, as batch jobs take time to complete
+                )
+
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "Checking batch cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
+                )
+                pass
 
         scheduler.start()
 
@@ -5570,7 +5608,9 @@ def _add_team_models_to_all_models(
                         team_models.setdefault(model_id, set()).add(team_object.team_id)
         else:
             for model_name in team_object.models:
-                _models = llm_router.get_model_list(model_name=model_name)
+                _models = llm_router.get_model_list(
+                    model_name=model_name, team_id=team_object.team_id
+                )
                 if _models is not None:
                     for model in _models:
                         model_id = model.get("model_info", {}).get("id", None)
@@ -5606,6 +5646,7 @@ async def get_all_team_models(
         team_db_objects = await prisma_client.db.litellm_teamtable.find_many(
             where={"team_id": {"in": user_teams}}
         )
+
         team_db_objects_typed = [
             LiteLLM_TeamTable(**team_db_object.model_dump())
             for team_db_object in team_db_objects
@@ -5676,6 +5717,7 @@ async def get_all_team_and_direct_access_models(
             prisma_client=prisma_client,
             llm_router=llm_router,
         )
+
         for _model in all_models:
             model_id = _model.get("model_info", {}).get("id", None)
             team_only_model_id = _model.get("model_info", {}).get("team_id", None)
@@ -5691,9 +5733,11 @@ async def get_all_team_and_direct_access_models(
                     )
 
     ## ADD DIRECT_ACCESS TO RELEVANT MODELS
+
     for _model in all_models:
         model_id = _model.get("model_info", {}).get("id", None)
         if model_id is not None and model_id in direct_access_models:
+
             _model["model_info"]["direct_access"] = True
 
     ## FILTER OUT MODELS THAT ARE NOT IN DIRECT_ACCESS_MODELS OR ACCESS_VIA_TEAM_IDS - only show user models they can call
@@ -7481,49 +7525,37 @@ async def new_invitation(
         }'
     ```
     """
-    global prisma_client
-
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": CommonProxyErrors.db_not_connected_error.value},
-        )
-
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "{}, your role={}".format(
-                    CommonProxyErrors.not_allowed_access.value,
-                    user_api_key_dict.user_role,
-                )
-            },
-        )
-
-    current_time = litellm.utils.get_utc_datetime()
-    expires_at = current_time + timedelta(days=7)
-
     try:
-        response = await prisma_client.db.litellm_invitationlink.create(
-            data={
-                "user_id": data.user_id,
-                "created_at": current_time,
-                "expires_at": expires_at,
-                "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-                "updated_at": current_time,
-                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-            }  # type: ignore
+        from litellm.proxy.management_helpers.user_invitation import (
+            create_invitation_for_user,
         )
-        return response
-    except Exception as e:
-        if "Foreign key constraint failed on the field" in str(e):
+
+        global prisma_client
+
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": "User id does not exist in 'LiteLLM_UserTable'. Fix this by creating user via `/user/new`."
+                    "error": "{}, your role={}".format(
+                        CommonProxyErrors.not_allowed_access.value,
+                        user_api_key_dict.user_role,
+                    )
                 },
             )
-        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+        response = await create_invitation_for_user(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+        return response
+    except Exception as e:
+        raise handle_exception_on_proxy(e)
 
 
 @router.get(
@@ -8584,6 +8616,7 @@ app.include_router(credential_router)
 app.include_router(llm_passthrough_router)
 app.include_router(mcp_management_router)
 app.include_router(anthropic_router)
+app.include_router(google_router)
 app.include_router(langfuse_router)
 app.include_router(pass_through_router)
 app.include_router(health_router)

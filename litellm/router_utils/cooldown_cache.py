@@ -62,7 +62,15 @@ class CooldownCache:
         cooldown_time: Optional[float],
     ):
         try:
-            _cooldown_time = cooldown_time or self.default_cooldown_time
+            #########################################################
+            # get cooldown time
+            # 1. If dynamic cooldown time is set for the model/deployment, use that
+            # 2. If no dynamic cooldown time is set, use the default cooldown time set on CooldownCache
+            _cooldown_time = cooldown_time
+            if _cooldown_time is None:
+                _cooldown_time = self.default_cooldown_time
+            #########################################################
+
             cooldown_key, cooldown_data = self._common_add_cooldown_logic(
                 model_id=model_id,
                 original_exception=original_exception,

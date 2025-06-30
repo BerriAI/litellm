@@ -15,6 +15,7 @@ import {
   TableHeaderCell, TableBody, TableCell,
   Subtitle, DateRangePicker, DateRangePickerValue
 } from "@tremor/react";
+import UsageDatePicker from "./shared/usage_date_picker";
 import { AreaChart } from "@tremor/react";
 
 import { userDailyActivityCall, tagListCall } from "./networking";
@@ -211,8 +212,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 
   const fetchUserSpendData = async () => {
     if (!accessToken || !dateValue.from || !dateValue.to) return;
-    const startTime = dateValue.from;
-    const endTime = dateValue.to;
+    // Create new Date objects to avoid mutating the original dates
+    const startTime = new Date(dateValue.from);
+    const endTime = new Date(dateValue.to);
     
     try {
       // Get first page
@@ -224,23 +226,31 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
       }
 
       // If only one page, just set the data
-      if (firstPageData.metadata.total_pages === 1) {
+      if (firstPageData.metadata.total_pages <= 1) {
         setUserSpendData(firstPageData);
         return;
       }
 
       // Fetch all pages
       const allResults = [...firstPageData.results];
+      const aggregatedMetadata = { ...firstPageData.metadata };
       
       for (let page = 2; page <= firstPageData.metadata.total_pages; page++) {
         const pageData = await userDailyActivityCall(accessToken, startTime, endTime, page);
         allResults.push(...pageData.results);
+        if (pageData.metadata) {
+            aggregatedMetadata.total_spend += pageData.metadata.total_spend || 0;
+            aggregatedMetadata.total_api_requests += pageData.metadata.total_api_requests || 0;
+            aggregatedMetadata.total_successful_requests += pageData.metadata.total_successful_requests || 0;
+            aggregatedMetadata.total_failed_requests += pageData.metadata.total_failed_requests || 0;
+            aggregatedMetadata.total_tokens += pageData.metadata.total_tokens || 0;
+        }
       }
 
       // Combine all results with the first page's metadata
       setUserSpendData({
         results: allResults,
-        metadata: firstPageData.metadata
+        metadata: aggregatedMetadata
       });
     } catch (error) {
       console.error("Error fetching user spend data:", error);
@@ -273,9 +283,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
           <TabPanel>
             <Grid numItems={2} className="gap-2 w-full mb-4">
               <Col>
-                <Text>Select Time Range</Text>
-                <DateRangePicker
-                  enableSelect={true}
+                <UsageDatePicker
                   value={dateValue}
                   onValueChange={(value) => {
                     setDateValue(value);

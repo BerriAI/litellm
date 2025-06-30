@@ -33,7 +33,10 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 import litellm
-from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+from litellm.types.llms.base import (
+    BaseLiteLLMOpenAIResponseObject,
+    LiteLLMPydanticObjectBase,
+)
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
 from .guardrails import GuardrailEventHooks
@@ -61,28 +64,6 @@ else:
 
 def _generate_id():  # private helper function
     return "chatcmpl-" + str(uuid.uuid4())
-
-
-class LiteLLMPydanticObjectBase(BaseModel):
-    """
-    Implements default functions, all pydantic objects should have.
-    """
-
-    def json(self, **kwargs):  # type: ignore
-        try:
-            return self.model_dump(**kwargs)  # noqa
-        except Exception:
-            # if using pydantic v1
-            return self.dict(**kwargs)
-
-    def fields_set(self):
-        try:
-            return self.model_fields_set  # noqa
-        except Exception:
-            # if using pydantic v1
-            return self.__fields_set__
-
-    model_config = ConfigDict(protected_namespaces=())
 
 
 class LiteLLMCommonStrings(Enum):
@@ -276,6 +257,16 @@ class CallTypes(Enum):
     responses = "responses"
     aresponses = "aresponses"
     alist_input_items = "alist_input_items"
+    llm_passthrough_route = "llm_passthrough_route"
+    allm_passthrough_route = "allm_passthrough_route"
+
+    #########################################################
+    # Google GenAI Native Call Types
+    #########################################################
+    generate_content = "generate_content"
+    agenerate_content = "agenerate_content"
+    generate_content_stream = "generate_content_stream"
+    agenerate_content_stream = "agenerate_content_stream"
 
 
 CallTypesLiteral = Literal[
@@ -304,6 +295,10 @@ CallTypesLiteral = Literal[
     "anthropic_messages",
     "aretrieve_batch",
     "retrieve_batch",
+    "generate_content",
+    "agenerate_content",
+    "generate_content_stream",
+    "agenerate_content_stream",
 ]
 
 
@@ -611,7 +606,7 @@ class Message(OpenAIObject):
     def __init__(
         self,
         content: Optional[str] = None,
-        role: Literal["assistant"] = "assistant",
+        role: Literal["assistant", "user", "system", "tool", "function"] = "assistant",
         function_call=None,
         tool_calls: Optional[list] = None,
         audio: Optional[ChatCompletionAudioResponse] = None,
@@ -2288,6 +2283,7 @@ class LlmProviders(str, Enum):
     NEBIUS = "nebius"
     INFINITY = "infinity"
     DEEPGRAM = "deepgram"
+    ELEVENLABS = "elevenlabs"
     NOVITA = "novita"
     AIOHTTP_OPENAI = "aiohttp_openai"
     LANGFUSE = "langfuse"
@@ -2499,3 +2495,12 @@ class CallbacksByType(TypedDict):
     success: List[str]
     failure: List[str]
     success_and_failure: List[str]
+
+
+CostResponseTypes = Union[
+    ModelResponse,
+    TextCompletionResponse,
+    EmbeddingResponse,
+    ImageResponse,
+    TranscriptionResponse,
+]

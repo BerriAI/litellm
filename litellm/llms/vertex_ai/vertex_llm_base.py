@@ -8,9 +8,11 @@ import json
 import os
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES, VertexPartnerProvider
 
 from .common_utils import (
@@ -80,11 +82,9 @@ class VertexBase:
             # Check if the JSON object contains Workload Identity Federation configuration
             if "type" in json_obj and json_obj["type"] == "external_account":
                 # If environment_id key contains "aws" value it corresponds to an AWS config file
-                if (
-                    "credential_source" in json_obj
-                    and "environment_id" in json_obj["credential_source"]
-                    and "aws" in json_obj["credential_source"]["environment_id"]
-                ):
+                credential_source = json_obj.get("credential_source", {})
+                environment_id = credential_source.get("environment_id", "") if isinstance(credential_source, dict) else ""
+                if isinstance(environment_id, str) and "aws" in environment_id:
                     creds = self._credentials_from_identity_pool_with_aws(json_obj)
                 else:
                     creds = self._credentials_from_identity_pool(json_obj)
@@ -490,3 +490,30 @@ class VertexBase:
             headers.update(extra_headers)
 
         return headers
+    
+    @staticmethod
+    def get_vertex_ai_project(litellm_params: dict) -> Optional[str]:
+        return (
+            litellm_params.pop("vertex_project", None)
+            or litellm_params.pop("vertex_ai_project", None)
+            or litellm.vertex_project
+            or get_secret_str("VERTEXAI_PROJECT")
+        )
+    
+    @staticmethod
+    def get_vertex_ai_credentials(litellm_params: dict) -> Optional[str]:
+        return (
+            litellm_params.pop("vertex_credentials", None)
+            or litellm_params.pop("vertex_ai_credentials", None)
+            or get_secret_str("VERTEXAI_CREDENTIALS")
+        )
+    
+    @staticmethod
+    def get_vertex_ai_location(litellm_params: dict) -> Optional[str]:
+        return (
+            litellm_params.pop("vertex_location", None)
+            or litellm_params.pop("vertex_ai_location", None)
+            or litellm.vertex_location
+            or get_secret_str("VERTEXAI_LOCATION")
+            or get_secret_str("VERTEX_LOCATION")
+        )

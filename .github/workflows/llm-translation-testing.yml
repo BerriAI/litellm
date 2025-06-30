@@ -1,4 +1,4 @@
-name: LLM Translation Test Results for Release Candidates
+name: LLM Translation Tests
 
 on:
   workflow_dispatch:
@@ -12,9 +12,9 @@ on:
       - 'v*-rc*'  # Triggers on release candidate tags like v1.0.0-rc1
   
 jobs:
-  fetch-llm-translation-results:
+  run-llm-translation-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     
     steps:
       - name: Checkout code
@@ -22,136 +22,68 @@ jobs:
         with:
           ref: ${{ github.event.inputs.release_candidate_tag || github.ref }}
       
-      - name: Install CircleCI CLI
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: latest
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+      
+      - name: Cache Poetry dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/pypoetry
+            .venv
+          key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-poetry-
+      
+      - name: Install dependencies
         run: |
-          curl -fLSs https://raw.githubusercontent.com/CircleCI-Public/circleci-cli/main/install.sh | sudo bash
+          poetry install --with dev
+          poetry run pip install pytest-xdist pytest-timeout
       
       - name: Create test results directory
         run: mkdir -p test-results
       
-      - name: Fetch LLM Translation Test Results from CircleCI
+      - name: Run LLM Translation Tests
         env:
-          CIRCLE_TOKEN: ${{ secrets.CIRCLE_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          AZURE_API_KEY: ${{ secrets.AZURE_API_KEY }}
+          AZURE_API_BASE: ${{ secrets.AZURE_API_BASE }}
+          AZURE_API_VERSION: ${{ secrets.AZURE_API_VERSION }}
+          # Add other API keys as needed
         run: |
-          # Get the latest CircleCI pipeline for this commit
-          COMMIT_SHA="${{ github.sha }}"
-          echo "Fetching CircleCI results for commit: $COMMIT_SHA"
-          
-          # Get pipeline info
-          PIPELINE_INFO=$(curl -s -H "Circle-Token: $CIRCLE_TOKEN" \
-            "https://circleci.com/api/v2/project/github/BerriAI/litellm/pipeline?branch=main" | \
-            jq -r ".items[] | select(.vcs.revision == \"$COMMIT_SHA\") | .id" | head -1)
-          
-          if [ -z "$PIPELINE_INFO" ]; then
-            echo "No CircleCI pipeline found for commit $COMMIT_SHA"
-            echo "Creating placeholder test results..."
-            echo '<?xml version="1.0" encoding="utf-8"?>' > test-results/junit.xml
-            echo '<testsuite name="llm_translation" tests="0" failures="0" errors="0" skipped="0" time="0">' >> test-results/junit.xml
-            echo '<system-out>No CircleCI results found for this commit</system-out>' >> test-results/junit.xml
-            echo '</testsuite>' >> test-results/junit.xml
-            exit 0
-          fi
-          
-          echo "Found pipeline: $PIPELINE_INFO"
-          
-          # Get workflow info
-          WORKFLOW_ID=$(curl -s -H "Circle-Token: $CIRCLE_TOKEN" \
-            "https://circleci.com/api/v2/pipeline/$PIPELINE_INFO/workflow" | \
-            jq -r '.items[] | select(.name | contains("test")) | .id' | head -1)
-          
-          if [ -z "$WORKFLOW_ID" ]; then
-            echo "No test workflow found in pipeline"
-            exit 1
-          fi
-          
-          echo "Found workflow: $WORKFLOW_ID"
-          
-          # Get job info for llm_translation tests
-          JOB_INFO=$(curl -s -H "Circle-Token: $CIRCLE_TOKEN" \
-            "https://circleci.com/api/v2/workflow/$WORKFLOW_ID/job" | \
-            jq -r '.items[] | select(.name | contains("llm_translation")) | select(.status == "success" or .status == "failed") | .job_number' | head -1)
-          
-          if [ -z "$JOB_INFO" ]; then
-            echo "No completed llm_translation job found"
-            exit 1
-          fi
-          
-          echo "Found job: $JOB_INFO"
-          
-          # Download artifacts
-          curl -s -H "Circle-Token: $CIRCLE_TOKEN" \
-            "https://circleci.com/api/v2/project/github/BerriAI/litellm/$JOB_INFO/artifacts" | \
-            jq -r '.items[] | select(.path | contains("junit") or contains("coverage") or contains("report")) | .url' | \
-            while read -r artifact_url; do
-              filename=$(basename "$artifact_url" | sed 's/[?&].*//')
-              echo "Downloading artifact: $filename"
-              curl -s -H "Circle-Token: $CIRCLE_TOKEN" -o "test-results/$filename" "$artifact_url"
-            done
-          
-          # If no artifacts found, create placeholder
-          if [ ! -f "test-results/junit.xml" ]; then
-            echo "No test artifacts found, creating placeholder..."
-            echo '<?xml version="1.0" encoding="utf-8"?>' > test-results/junit.xml
-            echo '<testsuite name="llm_translation" tests="0" failures="0" errors="0" skipped="0" time="0">' >> test-results/junit.xml
-            echo '<system-out>Test artifacts not available from CircleCI</system-out>' >> test-results/junit.xml
-            echo '</testsuite>' >> test-results/junit.xml
-          fi
-        continue-on-error: true
+          python .github/workflows/run_llm_translation_tests.py \
+            --tag "${{ github.event.inputs.release_candidate_tag || github.ref_name }}" \
+            --commit "${{ github.sha }}" \
+            || true  # Continue even if tests fail
       
-      - name: Generate test summary
+      - name: Display test summary
+        if: always()
         run: |
-          echo "# LLM Translation Testing Results" > test-results/summary.md
-          echo "" >> test-results/summary.md
-          echo "**Release Candidate:** ${{ github.event.inputs.release_candidate_tag || github.ref_name }}" >> test-results/summary.md
-          echo "**Fetched Date:** $(date)" >> test-results/summary.md
-          echo "**Commit:** ${{ github.sha }}" >> test-results/summary.md
-          echo "**Source:** CircleCI Pipeline" >> test-results/summary.md
-          echo "" >> test-results/summary.md
-          
-          # Parse junit.xml for test statistics if it exists
-          if [ -f "test-results/junit.xml" ]; then
-            python -c "
-          import xml.etree.ElementTree as ET
-          try:
-              tree = ET.parse('test-results/junit.xml')
-              root = tree.getroot()
-              tests = root.get('tests', '0')
-              failures = root.get('failures', '0')
-              errors = root.get('errors', '0')
-              skipped = root.get('skipped', '0')
-              time = root.get('time', '0')
-              
-              print(f'**Total Tests:** {tests}')
-              print(f'**Passed:** {int(tests) - int(failures) - int(errors) - int(skipped)}')
-              print(f'**Failed:** {failures}')
-              print(f'**Errors:** {errors}')
-              print(f'**Skipped:** {skipped}')
-              print(f'**Duration:** {time} seconds')
-          except Exception as e:
-              print(f'Could not parse test results: {e}')
-          " >> test-results/summary.md
+          if [ -f "test-results/llm_translation_report.md" ]; then
+            echo "Test report generated successfully!"
+            echo "Artifact will contain:"
+            echo "- test-results/junit.xml (JUnit XML results)"
+            echo "- test-results/llm_translation_report.md (Beautiful markdown report)"
+          else
+            echo "Warning: Test report was not generated"
           fi
-          
-          echo "" >> test-results/summary.md
-          echo "## Test Files Covered" >> test-results/summary.md
-          ls tests/llm_translation/*.py | sed 's/^/- /' >> test-results/summary.md
       
-      - name: Upload test results
+      - name: Upload test artifacts
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: llm-translation-test-results-${{ github.event.inputs.release_candidate_tag || github.ref_name }}
-          path: |
-            test-results/
-            coverage.xml
-            htmlcov/
-            .coverage
+          name: LLM-Translation-Artifact-${{ github.event.inputs.release_candidate_tag || github.ref_name }}
+          path: test-results/
           retention-days: 30
-      
-      - name: Upload JUnit test results
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: junit-xml-${{ github.event.inputs.release_candidate_tag || github.ref_name }}
-          path: test-results/junit.xml
-          retention-days: 30 
