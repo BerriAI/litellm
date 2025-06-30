@@ -1,6 +1,7 @@
 from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union, cast
 
 import litellm
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse
 
 from .transformation import GoogleGenAIAdapter
@@ -18,6 +19,7 @@ class GenerateContentToCompletionHandler:
         contents: Union[List[Dict[str, Any]], Dict[str, Any]],
         config: Optional[Dict[str, Any]] = None,
         stream: bool = False,
+        litellm_params: Optional[GenericLiteLLMParams] = None,
         extra_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Prepare kwargs for litellm.completion/acompletion"""
@@ -27,6 +29,7 @@ class GenerateContentToCompletionHandler:
             model=model,
             contents=contents,
             config=config,
+            litellm_params=litellm_params,
             **(extra_kwargs or {})
         )
         
@@ -43,6 +46,7 @@ class GenerateContentToCompletionHandler:
         contents: Union[List[Dict[str, Any]], Dict[str, Any]],
         config: Optional[Dict[str, Any]] = None,
         stream: bool = False,
+        litellm_params: Optional[GenericLiteLLMParams] = None,
         **kwargs,
     ) -> Union[Dict[str, Any], AsyncIterator[bytes]]:
         """Handle generate_content call asynchronously using completion adapter"""
@@ -52,6 +56,7 @@ class GenerateContentToCompletionHandler:
             contents=contents,
             config=config,
             stream=stream,
+            litellm_params=litellm_params,
             extra_kwargs=kwargs,
         )
         
@@ -85,6 +90,7 @@ class GenerateContentToCompletionHandler:
         config: Optional[Dict[str, Any]] = None,
         stream: bool = False,
         _is_async: bool = False,
+        litellm_params: Optional[GenericLiteLLMParams] = None,
         **kwargs,
     ) -> Union[Dict[str, Any], AsyncIterator[bytes], Coroutine[Any, Any, Union[Dict[str, Any], AsyncIterator[bytes]]]]:
         """Handle generate_content call using completion adapter"""
@@ -103,6 +109,7 @@ class GenerateContentToCompletionHandler:
             contents=contents,
             config=config,
             stream=stream,
+            litellm_params=litellm_params,
             extra_kwargs=kwargs,
         )
         
