@@ -18,7 +18,7 @@ async def test_async_sqs_logger_flush():
     litellm.callbacks = [sqs_logger]
 
     await litellm.acompletion(
-        model="gpt-3.5-turbo",
+        model="gpt-4o",
         messages=[{"role": "user", "content": "hello"}],
         mock_response="hi",
     )
