@@ -11,7 +11,12 @@ from typing import List, Optional
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
-from litellm.constants import DEFAULT_SQS_BATCH_SIZE, DEFAULT_SQS_FLUSH_INTERVAL_SECONDS
+from litellm.constants import (
+    DEFAULT_SQS_BATCH_SIZE,
+    DEFAULT_SQS_FLUSH_INTERVAL_SECONDS,
+    SQS_API_VERSION,
+    SQS_SEND_MESSAGE_ACTION,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
@@ -234,7 +239,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             json_string = safe_dumps(payload)
 
             body = (
-                "Action=SendMessage&Version=2012-11-05&MessageBody="
+                f"Action={SQS_SEND_MESSAGE_ACTION}&Version={SQS_API_VERSION}&MessageBody="
                 + quote(json_string, safe="")
             )
 
