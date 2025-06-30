@@ -725,8 +725,22 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )
     if callback_settings_obj is not None:
-        data["success_callback"] = callback_settings_obj.success_callback
-        data["failure_callback"] = callback_settings_obj.failure_callback
+        # Merge team callbacks with existing callbacks instead of overwriting
+        if callback_settings_obj.success_callback:
+            existing_success = data.get("success_callback", [])
+            if not isinstance(existing_success, list):
+                existing_success = [existing_success] if existing_success else []
+            # Merge and deduplicate callbacks
+            merged_success = list(set(existing_success + callback_settings_obj.success_callback))
+            data["success_callback"] = merged_success
+        
+        if callback_settings_obj.failure_callback:
+            existing_failure = data.get("failure_callback", [])
+            if not isinstance(existing_failure, list):
+                existing_failure = [existing_failure] if existing_failure else []
+            # Merge and deduplicate callbacks
+            merged_failure = list(set(existing_failure + callback_settings_obj.failure_callback))
+            data["failure_callback"] = merged_failure
 
         if callback_settings_obj.callback_vars is not None:
             # unpack callback_vars in data
