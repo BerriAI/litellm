@@ -1384,6 +1384,74 @@ litellm_settings:
 
 On s3 bucket, you will see the object key as `my-test-path/my-team-alias/...`
 
+## AWS SQS
+
+Log LLM Logs to [AWS Simple Queue Service (SQS)](https://aws.amazon.com/sqs/)
+
+We will use the litellm `--config` to set 
+
+- `litellm.success_callback = ["aws_sqs"]` 
+
+This will log all successful LLM calls to AWS SQS Queue
+
+**Step 1** Set AWS Credentials in .env
+
+```shell
+AWS_ACCESS_KEY_ID = ""
+AWS_SECRET_ACCESS_KEY = ""
+AWS_REGION_NAME = ""
+```
+
+**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `callbacks`
+
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  callbacks: ["aws_sqs"]
+  aws_sqs_callback_params:
+    sqs_queue_url: https://sqs.us-west-2.amazonaws.com/123456789012/my-queue   # AWS SQS Queue URL
+    sqs_region_name: us-west-2              # AWS Region Name for SQS
+    sqs_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID  # use os.environ/<variable name> to pass environment variables. This is AWS Access Key ID for SQS
+    sqs_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY  # AWS Secret Access Key for SQS
+    sqs_batch_size: 10  # [OPTIONAL] Number of messages to batch before sending (default: 10)
+    sqs_flush_interval: 30  # [OPTIONAL] Time in seconds to wait before flushing batch (default: 30)
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-4o",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
+```
+
+Your logs should be available on the specified SQS Queue
+
+### Fields Logged to SQS
+
+[**The standard logging object is logged to SQS Queue**](../proxy/logging_spec)
+
+Each message sent to SQS contains the complete `StandardLoggingPayload` as JSON, including request details, response data, usage metrics, and metadata.
+
 ## Azure Blob Storage
 
 Log LLM Logs to [Azure Data Lake Storage](https://learn.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction)
