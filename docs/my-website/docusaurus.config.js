@@ -183,6 +183,11 @@ const config = {
             position: 'right',
           },
           {
+            href: 'https://join.slack.com/share/enQtOTE0ODczMzk2Nzk4NC01YjUxNjY2YjBlYTFmNDRiZTM3NDFiYTM3MzVkODFiMDVjOGRjMmNmZTZkZTMzOWQzZGQyZWIwYjQ0MWExYmE3',
+            label: 'Slack',
+            position: 'right',
+          },
+          {
             href: 'https://discord.com/invite/wuPM9dRgDw',
             label: 'Discord',
             position: 'right',
