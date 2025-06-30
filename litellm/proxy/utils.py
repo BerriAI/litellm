@@ -168,13 +168,25 @@ def _print_original_feedback_box():
     """Print the original feedback box without Rich formatting"""
     # ASCII Art feedback box
     print()  # noqa: T201
-    print(" ┌───────────────────────────────────────────────────────────────┐")  # noqa: T201
-    print(" │                                                               │")  # noqa: T201
-    print(" │  Give Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new │")  # noqa: T201
-    print(" │                                                               │")  # noqa: T201
-    print(" └───────────────────────────────────────────────────────────────┘")  # noqa: T201
+    print(  # noqa: T201
+        " ┌───────────────────────────────────────────────────────────────┐"
+    )
+    print(  # noqa: T201
+        " │                                                               │"
+    )
+    print(  # noqa: T201
+        " │  Give Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new │"
+    )
+    print(  # noqa: T201
+        " │                                                               │"
+    )
+    print(  # noqa: T201
+        " └───────────────────────────────────────────────────────────────┘"
+    )
     print()  # noqa: T201
-    print(" Thank you for using LiteLLM! - Krrish & Ishaan")  # noqa: T201
+    print(  # noqa: T201
+        " Thank you for using LiteLLM! - Krrish & Ishaan"
+    )
     print()  # noqa: T201
     print()  # noqa: T201
     print()  # noqa: T201
