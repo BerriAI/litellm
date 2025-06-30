@@ -200,6 +200,7 @@ class BaseOpenAILLM:
             limits=httpx.Limits(max_connections=1000, max_keepalive_connections=100),
             verify=litellm.ssl_verify,
             transport=AsyncHTTPHandler._create_async_transport(),
+            follow_redirects=True,
         )
 
     @staticmethod
