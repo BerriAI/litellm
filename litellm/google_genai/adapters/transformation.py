@@ -2,6 +2,7 @@ import json
 from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Union, cast
 
 from litellm.litellm_core_utils.json_validation_rule import normalize_tool_schema
+from litellm.types.google_genai.adapters import LiteLLMChatCompletionRequest
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -13,6 +14,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionUserMessage,
 )
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     AdapterCompletionStreamWrapper,
     Choices,
@@ -107,8 +109,9 @@ class GoogleGenAIAdapter:
         model: str,
         contents: Union[List[Dict[str, Any]], Dict[str, Any]],
         config: Optional[Dict[str, Any]] = None,
+        litellm_params: Optional[GenericLiteLLMParams] = None,
         **kwargs,
-    ) -> ChatCompletionRequest:
+    ) -> LiteLLMChatCompletionRequest:
         """
         Transform generate_content request to litellm completion format
 
@@ -131,11 +134,11 @@ class GoogleGenAIAdapter:
         # Transform contents to OpenAI messages format
         messages = self._transform_contents_to_messages(contents_list)
 
-        # Create base request
-        completion_request: ChatCompletionRequest = ChatCompletionRequest(
-            model=model,
-            messages=messages,
-        )
+        # Create base request as dict (which is compatible with ChatCompletionRequest)
+        completion_request: LiteLLMChatCompletionRequest = {
+            "model": model,
+            "messages": messages,
+        }
 
         #########################################################
         # Supported OpenAI chat completion params
@@ -182,7 +185,30 @@ class GoogleGenAIAdapter:
             )
             if tool_choice:
                 completion_request["tool_choice"] = tool_choice
+        
+        # forward any litellm specific params
+        if litellm_params:
+            completion_request = self._add_generic_litellm_params_to_request(completion_request, litellm_params)
 
+        return completion_request
+    
+    def _add_generic_litellm_params_to_request(
+        self, 
+        completion_request: LiteLLMChatCompletionRequest, 
+        litellm_params: Optional[GenericLiteLLMParams] = None):
+        """Add generic litellm params to request. e.g add api_base, api_key, api_version, etc.
+
+        Args:
+            completion_request: LiteLLMChatCompletionRequest
+            litellm_params: GenericLiteLLMParams
+
+        Returns:
+            LiteLLMChatCompletionRequest
+        """
+        if litellm_params:
+            litellm_dict = litellm_params.model_dump(exclude_none=True)
+            for key, value in litellm_dict.items():
+                completion_request[key] = value
         return completion_request
 
     def translate_completion_output_params_streaming(
