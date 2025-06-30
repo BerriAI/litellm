@@ -136,7 +136,7 @@ Create / Update a customer with budget
 curl -X POST 'http://0.0.0.0:4000/customer/new'         
     -H 'Authorization: Bearer sk-1234'         
     -H 'Content-Type: application/json'         
-    -D '{
+    -d '{
         "user_id" : "my-customer-id",
         "max_budget": "0", # 👈 CAN BE FLOAT
     }'
