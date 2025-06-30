@@ -372,7 +372,8 @@ class PrometheusLogger(CustomLogger):
         
         if validation_results.has_errors:
             self._pretty_print_validation_errors(validation_results)
-            raise ValueError(f"Configuration validation failed:\n" + "\n".join(validation_results.all_error_messages))
+            error_message = "Configuration validation failed:\n" + "\n".join(validation_results.all_error_messages)
+            raise ValueError(error_message)
 
         # Build label filters from valid configurations
         label_filters = self._build_label_filters(parsed_configs)
