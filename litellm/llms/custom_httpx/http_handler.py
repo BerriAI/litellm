@@ -919,12 +919,10 @@ def get_async_httpx_client(
         return _cached_client
 
     if params is not None:
-        _new_client = AsyncHTTPHandler(**params)
-    elif litellm.module_level_aclient is not None:
-        _new_client = litellm.module_level_aclient
+        _new_client = AsyncHTTPHandler(**params, client=litellm.aclient_session)
     else:
         _new_client = AsyncHTTPHandler(
-            timeout=httpx.Timeout(timeout=600.0, connect=5.0)
+            timeout=httpx.Timeout(timeout=600.0, connect=5.0),client=litellm.aclient_session
         )
 
     litellm.in_memory_llm_clients_cache.set_cache(
@@ -957,11 +955,9 @@ def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
         return _cached_client
 
     if params is not None:
-        _new_client = HTTPHandler(**params)
-    elif litellm.module_level_client is not None:
-        _new_client = litellm.module_level_client
+        _new_client = HTTPHandler(**params, client=litellm.client_session)
     else:
-        _new_client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
+        _new_client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0), client=litellm.client_session)
 
     litellm.in_memory_llm_clients_cache.set_cache(
         key=_cache_key_name,
