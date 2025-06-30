@@ -180,3 +180,15 @@ def test_get_ssl_context_integration():
     # Verify it has basic SSL context properties
     assert ssl_context.protocol is not None
     assert ssl_context.verify_mode is not None
+
+
+def test_async_http_handler_custom_client():
+    """Test that verifies that setting client=httpx.AsyncClient(...) actually assigns the custom client"""
+    # Create custom httpx.AsyncClient
+    custom_client = httpx.AsyncClient(proxy="http://proxy.com")
+
+    # Create custom AsyncHTTPHandler and pass custom client into it
+    handler = AsyncHTTPHandler(client=custom_client)
+
+    # Verify new client was set
+    assert handler.client == custom_client
