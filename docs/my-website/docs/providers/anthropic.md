@@ -1676,3 +1676,63 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
+
+## Usage - Set `ssl_verify=False`
+
+This is done by setting your own `httpx.Client` 
+
+- For `litellm.completion` set `litellm.module_level_client=litellm.HTTPHandler(client=httpx.Client(verify=False))`
+- For `litellm.acompletion` set `litellm.module_level_aclient=litellm.HTTPHandler(client=httpx.AsyncClient(verify=False))`
+```python
+import litellm, httpx
+
+# for completion
+litellm.module_level_client = litellm.HTTPHandler(client=httpx.Client(verify=False))
+response = litellm.completion(
+    model="claude-3-5-sonnet-20240620",
+    messages=messages,
+)
+
+# for acompletion
+litellm.module_level_aclient = litellm.HTTPHandler(client=httpx.AsyncClient(verify=False))
+response = litellm.acompletion(
+    model="claude-3-5-sonnet-20240620",
+    messages=messages,
+)
+```
+
+:::tip
+
+If you are using Anthropic models together with models from other providers, we recommend setting this parameter along with the other parameter mentioned on [this page.](/docs/providers/openai#set-ssl_verifyfalse)
+
+:::
+
+### Using HTTP/HTTPS Proxy with LiteLLM
+
+This is done by setting your own `httpx.Client` 
+
+- For `litellm.completion` set `litellm.module_level_client=litellm.HTTPHandler(client=httpx.Client(proxy="http://proxy.com"))`
+- For `litellm.acompletion` set `litellm.module_level_aclient=litellm.HTTPHandler(client=httpx.AsyncClient(proxy="http://proxy.com"))`
+```python
+import litellm, httpx
+
+# for completion
+litellm.module_level_client=litellm.HTTPHandler(client=httpx.Client(proxy="http://proxy.com"))
+response = litellm.completion(
+    model="claude-3-5-sonnet-20240620",
+    messages=messages,
+)
+
+# for acompletion
+litellm.module_level_aclient=litellm.HTTPHandler(client=httpx.AsyncClient(proxy="http://proxy.com"))
+response = litellm.acompletion(
+    model="claude-3-5-sonnet-20240620",
+    messages=messages,
+)
+```
+
+:::tip
+
+If you are using Anthropic models together with models from other providers, we recommend setting this parameter along with the other parameter mentioned on [this page.](/docs/providers/openai#set-ssl_verifyfalse)
+
+:::
