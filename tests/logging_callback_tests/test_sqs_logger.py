@@ -66,7 +66,7 @@ async def test_async_sqs_logger_flush():
     # Verify it has the expected StandardLoggingPayload structure
     assert "model" in payload_data
     assert "messages" in payload_data
-    assert "response_obj" in payload_data
+    assert "response" in payload_data
     assert payload_data["model"] == "gpt-4o"
     assert len(payload_data["messages"]) == 1
     assert payload_data["messages"][0]["role"] == "user"
