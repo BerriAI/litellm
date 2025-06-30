@@ -174,6 +174,8 @@ def _get_cost_per_unit(model_info: ModelInfo, cost_key: str, default_value: floa
     cost_per_unit = model_info.get(cost_key)
     if isinstance(cost_per_unit, float):
         return cost_per_unit
+    if isinstance(cost_per_unit, int):
+        return float(cost_per_unit)
     if isinstance(cost_per_unit, str):
         try:
             return float(cost_per_unit)
