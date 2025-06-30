@@ -32,6 +32,7 @@ from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.integrations.opik.opik import OpikLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.s3_v2 import S3Logger
+from litellm.integrations.sqs import SQSLogger
 from litellm.integrations.vector_store_integrations.bedrock_vector_store import (
     BedrockVectorStore,
 )
@@ -73,6 +74,7 @@ class CustomLoggerRegistry:
         "bedrock_vector_store": BedrockVectorStore,
         "deepeval": DeepEvalLogger,
         "s3_v2": S3Logger,
+        "aws_sqs": SQSLogger,
         "dynamic_rate_limiter": _PROXY_DynamicRateLimitHandler,
     }
 
