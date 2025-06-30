@@ -151,19 +151,7 @@ async def anthropic_response(  # noqa: PLR0915
 
         verbose_proxy_logger.debug("final response: %s", response)
 
-        fastapi_response.headers.update(
-            ProxyBaseLLMRequestProcessing.get_custom_headers(
-                user_api_key_dict=user_api_key_dict,
-                model_id=model_id,
-                cache_key=cache_key,
-                api_base=api_base,
-                version=version,
-                response_cost=response_cost,
-                request_data=data,
-                hidden_params=hidden_params,
-            )
-        )
-
+        # For streaming responses, handle usage tracking differently
         if (
             "stream" in data and data["stream"] is True
         ):  # use generate_responses to stream responses
@@ -176,11 +164,44 @@ async def anthropic_response(  # noqa: PLR0915
                 )
             )
 
+            fastapi_response.headers.update(
+                ProxyBaseLLMRequestProcessing.get_custom_headers(
+                    user_api_key_dict=user_api_key_dict,
+                    model_id=model_id,
+                    cache_key=cache_key,
+                    api_base=api_base,
+                    version=version,
+                    response_cost=response_cost,
+                    request_data=data,
+                    hidden_params=hidden_params,
+                )
+            )
+
             return await create_streaming_response(
                 generator=selected_data_generator,
                 media_type="text/event-stream",
                 headers=dict(fastapi_response.headers),
             )
+
+        ### CALL HOOKS ### - modify outgoing data and handle usage tracking
+        response = await proxy_logging_obj.post_call_success_hook(
+            data=data, user_api_key_dict=user_api_key_dict, response=response
+        )
+
+        # Update headers after hooks (which may modify hidden_params)
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        fastapi_response.headers.update(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
+                model_id=model_id,
+                cache_key=cache_key,
+                api_base=api_base,
+                version=version,
+                response_cost=response_cost,
+                request_data=data,
+                hidden_params=hidden_params,
+            )
+        )
 
         verbose_proxy_logger.info("\nResponse from Litellm:\n{}".format(response))
         return response
