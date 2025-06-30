@@ -271,7 +271,7 @@ def _extract_prompt_token_details(usage: Usage) -> Tuple[int, int, int, int, int
     return text_tokens, cache_hit_tokens, audio_tokens, character_count, image_count, video_length_seconds
 
 
-def _calculate_prompt_cost(model_info: dict, usage: Usage, prompt_base_cost: float) -> float:
+def _calculate_prompt_cost(model_info: ModelInfo, usage: Usage, prompt_base_cost: float) -> float:
     """Calculate the total prompt cost including all components."""
     text_tokens, cache_hit_tokens, audio_tokens, character_count, image_count, video_length_seconds = (
         _extract_prompt_token_details(usage)
@@ -281,12 +281,12 @@ def _calculate_prompt_cost(model_info: dict, usage: Usage, prompt_base_cost: flo
 
     ### CACHE READ COST
     prompt_cost += calculate_cost_component(
-        model_info, "cache_read_input_token_cost", cache_hit_tokens
+        model_info, "cache_read_input_token_cost", float(cache_hit_tokens)
     )
 
     ### AUDIO COST
     prompt_cost += calculate_cost_component(
-        model_info, "input_cost_per_audio_token", audio_tokens
+        model_info, "input_cost_per_audio_token", float(audio_tokens)
     )
 
     ### CACHE WRITING COST
@@ -298,17 +298,17 @@ def _calculate_prompt_cost(model_info: dict, usage: Usage, prompt_base_cost: flo
 
     ### CHARACTER COST
     prompt_cost += calculate_cost_component(
-        model_info, "input_cost_per_character", character_count
+        model_info, "input_cost_per_character", float(character_count)
     )
 
     ### IMAGE COUNT COST
     prompt_cost += calculate_cost_component(
-        model_info, "input_cost_per_image", image_count
+        model_info, "input_cost_per_image", float(image_count)
     )
 
     ### VIDEO LENGTH COST
     prompt_cost += calculate_cost_component(
-        model_info, "input_cost_per_video_per_second", video_length_seconds
+        model_info, "input_cost_per_video_per_second", float(video_length_seconds)
     )
 
     return prompt_cost
@@ -360,10 +360,19 @@ def _convert_string_cost_to_float(cost_value: Any, cost_name: str) -> Optional[f
                 f"litellm.litellm_core_utils.llm_cost_calc.utils.py::generic_cost_per_token(): Exception converting {cost_name} string to float - {cost_value}\nDefaulting to None"
             )
             return None
-    return cost_value
+    elif isinstance(cost_value, (int, float)):
+        return float(cost_value)
+    elif cost_value is None:
+        return None
+    else:
+        # For any other type, log a warning and return None
+        verbose_logger.warning(
+            f"litellm.litellm_core_utils.llm_cost_calc.utils.py::_convert_string_cost_to_float(): Unexpected type for {cost_name}: {type(cost_value)}. Defaulting to None"
+        )
+        return None
 
 
-def _calculate_completion_cost(model_info: dict, usage: Usage, completion_base_cost: float) -> float:
+def _calculate_completion_cost(model_info: ModelInfo, usage: Usage, completion_base_cost: float) -> float:
     """Calculate the total completion cost including all components."""
     text_tokens, audio_tokens, reasoning_tokens, is_text_tokens_total = (
         _extract_completion_token_details(usage)
