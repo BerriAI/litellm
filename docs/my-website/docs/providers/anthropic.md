@@ -1684,7 +1684,7 @@ This is done by setting your own `httpx.Client`
 - For `litellm.completion` set `litellm.client_session` and `litellm.module_level_client`
 - For `litellm.acompletion` set `litellm.aclient_session` and `litellm.module_level_aclient`
 
-as follows
+as follows:
 ```python
 import litellm, httpx
 
