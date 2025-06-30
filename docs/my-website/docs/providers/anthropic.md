@@ -1681,58 +1681,54 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 This is done by setting your own `httpx.Client` 
 
-- For `litellm.completion` set `litellm.module_level_client=litellm.HTTPHandler(client=httpx.Client(verify=False))`
-- For `litellm.acompletion` set `litellm.module_level_aclient=litellm.HTTPHandler(client=httpx.AsyncClient(verify=False))`
+- For `litellm.completion` set `litellm.client_session` and `litellm.module_level_client`
+- For `litellm.acompletion` set `litellm.aclient_session` and `litellm.module_level_aclient`
+
+as follows
 ```python
 import litellm, httpx
 
 # for completion
-litellm.module_level_client = litellm.HTTPHandler(client=httpx.Client(verify=False))
+litellm.client_session = httpx.Client(verify=False)
+litellm.module_level_client = litellm.HTTPHandler(client=litellm.client_session)
 response = litellm.completion(
     model="claude-3-5-sonnet-20240620",
     messages=messages,
 )
 
 # for acompletion
-litellm.module_level_aclient = litellm.HTTPHandler(client=httpx.AsyncClient(verify=False))
+litellm.aclient_session = httpx.AsyncClient(verify=False)
+litellm.module_level_aclient = litellm.HTTPHandler(client=litellm.aclient_session)
 response = litellm.acompletion(
     model="claude-3-5-sonnet-20240620",
     messages=messages,
 )
 ```
-
-:::tip
-
-If you are using Anthropic models together with models from other providers, we recommend setting this parameter along with the other parameter mentioned on [this page.](/docs/providers/openai#set-ssl_verifyfalse)
-
-:::
 
 ## Using HTTP/HTTPS Proxy with LiteLLM
 
 This is done by setting your own `httpx.Client` 
 
-- For `litellm.completion` set `litellm.module_level_client=litellm.HTTPHandler(client=httpx.Client(proxy="http://proxy.com"))`
-- For `litellm.acompletion` set `litellm.module_level_aclient=litellm.HTTPHandler(client=httpx.AsyncClient(proxy="http://proxy.com"))`
+- For `litellm.completion` set `litellm.client_session` and `litellm.module_level_client`
+- For `litellm.acompletion` set `litellm.aclient_session` and `litellm.module_level_aclient`
+
+as follows:
 ```python
 import litellm, httpx
 
 # for completion
-litellm.module_level_client=litellm.HTTPHandler(client=httpx.Client(proxy="http://proxy.com"))
+litellm.client_session = httpx.Client(proxy="http://proxy.com")
+litellm.module_level_client=litellm.HTTPHandler(client=litellm.client_session)
 response = litellm.completion(
     model="claude-3-5-sonnet-20240620",
     messages=messages,
 )
 
 # for acompletion
-litellm.module_level_aclient=litellm.HTTPHandler(client=httpx.AsyncClient(proxy="http://proxy.com"))
+litellm.aclient_session = httpx.Client(proxy="http://proxy.com")
+litellm.module_level_aclient=litellm.HTTPHandler(client=litellm.aclient_session)
 response = litellm.acompletion(
     model="claude-3-5-sonnet-20240620",
     messages=messages,
 )
 ```
-
-:::tip
-
-If you are using Anthropic models together with models from other providers, we recommend setting this parameter along with the other parameter mentioned on [this page.](/docs/providers/openai#using-httphttps-proxy-with-litellm)
-
-:::
