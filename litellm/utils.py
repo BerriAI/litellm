@@ -6571,6 +6571,14 @@ def validate_chat_completion_tool_choice(
     elif isinstance(tool_choice, str):
         return tool_choice
     elif isinstance(tool_choice, dict):
+        # Handle Cursor IDE format: {"type": "auto"} -> "auto"
+        if (
+            tool_choice.get("type") in ["auto", "none", "required"]
+            and "function" not in tool_choice
+        ):
+            return tool_choice["type"]
+        
+        # Standard OpenAI format: {"type": "function", "function": {...}}
         if tool_choice.get("type") is None or tool_choice.get("function") is None:
             raise Exception(
                 f"Invalid tool choice, tool_choice={tool_choice}. Please ensure tool_choice follows the OpenAI spec"
