@@ -300,6 +300,7 @@ def generate_content(
                 config=setup_result.generate_content_config_dict,
                 stream=False,
                 _is_async=_is_async,
+                litellm_params=setup_result.litellm_params,
                 **kwargs
             )
 
@@ -377,6 +378,7 @@ async def agenerate_content_stream(
                 model=setup_result.model,
                 contents=contents,  # type: ignore
                 config=setup_result.generate_content_config_dict,
+                litellm_params=setup_result.litellm_params,
                 stream=True,
                 **kwargs
             )
@@ -452,6 +454,7 @@ def generate_content_stream(
                 config=setup_result.generate_content_config_dict,
                 stream=True,
                 _is_async=_is_async,
+                litellm_params=setup_result.litellm_params,
                 **kwargs
             )
 
