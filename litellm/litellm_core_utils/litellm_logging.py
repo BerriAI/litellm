@@ -21,6 +21,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Set,
     Tuple,
     Type,
     Union,
@@ -39,6 +40,10 @@ from litellm import (
 )
 from litellm._logging import _is_debugging_on, verbose_logger
 from litellm.batches.batch_utils import _handle_completed_batch
+
+# Simple cache to track which batches have already had their costs logged
+# This prevents duplicate spend updates when retrieve_batch is called multiple times
+_PROCESSED_BATCH_COSTS: Set[str] = set()
 from litellm.caching.caching import DualCache, InMemoryCache
 from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.constants import (
@@ -2020,7 +2025,13 @@ class Logging(LiteLLMLoggingBaseClass):
                 result._hidden_params["batch_models"] = batch_models
                 result.usage = batch_usage
 
-            elif not is_base64_unified_file_id:  # only run for non-unified file ids
+            elif not is_base64_unified_file_id and result.status == "completed" and result.output_file_id is not None:  # only run for non-unified file ids and completed batches with output files
+                # Check if we've already processed this batch's cost
+                if result.id in _PROCESSED_BATCH_COSTS:
+                    verbose_logger.debug(f"Skipping batch cost calculation for batch_id={result.id}, already processed")
+                    # Don't set response_cost to avoid duplicate spend updates
+                    return
+                
                 response_cost, batch_usage, batch_models = (
                     await _handle_completed_batch(
                         batch=result, custom_llm_provider=self.custom_llm_provider
@@ -2030,6 +2041,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 result._hidden_params["response_cost"] = response_cost
                 result._hidden_params["batch_models"] = batch_models
                 result.usage = batch_usage
+                
+                # Mark this batch as processed
+                _PROCESSED_BATCH_COSTS.add(result.id)
 
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time,
