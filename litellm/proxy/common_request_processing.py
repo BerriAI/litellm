@@ -208,11 +208,11 @@ class ProxyBaseLLMRequestProcessing:
             ),  # don't include query params, risk of leaking sensitive info
             "x-litellm-version": version,
             "x-litellm-model-region": model_region,
-            "x-litellm-response-cost": str(response_cost),
+            "x-litellm-response-cost": ProxyBaseLLMRequestProcessing._safely_round_response_cost(response_cost),
             "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
             "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
-            "x-litellm-key-max-budget": str(user_api_key_dict.max_budget),
-            "x-litellm-key-spend": str(user_api_key_dict.spend),
+            "x-litellm-key-max-budget": ProxyBaseLLMRequestProcessing._safely_round_response_cost(user_api_key_dict.max_budget),
+            "x-litellm-key-spend": ProxyBaseLLMRequestProcessing._safely_round_response_cost(user_api_key_dict.spend),
             "x-litellm-response-duration-ms": str(
                 hidden_params.get("_response_ms", None)
             ),
@@ -246,6 +246,21 @@ class ProxyBaseLLMRequestProcessing:
         except Exception as e:
             verbose_proxy_logger.error(f"Error setting custom headers: {e}")
             return {}
+
+    @staticmethod
+    def _safely_round_response_cost(response_cost: Optional[Union[float, str]]) -> str:
+        """
+        Safely round response cost to 6 decimal places.
+        If rounding fails, return the original response cost as a string.
+        """
+        if response_cost is None:
+            return "None"
+
+        try:
+            return str(round(float(response_cost), 6))
+        except Exception:
+            # If rounding fails for any reason, return the original value
+            return str(response_cost)
 
     async def common_processing_pre_call_logic(
         self,
