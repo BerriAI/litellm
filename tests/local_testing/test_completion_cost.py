@@ -319,6 +319,80 @@ def test_cost_openai_image_gen():
     assert cost == 0.019922944
 
 
+def test_cost_gpt_image_1_token_based():
+    """Test GPT-image-1 token-based cost calculation with actual response data"""
+    import json
+    from litellm import ImageResponse, Usage
+    
+    # Load the local model cost map directly
+    with open('model_prices_and_context_window.json', 'r') as f:
+        litellm.model_cost = json.load(f)
+    
+    # Create mock image responses with actual token usage based on quality
+    # Token counts based on gpt-image-1 quality levels (from original test expectations)
+    low_response = ImageResponse(
+        created=1234567890,
+        data=[{"url": "http://example.com/image.png"}]
+    )
+    low_response.usage = Usage(prompt_tokens=50, completion_tokens=272, total_tokens=322)
+    
+    medium_response = ImageResponse(
+        created=1234567890,
+        data=[{"url": "http://example.com/image.png"}]
+    )
+    medium_response.usage = Usage(prompt_tokens=50, completion_tokens=1056, total_tokens=1106)
+    
+    high_response = ImageResponse(
+        created=1234567890,
+        data=[{"url": "http://example.com/image.png"}]
+    )
+    high_response.usage = Usage(prompt_tokens=50, completion_tokens=4160, total_tokens=4210)
+    
+    # Test different quality levels with actual response data
+    cost_low = litellm.completion_cost(
+        model="gpt-image-1",
+        completion_response=low_response,
+        size="1024x1024",
+        quality="low",
+        n=1,
+        call_type="image_generation",
+    )
+    
+    cost_medium = litellm.completion_cost(
+        model="gpt-image-1",
+        completion_response=medium_response,
+        size="1024x1024",
+        quality="medium",
+        n=1,
+        call_type="image_generation",
+    )
+    
+    cost_high = litellm.completion_cost(
+        model="gpt-image-1",
+        completion_response=high_response,
+        size="1024x1024",
+        quality="high",
+        n=1,
+        call_type="image_generation",
+    )
+    
+    # Verify costs increase with quality
+    assert cost_low < cost_medium < cost_high
+    
+    # Test expected values based on token-based pricing
+    # Low: 50 text tokens * 5e-06 + 272 output tokens * 4e-05 = 0.000250 + 0.01088 = 0.01113
+    expected_low = 50 * 5e-06 + 272 * 4e-05
+    assert abs(cost_low - expected_low) < 1e-6
+    
+    # Medium: 50 text tokens * 5e-06 + 1056 output tokens * 4e-05 = 0.000250 + 0.04224 = 0.04249
+    expected_medium = 50 * 5e-06 + 1056 * 4e-05 
+    assert abs(cost_medium - expected_medium) < 1e-6
+    
+    # High: 50 text tokens * 5e-06 + 4160 output tokens * 4e-05 = 0.000250 + 0.1664 = 0.16665
+    expected_high = 50 * 5e-06 + 4160 * 4e-05
+    assert abs(cost_high - expected_high) < 1e-6
+
+
 def test_cost_bedrock_pricing():
     """
     - get pricing specific to region for a model
