@@ -6,7 +6,7 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload, cast
+from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
@@ -86,8 +86,9 @@ class MistralConfig(OpenAIGPTConfig):
             "seed",
             "stop",
             "response_format",
+            "parallel_tool_calls",
         ]
-        
+
         # Add reasoning support for magistral models
         if "magistral" in model.lower():
             supported_params.extend(["thinking", "reasoning_effort"])
@@ -106,15 +107,28 @@ class MistralConfig(OpenAIGPTConfig):
     def _get_mistral_reasoning_system_prompt() -> str:
         """
         Returns the system prompt for Mistral reasoning models.
-        Based on Mistral's documentation: https://docs.mistral.ai/capabilities/reasoning/
+        Based on Mistral's documentation: https://huggingface.co/mistralai/Magistral-Small-2506
+
+        Mistral recommends the following system prompt for reasoning:
         """
-        return """When solving problems, think step-by-step in <think> tags before providing your final answer. Use the following format:
+        return """
+        <s>[SYSTEM_PROMPT]system_prompt
+        A user will ask you to solve a task. You should first draft your thinking process (inner monologue) until you have derived the final answer. Afterwards, write a self-contained summary of your thoughts (i.e. your summary should be succinct but contain all the critical steps you needed to reach the conclusion). You should use Markdown to format your response. Write both your thoughts and summary in the same language as the task posed by the user. NEVER use \boxed{} in your response.
 
-<think>
-Your step-by-step reasoning process. Be thorough and work through the problem carefully.
-</think>
+        Your thinking process must follow the template below:
+        <think>
+        Your thoughts or/and draft, like working through an exercise on scratch paper. Be as casual and as long as you want until you are confident to generate a correct answer.
+        </think>
 
-Then provide a clear, concise answer based on your reasoning."""
+        Here, provide a concise summary that reflects your reasoning and presents a clear final answer to the user. Don't mention that this is a summary.
+
+        Problem:
+
+        [/SYSTEM_PROMPT][INST]user_message[/INST]<think>
+        reasoning_traces
+        </think>
+        assistant_response</s>[INST]user_message[/INST]
+        """
 
     def map_openai_params(
         self,
@@ -154,6 +168,8 @@ Then provide a clear, concise answer based on your reasoning."""
             if param == "thinking" and "magistral" in model.lower():
                 # Flag that we need to add reasoning system prompt
                 optional_params["_add_reasoning_prompt"] = True
+            if param == "parallel_tool_calls":
+                optional_params["parallel_tool_calls"] = value
         return optional_params
 
     def _get_openai_compatible_provider_info(
@@ -287,12 +303,18 @@ Then provide a clear, concise answer based on your reasoning."""
         """
         Mistral API only supports `name` in tool messages
 
-        If role == tool, then we keep `name`
+        If role == tool, then we keep `name` if it's not an empty string
         Otherwise, we drop `name`
         """
         _name = message.get("name")  # type: ignore
-        if _name is not None and message["role"] != "tool":
-            message.pop("name", None)  # type: ignore
+        
+        if _name is not None:
+            # Remove name if not a tool message
+            if message["role"] != "tool":
+                message.pop("name", None)  # type: ignore
+            # For tool messages, remove name if it's an empty string
+            elif isinstance(_name, str) and len(_name.strip()) == 0:
+                message.pop("name", None)  # type: ignore
 
         return message
 

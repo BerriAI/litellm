@@ -344,7 +344,7 @@ async def acompletion(
     response_format: Optional[Union[dict, Type[BaseModel]]] = None,
     seed: Optional[int] = None,
     tools: Optional[List] = None,
-    tool_choice: Optional[str] = None,
+    tool_choice: Optional[Union[str, dict]] = None,
     parallel_tool_calls: Optional[bool] = None,
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
@@ -1297,6 +1297,12 @@ def completion(  # type: ignore # noqa: PLR0915
         except Exception as e:
             verbose_logger.debug("Error getting model info: {}".format(e))
             model_info = {}
+            if model.startswith(
+                "responses/"
+            ):  # handle azure models - `azure/responses/<deployment-name>`
+                model = model.split("/")[1]
+                mode = "responses"
+                model_info["mode"] = mode
 
         if model_info.get("mode") == "responses":
             from litellm.completion_extras import responses_api_bridge
@@ -4931,7 +4937,7 @@ def transcription(
             provider_config=provider_config,
             litellm_params=litellm_params_dict,
         )
-    elif custom_llm_provider == "deepgram":
+    elif custom_llm_provider in [LlmProviders.DEEPGRAM.value, LlmProviders.ELEVENLABS.value]:
         response = base_llm_http_handler.audio_transcriptions(
             model=model,
             audio_file=file,
@@ -4953,7 +4959,7 @@ def transcription(
             logging_obj=litellm_logging_obj,
             api_base=api_base,
             api_key=api_key,
-            custom_llm_provider="deepgram",
+            custom_llm_provider=custom_llm_provider,
             headers={},
             provider_config=provider_config,
         )

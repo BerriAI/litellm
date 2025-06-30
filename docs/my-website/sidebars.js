@@ -40,6 +40,7 @@ const sidebars = {
           "proxy/guardrails/lakera_ai",
           "proxy/guardrails/pangea",
           "proxy/guardrails/pii_masking_v2",
+          "proxy/guardrails/panw_prisma_airs",
           "proxy/guardrails/secret_detection",
           "proxy/guardrails/custom_guardrail",
           "proxy/guardrails/prompt_injection",
@@ -69,6 +70,7 @@ const sidebars = {
       items: [
         "tutorials/openweb_ui",
         "tutorials/openai_codex",
+        "tutorials/litellm_gemini_cli",
         "tutorials/claude_responses_api",
       ]
     },
@@ -105,7 +107,6 @@ const sidebars = {
             "proxy/model_management",
             "proxy/health",
             "proxy/debugging",
-            "proxy/spending_monitoring",
             "proxy/master_key_rotations",
           ],
         },
@@ -198,7 +199,8 @@ const sidebars = {
           items: [
             "proxy/logging",
             "proxy/logging_spec",
-            "proxy/team_logging"
+            "proxy/team_logging",
+            "proxy/dynamic_logging"
           ],
         },
         
@@ -347,12 +349,20 @@ const sidebars = {
           label: "Azure OpenAI",
           items: [
             "providers/azure/azure",
+            "providers/azure/azure_responses",
             "providers/azure/azure_embedding",
           ]
         },
         "providers/azure_ai",
         "providers/aiml",
-        "providers/vertex",
+        {
+          type: "category",
+          label: "Vertex AI",
+          items: [
+            "providers/vertex",
+            "providers/vertex_image",
+          ]
+        },
         {
           type: "category",
           label: "Google AI Studio",
@@ -406,6 +416,7 @@ const sidebars = {
         "providers/groq",
         "providers/github",
         "providers/deepseek",
+        "providers/elevenlabs",
         "providers/fireworks_ai",
         "providers/clarifai",
         "providers/vllm",
@@ -511,10 +522,12 @@ const sidebars = {
         "tutorials/openweb_ui",
         "tutorials/openai_codex",
         "tutorials/anthropic_file_usage",
+        "tutorials/default_team_self_serve",
         "tutorials/msft_sso",
         "tutorials/prompt_caching",
         "tutorials/tag_management",
         'tutorials/litellm_proxy_aporia',
+        "tutorials/elasticsearch_logging",
         "tutorials/gemini_realtime_with_audio",
         "tutorials/claude_responses_api",
         {

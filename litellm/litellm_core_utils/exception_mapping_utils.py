@@ -44,6 +44,25 @@ class ExceptionCheckers:
             return False
             
         return "429" in error_str or "rate limit" in error_str.lower()
+    
+
+    @staticmethod
+    def is_error_str_context_window_exceeded(error_str: str) -> bool:
+        """
+        Check if an error string indicates a context window exceeded error.
+        """
+        _error_str_lowercase = error_str.lower()
+        known_exception_substrings = [
+            "exceed context limit",
+            "this model's maximum context length is",
+            "string too long. expected a string with maximum length",
+            "model's maximum context limit",
+            "is longer than the model's context length",
+        ]
+        for substring in known_exception_substrings:
+            if substring in _error_str_lowercase:
+                return True
+        return False
 
 
 def get_error_message(error_obj) -> Optional[str]:
@@ -304,13 +323,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         llm_provider=custom_llm_provider,
                         response=getattr(original_exception, "response", None),
                     )
-                elif (
-                    "This model's maximum context length is" in error_str
-                    or "string too long. Expected a string with maximum length"
-                    in error_str
-                    or "model's maximum context limit" in error_str
-                    or "is longer than the model's context length" in error_str
-                ):
+                elif ExceptionCheckers.is_error_str_context_window_exceeded(error_str):
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
                         message=f"ContextWindowExceededError: {exception_provider} - {message}",

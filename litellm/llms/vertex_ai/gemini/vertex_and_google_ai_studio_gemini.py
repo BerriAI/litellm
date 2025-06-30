@@ -1025,9 +1025,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             response_tokens_details = CompletionTokensDetailsWrapper()
             for detail in usage_metadata["responseTokensDetails"]:
                 if detail["modality"] == "TEXT":
-                    response_tokens_details.text_tokens = detail["tokenCount"]
+                    response_tokens_details.text_tokens = detail.get("tokenCount", 0)
                 elif detail["modality"] == "AUDIO":
-                    response_tokens_details.audio_tokens = detail["tokenCount"]
+                    response_tokens_details.audio_tokens = detail.get("tokenCount", 0)
         #########################################################
 
         if "promptTokensDetails" in usage_metadata:
@@ -1261,6 +1261,30 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 status_code=422,
                 headers=raw_response.headers,
             )
+        
+
+        return self._transform_google_generate_content_to_openai_model_response(
+            completion_response=completion_response,
+            model_response=model_response,
+            model=model,
+            logging_obj=logging_obj,
+            raw_response=raw_response,
+        )
+    
+
+    def _transform_google_generate_content_to_openai_model_response(
+        self,
+        completion_response: Union[GenerateContentResponseBody, dict],
+        model_response: ModelResponse,
+        model: str,
+        logging_obj: LoggingClass,
+        raw_response: httpx.Response,
+    ) -> ModelResponse:
+        """
+        Transforms a Google GenAI generate content response to an OpenAI model response.
+        """
+        if isinstance(completion_response, dict):
+            completion_response = GenerateContentResponseBody(**completion_response)  # type: ignore
 
         ## GET MODEL ##
         model_response.model = model

@@ -17,7 +17,7 @@ Pre-requisites:
 model_list:
     - model_name: codex-mini    
       litellm_params:
-        model: codex-mini
+        model: openai/codex-mini
         api_key: sk-proj-1234567890
         api_base: https://api.openai.com/v1
 ```
@@ -47,7 +47,7 @@ curl -X POST http://0.0.0.0:4000/v1/messages \
 - Setup environment variables
 
 ```bash
-export ANTHROPIC_API_BASE="http://0.0.0.0:4000"
+export ANTHROPIC_BASE_URL="http://0.0.0.0:4000"
 export ANTHROPIC_API_KEY="sk-1234" # replace with your LiteLLM key
 ```
 

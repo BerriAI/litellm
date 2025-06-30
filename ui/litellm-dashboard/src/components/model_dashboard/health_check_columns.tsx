@@ -2,7 +2,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { Button, Badge } from "@tremor/react";
 import { Tooltip, Checkbox } from "antd";
 import { Text } from "@tremor/react";
-import { InformationCircleIcon } from "@heroicons/react/outline";
+import { InformationCircleIcon, PlayIcon, RefreshIcon } from "@heroicons/react/outline";
 
 interface HealthCheckData {
   model_name: string;
@@ -15,6 +15,7 @@ interface HealthCheckData {
   litellm_model_name?: string;
   health_status: string;
   last_check: string;
+  last_success: string;
   health_loading: boolean;
   health_error?: string;
   health_full_error?: string;
@@ -23,9 +24,11 @@ interface HealthCheckData {
 interface HealthStatus {
   status: string;
   lastCheck: string;
+  lastSuccess?: string;
   loading: boolean;
   error?: string;
   fullError?: string;
+  successResponse?: any;
 }
 
 export const healthCheckColumns = (
@@ -38,6 +41,8 @@ export const healthCheckColumns = (
   getStatusBadge: (status: string) => JSX.Element,
   getDisplayModelName: (model: any) => string,
   showErrorModal?: (modelName: string, cleanedError: string, fullError: string) => void,
+  showSuccessModal?: (modelName: string, response: any) => void,
+  setSelectedModelId?: (modelId: string) => void,
 ): ColumnDef<HealthCheckData>[] => [
   {
     header: () => (
@@ -46,6 +51,7 @@ export const healthCheckColumns = (
           checked={allModelsSelected}
           indeterminate={selectedModelsForHealth.length > 0 && !allModelsSelected}
           onChange={(e) => handleSelectAll(e.target.checked)}
+          onClick={(e) => e.stopPropagation()}
         />
         <span>Model ID</span>
       </div>
@@ -63,10 +69,12 @@ export const healthCheckColumns = (
           <Checkbox
             checked={isSelected}
             onChange={(e) => handleModelSelection(modelName, e.target.checked)}
+            onClick={(e) => e.stopPropagation()}
           />
           <Tooltip title={model.model_info.id}>
             <div 
               className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left w-full truncate whitespace-nowrap cursor-pointer max-w-[15ch]"
+              onClick={() => setSelectedModelId && setSelectedModelId(model.model_info.id)}
             >
               {model.model_info.id}
             </div>
@@ -131,9 +139,22 @@ export const healthCheckColumns = (
         );
       }
 
+      const modelName = model.model_name;
+      const hasSuccessResponse = healthStatus.status === 'healthy' && modelHealthStatuses[modelName]?.successResponse;
+
       return (
         <div className="flex items-center space-x-2">
           {getStatusBadge(healthStatus.status)}
+          {hasSuccessResponse && showSuccessModal && (
+            <Tooltip title="View response details" placement="top">
+              <button
+                onClick={() => showSuccessModal(modelName, modelHealthStatuses[modelName]?.successResponse)}
+                className="p-1 text-green-600 hover:text-green-800 hover:bg-green-50 rounded cursor-pointer transition-colors"
+              >
+                <InformationCircleIcon className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          )}
         </div>
       );
     },
@@ -216,27 +237,88 @@ export const healthCheckColumns = (
     },
   },
   {
+    header: "Last Success",
+    accessorKey: "last_success",
+    enableSorting: true,
+    sortingFn: (rowA, rowB, columnId) => {
+      const lastSuccessA = rowA.getValue("last_success") as string || 'Never succeeded';
+      const lastSuccessB = rowB.getValue("last_success") as string || 'Never succeeded';
+      
+      // Handle special cases
+      if (lastSuccessA === 'Never succeeded' && lastSuccessB === 'Never succeeded') return 0;
+      if (lastSuccessA === 'Never succeeded') return 1; // Never succeeded goes to bottom
+      if (lastSuccessB === 'Never succeeded') return -1;
+      if (lastSuccessA === 'None' && lastSuccessB === 'None') return 0;
+      if (lastSuccessA === 'None') return 1; // None goes to bottom
+      if (lastSuccessB === 'None') return -1;
+      
+      // Parse dates for comparison
+      const dateA = new Date(lastSuccessA);
+      const dateB = new Date(lastSuccessB);
+      
+      // If dates are invalid, treat as never succeeded
+      if (isNaN(dateA.getTime()) && isNaN(dateB.getTime())) return 0;
+      if (isNaN(dateA.getTime())) return 1;
+      if (isNaN(dateB.getTime())) return -1;
+      
+      // Sort by date (most recent first)
+      return dateB.getTime() - dateA.getTime();
+    },
+    cell: ({ row }) => {
+      const model = row.original;
+      const modelName = model.model_name;
+      const healthStatus = modelHealthStatuses[modelName];
+      const lastSuccess = healthStatus?.lastSuccess || 'None';
+      
+      return (
+        <Text className="text-gray-600 text-sm">
+          {lastSuccess}
+        </Text>
+      );
+    },
+  },
+  {
     header: "Actions",
     id: "actions",
     cell: ({ row }) => {
       const model = row.original;
       const modelName = model.model_name;
       
+      const hasExistingStatus = model.health_status && model.health_status !== 'none';
+      const tooltipText = model.health_loading 
+        ? 'Checking...' 
+        : hasExistingStatus 
+          ? 'Re-run Health Check' 
+          : 'Run Health Check';
+
       return (
-        <div 
-          className={`text-sm cursor-pointer ${
-            model.health_loading 
-              ? 'text-gray-400 cursor-not-allowed' 
-              : 'text-indigo-600 hover:text-indigo-700 hover:underline'
-          }`}
-          onClick={() => {
-            if (!model.health_loading) {
-              runIndividualHealthCheck(modelName);
-            }
-          }}
-        >
-          {model.health_loading ? 'Checking...' : 'Run Check'}
-        </div>
+        <Tooltip title={tooltipText} placement="top">
+          <button
+            className={`p-2 rounded-md transition-colors ${
+              model.health_loading 
+                ? 'text-gray-400 cursor-not-allowed bg-gray-100' 
+                : 'text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50'
+            }`}
+            onClick={() => {
+              if (!model.health_loading) {
+                runIndividualHealthCheck(modelName);
+              }
+            }}
+            disabled={model.health_loading}
+          >
+            {model.health_loading ? (
+              <div className="flex space-x-1">
+                <div className="w-1 h-1 bg-gray-400 rounded-full animate-pulse"></div>
+                <div className="w-1 h-1 bg-gray-400 rounded-full animate-pulse" style={{animationDelay: '0.2s'}}></div>
+                <div className="w-1 h-1 bg-gray-400 rounded-full animate-pulse" style={{animationDelay: '0.4s'}}></div>
+              </div>
+            ) : hasExistingStatus ? (
+              <RefreshIcon className="h-4 w-4" />
+            ) : (
+              <PlayIcon className="h-4 w-4" />
+            )}
+          </button>
+        </Tooltip>
       );
     },
     enableSorting: false,

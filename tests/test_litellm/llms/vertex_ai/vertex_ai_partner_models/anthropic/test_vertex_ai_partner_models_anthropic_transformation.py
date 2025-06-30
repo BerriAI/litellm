@@ -1,5 +1,5 @@
-import sys
 import os
+import sys
 
 import pytest
 
@@ -14,15 +14,21 @@ from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation im
 @pytest.mark.parametrize(
     "model, expected_thinking",
     [
-        ("claude-sonnet-4@20250514", True), 
+        ("claude-sonnet-4@20250514", True),
     ],
 )
 def test_vertex_ai_anthropic_thinking_param(model, expected_thinking):
     supported_openai_params = VertexAIAnthropicConfig().get_supported_openai_params(
-            model=model
-        )
-    
+        model=model
+    )
+
     if expected_thinking:
         assert "thinking" in supported_openai_params
     else:
         assert "thinking" not in supported_openai_params
+
+
+def test_get_supported_params_thinking():
+    config = VertexAIAnthropicConfig()
+    params = config.get_supported_openai_params(model="claude-sonnet-4")
+    assert "thinking" in params
