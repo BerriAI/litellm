@@ -869,6 +869,59 @@ def test_handler_parameter_exclusion():
     assert "temperature" in completion_kwargs
     assert completion_kwargs["temperature"] == 0.7
 
+def test_api_base_and_api_key_passthrough():
+    """Test that api_base and api_key parameters are passed through to litellm.completion"""
+    import unittest.mock
+
+    from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler
+
+    # Test input parameters
+    model = "gpt-3.5-turbo"
+    contents = {"role": "user", "parts": [{"text": "Hello, world!"}]}
+    config = {"temperature": 0.7}
+    test_api_base = "https://test-api.example.com"
+    test_api_key = "test-api-key-123"
+    
+    # Mock litellm.completion to capture the arguments passed to it
+    with unittest.mock.patch('litellm.completion') as mock_completion:
+        # Mock return value
+        mock_completion.return_value = unittest.mock.MagicMock()
+        
+        # Call the handler with api_base and api_key
+        try:
+            GenerateContentToCompletionHandler.generate_content_handler(
+                model=model,
+                contents=contents,
+                config=config,
+                stream=False,
+                _is_async=False,
+                api_base=test_api_base,
+                api_key=test_api_key
+            )
+        except Exception:
+            # Ignore any errors from the mock response processing
+            pass
+        
+        # Verify that litellm.completion was called
+        mock_completion.assert_called_once()
+        
+        # Get the arguments passed to litellm.completion
+        call_args, call_kwargs = mock_completion.call_args
+        
+        # Verify that api_base and api_key were passed through
+        assert "api_base" in call_kwargs, f"api_base not found in completion kwargs: {call_kwargs.keys()}"
+        assert call_kwargs["api_base"] == test_api_base, f"Expected api_base {test_api_base}, got {call_kwargs['api_base']}"
+        
+        assert "api_key" in call_kwargs, f"api_key not found in completion kwargs: {call_kwargs.keys()}"
+        assert call_kwargs["api_key"] == test_api_key, f"Expected api_key {test_api_key}, got {call_kwargs['api_key']}"
+        
+        # Verify other expected parameters
+        assert call_kwargs["model"] == model
+        assert len(call_kwargs["messages"]) == 1
+        assert call_kwargs["messages"][0]["role"] == "user"
+        assert call_kwargs["messages"][0]["content"] == "Hello, world!"
+        assert call_kwargs["temperature"] == 0.7
+
 def test_shared_schema_normalization_utilities():
     """Test the shared schema normalization utility functions work correctly"""
     from litellm.litellm_core_utils.json_validation_rule import (
