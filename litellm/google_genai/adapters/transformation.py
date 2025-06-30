@@ -110,7 +110,7 @@ class GoogleGenAIAdapter:
         config: Optional[Dict[str, Any]] = None,
         litellm_params: Optional[GenericLiteLLMParams] = None,
         **kwargs,
-    ) -> ChatCompletionRequest:
+    ) -> Dict[str, Any]:
         """
         Transform generate_content request to litellm completion format
 
@@ -121,7 +121,7 @@ class GoogleGenAIAdapter:
             **kwargs: Additional parameters
 
         Returns:
-            ChatCompletionRequest in OpenAI format
+            Dict in OpenAI format
         """
 
         # Normalize contents to list format
@@ -185,30 +185,37 @@ class GoogleGenAIAdapter:
             if tool_choice:
                 completion_request["tool_choice"] = tool_choice
         
+        #########################################################
         # forward any litellm specific params
+        #########################################################
+        completion_request_dict = dict(completion_request)
         if litellm_params:
-            completion_request = self._add_generic_litellm_params_to_request(completion_request, litellm_params)
+            completion_request_dict = self._add_generic_litellm_params_to_request(
+                completion_request_dict=completion_request_dict,
+                litellm_params=litellm_params
+            )
 
-        return completion_request
+        return completion_request_dict
     
     def _add_generic_litellm_params_to_request(
         self, 
-        completion_request: ChatCompletionRequest, 
-        litellm_params: Optional[GenericLiteLLMParams] = None):
+        completion_request_dict: Dict[str, Any], 
+        litellm_params: Optional[GenericLiteLLMParams] = None
+    ) -> dict:
         """Add generic litellm params to request. e.g add api_base, api_key, api_version, etc.
 
         Args:
-            completion_request: ChatCompletionRequest
+            completion_request_dict: Dict[str, Any]
             litellm_params: GenericLiteLLMParams
 
         Returns:
-            ChatCompletionRequest
+            Dict[str, Any]
         """
         if litellm_params:
             litellm_dict = litellm_params.model_dump(exclude_none=True)
             for key, value in litellm_dict.items():
-                completion_request[key] = value
-        return completion_request
+                completion_request_dict[key] = value
+        return completion_request_dict
 
     def translate_completion_output_params_streaming(
         self, completion_stream: Any
