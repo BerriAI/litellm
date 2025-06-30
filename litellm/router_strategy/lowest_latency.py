@@ -44,10 +44,11 @@ class LowestLatencyLoggingHandler(CustomLogger):
             """
             Update latency usage on success
             """
-            if kwargs["litellm_params"].get("metadata") is None:
+            metadata_field = self._select_metadata_field(kwargs)
+            if kwargs["litellm_params"].get(metadata_field) is None:
                 pass
             else:
-                model_group = kwargs["litellm_params"]["metadata"].get(
+                model_group = kwargs["litellm_params"][metadata_field].get(
                     "model_group", None
                 )
 
@@ -181,12 +182,13 @@ class LowestLatencyLoggingHandler(CustomLogger):
         Check if Timeout Error, if timeout set deployment latency -> 100
         """
         try:
+            metadata_field = self._select_metadata_field(kwargs)
             _exception = kwargs.get("exception", None)
             if isinstance(_exception, litellm.Timeout):
-                if kwargs["litellm_params"].get("metadata") is None:
+                if kwargs["litellm_params"].get(metadata_field) is None:
                     pass
                 else:
-                    model_group = kwargs["litellm_params"]["metadata"].get(
+                    model_group = kwargs["litellm_params"][metadata_field].get(
                         "model_group", None
                     )
 
@@ -251,10 +253,11 @@ class LowestLatencyLoggingHandler(CustomLogger):
             """
             Update latency usage on success
             """
-            if kwargs["litellm_params"].get("metadata") is None:
+            metadata_field = self._select_metadata_field(kwargs)
+            if kwargs["litellm_params"].get(metadata_field) is None:
                 pass
             else:
-                model_group = kwargs["litellm_params"]["metadata"].get(
+                model_group = kwargs["litellm_params"][metadata_field].get(
                     "model_group", None
                 )
 
@@ -519,9 +522,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
         # Pick a random deployment from valid deployments
         random_valid_deployment = random.choice(valid_deployments)
         deployment = random_valid_deployment[0]
-
-        if request_kwargs is not None and "metadata" in request_kwargs:
-            request_kwargs["metadata"][
+        metadata_field = self._select_metadata_field(request_kwargs)
+        if request_kwargs is not None and metadata_field in request_kwargs:
+            request_kwargs[metadata_field][
                 "_latency_per_deployment"
             ] = _latency_per_deployment
         return deployment

@@ -408,3 +408,19 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             if len(text) > max_length
             else text
         )
+    
+
+    def _select_metadata_field(self, request_kwargs: Optional[Dict] = None) -> Optional[str]:
+        """
+        Select the metadata field to use for logging
+
+        1. If `litellm_metadata` is in the request kwargs, use it
+        2. Otherwise, use `metadata`
+        """
+        from litellm.constants import LITELLM_METADATA_FIELD, OLD_LITELLM_METADATA_FIELD
+        if request_kwargs is None:
+            return None
+        if LITELLM_METADATA_FIELD in request_kwargs:
+            return LITELLM_METADATA_FIELD
+        return OLD_LITELLM_METADATA_FIELD
+        
