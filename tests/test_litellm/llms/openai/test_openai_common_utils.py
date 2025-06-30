@@ -129,3 +129,18 @@ async def test_openai_client_reuse(function_name, is_async, args):
 
         # Verify we tried to get from cache 10 times (once per request)
         assert mock_get_cache.call_count == 10, "Should check cache for each request"
+
+
+@pytest.mark.asyncio
+async def test_openai_llm_async_client_has_unverified_ssl_context(monkeypatch):
+    """
+    Test that BaseOpenAILLM's async client has SSL verification disabled when ssl_verify=False
+    """
+    from litellm.llms.openai.openai import BaseOpenAILLM
+    
+    # Safely patch litellm.ssl_verify - will be automatically restored after test
+    monkeypatch.setattr(litellm, 'ssl_verify', False)
+
+    # Directly check the SSL context of the async client's transport
+    assert BaseOpenAILLM._get_async_http_client()._transport.client()._connector._ssl == False
+    
