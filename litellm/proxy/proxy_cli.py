@@ -21,7 +21,7 @@ try:
     from rich.progress import Progress, SpinnerColumn, TextColumn
     from rich.align import Align
     RICH_AVAILABLE = True
-    console = Console()
+    console: Optional[Console] = Console()
 except ImportError:
     RICH_AVAILABLE = False
     console = None
@@ -142,6 +142,7 @@ class ProxyInitializationHelpers:
     @staticmethod
     def _run_test_with_rich(client, request_model: str):
         """Run tests with Rich progress indicators"""
+        assert console is not None, "Console must be available for Rich display"
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),

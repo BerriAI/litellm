@@ -46,7 +46,7 @@ try:
     from rich.table import Table
     from rich.panel import Panel
     RICH_AVAILABLE = True
-    console = Console()
+    console: Optional[Console] = Console()
 except ImportError:
     RICH_AVAILABLE = False
     console = None
@@ -3347,7 +3347,7 @@ class ProxyStartupEvent:
                         model_name = model.get("model_name", "N/A")
                         litellm_params = model.get("litellm_params", {})
                         model_id = litellm_params.get("model", "N/A")
-                        api_base = litellm_params.get("api_base", "Default")
+                        api_base = litellm_params.get("api_base") or "Default"
                         
                         # Extract provider from model ID
                         provider = model_id.split("/")[0] if "/" in model_id else "openai"
@@ -3361,10 +3361,13 @@ class ProxyStartupEvent:
                         input_cost_str = f"${input_cost:.6f}" if input_cost > 0 else "N/A"
                         output_cost_str = f"${output_cost:.6f}" if output_cost > 0 else "N/A"
                         
+                        # Format api_base - ensure it's not None before slicing
+                        formatted_api_base = api_base[:50] + "..." if api_base and len(api_base) > 50 else api_base
+                        
                         table.add_row(
                             model_name,
                             provider,
-                            api_base[:50] + "..." if len(api_base) > 50 else api_base,
+                            formatted_api_base,
                             input_cost_str,
                             output_cost_str
                         )
