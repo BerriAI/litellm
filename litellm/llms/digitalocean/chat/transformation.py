@@ -96,11 +96,9 @@ class DigitalOceanConfig(OpenAILikeChatConfig):
         complete_url = f"{api_base}/api/v1/chat/completions"
         return complete_url
 
-    def _transform_messages(self, messages: List[AllMessageValues], model: str) -> List:
+    def _transform_messages(self, messages: List[AllMessageValues], model: str) -> List[AllMessageValues]:
         for idx, message in enumerate(messages):
-            """
-            1. Don't pass 'null' function_call assistant message to groq - https://github.com/BerriAI/litellm/issues/5839
-            """
+
             if isinstance(message, BaseModel):
                 _message = message.model_dump()
             else:
