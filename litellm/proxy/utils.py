@@ -167,22 +167,22 @@ def generate_feedback_box():
 def _print_original_feedback_box():
     """Print the original feedback box without Rich formatting"""
     # ASCII Art feedback box
-    print()  # noqa
-    print(" ┌───────────────────────────────────────────────────────────────┐")  # noqa
-    print(" │                                                               │")  # noqa
-    print(" │  Give Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new │")  # noqa
-    print(" │                                                               │")  # noqa
-    print(" └───────────────────────────────────────────────────────────────┘")  # noqa
-    print()  # noqa
-    print(" Thank you for using LiteLLM! - Krrish & Ishaan")  # noqa
-    print()  # noqa
-    print()  # noqa
-    print()  # noqa
-    print(  # noqa
+    print()  # noqa: T201
+    print(" ┌───────────────────────────────────────────────────────────────┐")  # noqa: T201
+    print(" │                                                               │")  # noqa: T201
+    print(" │  Give Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new │")  # noqa: T201
+    print(" │                                                               │")  # noqa: T201
+    print(" └───────────────────────────────────────────────────────────────┘")  # noqa: T201
+    print()  # noqa: T201
+    print(" Thank you for using LiteLLM! - Krrish & Ishaan")  # noqa: T201
+    print()  # noqa: T201
+    print()  # noqa: T201
+    print()  # noqa: T201
+    print(  # noqa: T201
         "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"
-    )  # noqa
-    print()  # noqa
-    print()  # noqa
+    )
+    print()  # noqa: T201
+    print()  # noqa: T201
 
 
 def print_verbose(print_statement):

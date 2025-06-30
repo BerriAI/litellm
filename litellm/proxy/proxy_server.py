@@ -2023,7 +2023,7 @@ class ProxyConfig:
                         
                         litellm_model_api_base = model["litellm_params"].get("api_base", None)
                         if "ollama" in litellm_model_name and litellm_model_api_base is None:
-                            continue  # Skip the rest of the loop for this model
+                            run_ollama_serve()
                     
                     # Create panel with the table
                     panel = Panel(
@@ -2038,19 +2038,29 @@ class ProxyConfig:
                     console.print(panel)
                     console.print()
                 except Exception:
-                    # Fallback to original display
-                    print("\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m")  # noqa
+                    # Fallback to click.echo
+                    import click
+                    click.echo("\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m")
                     for model in model_list:
-                        print(f"\033[32m    {model.get('model_name', '')}\033[0m")  # noqa
+                        ### LOAD FROM os.environ/ ###
+                        for k, v in model["litellm_params"].items():
+                            if isinstance(v, str) and v.startswith("os.environ/"):
+                                model["litellm_params"][k] = get_secret(v)
+                        click.echo(f"\033[32m    {model.get('model_name', '')}\033[0m")
+                        litellm_model_name = model["litellm_params"]["model"]
+                        litellm_model_api_base = model["litellm_params"].get("api_base", None)
+                        if "ollama" in litellm_model_name and litellm_model_api_base is None:
+                            run_ollama_serve()
             else:
-                # Original display without Rich
-                print("\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m")  # noqa
+                # Original display without Rich - use click.echo
+                import click
+                click.echo("\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m")
                 for model in model_list:
                     ### LOAD FROM os.environ/ ###
                     for k, v in model["litellm_params"].items():
                         if isinstance(v, str) and v.startswith("os.environ/"):
                             model["litellm_params"][k] = get_secret(v)
-                    print(f"\033[32m    {model.get('model_name', '')}\033[0m")  # noqa
+                    click.echo(f"\033[32m    {model.get('model_name', '')}\033[0m")
                     litellm_model_name = model["litellm_params"]["model"]
                     litellm_model_api_base = model["litellm_params"].get("api_base", None)
                     if "ollama" in litellm_model_name and litellm_model_api_base is None:
@@ -3288,7 +3298,8 @@ class ProxyStartupEvent:
         )
         
         # Display loaded models in a nice table format
-        cls._display_loaded_models(llm_router)
+        # Note: Models are already displayed during initialization in the config loading section
+        # cls._display_loaded_models(llm_router)
 
     @classmethod
     def _initialize_jwt_auth(

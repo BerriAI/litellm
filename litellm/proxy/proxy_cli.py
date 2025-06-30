@@ -140,6 +140,70 @@ class ProxyInitializationHelpers:
                 print(f"Health check failed: {e}")  # noqa
 
     @staticmethod
+    def _run_test_with_rich(client, request_model: str):
+        """Run tests with Rich progress indicators"""
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            # Test 1: Regular completion
+            task1 = progress.add_task("🚄 Testing chat completion...", total=None)
+            try:
+                response = client.chat.completions.create(
+                    model=request_model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": "this is a test request, write a short poem",
+                        }
+                    ],
+                    max_tokens=256,
+                )
+                progress.update(task1, completed=True)
+                console.print("[green]✅ Chat completion test passed![/green]")
+                console.print(Panel(str(response), title="Response", border_style="green"))
+            except Exception as e:
+                progress.update(task1, completed=True)
+                console.print(f"[red]❌ Chat completion test failed: {e}[/red]")
+                
+            # Test 2: Streaming
+            task2 = progress.add_task("🚄 Testing streaming...", total=None)
+            try:
+                stream_response = client.chat.completions.create(
+                    model=request_model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": "this is a test request, write a short poem",
+                        }
+                    ],
+                    stream=True,
+                )
+                chunks = []
+                for chunk in stream_response:
+                    chunks.append(chunk)
+                progress.update(task2, completed=True)
+                console.print("[green]✅ Streaming test passed![/green]")
+                console.print(f"[dim]Received {len(chunks)} chunks[/dim]")
+            except Exception as e:
+                progress.update(task2, completed=True)
+                console.print(f"[red]❌ Streaming test failed: {e}[/red]")
+                
+            # Test 3: Completion API
+            task3 = progress.add_task("🚄 Testing completion API...", total=None)
+            try:
+                completion_response = client.completions.create(
+                    model=request_model, prompt="this is a test request, write a short poem"
+                )
+                progress.update(task3, completed=True)
+                console.print("[green]✅ Completion API test passed![/green]")
+                console.print(Panel(str(completion_response), title="Completion Response", border_style="green"))
+            except Exception as e:
+                progress.update(task3, completed=True)
+                console.print(f"[red]❌ Completion API test failed: {e}[/red]")
+
+    @staticmethod
     def _run_test_chat_completion(
         host: str,
         port: int,
@@ -172,66 +236,7 @@ class ProxyInitializationHelpers:
         client = openai.OpenAI(api_key="My API Key", base_url=api_base)
 
         if RICH_AVAILABLE and console:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-            ) as progress:
-                # Test 1: Regular completion
-                task1 = progress.add_task("🚄 Testing chat completion...", total=None)
-                try:
-                    response = client.chat.completions.create(
-                        model=request_model,
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": "this is a test request, write a short poem",
-                            }
-                        ],
-                        max_tokens=256,
-                    )
-                    progress.update(task1, completed=True)
-                    console.print("[green]✅ Chat completion test passed![/green]")
-                    console.print(Panel(str(response), title="Response", border_style="green"))
-                except Exception as e:
-                    progress.update(task1, completed=True)
-                    console.print(f"[red]❌ Chat completion test failed: {e}[/red]")
-                    
-                # Test 2: Streaming
-                task2 = progress.add_task("🚄 Testing streaming...", total=None)
-                try:
-                    stream_response = client.chat.completions.create(
-                        model=request_model,
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": "this is a test request, write a short poem",
-                            }
-                        ],
-                        stream=True,
-                    )
-                    chunks = []
-                    for chunk in stream_response:
-                        chunks.append(chunk)
-                    progress.update(task2, completed=True)
-                    console.print("[green]✅ Streaming test passed![/green]")
-                    console.print(f"[dim]Received {len(chunks)} chunks[/dim]")
-                except Exception as e:
-                    progress.update(task2, completed=True)
-                    console.print(f"[red]❌ Streaming test failed: {e}[/red]")
-                    
-                # Test 3: Completion API
-                task3 = progress.add_task("🚄 Testing completion API...", total=None)
-                try:
-                    completion_response = client.completions.create(
-                        model=request_model, prompt="this is a test request, write a short poem"
-                    )
-                    progress.update(task3, completed=True)
-                    console.print("[green]✅ Completion API test passed![/green]")
-                    console.print(Panel(str(completion_response), title="Completion Response", border_style="green"))
-                except Exception as e:
-                    progress.update(task3, completed=True)
-                    console.print(f"[red]❌ Completion API test failed: {e}[/red]")
+            ProxyInitializationHelpers._run_test_with_rich(client, request_model)
         else:
             # Fallback to original implementation
             response = client.chat.completions.create(
