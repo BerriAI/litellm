@@ -101,16 +101,21 @@ class AsyncHTTPHandler:
         concurrent_limit=1000,
         client_alias: Optional[str] = None,  # name for client in logs
         ssl_verify: Optional[VerifyTypes] = None,
+        client: Optional[httpx.AsyncClient] = None
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
-        self.client = self.create_client(
-            timeout=timeout,
-            concurrent_limit=concurrent_limit,
-            event_hooks=event_hooks,
-            ssl_verify=ssl_verify,
-        )
         self.client_alias = client_alias
+
+        if client is None:
+            self.client = self.create_client(
+                timeout=timeout,
+                concurrent_limit=concurrent_limit,
+                event_hooks=event_hooks,
+                ssl_verify=ssl_verify,
+            )
+        else:
+            self.client = client
 
     def create_client(
         self,
