@@ -242,6 +242,7 @@ class BaseLLMAIOHTTPHandler:
             stream=stream,
         )
 
+        extra_body = optional_params.pop("extra_body", {})
         data = provider_config.transform_request(
             model=model,
             messages=messages,
@@ -249,6 +250,7 @@ class BaseLLMAIOHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+        data = {**data, **extra_body}
 
         ## LOGGING
         logging_obj.pre_call(
