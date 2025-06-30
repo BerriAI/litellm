@@ -231,6 +231,47 @@ async def test_anthropic_messages_litellm_router_non_streaming():
     print(f"Non-streaming response: {json.dumps(response, indent=2)}")
     return response
 
+@pytest.mark.asyncio
+async def test_anthropic_messages_litellm_router_routing_strategy():
+    """
+    Test the anthropic_messages with routing strategy + non-streaming request
+    """
+    litellm._turn_on_debug()
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-special-alias",
+                "litellm_params": {
+                    "model": "claude-3-haiku-20240307",
+                    "api_key": os.getenv("ANTHROPIC_API_KEY"),
+                },
+            }
+        ],
+        routing_strategy="latency-based-routing",
+    )
+
+    # Set up test parameters
+    messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
+
+    # Call the handler
+    response = await router.aanthropic_messages(
+        messages=messages,
+        model="claude-special-alias",
+        max_tokens=100,
+        metadata={
+            "user_id": "hello",
+        }
+    )
+
+    # Verify response
+    assert "id" in response
+    assert "content" in response
+    assert "model" in response
+    assert response["role"] == "assistant"
+
+    print(f"Non-streaming response: {json.dumps(response, indent=2)}")
+    return response
+
 
 class TestCustomLogger(CustomLogger):
     def __init__(self):
