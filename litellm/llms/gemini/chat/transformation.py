@@ -1,6 +1,5 @@
-from typing import Dict, List, Optional
+from typing import List, Optional
 
-import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
@@ -67,6 +66,9 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
     def get_config(cls):
         return super().get_config()
 
+    def is_model_gemini_audio_model(self, model: str) -> bool:
+        return "tts" in model
+
     def get_supported_openai_params(self, model: str) -> List[str]:
         supported_params = [
             "temperature",
@@ -83,27 +85,15 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
             "logprobs",
             "frequency_penalty",
             "modalities",
+            "parallel_tool_calls",
+            "web_search_options",
         ]
         if supports_reasoning(model):
             supported_params.append("reasoning_effort")
             supported_params.append("thinking")
+        if self.is_model_gemini_audio_model(model):
+            supported_params.append("audio")
         return supported_params
-
-    def map_openai_params(
-        self,
-        non_default_params: Dict,
-        optional_params: Dict,
-        model: str,
-        drop_params: bool,
-    ) -> Dict:
-        if litellm.vertex_ai_safety_settings is not None:
-            optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
-        return super().map_openai_params(
-            model=model,
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            drop_params=drop_params,
-        )
 
     def _transform_messages(
         self, messages: List[AllMessageValues]

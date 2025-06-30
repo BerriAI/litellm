@@ -137,7 +137,6 @@ class PrismaManager:
         for attempt in range(4):
             original_dir = os.getcwd()
             prisma_dir = PrismaManager._get_prisma_dir()
-            schema_path = prisma_dir + "/schema.prisma"
             os.chdir(prisma_dir)
             try:
                 if use_migrate:
@@ -150,11 +149,8 @@ class PrismaManager:
                         return False
 
                     prisma_dir = PrismaManager._get_prisma_dir()
-                    schema_path = prisma_dir + "/schema.prisma"
 
-                    return ProxyExtrasDBManager.setup_database(
-                        schema_path=schema_path, use_migrate=use_migrate
-                    )
+                    return ProxyExtrasDBManager.setup_database(use_migrate=use_migrate)
                 else:
                     # Use prisma db push with increased timeout
                     subprocess.run(

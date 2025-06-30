@@ -8,7 +8,8 @@ import {
   Organization,
   organizationListCall,
   DEFAULT_ORGANIZATION,
-  keyInfoCall
+  keyInfoCall,
+  getProxyBaseUrl
 } from "./networking";
 import { fetchTeams } from "./common_components/fetch_teams";
 import { Grid, Col, Card, Text, Title } from "@tremor/react";
@@ -23,12 +24,6 @@ import { Team } from "./key_team_helpers/key_list";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
 import { clearTokenCookies } from "@/utils/cookieUtils";
-const isLocal = process.env.NODE_ENV === "development";
-if (isLocal != true) {
-  console.log = function() {};
-}
-console.log("isLocal:", isLocal);
-const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 
 export interface ProxySettings {
   PROXY_BASE_URL: string | null;
@@ -66,6 +61,8 @@ interface UserDashboardProps {
   setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
   premiumUser: boolean;
   organizations: Organization[] | null;
+  addKey: (data: any) => void;
+  createClicked: boolean
 }
 
 type TeamInterface = {
@@ -85,7 +82,9 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   setTeams,
   setKeys,
   premiumUser,
-  organizations
+  organizations,
+  addKey,
+  createClicked
 }) => {
   const [userSpendData, setUserSpendData] = useState<UserInfo | null>(
     null
@@ -321,9 +320,13 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   function gotoLogin() {
     // Clear token cookies using the utility function
     clearTokenCookies();
+
+    const baseUrl = getProxyBaseUrl();
+
+    console.log("proxyBaseUrl:", baseUrl);
     
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/sso/key/generate`
+    const url = baseUrl
+      ? `${baseUrl}/sso/key/generate`
       : `/sso/key/generate`;
 
     console.log("Full URL:", url);
@@ -350,15 +353,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       if (expTime && currentTime >= expTime) {
         console.log("Token expired, redirecting to login");
         
-        // Clear token cookies
-        clearTokenCookies();
-        
-        const url = proxyBaseUrl
-          ? `${proxyBaseUrl}/sso/key/generate`
-          : `/sso/key/generate`;
-        
-        console.log("Full URL for expired token:", url);
-        window.location.href = url;
+        gotoLogin();
         
         return null;
       }
@@ -367,12 +362,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       // If there's an error decoding the token, consider it invalid
       clearTokenCookies();
       
-      const url = proxyBaseUrl
-        ? `${proxyBaseUrl}/sso/key/generate`
-        : `/sso/key/generate`;
-      
-      console.log("Full URL after token decode error:", url);
-      window.location.href = url;
+      gotoLogin();
       
       return null;
     }
@@ -417,7 +407,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             userRole={userRole}
             accessToken={accessToken}
             data={keys}
-            setData={setKeys}
+            addKey={addKey}
+            premiumUser={premiumUser}
           />
 
           <ViewKeyTable
@@ -435,6 +426,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             currentOrg={currentOrg}
             setCurrentOrg={setCurrentOrg}
             organizations={organizations}
+            createClicked={createClicked}
           />
         </Col>
       </Grid>

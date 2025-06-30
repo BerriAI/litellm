@@ -203,6 +203,7 @@ class Timeout(openai.APITimeoutError):  # type: ignore
         max_retries: Optional[int] = None,
         num_retries: Optional[int] = None,
         headers: Optional[dict] = None,
+        exception_status_code: Optional[int] = None,
     ):
         request = httpx.Request(
             method="POST",
@@ -211,7 +212,7 @@ class Timeout(openai.APITimeoutError):  # type: ignore
         super().__init__(
             request=request
         )  # Call the base class constructor with the parameters it needs
-        self.status_code = 408
+        self.status_code = exception_status_code or 408
         self.message = "litellm.Timeout: {}".format(message)
         self.model = model
         self.llm_provider = llm_provider
@@ -806,3 +807,25 @@ class LiteLLMUnknownProvider(BadRequestError):
 
     def __str__(self):
         return self.message
+
+
+class GuardrailRaisedException(Exception):
+    def __init__(self, guardrail_name: Optional[str] = None, message: str = ""):
+        self.guardrail_name = guardrail_name
+        self.message = f"Guardrail raised an exception, Guardrail: {guardrail_name}, Message: {message}"
+        super().__init__(self.message)
+
+
+class BlockedPiiEntityError(Exception):
+    def __init__(
+        self,
+        entity_type: str,
+        guardrail_name: Optional[str] = None,
+    ):
+        """
+        Raised when a blocked entity is detected by a guardrail.
+        """
+        self.entity_type = entity_type
+        self.guardrail_name = guardrail_name
+        self.message = f"Blocked entity detected: {entity_type} by Guardrail: {guardrail_name}. This entity is not allowed to be used in this request."
+        super().__init__(self.message)

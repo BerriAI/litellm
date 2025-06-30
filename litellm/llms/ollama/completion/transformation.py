@@ -22,6 +22,7 @@ from litellm.types.utils import (
     GenericStreamingChunk,
     ModelInfoBase,
     ModelResponse,
+    ModelResponseStream,
     ProviderField,
 )
 
@@ -150,6 +151,7 @@ class OllamaConfig(BaseConfig):
             "frequency_penalty",
             "stop",
             "response_format",
+            "max_completion_tokens",
         ]
 
     def map_openai_params(
@@ -160,7 +162,7 @@ class OllamaConfig(BaseConfig):
         drop_params: bool,
     ) -> dict:
         for param, value in non_default_params.items():
-            if param == "max_tokens":
+            if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["num_predict"] = value
             if param == "stream":
                 optional_params["stream"] = value
@@ -171,12 +173,14 @@ class OllamaConfig(BaseConfig):
             if param == "top_p":
                 optional_params["top_p"] = value
             if param == "frequency_penalty":
-                optional_params["repeat_penalty"] = value
+                optional_params["frequency_penalty"] = value
             if param == "stop":
                 optional_params["stop"] = value
             if param == "response_format" and isinstance(value, dict):
                 if value["type"] == "json_object":
                     optional_params["format"] = "json"
+                elif value["type"] == "json_schema":
+                    optional_params["format"] = value["json_schema"]["schema"]
 
         return optional_params
 
@@ -256,22 +260,38 @@ class OllamaConfig(BaseConfig):
         ## RESPONSE OBJECT
         model_response.choices[0].finish_reason = "stop"
         if request_data.get("format", "") == "json":
-            function_call = json.loads(response_json["response"])
-            message = litellm.Message(
-                content=None,
-                tool_calls=[
-                    {
-                        "id": f"call_{str(uuid.uuid4())}",
-                        "function": {
-                            "name": function_call["name"],
-                            "arguments": json.dumps(function_call["arguments"]),
-                        },
-                        "type": "function",
-                    }
-                ],
-            )
-            model_response.choices[0].message = message  # type: ignore
-            model_response.choices[0].finish_reason = "tool_calls"
+            response_content = json.loads(response_json["response"])
+
+            # Check if this is a function call format with name/arguments structure
+            if (
+                isinstance(response_content, dict)
+                and "name" in response_content
+                and "arguments" in response_content
+            ):
+                # Handle as function call (original behavior)
+                function_call = response_content
+                message = litellm.Message(
+                    content=None,
+                    tool_calls=[
+                        {
+                            "id": f"call_{str(uuid.uuid4())}",
+                            "function": {
+                                "name": function_call["name"],
+                                "arguments": json.dumps(function_call["arguments"]),
+                            },
+                            "type": "function",
+                        }
+                    ],
+                )
+                model_response.choices[0].message = message  # type: ignore
+                model_response.choices[0].finish_reason = "tool_calls"
+            else:
+                # Handle as regular JSON (new behavior)
+                message = litellm.Message(
+                    content=json.dumps(response_content),
+                )
+                model_response.choices[0].message = message  # type: ignore
+                model_response.choices[0].finish_reason = "stop"
         else:
             model_response.choices[0].message.content = response_json["response"]  # type: ignore
         model_response.created = int(time.time())
@@ -398,7 +418,9 @@ class OllamaConfig(BaseConfig):
 
 
 class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
-    def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk:
+    def _handle_string_chunk(
+        self, str_line: str
+    ) -> Union[GenericStreamingChunk, ModelResponseStream]:
         return self.chunk_parser(json.loads(str_line))
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:

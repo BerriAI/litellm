@@ -14,10 +14,10 @@ class LLMClientCache(InMemoryCache):
         If none, use the key as is.
         """
         try:
-            event_loop = asyncio.get_event_loop()
+            event_loop = asyncio.get_running_loop()
             stringified_event_loop = str(id(event_loop))
             return f"{key}-{stringified_event_loop}"
-        except Exception:  # handle no current event loop
+        except RuntimeError:  # handle no current running event loop
             return key
 
     def set_cache(self, key, value, **kwargs):

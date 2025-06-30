@@ -50,6 +50,7 @@ GENERIC_AUTHORIZATION_ENDPOINT = "<your-okta-domain>/authorize" # https://dev-2k
 GENERIC_TOKEN_ENDPOINT = "<your-okta-domain>/token" # https://dev-2kqkcd6lx6kdkuzt.us.auth0.com/oauth/token
 GENERIC_USERINFO_ENDPOINT = "<your-okta-domain>/userinfo" # https://dev-2kqkcd6lx6kdkuzt.us.auth0.com/userinfo
 GENERIC_CLIENT_STATE = "random-string" # [OPTIONAL] REQUIRED BY OKTA, if not set random state value is generated
+GENERIC_SSO_HEADERS = "Content-Type=application/json, X-Custom-Header=custom-value" # [OPTIONAL] Comma-separated list of additional headers to add to the request - e.g. Content-Type=application/json, etc.
 ```
 
 You can get your domain specific auth/token/userinfo endpoints at `<YOUR-OKTA-DOMAIN>/.well-known/openid-configuration`
@@ -185,6 +186,10 @@ Set a Proxy Admin when SSO is enabled. Once SSO is enabled, the `user_id` for us
 ```env
 export PROXY_ADMIN_ID="116544810872468347480"
 ```
+
+This will update the user role in the `LiteLLM_UserTable` to `proxy_admin`. 
+
+If you plan to change this ID, please update the user role via API `/user/update` or UI (Internal Users page). 
 
 #### Step 3: See all proxy keys
 

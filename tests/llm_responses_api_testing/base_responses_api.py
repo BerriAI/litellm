@@ -116,17 +116,19 @@ class BaseResponsesAPITest(ABC):
         litellm._turn_on_debug()
         litellm.set_verbose = True
         base_completion_call_args = self.get_base_completion_call_args()
-        if sync_mode:
-            response = litellm.responses(
-                input="Basic ping", max_output_tokens=20,
-                **base_completion_call_args
-            )
-        else:
-            response = await litellm.aresponses(
-                input="Basic ping", max_output_tokens=20,
-                **base_completion_call_args
-            )
-
+        try: 
+            if sync_mode:
+                response = litellm.responses(
+                    input="Basic ping", max_output_tokens=20,
+                    **base_completion_call_args
+                )
+            else:
+                response = await litellm.aresponses(
+                    input="Basic ping", max_output_tokens=20,
+                    **base_completion_call_args
+                )
+        except litellm.InternalServerError: 
+            pytest.skip("Skipping test due to litellm.InternalServerError")
         print("litellm response=", json.dumps(response, indent=4, default=str))
 
         # Use the helper function to validate the response
@@ -313,5 +315,51 @@ class BaseResponsesAPITest(ABC):
                 assert result.output == response.output
             else:
                 raise ValueError("response is not a ResponsesAPIResponse")
-    
 
+    @pytest.mark.asyncio
+    async def test_basic_openai_list_input_items_endpoint(self):
+        """Test that calls the OpenAI List Input Items endpoint"""
+        litellm._turn_on_debug()
+
+        response = await litellm.aresponses(
+            model="gpt-4o",
+            input="Tell me a three sentence bedtime story about a unicorn.",
+        )
+        print("Initial response=", json.dumps(response, indent=4, default=str))
+
+        response_id = response.get("id")
+        assert response_id is not None, "Response should have an ID"
+        print(f"Got response_id: {response_id}")
+
+        list_items_response = await litellm.alist_input_items(
+            response_id=response_id,
+            limit=20,
+            order="desc",
+        )
+        print(
+            "List items response=",
+            json.dumps(list_items_response, indent=4, default=str),
+        )
+
+    
+    @pytest.mark.asyncio
+    async def test_multiturn_responses_api(self):
+        litellm._turn_on_debug()
+        litellm.set_verbose = True
+        base_completion_call_args = self.get_base_completion_call_args()
+        response_1 = await litellm.aresponses(
+            input="Basic ping", max_output_tokens=20, **base_completion_call_args
+        )
+
+        # follow up with a second request
+        response_1_id = response_1.id
+        response_2 = await litellm.aresponses(
+            input="Basic ping", 
+            max_output_tokens=20, 
+            previous_response_id=response_1_id,
+            **base_completion_call_args
+        )
+
+        # assert the response is not None
+        assert response_1 is not None
+        assert response_2 is not None

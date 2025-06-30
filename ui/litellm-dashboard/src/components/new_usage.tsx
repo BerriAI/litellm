@@ -15,6 +15,7 @@ import {
   TableHeaderCell, TableBody, TableCell,
   Subtitle, DateRangePicker, DateRangePickerValue
 } from "@tremor/react";
+import UsageDatePicker from "./shared/usage_date_picker";
 import { AreaChart } from "@tremor/react";
 
 import { userDailyActivityCall, tagListCall } from "./networking";
@@ -33,13 +34,15 @@ interface NewUsagePageProps {
   userRole: string | null;
   userID: string | null;
   teams: Team[];
+  premiumUser: boolean;
 }
 
 const NewUsagePage: React.FC<NewUsagePageProps> = ({
   accessToken,
   userRole,
   userID,
-  teams
+  teams,
+  premiumUser
 }) => {
   const [userSpendData, setUserSpendData] = useState<{
     results: DailyData[];
@@ -209,8 +212,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 
   const fetchUserSpendData = async () => {
     if (!accessToken || !dateValue.from || !dateValue.to) return;
-    const startTime = dateValue.from;
-    const endTime = dateValue.to;
+    // Create new Date objects to avoid mutating the original dates
+    const startTime = new Date(dateValue.from);
+    const endTime = new Date(dateValue.to);
     
     try {
       // Get first page
@@ -222,23 +226,31 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
       }
 
       // If only one page, just set the data
-      if (firstPageData.metadata.total_pages === 1) {
+      if (firstPageData.metadata.total_pages <= 1) {
         setUserSpendData(firstPageData);
         return;
       }
 
       // Fetch all pages
       const allResults = [...firstPageData.results];
+      const aggregatedMetadata = { ...firstPageData.metadata };
       
       for (let page = 2; page <= firstPageData.metadata.total_pages; page++) {
         const pageData = await userDailyActivityCall(accessToken, startTime, endTime, page);
         allResults.push(...pageData.results);
+        if (pageData.metadata) {
+            aggregatedMetadata.total_spend += pageData.metadata.total_spend || 0;
+            aggregatedMetadata.total_api_requests += pageData.metadata.total_api_requests || 0;
+            aggregatedMetadata.total_successful_requests += pageData.metadata.total_successful_requests || 0;
+            aggregatedMetadata.total_failed_requests += pageData.metadata.total_failed_requests || 0;
+            aggregatedMetadata.total_tokens += pageData.metadata.total_tokens || 0;
+        }
       }
 
       // Combine all results with the first page's metadata
       setUserSpendData({
         results: allResults,
-        metadata: firstPageData.metadata
+        metadata: aggregatedMetadata
       });
     } catch (error) {
       console.error("Error fetching user spend data:", error);
@@ -255,9 +267,11 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 
   return (
     <div style={{ width: "100%" }} className="p-8">
+      {all_admin_roles.includes(userRole || "") ?
       <Text className="text-sm text-gray-500 mb-4">
-        This is the new usage dashboard. <br/> You may see empty data, as these use <a href="https://github.com/BerriAI/litellm/blob/6de348125208dd4be81ff0e5813753df2fbe9735/schema.prisma#L320" className="text-blue-500 hover:text-blue-700 ml-1">new aggregate tables</a> to allow UI to work at 1M+ spend logs. To access the old dashboard, go to Experimental {'>'} Old Usage.
+        Note: If you see key/model-level inconsistencies between Global View and Team Usage, it&apos;s because the Global View was missing spend when user_id = null, prior to v1.71.2. <a href="https://github.com/BerriAI/litellm/issues/10876" className="text-blue-500 hover:text-blue-700 ml-1">Learn more here</a>.
       </Text>
+      : null}
       <TabGroup>
         <TabList variant="solid" className="mt-1">
           {all_admin_roles.includes(userRole || "") ? <Tab>Global Usage</Tab> : <Tab>Your Usage</Tab>}
@@ -269,9 +283,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
           <TabPanel>
             <Grid numItems={2} className="gap-2 w-full mb-4">
               <Col>
-                <Text>Select Time Range</Text>
-                <DateRangePicker
-                  enableSelect={true}
+                <UsageDatePicker
                   value={dateValue}
                   onValueChange={(value) => {
                     setDateValue(value);
@@ -384,6 +396,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                           userID={userID}
                           userRole={userRole}
                           teams={null}
+                          premiumUser={premiumUser}
                         />
                       </Card>
                     </Col>
@@ -504,6 +517,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                 label: team.team_alias,
                 value: team.team_id
               })) || null}
+              premiumUser={premiumUser}
             />
           </TabPanel>
 
@@ -515,6 +529,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               userID={userID}
               userRole={userRole}
               entityList={allTags}
+              premiumUser={premiumUser}
             />
           </TabPanel>
 

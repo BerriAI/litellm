@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import HTTPException
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
 
 
 class LiteLLM_UserScimMetadata(BaseModel):
@@ -22,8 +22,8 @@ class SCIMResource(BaseModel):
 
 
 class SCIMUserName(BaseModel):
-    familyName: str
-    givenName: str
+    familyName: Optional[str] = None
+    givenName: Optional[str] = None
     formatted: Optional[str] = None
     middleName: Optional[str] = None
     honorificPrefix: Optional[str] = None
@@ -43,8 +43,8 @@ class SCIMUserGroup(BaseModel):
 
 
 class SCIMUser(SCIMResource):
-    userName: str
-    name: SCIMUserName
+    userName: Optional[str] = None
+    name: Optional[SCIMUserName] = None
     displayName: Optional[str] = None
     active: bool = True
     emails: Optional[List[SCIMUserEmail]] = None
@@ -72,9 +72,19 @@ class SCIMListResponse(BaseModel):
 
 # SCIM PATCH Operation Models
 class SCIMPatchOperation(BaseModel):
-    op: Literal["add", "remove", "replace"]
+    op: str
     path: Optional[str] = None
     value: Optional[Any] = None
+
+    @field_validator("op", mode="before")
+    @classmethod
+    def normalize_op(cls, v):
+        if isinstance(v, str):
+            v_lower = v.lower()
+            if v_lower not in {"add", "remove", "replace"}:
+                raise ValueError("op must be add, remove, or replace")
+            return v_lower
+        return v
 
 
 class SCIMPatchOp(BaseModel):

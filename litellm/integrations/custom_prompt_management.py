@@ -18,6 +18,7 @@ class CustomPromptManagement(CustomLogger, PromptManagementBase):
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_label: Optional[str] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Returns:
@@ -43,6 +44,7 @@ class CustomPromptManagement(CustomLogger, PromptManagementBase):
         prompt_id: str,
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_label: Optional[str] = None,
     ) -> PromptManagementClient:
         raise NotImplementedError(
             "Custom prompt management does not support compile prompt helper"

@@ -149,6 +149,8 @@ class RouteChecks:
             route=route, allowed_routes=LiteLLMRoutes.self_managed_routes.value
         ):  # routes that manage their own allowed/disallowed logic
             pass
+        elif route.startswith("/v1/mcp/"):
+            pass  # authN/authZ handled by api itself
         else:
             user_role = "unknown"
             user_id = "unknown"
@@ -191,6 +193,12 @@ class RouteChecks:
             return True
 
         if route in LiteLLMRoutes.anthropic_routes.value:
+            return True
+
+        if RouteChecks.check_route_access(
+            route=route, 
+            allowed_routes=LiteLLMRoutes.mcp_routes.value
+        ):
             return True
 
         # fuzzy match routes like "/v1/threads/thread_49EIN5QF32s4mH20M7GFKdlZ"

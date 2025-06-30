@@ -1,7 +1,34 @@
 import React from "react";
 import { ColumnDef } from "@tanstack/react-table";
 import { MCPTool, InputSchema } from "./types";
-import { Button } from "@tremor/react"
+import { Button, Callout, Icon } from "@tremor/react"
+
+const AuthBanner = ({needsAuth, authValue}: {needsAuth: boolean, authValue?: string | null}) => {
+  if(!needsAuth || (needsAuth && authValue)) {
+    return (
+      <Callout
+        title="Authentication"
+        color="green"
+        className="mb-4"
+      >
+        This tool does not require authentication or has authentication added.
+      </Callout>
+    )
+  }
+  
+  if (needsAuth && !authValue) {
+    return (
+      <Callout
+        title="Authentication required"
+        color="yellow"
+        className="mb-4"
+      >
+        Please provide authentication details if this tool call requires auth.
+      </Callout>
+    );
+  }
+  return null;
+}
 
 export const columns: ColumnDef<MCPTool>[] = [
   {
@@ -78,6 +105,8 @@ export const columns: ColumnDef<MCPTool>[] = [
 // Tool Panel component to display when a tool is selected
 export function ToolTestPanel({
   tool,
+  needsAuth,
+  authValue,
   onSubmit,
   isLoading,
   result,
@@ -85,6 +114,8 @@ export function ToolTestPanel({
   onClose
 }: {
   tool: MCPTool;
+  needsAuth: boolean;
+  authValue?: string | null;
   onSubmit: (args: Record<string, any>) => void;
   isLoading: boolean;
   result: any | null;
@@ -131,6 +162,12 @@ export function ToolTestPanel({
           <p className="text-gray-600">{tool.description}</p>
           <p className="text-sm text-gray-500 mt-1">Provider: {tool.mcp_info.server_name}</p>
         </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <AuthBanner 
+            needsAuth={needsAuth}
+            authValue={authValue}
+          />
+        </div>
         <button
           onClick={onClose}
           className="p-1 rounded-full hover:bg-gray-200"
@@ -173,7 +210,9 @@ export function ToolTestPanel({
                   />
                 </div>
               </div>
-            ) : (
+            ) : schema.properties === undefined ? (
+              <p className="text-xs">None</p>
+            ): (
               Object.entries(schema.properties).map(([key, prop]) => (
                 <div key={key} className="mb-4">
                   <label className="block text-sm font-medium text-gray-700 mb-1">

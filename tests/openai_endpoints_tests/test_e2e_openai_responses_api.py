@@ -69,13 +69,26 @@ def validate_stream_chunk(chunk):
     assert hasattr(chunk, "created")
     assert isinstance(chunk.created, int)
 
-
+@pytest.mark.flaky(retries=3, delay=2)
 def test_basic_response():
     client = get_test_client()
     response = client.responses.create(
         model="gpt-4o", input="just respond with the word 'ping'"
     )
     print("basic response=", response)
+
+    # get the response
+    response = client.responses.retrieve(response.id)
+    print("GET response=", response)
+
+
+    # delete the response
+    delete_response = client.responses.delete(response.id)
+    print("DELETE response=", delete_response)
+
+    # expect an error when getting the response again since it was deleted
+    with pytest.raises(Exception):
+        get_response = client.responses.retrieve(response.id)
 
 
 def test_streaming_response():

@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import List, Literal, Optional, Union
 
 from pydantic import PrivateAttr
 from typing_extensions import Any, List, Optional, TypedDict

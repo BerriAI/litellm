@@ -33,6 +33,27 @@ import MemberModal from "./edit_membership";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { isAdminRole } from "@/utils/roles";
+import ObjectPermissionsView from "../object_permissions_view";
+import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
+import PremiumVectorStoreSelector from "../common_components/PremiumVectorStoreSelector";
+
+export interface TeamMembership {
+  user_id: string;
+  team_id: string;
+  budget_id: string;
+  spend: number;
+  litellm_budget_table: {
+    budget_id: string;
+    soft_budget: number | null;
+    max_budget: number | null;
+    max_parallel_requests: number | null;
+    tpm_limit: number | null;
+    rpm_limit: number | null;
+    model_max_budget: Record<string, number> | null;
+    budget_duration: string | null;
+  };
+}
 
 export interface TeamData {
   team_id: string;
@@ -58,9 +79,18 @@ export interface TeamData {
       model_aliases: Record<string, string>;
     } | null;
     created_at: string;
+    object_permission?: {
+      object_permission_id: string;
+      mcp_servers: string[];
+      vector_stores: string[];
+    };
+    team_member_budget_table: {
+      max_budget: number;
+      budget_duration: string;
+    } | null;
   };
   keys: any[];
-  team_memberships: any[];
+  team_memberships: TeamMembership[];
 }
 
 export interface TeamInfoProps {
@@ -72,6 +102,7 @@ export interface TeamInfoProps {
   is_proxy_admin: boolean;
   userModels: string[];
   editTeam: boolean;
+  premiumUser?: boolean;
 }
 
 const TeamInfoView: React.FC<TeamInfoProps> = ({ 
@@ -81,7 +112,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   is_team_admin, 
   is_proxy_admin,
   userModels,
-  editTeam
+  editTeam,
+  premiumUser = false
 }) => {
   const [teamData, setTeamData] = useState<TeamData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -115,26 +147,36 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   const handleMemberCreate = async (values: any) => {
     try {
-      if (accessToken == null) {
-        return;
-      }
-
+      if (accessToken == null) return;
+  
       const member: Member = {
         user_email: values.user_email,
         user_id: values.user_id,
         role: values.role,
-      }
-      const response = await teamMemberAddCall(accessToken, teamId, member);
-
+      };
+  
+      await teamMemberAddCall(accessToken, teamId, member);
+  
       message.success("Team member added successfully");
       setIsAddMemberModalVisible(false);
       form.resetFields();
       fetchTeamInfo();
-    } catch (error) {
-      message.error("Failed to add team member");
+    } catch (error: any) {
+      let errMsg = "Failed to add team member";
+  
+      if (error?.raw?.detail?.error?.includes("Assigning team admins is a premium feature")) {
+        errMsg = "Assigning admins is an enterprise-only feature. Please upgrade your LiteLLM plan to enable this.";
+      } else if (error?.message) {
+        errMsg = error.message;
+      }
+  
+      message.error(errMsg);
       console.error("Error adding team member:", error);
     }
   };
+  
+    
+  
 
   const handleMemberUpdate = async (values: any) => {
     try {
@@ -147,17 +189,29 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         user_id: values.user_id,
         role: values.role,
       }
+      message.destroy(); // Remove all existing toasts
 
-      const response = await teamMemberUpdateCall(accessToken, teamId, member);
+      await teamMemberUpdateCall(accessToken, teamId, member);
 
       message.success("Team member updated successfully");
       setIsEditMemberModalVisible(false);
       fetchTeamInfo();
-    } catch (error) {
-      message.error("Failed to update team member");
+    } catch (error: any) {
+      let errMsg = "Failed to update team member";
+      if (error?.raw?.detail?.includes("Assigning team admins is a premium feature")) {
+        errMsg = "Assigning admins is an enterprise-only feature. Please upgrade your LiteLLM plan to enable this.";
+      } else if (error?.message) {
+        errMsg = error.message;
+      }
+      setIsEditMemberModalVisible(false);
+
+      message.destroy(); // Remove all existing toasts
+
+      message.error(errMsg);
       console.error("Error updating team member:", error);
     }
   };
+  
 
   const handleMemberDelete = async (member: Member) => {
     try {
@@ -187,7 +241,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         return;
       }
 
-      const updateData = {
+      const updateData: any = {
         team_id: teamId,
         team_alias: values.team_alias,
         models: values.models,
@@ -198,8 +252,26 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         metadata: {
           ...parsedMetadata,
           guardrails: values.guardrails || []
-        }
+        },
+        organization_id: values.organization_id,
       };
+
+      if (values.team_member_budget !== undefined) {
+        updateData.team_member_budget = Number(values.team_member_budget);
+      }
+
+      if (values.team_member_key_duration !== undefined) {
+        updateData.team_member_key_duration = values.team_member_key_duration;
+      }
+
+      // Handle object_permission updates
+      if (values.vector_stores !== undefined || values.mcp_servers !== undefined) {
+        updateData.object_permission = {
+          ...teamData?.team_info.object_permission,
+          vector_stores: values.vector_stores || [],
+          mcp_servers: values.mcp_servers || []
+        };
+      }
       
       const response = await teamUpdateCall(accessToken, updateData);
       
@@ -207,7 +279,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       setIsEditing(false);
       fetchTeamInfo();
     } catch (error) {
-      message.error("Failed to update team settings");
       console.error("Error updating team:", error);
     }
   };
@@ -256,6 +327,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   {info.budget_duration && (
                     <Text className="text-gray-500">Reset: {info.budget_duration}</Text>
                   )}
+                  <br/>
+                  {info.team_member_budget_table && (
+                    <Text className="text-gray-500">Team Member Budget: ${info.team_member_budget_table.max_budget}</Text>
+                  )}
                 </div>
               </Card>
 
@@ -273,13 +348,23 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               <Card>
                 <Text>Models</Text>
                 <div className="mt-2 flex flex-wrap gap-2">
-                  {info.models.map((model, index) => (
-                    <Badge key={index} color="red">
-                      {model}
-                    </Badge>
-                  ))}
+                  {info.models.length === 0 ? (
+                    <Badge color="red">All proxy models</Badge>
+                  ) : (
+                    info.models.map((model, index) => (
+                      <Badge key={index} color="red">
+                        {model}
+                      </Badge>
+                    ))
+                  )}
                 </div>
               </Card>
+
+              <ObjectPermissionsView 
+                objectPermission={info.object_permission} 
+                variant="card"
+                accessToken={accessToken}
+              />
             </Grid>
           </TabPanel>
 
@@ -308,7 +393,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
           {/* Settings Panel */}
           <TabPanel>
-            <Card>
+            <Card className="overflow-y-auto max-h-[65vh]">
               <div className="flex justify-between items-center mb-4">
                 <Title>Team Settings</Title>
                 {(canEditTeam && !isEditing) && (
@@ -334,6 +419,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     budget_duration: info.budget_duration,
                     guardrails: info.metadata?.guardrails || [],
                     metadata: info.metadata ? JSON.stringify(info.metadata, null, 2) : "",
+                    organization_id: info.organization_id,
+                    vector_stores: info.object_permission?.vector_stores || [],
+                    mcp_servers: info.object_permission?.mcp_servers || []
                   }}
                   layout="vertical"
                 >
@@ -353,7 +441,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <Select.Option key="all-proxy-models" value="all-proxy-models">
                         All Proxy Models
                       </Select.Option>
-                      {userModels.map((model, idx) => (
+                      {Array.from(new Set(userModels)).map((model, idx) => (
                         <Select.Option key={idx} value={model}>
                           {getModelDisplayName(model)}
                         </Select.Option>
@@ -364,6 +452,19 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   <Form.Item label="Max Budget (USD)" name="max_budget">
                     <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
                   </Form.Item>
+
+                  <Form.Item label="Team Member Budget (USD)" name="team_member_budget" tooltip="This is the individual budget for a user in the team.">
+                    <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
+                  </Form.Item>
+
+                  <Form.Item label="Team Member Key Duration" name="team_member_key_duration" tooltip="Set a limit to the duration of a team member's key.">
+                    <Select placeholder="n/a">
+                      <Select.Option value="1d">1 day</Select.Option>
+                      <Select.Option value="1w">1 week</Select.Option>
+                      <Select.Option value="1mo">1 month</Select.Option>
+                    </Select>
+                  </Form.Item>
+
 
                   <Form.Item label="Reset Budget" name="budget_duration">
                     <Select placeholder="n/a">
@@ -405,18 +506,42 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       placeholder="Select or enter guardrails"
                     />
                   </Form.Item>
+
+                  <Form.Item label="Vector Stores" name="vector_stores">
+                    <VectorStoreSelector
+                      onChange={(values) => form.setFieldValue('vector_stores', values)}
+                      value={form.getFieldValue('vector_stores')}
+                      accessToken={accessToken || ""}
+                      placeholder="Select vector stores"
+                    />
+                  </Form.Item>
+
+                  <Form.Item label="MCP Servers" name="mcp_servers">
+                    <MCPServerSelector
+                      onChange={(values) => form.setFieldValue('mcp_servers', values)}
+                      value={form.getFieldValue('mcp_servers')}
+                      accessToken={accessToken || ""}
+                      placeholder="Select MCP servers"
+                    />
+                  </Form.Item>
+                  
+                  <Form.Item label="Organization ID" name="organization_id">
+                    <Input type=""/>
+                  </Form.Item>
+
                   <Form.Item label="Metadata" name="metadata">
                     <Input.TextArea rows={10} />
                   </Form.Item>
-
-
-                  <div className="flex justify-end gap-2 mt-6">
-                    <Button onClick={() => setIsEditing(false)}>
-                      Cancel
-                    </Button>
-                    <TremorButton>
-                      Save Changes
-                    </TremorButton>
+                  
+                  <div className="sticky z-10 bg-white p-4 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
+                    <div className="flex justify-end items-center gap-2">
+                      <Button htmlType="button" onClick={() => setIsEditing(false)}>
+                        Cancel
+                      </Button>
+                      <TremorButton type="submit">
+                        Save Changes
+                      </TremorButton>
+                    </div>
                   </div>
                 </Form>
               ) : (
@@ -449,9 +574,23 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <div>RPM: {info.rpm_limit || 'Unlimited'}</div>
                   </div>
                   <div>
-                    <Text className="font-medium">Budget</Text>
-                      <div>Max: {info.max_budget !== null ? `$${info.max_budget}` : 'No Limit'}</div>
-                    <div>Reset: {info.budget_duration || 'Never'}</div>
+                    <Text className="font-medium">Team Budget</Text>
+                      <div>Max Budget: {info.max_budget !== null ? `$${info.max_budget}` : 'No Limit'}</div>
+                    <div>Budget Reset: {info.budget_duration || 'Never'}</div>
+                  </div>
+                  <div>
+                    <Text className="font-medium">
+                      Team Member Settings{' '}
+                      <Tooltip title="These are limits on individual team members">
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </Tooltip>
+                    </Text>
+                    <div>Max Budget: {info.team_member_budget_table?.max_budget || 'No Limit'}</div>
+                    <div>Key Duration: {info.metadata?.team_member_key_duration || 'No Limit'}</div>
+                  </div>
+                  <div>
+                    <Text className="font-medium">Organization ID</Text>
+                    <div>{info.organization_id}</div>
                   </div>
                   <div>
                     <Text className="font-medium">Status</Text>
@@ -459,6 +598,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       {info.blocked ? 'Blocked' : 'Active'}
                     </Badge>
                   </div>
+
+                  <ObjectPermissionsView 
+                    objectPermission={info.object_permission} 
+                    variant="inline"
+                    className="pt-4 border-t border-gray-200"
+                    accessToken={accessToken}
+                  />
                 </div>
               )}
             </Card>
