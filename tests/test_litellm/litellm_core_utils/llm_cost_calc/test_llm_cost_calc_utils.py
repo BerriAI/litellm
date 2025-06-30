@@ -1,21 +1,10 @@
-import json
 import os
 import sys
 
-import pytest
-from fastapi.testclient import TestClient
-
 import litellm
-from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
-    StandardBuiltInToolCostTracking,
-)
-from litellm.types.llms.openai import FileSearchTool, WebSearchOptions
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
-    ModelInfo,
-    ModelResponse,
     PromptTokensDetailsWrapper,
-    StandardBuiltInToolsParams,
 )
 
 sys.path.insert(
@@ -28,7 +17,6 @@ from litellm.types.utils import Usage
 
 def test_reasoning_tokens_no_price_set():
     model = "o1-mini"
-    custom_llm_provider = "openai"
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
     model_cost_map = litellm.model_cost[model]
@@ -56,11 +44,9 @@ def test_reasoning_tokens_no_price_set():
         model_cost_map["input_cost_per_token"] * usage.prompt_tokens,
         10,
     )
-    print(f"completion_cost: {completion_cost}")
     expected_completion_cost = (
         model_cost_map["output_cost_per_token"] * usage.completion_tokens
     )
-    print(f"expected_completion_cost: {expected_completion_cost}")
     assert round(completion_cost, 10) == round(
         expected_completion_cost,
         10,

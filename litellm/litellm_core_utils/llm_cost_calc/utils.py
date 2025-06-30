@@ -1,7 +1,7 @@
 # What is this?
 ## Helper utilities for cost_per_token()
 
-from typing import Literal, Optional, Tuple, cast
+from typing import Any, Literal, Optional, Tuple, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -219,35 +219,15 @@ def calculate_cost_component(
     return 0.0
 
 
-def generic_cost_per_token(
-    model: str, usage: Usage, custom_llm_provider: str
-) -> Tuple[float, float]:
-    """
-    Calculates the cost per token for a given model, prompt tokens, and completion tokens.
-
-    Handles context caching as well.
-
-    Input:
-        - model: str, the model name without provider prefix
-        - usage: LiteLLM Usage block, containing anthropic caching information
-
-    Returns:
-        Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
-    """
-
-    ## GET MODEL INFO
-    model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-
-    ## CALCULATE INPUT COST
-    ### Cost of processing (non-cache hit + cache hit) + Cost of cache-writing (cache writing)
-    prompt_cost = 0.0
-    ### PROCESSING COST
+def _extract_prompt_token_details(usage: Usage) -> Tuple[int, int, int, int, int, int]:
+    """Extract token details from prompt_tokens_details."""
     text_tokens = usage.prompt_tokens
     cache_hit_tokens = 0
     audio_tokens = 0
     character_count = 0
     image_count = 0
     video_length_seconds = 0
+    
     if usage.prompt_tokens_details:
         cache_hit_tokens = (
             cast(
@@ -288,10 +268,15 @@ def generic_cost_per_token(
     if text_tokens == 0:
         text_tokens = usage.prompt_tokens - cache_hit_tokens - audio_tokens
 
-    prompt_base_cost, completion_base_cost = _get_token_base_cost(
-        model_info=model_info, usage=usage
-    )
+    return text_tokens, cache_hit_tokens, audio_tokens, character_count, image_count, video_length_seconds
 
+
+def _calculate_prompt_cost(model_info: dict, usage: Usage, prompt_base_cost: float) -> float:
+    """Calculate the total prompt cost including all components."""
+    text_tokens, cache_hit_tokens, audio_tokens, character_count, image_count, video_length_seconds = (
+        _extract_prompt_token_details(usage)
+    )
+    
     prompt_cost = float(text_tokens) * prompt_base_cost
 
     ### CACHE READ COST
@@ -312,7 +297,6 @@ def generic_cost_per_token(
     )
 
     ### CHARACTER COST
-
     prompt_cost += calculate_cost_component(
         model_info, "input_cost_per_character", character_count
     )
@@ -327,11 +311,15 @@ def generic_cost_per_token(
         model_info, "input_cost_per_video_per_second", video_length_seconds
     )
 
-    ## CALCULATE OUTPUT COST
+    return prompt_cost
+
+
+def _extract_completion_token_details(usage: Usage) -> Tuple[int, int, int, bool]:
+    """Extract token details from completion_tokens_details."""
     text_tokens = 0
     audio_tokens = 0
     reasoning_tokens = 0
-    is_text_tokens_total = False
+    
     if usage.completion_tokens_details is not None:
         audio_tokens = (
             cast(
@@ -357,32 +345,39 @@ def generic_cost_per_token(
 
     if text_tokens == 0:
         text_tokens = usage.completion_tokens
-    if text_tokens == usage.completion_tokens:
-        is_text_tokens_total = True
+    is_text_tokens_total = text_tokens == usage.completion_tokens
+    
+    return text_tokens, audio_tokens, reasoning_tokens, is_text_tokens_total
+
+
+def _convert_string_cost_to_float(cost_value: Any, cost_name: str) -> Optional[float]:
+    """Convert string cost values to float, with error handling."""
+    if isinstance(cost_value, str):
+        try:
+            return float(cost_value)
+        except ValueError:
+            verbose_logger.exception(
+                f"litellm.litellm_core_utils.llm_cost_calc.utils.py::generic_cost_per_token(): Exception converting {cost_name} string to float - {cost_value}\nDefaulting to None"
+            )
+            return None
+    return cost_value
+
+
+def _calculate_completion_cost(model_info: dict, usage: Usage, completion_base_cost: float) -> float:
+    """Calculate the total completion cost including all components."""
+    text_tokens, audio_tokens, reasoning_tokens, is_text_tokens_total = (
+        _extract_completion_token_details(usage)
+    )
+    
     ## TEXT COST
     completion_cost = float(text_tokens) * completion_base_cost
 
-    _output_cost_per_audio_token = model_info.get("output_cost_per_audio_token")
-    _output_cost_per_reasoning_token = model_info.get("output_cost_per_reasoning_token")
-    
-    # Convert string costs to floats if needed
-    if isinstance(_output_cost_per_audio_token, str):
-        try:
-            _output_cost_per_audio_token = float(_output_cost_per_audio_token)
-        except ValueError:
-            verbose_logger.exception(
-                f"litellm.litellm_core_utils.llm_cost_calc.utils.py::generic_cost_per_token(): Exception converting _output_cost_per_audio_token string to float - {_output_cost_per_audio_token}\nDefaulting to None"
-            )
-            _output_cost_per_audio_token = None
-    
-    if isinstance(_output_cost_per_reasoning_token, str):
-        try:
-            _output_cost_per_reasoning_token = float(_output_cost_per_reasoning_token)
-        except ValueError:
-            verbose_logger.exception(
-                f"litellm.litellm_core_utils.llm_cost_calc.utils.py::generic_cost_per_token(): Exception converting _output_cost_per_reasoning_token string to float - {_output_cost_per_reasoning_token}\nDefaulting to None"
-            )
-            _output_cost_per_reasoning_token = None
+    _output_cost_per_audio_token = _convert_string_cost_to_float(
+        model_info.get("output_cost_per_audio_token"), "_output_cost_per_audio_token"
+    )
+    _output_cost_per_reasoning_token = _convert_string_cost_to_float(
+        model_info.get("output_cost_per_reasoning_token"), "_output_cost_per_reasoning_token"
+    )
 
     ## AUDIO COST
     if not is_text_tokens_total and audio_tokens is not None and audio_tokens > 0:
@@ -401,6 +396,37 @@ def generic_cost_per_token(
             else completion_base_cost
         )
         completion_cost += float(reasoning_tokens) * _output_cost_per_reasoning_token
+
+    return completion_cost
+
+
+def generic_cost_per_token(
+    model: str, usage: Usage, custom_llm_provider: str
+) -> Tuple[float, float]:
+    """
+    Calculates the cost per token for a given model, prompt tokens, and completion tokens.
+
+    Handles context caching as well.
+
+    Input:
+        - model: str, the model name without provider prefix
+        - usage: LiteLLM Usage block, containing anthropic caching information
+
+    Returns:
+        Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
+    """
+    ## GET MODEL INFO
+    model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+
+    prompt_base_cost, completion_base_cost = _get_token_base_cost(
+        model_info=model_info, usage=usage
+    )
+
+    ## CALCULATE INPUT COST
+    prompt_cost = _calculate_prompt_cost(model_info, usage, prompt_base_cost)
+
+    ## CALCULATE OUTPUT COST
+    completion_cost = _calculate_completion_cost(model_info, usage, completion_base_cost)
 
     return prompt_cost, completion_cost
 
