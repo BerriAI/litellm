@@ -6571,12 +6571,12 @@ def validate_chat_completion_tool_choice(
     elif isinstance(tool_choice, str):
         return tool_choice
     elif isinstance(tool_choice, dict):
-        # Handle Cursor IDE format: {"type": "auto"} -> "auto"
+        # Handle Cursor IDE format: {"type": "auto"} -> return as-is
         if (
             tool_choice.get("type") in ["auto", "none", "required"]
             and "function" not in tool_choice
         ):
-            return tool_choice["type"]
+            return tool_choice
         
         # Standard OpenAI format: {"type": "function", "function": {...}}
         if tool_choice.get("type") is None or tool_choice.get("function") is None:
