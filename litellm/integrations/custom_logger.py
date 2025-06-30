@@ -417,9 +417,10 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         1. If `litellm_metadata` is in the request kwargs, use it
         2. Otherwise, use `metadata`
         """
+        from litellm.constants import LITELLM_METADATA_FIELD, OLD_LITELLM_METADATA_FIELD
         if request_kwargs is None:
             return None
-        if "litellm_metadata" in request_kwargs:
-            return "litellm_metadata"
-        return "metadata"
+        if LITELLM_METADATA_FIELD in request_kwargs:
+            return LITELLM_METADATA_FIELD
+        return OLD_LITELLM_METADATA_FIELD
         
