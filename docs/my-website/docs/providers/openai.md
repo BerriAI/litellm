@@ -609,6 +609,12 @@ response = litellm.acompletion(
 )
 ```
 
+:::tip
+
+If you are using OpenAI models together with models from other providers (e.g. Anthropic), we recommend setting this parameter along with the other parameter mentioned on [this page.](/docs/providers/anthropic#usage---set-ssl_verifyfalse)
+
+:::
+
 ### Using HTTP/HTTPS Proxy with LiteLLM
 
 This is done by setting your own `httpx.Client` 
@@ -632,6 +638,12 @@ response = litellm.acompletion(
     messages=messages,
 )
 ```
+
+:::tip
+
+If you are using OpenAI models together with models from other providers (e.g. Anthropic), we recommend setting this parameter along with the other parameter mentioned on [this page.](/docs/providers/anthropic#usage---set-ssl_verifyfalse)
+
+:::
 
 
 ### Using OpenAI Proxy with LiteLLM

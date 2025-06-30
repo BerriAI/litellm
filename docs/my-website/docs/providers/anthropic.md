@@ -1707,7 +1707,7 @@ If you are using Anthropic models together with models from other providers, we 
 
 :::
 
-### Using HTTP/HTTPS Proxy with LiteLLM
+## Using HTTP/HTTPS Proxy with LiteLLM
 
 This is done by setting your own `httpx.Client` 
 
@@ -1733,6 +1733,6 @@ response = litellm.acompletion(
 
 :::tip
 
-If you are using Anthropic models together with models from other providers, we recommend setting this parameter along with the other parameter mentioned on [this page.](/docs/providers/openai#set-ssl_verifyfalse)
+If you are using Anthropic models together with models from other providers, we recommend setting this parameter along with the other parameter mentioned on [this page.](/docs/providers/openai#using-httphttps-proxy-with-litellm)
 
 :::
