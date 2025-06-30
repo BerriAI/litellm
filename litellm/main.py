@@ -3220,6 +3220,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 custom_llm_provider=custom_llm_provider,
                 encoding=encoding,
                 stream=stream,
+                provider_config=bytez_transformation
             )
 
             pass

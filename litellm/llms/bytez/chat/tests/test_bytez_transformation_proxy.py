@@ -15,7 +15,11 @@ for index, messages in enumerate(messages_list, 0):
         model="gemma-3", messages=messages, max_tokens=50
     )
 
-    print("Response is: ", response.choices[0].message.content)
+    content = response.choices[0].message.content
+
+    print("Response is: ", content)
+
+    assert isinstance(content, str) and len(content) > 0
 
 
 # NOTE to run these tests, run this in the root folder:

@@ -182,7 +182,7 @@ class BytezChatConfig(BaseConfig):
 
         message = model_response.choices[0].message  # type: ignore
 
-        message.content = output
+        message.content = output["content"][0]["text"]
 
         messages = adapt_messages_to_bytez_standard(messages=messages)  # type: ignore
 
