@@ -1152,6 +1152,7 @@ def client(original_function):  # noqa: PLR0915
                 and (
                     call_type == CallTypes.acompletion.value
                     or call_type == CallTypes.completion.value
+                    or call_type == CallTypes.anthropic_messages.value
                 )
             ):
                 try:
@@ -1370,6 +1371,40 @@ def client(original_function):  # noqa: PLR0915
             elif _caching_handler_response.embedding_all_elements_cache_hit is True:
                 return _caching_handler_response.final_embedding_cached_response
 
+            # CHECK MAX TOKENS
+            if (
+                kwargs.get("max_tokens", None) is not None
+                and model is not None
+                and litellm.modify_params
+                is True  # user is okay with params being modified
+                and (
+                    call_type == CallTypes.acompletion.value
+                    or call_type == CallTypes.completion.value
+                    or call_type == CallTypes.anthropic_messages.value
+                )
+            ):
+                try:
+                    base_model = model
+                    if kwargs.get("hf_model_name", None) is not None:
+                        base_model = f"huggingface/{kwargs.get('hf_model_name')}"
+                    messages = None
+                    if len(args) > 1:
+                        messages = args[1]
+                    elif kwargs.get("messages", None):
+                        messages = kwargs["messages"]
+                    user_max_tokens = kwargs.get("max_tokens")
+                    modified_max_tokens = get_modified_max_tokens(
+                        model=model,
+                        base_model=base_model,
+                        messages=messages,
+                        user_max_tokens=user_max_tokens,
+                        buffer_num=None,
+                        buffer_perc=None,
+                    )
+                    kwargs["max_tokens"] = modified_max_tokens
+                except Exception as e:
+                    print_verbose(f"Error while checking max token limit: {str(e)}")
+            
             # MODEL CALL
             result = await original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
