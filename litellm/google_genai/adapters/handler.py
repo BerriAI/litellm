@@ -44,9 +44,9 @@ class GenerateContentToCompletionHandler:
     async def async_generate_content_handler(
         model: str,
         contents: Union[List[Dict[str, Any]], Dict[str, Any]],
+        litellm_params: GenericLiteLLMParams,
         config: Optional[Dict[str, Any]] = None,
         stream: bool = False,
-        litellm_params: Optional[GenericLiteLLMParams] = None,
         **kwargs,
     ) -> Union[Dict[str, Any], AsyncIterator[bytes]]:
         """Handle generate_content call asynchronously using completion adapter"""
@@ -87,10 +87,10 @@ class GenerateContentToCompletionHandler:
     def generate_content_handler(
         model: str,
         contents: Union[List[Dict[str, Any]], Dict[str, Any]],
+        litellm_params: GenericLiteLLMParams,
         config: Optional[Dict[str, Any]] = None,
         stream: bool = False,
         _is_async: bool = False,
-        litellm_params: Optional[GenericLiteLLMParams] = None,
         **kwargs,
     ) -> Union[Dict[str, Any], AsyncIterator[bytes], Coroutine[Any, Any, Union[Dict[str, Any], AsyncIterator[bytes]]]]:
         """Handle generate_content call using completion adapter"""
@@ -101,6 +101,7 @@ class GenerateContentToCompletionHandler:
                 contents=contents,
                 config=config,
                 stream=stream,
+                litellm_params=litellm_params,
                 **kwargs,
             )
             

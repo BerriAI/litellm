@@ -300,6 +300,7 @@ def generate_content(
                 config=setup_result.generate_content_config_dict,
                 stream=False,
                 _is_async=_is_async,
+                litellm_params=setup_result.litellm_params,
                 **kwargs
             )
 
