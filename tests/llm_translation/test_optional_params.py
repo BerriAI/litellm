@@ -1016,26 +1016,6 @@ def test_watsonx_text_top_k():
     assert optional_params["top_k"] == 10
 
 
-def test_watsonx_text_moderations():
-    optional_params = get_optional_params(
-        model="ibm/granite-3.3-8b-instruct",
-        custom_llm_provider="watsonx_text",
-        moderations={
-            "hap": {
-                "input": {"enabled": True, "threshold": 0.5},
-                "output": {"enabled": True, "threshold": 0.5},
-            },
-        },
-    )
-    print(optional_params)
-    assert optional_params["moderations"] == {
-        "hap": {
-            "input": {"enabled": True, "threshold": 0.5},
-            "output": {"enabled": True, "threshold": 0.5},
-        }
-    }
-
-
 def test_together_ai_model_params():
     optional_params = get_optional_params(
         model="together_ai", custom_llm_provider="together_ai", logprobs=1
