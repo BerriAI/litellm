@@ -193,6 +193,7 @@ baseten_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 snowflake_key: Optional[str] = None
+digitalocean_api_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
@@ -431,6 +432,7 @@ galadriel_models: List = []
 sambanova_models: List = []
 assemblyai_models: List = []
 snowflake_models: List = []
+digitalocean_models: List = []
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -588,6 +590,8 @@ def add_known_models():
             jina_ai_models.append(key)
         elif value.get("litellm_provider") == "snowflake":
             snowflake_models.append(key)
+        elif value.get("litellm_provider") == "digitalocean":
+            digitalocean_models.append(key)
 
 
 add_known_models()
@@ -664,6 +668,7 @@ model_list = (
     + assemblyai_models
     + jina_ai_models
     + snowflake_models
+    + digitalocean_models
 )
 
 model_list_set = set(model_list)
@@ -721,6 +726,7 @@ models_by_provider: dict = {
     "assemblyai": assemblyai_models,
     "jina_ai": jina_ai_models,
     "snowflake": snowflake_models,
+    "digitalocean": digitalocean_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -963,7 +969,7 @@ from .llms.openai.chat.o_series_transformation import (
 )
 
 from .llms.snowflake.chat.transformation import SnowflakeConfig
-
+from .llms.digitalocean.chat.transformation import DigitalOceanConfig
 openaiOSeriesConfig = OpenAIOSeriesConfig()
 from .llms.openai.chat.gpt_transformation import (
     OpenAIGPTConfig,

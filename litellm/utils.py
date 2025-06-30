@@ -3705,6 +3705,17 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
+    elif custom_llm_provider == "digitalocean":
+        optional_params = litellm.DigitalOceanConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
     elif custom_llm_provider == "openai":
         optional_params = litellm.OpenAIConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -6569,6 +6580,8 @@ class ProviderConfigManager:
             return litellm.LiteLLMProxyChatConfig()
         elif litellm.LlmProviders.OPENAI == provider:
             return litellm.OpenAIGPTConfig()
+        elif litellm.LlmProviders.DIGITALOCEAN == provider:
+            return litellm.DigitalOceanConfig()
         return None
 
     @staticmethod

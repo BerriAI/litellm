@@ -321,6 +321,8 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "openai"
         elif model in litellm.empower_models:
             custom_llm_provider = "empower"
+        elif model in litellm.digitalocean_models:
+            custom_llm_provider = "digitalocean"
         elif model == "*":
             custom_llm_provider = "openai"
         if not custom_llm_provider:
@@ -580,6 +582,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or f"https://{get_secret('SNOWFLAKE_ACCOUNT_ID')}.snowflakecomputing.com/api/v2/cortex/inference:complete"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("SNOWFLAKE_JWT")
+    elif custom_llm_provider == "digitalocean":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.DigitalOceanConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
 
     if api_base is not None and not isinstance(api_base, str):
         raise Exception("api base needs to be a string. api_base={}".format(api_base))

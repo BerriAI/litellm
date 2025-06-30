@@ -25,10 +25,9 @@ export enum Providers {
     Perplexity = "Perplexity",
     TogetherAI = "TogetherAI",
     Openrouter = "Openrouter",
-    FireworksAI = "Fireworks AI"
-
+    FireworksAI = "Fireworks AI",
+    DigitalOcean = "DigitalOcean"
   }
-  
 export const provider_map: Record<string, string> = {
     OpenAI: "openai",
     OpenAI_Text: "text-completion-openai",
@@ -53,7 +52,8 @@ export const provider_map: Record<string, string> = {
     Perplexity: "perplexity",
     TogetherAI: "togetherai",
     Openrouter: "openrouter",
-    FireworksAI: "fireworks_ai"
+    FireworksAI: "fireworks_ai",
+    DigitalOcean: "digitalocean"
 };
 
 const asset_logos_folder = '/ui/assets/logos/';
@@ -82,7 +82,8 @@ export const providerLogoMap: Record<string, string> = {
     [Providers.Sambanova]: `${asset_logos_folder}sambanova.svg`,
     [Providers.TogetherAI]: `${asset_logos_folder}togetherai.svg`,
     [Providers.Vertex_AI]: `${asset_logos_folder}google.svg`,
-    [Providers.xAI]: `${asset_logos_folder}xai.svg`
+    [Providers.xAI]: `${asset_logos_folder}xai.svg`,
+    [Providers.DigitalOcean]: `${asset_logos_folder}digitalocean.svg`
 };
 
 export const getProviderLogoAndName = (providerValue: string): { logo: string, displayName: string } => {
@@ -136,9 +137,9 @@ export const getPlaceholder = (selectedProvider: string): string => {
     console.log(`Provider key: ${providerKey}`);
     let custom_llm_provider = provider_map[providerKey];
     console.log(`Provider mapped to: ${custom_llm_provider}`);
-    
+
     let providerModels: Array<string> = [];
-    
+
     if (providerKey && typeof modelMap === "object") {
       Object.entries(modelMap).forEach(([key, value]) => {
         if (
@@ -151,7 +152,7 @@ export const getPlaceholder = (selectedProvider: string): string => {
           providerModels.push(key);
         }
       });
-  
+
       // Special case for cohere_chat
       // we need both cohere_chat and cohere models to show on dropdown
       if (providerKey == Providers.Cohere) {
@@ -168,6 +169,6 @@ export const getPlaceholder = (selectedProvider: string): string => {
         });
       }
     }
-  
+
     return providerModels;
   };

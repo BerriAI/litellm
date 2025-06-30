@@ -327,7 +327,27 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     label: "API Key",
     type: "password",
     required: true
-  }]
+  }],
+  [Providers.DigitalOcean]: [
+    {
+      key: "endpoint",
+      label: "DigitalOcean Endpoint",
+      placeholder: "https://...",
+      required: true
+    },
+
+    {
+      key: "base_model",
+      label: "Base Model",
+      placeholder: "digitalocean/mistral-nemo"
+    },
+    {
+      key: "api_key",
+      label: "DigitalOcean API Key",
+      type: "password",
+      required: true
+    }
+  ]
 };
 
 const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
@@ -335,7 +355,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
   uploadProps
 }) => {
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
-  
+
   // Simply use the fields as defined in PROVIDER_CREDENTIAL_FIELDS
   const allFields = React.useMemo(() => {
     return PROVIDER_CREDENTIAL_FIELDS[selectedProviderEnum] || [];
@@ -353,7 +373,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
             className={field.key === "vertex_credentials" ? "mb-0" : undefined}
           >
             {field.type === "select" ? (
-              <Select 
+              <Select
                 placeholder={field.placeholder}
                 defaultValue={field.defaultValue}
               >
@@ -368,9 +388,9 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
                 <Button2 icon={<UploadOutlined />}>Click to Upload</Button2>
               </Upload>
             ) : (
-              <TextInput 
-                placeholder={field.placeholder} 
-                type={field.type === "password" ? "password" : "text"} 
+              <TextInput
+                placeholder={field.placeholder}
+                type={field.type === "password" ? "password" : "text"}
               />
             )}
           </Form.Item>
