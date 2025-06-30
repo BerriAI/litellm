@@ -11,10 +11,10 @@ import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
-from litellm.proxy._types import KeyManagementSystem
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
 )
+from litellm.types.secret_managers.main import KeyManagementSystem
 
 oidc_cache = DualCache()
 

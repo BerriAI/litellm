@@ -1,5 +1,5 @@
 ---
-title: "[Pre-Release] v1.73.0-stable"
+title: "v1.73.0-stable - Set default team for new users"
 slug: "v1-73-0-stable"
 date: 2025-06-21T10:00:00
 authors:
@@ -20,13 +20,14 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 
-:::info
+:::warning
 
-This is a pre-release version. 
+## Known Issues
 
-The production version will be released on Wednesday.
+The `non-root` docker image has a known issue around the UI not loading. If you use the `non-root` docker image we recommend waiting before upgrading to this version. We will post a patch fix for this.
 
 :::
+
 ## Deploy this version
 
 <Tabs>
@@ -36,14 +37,14 @@ The production version will be released on Wednesday.
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.73.0.rc.1
+ghcr.io/berriai/litellm:v1.73.0-stable
 ```
 </TabItem>
 
 <TabItem value="pip" label="Pip">
 
 ``` showLineNumbers title="pip install litellm"
-pip install litellm==1.73.0rc1
+pip install litellm==1.73.0.post1
 ```
 
 </TabItem>
@@ -54,9 +55,9 @@ pip install litellm==1.73.0rc1
 
 
 * **Why Upgrade**
+    - User Management: Set default team for new users - enables giving all users $10 API keys for exploration.
     - Passthrough Endpoints v2: Enhanced support for subroutes and custom cost tracking for passthrough endpoints.
     - Health Check Dashboard: New frontend UI for monitoring model health and status.
-    - User Management: Set default team for new users - enables giving all users $10 API keys for exploration.
 * **Who Should Read**
     - Teams using **Passthrough Endpoints**
     - Teams using **User Management** on LiteLLM
@@ -65,11 +66,32 @@ pip install litellm==1.73.0rc1
 * **Risk of Upgrade**
     - **Low**
         - No major breaking changes to existing functionality.
-
+- **Major Changes**
+    - `User Agent` will be auto-tracked as a tag in LiteLLM UI Logs Page. This means for all LLM requests you will see a `User Agent` tag in the logs page.
 
 ---
 
 ## Key Highlights
+
+
+
+### Set Default Team for New Users
+
+<Image img={require('../../img/default_teams_product_ss.jpg')}/>
+
+<br/>
+
+v1.73.0 introduces the ability to assign new users to Default Teams. This makes it much easier to enable experimentation with LLMs within your company, while also **ensuring spend for exploration is tracked correctly.** 
+ 
+What this means for **Proxy Admins**:
+- Set a max budget per team member: This sets a max amount an individual can spend within a team. 
+- Set a default team for new users: When a new user signs in via SSO / invitation link, they will be automatically added to this team. 
+
+What this means for **Developers**: 
+- View models across teams: You can now go to `Models + Endpoints` and view the models you have access to, across all teams you're a member of. 
+- Safe create key modal: If you have no model access outside of a team (default behaviour), you are now nudged to select a team on the Create Key modal. This resolves a common confusion point for new users onboarding to the proxy. 
+
+[Get Started](https://docs.litellm.ai/docs/tutorials/default_team_self_serve)
 
 
 ### Passthrough Endpoints v2
@@ -98,25 +120,6 @@ This release brings support for Proxy Admins to select which specific models to 
 
 This allows Proxy Admins to immediately identify which specific models are in a bad state and view the full error stack trace for faster troubleshooting.
 
-
-### Set Default Team for New Users
-
-<Image img={require('../../img/default_teams_product_ss.jpg')}/>
-
-<br/>
-
-v1.73.0 introduces the ability to assign new users to Default Teams. This makes it much easier to enable experimentation with LLMs within your company, while also **ensuring spend for exploration is tracked correctly.** 
- 
-What this means for **Proxy Admins**:
-- Set a max budget per team member: This sets a max amount an individual can spend within a team. 
-- Set a default team for new users: When a new user signs in via SSO / invitation link, they will be automatically added to this team. 
-
-What this means for **Developers**: 
-- View models across teams: You can now go to `Models + Endpoints` and view the models you have access to, across all teams you're a member of. 
-- Safe create key modal: If you have no model access outside of a team (default behaviour), you are now nudged to select a team on the Create Key modal. This resolves a common confusion point for new users onboarding to the proxy. 
-
-[Get Started](https://docs.litellm.ai/docs/tutorials/default_team_self_serve)
-
 ---
 
 
@@ -135,7 +138,7 @@ What this means for **Developers**:
 | Azure | `azure/o3-pro` | 200k | $2.00 | $8.00 | Updated |
 | Azure OpenAI | Azure Codex Models | Various | Various | Various | New |
 
-## Updated Models
+### Updated Models
 
 #### Features
 - **[Azure](../../docs/providers/azure)**
@@ -167,7 +170,7 @@ What this means for **Developers**:
     - Add thinking parameter support - [PR](https://github.com/BerriAI/litellm/pull/11914)
 
 
-### Bugs
+#### Bugs
 
 - **[VertexAI](../../docs/providers/vertex)**
     - Handle missing tokenCount in promptTokensDetails - [PR](https://github.com/BerriAI/litellm/pull/11896)
@@ -258,7 +261,7 @@ What this means for **Developers**:
 
 ---
 
-### Logging / Guardrails Integrations
+## Logging / Guardrails Integrations
 
 #### Bugs
 - **[Prometheus](../../docs/observability/prometheus)**
