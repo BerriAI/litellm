@@ -1406,9 +1406,9 @@ AWS_REGION_NAME = ""
 
 ```yaml
 model_list:
- - model_name: gpt-3.5-turbo
+ - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
 litellm_settings:
   callbacks: ["aws_sqs"]
   aws_sqs_callback_params:
