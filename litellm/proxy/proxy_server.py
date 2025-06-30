@@ -40,6 +40,17 @@ from litellm.types.utils import (
     TextCompletionResponse,
 )
 
+# Optional Rich imports with fallback
+try:
+    from rich.console import Console
+    from rich.table import Table
+    from rich.panel import Panel
+    RICH_AVAILABLE = True
+    console = Console()
+except ImportError:
+    RICH_AVAILABLE = False
+    console = None
+
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
@@ -79,45 +90,8 @@ try:
 except ImportError as e:
     raise ImportError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
 
-list_of_messages = [
-    "'The thing I wish you improved is...'",
-    "'A feature I really want is...'",
-    "'The worst thing about this product is...'",
-    "'This product would be better if...'",
-    "'I don't like how this works...'",
-    "'It would help me if you could add...'",
-    "'This feature doesn't meet my needs because...'",
-    "'I get frustrated when the product...'",
-]
-
-
-def generate_feedback_box():
-    box_width = 60
-
-    # Select a random message
-    message = random.choice(list_of_messages)
-
-    print()  # noqa
-    print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa
-    print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa
-    print("\033[1;37m" + "# {:^59} #\033[0m".format(message))  # noqa
-    print(  # noqa
-        "\033[1;37m"
-        + "# {:^59} #\033[0m".format("https://github.com/BerriAI/litellm/issues/new")
-    )  # noqa
-    print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa
-    print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa
-    print()  # noqa
-    print(" Thank you for using LiteLLM! - Krrish & Ishaan")  # noqa
-    print()  # noqa
-    print()  # noqa
-    print()  # noqa
-    print(  # noqa
-        "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"
-    )  # noqa
-    print()  # noqa
-    print()  # noqa
-
+# Import generate_feedback_box from utils instead of duplicating
+from litellm.proxy.utils import generate_feedback_box
 
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -2015,19 +1989,72 @@ class ProxyConfig:
         model_list = config.get("model_list", None)
         if model_list:
             router_params["model_list"] = model_list
-            print(  # noqa
-                "\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m"
-            )  # noqa
-            for model in model_list:
-                ### LOAD FROM os.environ/ ###
-                for k, v in model["litellm_params"].items():
-                    if isinstance(v, str) and v.startswith("os.environ/"):
-                        model["litellm_params"][k] = get_secret(v)
-                print(f"\033[32m    {model.get('model_name', '')}\033[0m")  # noqa
-                litellm_model_name = model["litellm_params"]["model"]
-                litellm_model_api_base = model["litellm_params"].get("api_base", None)
-                if "ollama" in litellm_model_name and litellm_model_api_base is None:
-                    run_ollama_serve()
+            
+            # Display models with Rich table when available
+            from litellm.proxy.utils import RICH_AVAILABLE
+            if RICH_AVAILABLE:
+                try:
+                    from rich.console import Console
+                    from rich.table import Table
+                    from rich.panel import Panel
+                    from rich.align import Align
+                    
+                    console = Console()
+                    
+                    # Create the table
+                    table = Table(show_header=True, header_style="bold white", box=None)
+                    table.add_column("Model Name", style="green", min_width=30)
+                    table.add_column("Provider", style="magenta")
+                    
+                    # Process models and add to table
+                    for model in model_list:
+                        ### LOAD FROM os.environ/ ###
+                        for k, v in model["litellm_params"].items():
+                            if isinstance(v, str) and v.startswith("os.environ/"):
+                                model["litellm_params"][k] = get_secret(v)
+                        
+                        model_name = model.get('model_name', '')
+                        litellm_model_name = model["litellm_params"]["model"]
+                        
+                        # Extract provider from model string
+                        provider = litellm_model_name.split("/")[0] if "/" in litellm_model_name else litellm_model_name
+                        
+                        table.add_row(model_name, provider.capitalize())
+                        
+                        litellm_model_api_base = model["litellm_params"].get("api_base", None)
+                        if "ollama" in litellm_model_name and litellm_model_api_base is None:
+                            continue  # Skip the rest of the loop for this model
+                    
+                    # Create panel with the table
+                    panel = Panel(
+                        Align.center(table),
+                        title="[bold green]🚄 LiteLLM Proxy Initialized[/bold green]",
+                        subtitle="[bold blue]🚄 Configured Models[/bold blue]",
+                        border_style="green",
+                        padding=(1, 2)
+                    )
+                    
+                    console.print()
+                    console.print(panel)
+                    console.print()
+                except Exception:
+                    # Fallback to original display
+                    print("\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m")  # noqa
+                    for model in model_list:
+                        print(f"\033[32m    {model.get('model_name', '')}\033[0m")  # noqa
+            else:
+                # Original display without Rich
+                print("\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m")  # noqa
+                for model in model_list:
+                    ### LOAD FROM os.environ/ ###
+                    for k, v in model["litellm_params"].items():
+                        if isinstance(v, str) and v.startswith("os.environ/"):
+                            model["litellm_params"][k] = get_secret(v)
+                    print(f"\033[32m    {model.get('model_name', '')}\033[0m")  # noqa
+                    litellm_model_name = model["litellm_params"]["model"]
+                    litellm_model_api_base = model["litellm_params"].get("api_base", None)
+                    if "ollama" in litellm_model_name and litellm_model_api_base is None:
+                        run_ollama_serve()
 
         ## ASSISTANT SETTINGS
         assistants_config: Optional[AssistantsTypedDict] = None
@@ -3259,6 +3286,9 @@ class ProxyStartupEvent:
         proxy_logging_obj.startup_event(
             llm_router=llm_router, redis_usage_cache=redis_usage_cache
         )
+        
+        # Display loaded models in a nice table format
+        cls._display_loaded_models(llm_router)
 
     @classmethod
     def _initialize_jwt_auth(
@@ -3280,6 +3310,65 @@ class ProxyStartupEvent:
             user_api_key_cache=user_api_key_cache,
             litellm_jwtauth=litellm_jwtauth,
         )
+
+    @classmethod
+    def _display_loaded_models(cls, llm_router: Optional[Router]):
+        """Display loaded models in a nice table format using rich if available"""
+        if llm_router is None:
+            return
+            
+        try:
+            model_list = llm_router.get_model_list()
+            if not model_list:
+                return
+                
+            if RICH_AVAILABLE and console:
+                # Create a beautiful table with model information
+                table = Table(title="🚄 Loaded Models", show_header=True, header_style="bold magenta")
+                table.add_column("Model Name", style="cyan", no_wrap=True)
+                table.add_column("Provider", style="yellow")
+                table.add_column("API Base", style="green")
+                table.add_column("Input Cost", style="blue", justify="right")
+                table.add_column("Output Cost", style="blue", justify="right")
+                
+                for model in model_list:
+                    try:
+                        model_name = model.get("model_name", "N/A")
+                        litellm_params = model.get("litellm_params", {})
+                        model_id = litellm_params.get("model", "N/A")
+                        api_base = litellm_params.get("api_base", "Default")
+                        
+                        # Extract provider from model ID
+                        provider = model_id.split("/")[0] if "/" in model_id else "openai"
+                        
+                        # Get cost information
+                        model_info = litellm.get_model_info(model_id)
+                        input_cost = model_info.get("input_cost_per_token", 0) if model_info else 0
+                        output_cost = model_info.get("output_cost_per_token", 0) if model_info else 0
+                        
+                        # Format costs
+                        input_cost_str = f"${input_cost:.6f}" if input_cost > 0 else "N/A"
+                        output_cost_str = f"${output_cost:.6f}" if output_cost > 0 else "N/A"
+                        
+                        table.add_row(
+                            model_name,
+                            provider,
+                            api_base[:50] + "..." if len(api_base) > 50 else api_base,
+                            input_cost_str,
+                            output_cost_str
+                        )
+                    except Exception:
+                        # Skip models that can't be processed
+                        continue
+                
+                console.print("")
+                console.print(table)
+                console.print("")
+            else:
+                # Fallback to simple display
+                verbose_proxy_logger.info(f"\nLoaded Models: {llm_router.get_model_names()}\n")
+        except Exception as e:
+            verbose_proxy_logger.debug(f"Error displaying loaded models: {str(e)}")
 
     @classmethod
     def _add_proxy_budget_to_db(cls, litellm_proxy_budget_name: str):

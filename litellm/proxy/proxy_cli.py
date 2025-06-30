@@ -13,6 +13,19 @@ import click
 import httpx
 from dotenv import load_dotenv
 
+# Optional Rich imports with fallback
+try:
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+    from rich.align import Align
+    RICH_AVAILABLE = True
+    console = Console()
+except ImportError:
+    RICH_AVAILABLE = False
+    console = None
+
 if TYPE_CHECKING:
     from fastapi import FastAPI
 else:
@@ -51,14 +64,80 @@ def append_query_params(url, params) -> str:
 class ProxyInitializationHelpers:
     @staticmethod
     def _echo_litellm_version():
-        pkg_version = importlib.metadata.version("litellm")  # type: ignore
-        click.echo(f"\nLiteLLM: Current Version = {pkg_version}\n")
+        """Display LiteLLM version with rich formatting when available"""
+        try:
+            pkg_version = importlib.metadata.version("litellm")  # type: ignore
+            
+            if RICH_AVAILABLE and console:
+                # Create a beautiful version display
+                version_panel = Panel(
+                    Align.center(f"[bold cyan]🚄 LiteLLM[/bold cyan]\n[green]Version: {pkg_version}[/green]"),
+                    title="[bold blue]🚄 LiteLLM Proxy[/bold blue]",
+                    border_style="cyan",
+                    padding=(1, 2)
+                )
+                console.print()
+                console.print(version_panel)
+                console.print()
+            else:
+                # Fallback to original display
+                click.echo(f"\nLiteLLM: Current Version = {pkg_version}\n")
+        except Exception as e:
+            if RICH_AVAILABLE and console:
+                console.print(f"[red]Error getting version: {e}[/red]")
+            else:
+                click.echo(f"Error getting version: {e}")
 
     @staticmethod
     def _run_health_check(host, port):
-        print("\nLiteLLM: Health Testing models in config")  # noqa
-        response = httpx.get(url=f"http://{host}:{port}/health")
-        print(json.dumps(response.json(), indent=4))  # noqa
+        """Run health check with rich progress indicators when available"""
+        if RICH_AVAILABLE and console:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+            ) as progress:
+                task = progress.add_task("🚄 Running health check...", total=None)
+                
+                try:
+                    response = httpx.get(url=f"http://{host}:{port}/health")
+                    progress.update(task, completed=True)
+                    
+                    if response.status_code == 200:
+                        console.print("[green]✅ Health check passed![/green]")
+                        
+                        # Create a formatted table for health check results
+                        health_data = response.json()
+                        
+                        if isinstance(health_data, dict):
+                            table = Table(title="🚄 Health Check Results", show_header=True, header_style="bold magenta")
+                            table.add_column("Model", style="cyan")
+                            table.add_column("Status", style="green")
+                            table.add_column("Response Time", style="yellow")
+                            
+                            for model, details in health_data.items():
+                                if isinstance(details, dict):
+                                    status = "✅ Healthy" if details.get("status") == "healthy" else "❌ Unhealthy"
+                                    response_time = details.get("response_time", "N/A")
+                                    table.add_row(model, status, str(response_time))
+                            
+                            console.print(table)
+                        else:
+                            console.print_json(data=health_data)
+                    else:
+                        console.print(f"[red]❌ Health check failed with status {response.status_code}[/red]")
+                        
+                except Exception as e:
+                    progress.update(task, completed=True)
+                    console.print(f"[red]❌ Health check failed: {e}[/red]")
+        else:
+            # Fallback to original implementation
+            print("\nLiteLLM: Health Testing models in config")  # noqa
+            try:
+                response = httpx.get(url=f"http://{host}:{port}/health")
+                print(json.dumps(response.json(), indent=4))  # noqa
+            except Exception as e:
+                print(f"Health check failed: {e}")  # noqa
 
     @staticmethod
     def _run_test_chat_completion(
@@ -67,10 +146,22 @@ class ProxyInitializationHelpers:
         model: str,
         test: Union[bool, str],
     ):
+        """Run test chat completion with rich formatting and progress when available"""
         request_model = model or "gpt-3.5-turbo"
-        click.echo(
-            f"\nLiteLLM: Making a test ChatCompletions request to your proxy. Model={request_model}"
-        )
+        
+        if RICH_AVAILABLE and console:
+            # Create test info panel
+            test_panel = Panel(
+                f"[cyan]Model:[/cyan] {request_model}\n[cyan]Endpoint:[/cyan] http://{host}:{port}",
+                title="[bold yellow]🚄 Test Configuration[/bold yellow]",
+                border_style="yellow"
+            )
+            console.print(test_panel)
+        else:
+            click.echo(
+                f"\nLiteLLM: Making a test ChatCompletions request to your proxy. Model={request_model}"
+            )
+            
         import openai
 
         api_base = f"http://{host}:{port}"
@@ -80,39 +171,102 @@ class ProxyInitializationHelpers:
             raise ValueError("Invalid test value")
         client = openai.OpenAI(api_key="My API Key", base_url=api_base)
 
-        response = client.chat.completions.create(
-            model=request_model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": "this is a test request, write a short poem",
-                }
-            ],
-            max_tokens=256,
-        )
-        click.echo(f"\nLiteLLM: response from proxy {response}")
+        if RICH_AVAILABLE and console:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+            ) as progress:
+                # Test 1: Regular completion
+                task1 = progress.add_task("🚄 Testing chat completion...", total=None)
+                try:
+                    response = client.chat.completions.create(
+                        model=request_model,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": "this is a test request, write a short poem",
+                            }
+                        ],
+                        max_tokens=256,
+                    )
+                    progress.update(task1, completed=True)
+                    console.print("[green]✅ Chat completion test passed![/green]")
+                    console.print(Panel(str(response), title="Response", border_style="green"))
+                except Exception as e:
+                    progress.update(task1, completed=True)
+                    console.print(f"[red]❌ Chat completion test failed: {e}[/red]")
+                    
+                # Test 2: Streaming
+                task2 = progress.add_task("🚄 Testing streaming...", total=None)
+                try:
+                    stream_response = client.chat.completions.create(
+                        model=request_model,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": "this is a test request, write a short poem",
+                            }
+                        ],
+                        stream=True,
+                    )
+                    chunks = []
+                    for chunk in stream_response:
+                        chunks.append(chunk)
+                    progress.update(task2, completed=True)
+                    console.print("[green]✅ Streaming test passed![/green]")
+                    console.print(f"[dim]Received {len(chunks)} chunks[/dim]")
+                except Exception as e:
+                    progress.update(task2, completed=True)
+                    console.print(f"[red]❌ Streaming test failed: {e}[/red]")
+                    
+                # Test 3: Completion API
+                task3 = progress.add_task("🚄 Testing completion API...", total=None)
+                try:
+                    completion_response = client.completions.create(
+                        model=request_model, prompt="this is a test request, write a short poem"
+                    )
+                    progress.update(task3, completed=True)
+                    console.print("[green]✅ Completion API test passed![/green]")
+                    console.print(Panel(str(completion_response), title="Completion Response", border_style="green"))
+                except Exception as e:
+                    progress.update(task3, completed=True)
+                    console.print(f"[red]❌ Completion API test failed: {e}[/red]")
+        else:
+            # Fallback to original implementation
+            response = client.chat.completions.create(
+                model=request_model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "this is a test request, write a short poem",
+                    }
+                ],
+                max_tokens=256,
+            )
+            click.echo(f"\nLiteLLM: response from proxy {response}")
 
-        print(  # noqa
-            f"\n LiteLLM: Making a test ChatCompletions + streaming r equest to proxy. Model={request_model}"
-        )
+            print(  # noqa
+                f"\n LiteLLM: Making a test ChatCompletions + streaming r equest to proxy. Model={request_model}"
+            )
 
-        stream_response = client.chat.completions.create(
-            model=request_model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": "this is a test request, write a short poem",
-                }
-            ],
-            stream=True,
-        )
-        for chunk in stream_response:
-            click.echo(f"LiteLLM: streaming response from proxy {chunk}")
-        print("\n making completion request to proxy")  # noqa
-        completion_response = client.completions.create(
-            model=request_model, prompt="this is a test request, write a short poem"
-        )
-        print(completion_response)  # noqa
+            stream_response = client.chat.completions.create(
+                model=request_model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "this is a test request, write a short poem",
+                    }
+                ],
+                stream=True,
+            )
+            for chunk in stream_response:
+                click.echo(f"LiteLLM: streaming response from proxy {chunk}")
+            print("\n making completion request to proxy")  # noqa
+            completion_response = client.completions.create(
+                model=request_model, prompt="this is a test request, write a short poem"
+            )
+            print(completion_response)  # noqa
 
     @staticmethod
     def _get_default_unvicorn_init_args(

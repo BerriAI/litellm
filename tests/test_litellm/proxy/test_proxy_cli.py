@@ -13,8 +13,24 @@ from litellm.proxy.proxy_cli import ProxyInitializationHelpers
 
 class TestProxyInitializationHelpers:
     @patch("importlib.metadata.version")
+    @patch("litellm.proxy.proxy_cli.RICH_AVAILABLE", True)
+    @patch("litellm.proxy.proxy_cli.console")
+    def test_echo_litellm_version_with_rich(self, mock_console, mock_version):
+        # Setup
+        mock_version.return_value = "1.0.0"
+
+        # Execute
+        ProxyInitializationHelpers._echo_litellm_version()
+
+        # Assert
+        mock_version.assert_called_once_with("litellm")
+        # Should call console.print multiple times (for empty lines and panel)
+        assert mock_console.print.call_count >= 3
+    
+    @patch("importlib.metadata.version")
+    @patch("litellm.proxy.proxy_cli.RICH_AVAILABLE", False)
     @patch("click.echo")
-    def test_echo_litellm_version(self, mock_echo, mock_version):
+    def test_echo_litellm_version_without_rich(self, mock_echo, mock_version):
         # Setup
         mock_version.return_value = "1.0.0"
 
@@ -26,9 +42,29 @@ class TestProxyInitializationHelpers:
         mock_echo.assert_called_once_with("\nLiteLLM: Current Version = 1.0.0\n")
 
     @patch("httpx.get")
+    @patch("litellm.proxy.proxy_cli.RICH_AVAILABLE", True)
+    @patch("litellm.proxy.proxy_cli.console")
+    def test_run_health_check_with_rich(self, mock_console, mock_get):
+        # Setup
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"model1": {"status": "healthy", "response_time": "0.5s"}}
+        mock_get.return_value = mock_response
+
+        # Execute
+        ProxyInitializationHelpers._run_health_check("localhost", 8000)
+
+        # Assert
+        mock_get.assert_called_once_with(url="http://localhost:8000/health")
+        mock_response.json.assert_called_once()
+        # Should call console.print multiple times (progress, success message, table)
+        assert mock_console.print.call_count >= 2
+    
+    @patch("httpx.get")
+    @patch("litellm.proxy.proxy_cli.RICH_AVAILABLE", False)
     @patch("builtins.print")
     @patch("json.dumps")
-    def test_run_health_check(self, mock_dumps, mock_print, mock_get):
+    def test_run_health_check_without_rich(self, mock_dumps, mock_print, mock_get):
         # Setup
         mock_response = MagicMock()
         mock_response.json.return_value = {"status": "healthy"}

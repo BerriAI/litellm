@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 import os
+import random
 import smtplib
 import threading
 import time
@@ -21,6 +22,16 @@ from typing import (
     cast,
     overload,
 )
+
+# Optional Rich imports with fallback
+try:
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.text import Text
+    from rich.align import Align
+    RICH_AVAILABLE = True
+except ImportError:
+    RICH_AVAILABLE = False
 
 from litellm.constants import MAX_TEAM_LIST_LIMIT
 from litellm.proxy._types import (
@@ -95,6 +106,83 @@ if TYPE_CHECKING:
     Span = Union[_Span, Any]
 else:
     Span = Any
+
+
+# List of random feedback messages for the feedback box
+list_of_messages = [
+    "'The thing I wish you improved is...'",
+    "'A feature I really want is...'",
+    "'The worst thing about this product is...'",
+    "'This product would be better if...'",
+    "'I don't like how this works...'",
+    "'It would help me if you could add...'",
+    "'This feature doesn't meet my needs because...'",
+    "'I get frustrated when the product...'",
+]
+
+
+def generate_feedback_box():
+    """
+    Generate and display a beautiful feedback box with random message prompts.
+    
+    This function displays a formatted feedback request box using rich formatting
+    if available, with a fallback to ASCII art for environments without rich.
+    """
+    if RICH_AVAILABLE:
+        try:
+            console = Console()
+            
+            # Select a random message
+            message = random.choice(list_of_messages)
+            
+            # Create feedback panel with beautiful formatting
+            feedback_content = f"[yellow]{message}[/yellow]\n\n[cyan]https://github.com/BerriAI/litellm/issues/new[/cyan]"
+            
+            feedback_panel = Panel(
+                Align.center(feedback_content),
+                title="[bold blue]🚄 Feature Request[/bold blue]",
+                border_style="blue",
+                padding=(1, 2)
+            )
+            
+            # Create thank you message
+            thank_you_text = Text("Thank you for using LiteLLM! 🚄", style="bold green")
+            thank_you_subtitle = Text("- Krrish & Ishaan", style="italic cyan")
+            
+            # Print with spacing
+            console.print()
+            console.print(Align.center(thank_you_text))
+            console.print(Align.center(thank_you_subtitle))
+            console.print()
+            console.print(feedback_panel)
+            console.print()
+        except Exception:
+            # If Rich fails for any reason, fall back to original
+            _print_original_feedback_box()
+    else:
+        # Fallback to original ASCII art
+        _print_original_feedback_box()
+
+
+def _print_original_feedback_box():
+    """Print the original feedback box without Rich formatting"""
+    # ASCII Art feedback box
+    print()  # noqa
+    print(" ┌───────────────────────────────────────────────────────────────┐")  # noqa
+    print(" │                                                               │")  # noqa
+    print(" │  Give Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new │")  # noqa
+    print(" │                                                               │")  # noqa
+    print(" └───────────────────────────────────────────────────────────────┘")  # noqa
+    print()  # noqa
+    print(" Thank you for using LiteLLM! - Krrish & Ishaan")  # noqa
+    print()  # noqa
+    print()  # noqa
+    print()  # noqa
+    print(  # noqa
+        "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"
+    )  # noqa
+    print()  # noqa
+    print()  # noqa
 
 
 def print_verbose(print_statement):
