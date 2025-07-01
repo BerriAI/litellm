@@ -317,14 +317,14 @@ sequenceDiagram
     CLI->>Browser: Open /sso/key/generate?source=litellm-cli&key=sk-uuid
     
     Browser->>Proxy: GET /sso/key/generate?source=litellm-cli&key=sk-uuid
-    Proxy->>Proxy: Set cli_state = sk-uuid
-    Proxy->>SSO: Redirect with state=sk-uuid
+    Proxy->>Proxy: Set cli_state = litellm-session-token:sk-uuid
+    Proxy->>SSO: Redirect with state=litellm-session-token:sk-uuid
     
     SSO->>Browser: Show login page
     Browser->>SSO: User authenticates
-    SSO->>Proxy: Redirect to /sso/callback?state=sk-uuid
+    SSO->>Proxy: Redirect to /sso/callback?state=litellm-session-token:sk-uuid
     
-    Proxy->>Proxy: Check if state starts with "sk-"
+    Proxy->>Proxy: Check if state starts with "litellm-session-token:"
     Proxy->>Proxy: Generate API key with ID=sk-uuid
     Proxy->>Browser: Show success page
     
@@ -345,10 +345,10 @@ The CLI provides three authentication commands:
 
 1. **Generate Session ID**: CLI generates a unique key ID (`sk-{uuid}`)
 2. **Open Browser**: CLI opens browser to `/sso/key/generate` with CLI source and key parameters
-3. **SSO Redirect**: Proxy sets the key ID as OAuth state parameter and redirects to SSO provider
+3. **SSO Redirect**: Proxy sets the formatted state (`litellm-session-token:sk-uuid`) as OAuth state parameter and redirects to SSO provider
 4. **User Authentication**: User completes SSO authentication in browser
 5. **Callback Processing**: SSO provider redirects back to proxy with state parameter
-6. **Key Generation**: Proxy detects CLI login (state starts with "sk-") and generates API key with pre-specified ID
+6. **Key Generation**: Proxy detects CLI login (state starts with "litellm-session-token:") and generates API key with pre-specified ID
 7. **Polling**: CLI polls `/sso/cli/poll/{key_id}` endpoint until key is ready
 8. **Token Storage**: CLI saves the authentication token to `~/.litellm/token.json`
 
