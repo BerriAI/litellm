@@ -909,6 +909,120 @@ async def test_key_update_with_model_specific_params(prisma_client):
 
 
 @pytest.mark.asyncio
+async def test_key_soft_budget_and_permissions(prisma_client):
+    """
+    Test soft_budget and permissions functionality:
+    1. Create key with soft_budget
+    2. Create key with permissions
+    3. Update key with soft_budget
+    4. Update key with permissions
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_fn,
+        update_key_fn,
+    )
+    from litellm.proxy._types import GenerateKeyRequest, UpdateKeyRequest
+
+    # Setup
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    # Test 1: Create key with soft_budget
+    new_key_with_soft_budget = await generate_key_fn(
+        data=GenerateKeyRequest(
+            models=["gpt-4"],
+            max_budget=100.0,
+            soft_budget=50.0,  # 50% of max budget
+            permissions={"allow_pii_controls": True}
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="admin",
+        ),
+    )
+    
+    # Note: soft_budget is not in GenerateKeyResponse, it's returned as part of the budget table
+    
+    # Verify the key was created with soft_budget in the budget table
+    created_key = await prisma_client.db.litellm_verificationtoken.find_unique(
+        where={"token": new_key_with_soft_budget.token_id},
+        include={"litellm_budget_table": True}
+    )
+    
+    assert created_key is not None
+    assert created_key.litellm_budget_table is not None
+    assert created_key.litellm_budget_table.soft_budget == 50.0
+    assert created_key.permissions == {"allow_pii_controls": True}
+
+    # Test 2: Update key with new soft_budget
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/update/key")
+    
+    updated_key = await update_key_fn(
+        request=request,
+        data=UpdateKeyRequest(
+            key=new_key_with_soft_budget.token_id,
+            soft_budget=75.0,  # Update to 75
+            permissions={"allow_pii_controls": False, "new_permission": True}
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="admin",
+        ),
+    )
+    
+    # Verify the soft_budget was updated
+    updated_key_db = await prisma_client.db.litellm_verificationtoken.find_unique(
+        where={"token": new_key_with_soft_budget.token_id},
+        include={"litellm_budget_table": True}
+    )
+    
+    assert updated_key_db is not None
+    assert updated_key_db.litellm_budget_table is not None
+    assert updated_key_db.litellm_budget_table.soft_budget == 75.0
+    assert updated_key_db.permissions == {"allow_pii_controls": False, "new_permission": True}
+
+    # Test 3: Create key without budget_id then add soft_budget
+    new_key_no_budget = await generate_key_fn(
+        data=GenerateKeyRequest(
+            models=["gpt-4"],
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="admin",
+        ),
+    )
+    
+    # Update with soft_budget when no budget_id exists
+    await update_key_fn(
+        request=request,
+        data=UpdateKeyRequest(
+            key=new_key_no_budget.token_id,
+            soft_budget=30.0,
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="admin",
+        ),
+    )
+    
+    # Verify a budget table was created
+    updated_no_budget_key = await prisma_client.db.litellm_verificationtoken.find_unique(
+        where={"token": new_key_no_budget.token_id},
+        include={"litellm_budget_table": True}
+    )
+    
+    assert updated_no_budget_key is not None
+    assert updated_no_budget_key.litellm_budget_table is not None
+    assert updated_no_budget_key.litellm_budget_table.soft_budget == 30.0
+
+
+@pytest.mark.asyncio
 async def test_list_key_helper(prisma_client):
     """
     Test _list_key_helper function with various scenarios:

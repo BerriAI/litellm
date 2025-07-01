@@ -273,6 +273,16 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         formValues.metadata = JSON.stringify(metadata);
       }
 
+      // Parse permissions field if provided
+      if (formValues.permissions) {
+        try {
+          formValues.permissions = JSON.parse(formValues.permissions);
+        } catch (error) {
+          message.error("Invalid JSON format for permissions");
+          throw new Error("Invalid JSON format for permissions");
+        }
+      }
+
       // Transform allowed_vector_store_ids and allowed_mcp_server_ids into object_permission format
       if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
         formValues.object_permission = {
@@ -602,6 +612,33 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   className="mt-4"
                   label={
                     <span>
+                      Soft Budget (USD){' '}
+                      <Tooltip title="Soft budget limit for alerting purposes. When reached, a Slack alert will be triggered but the key will continue to work. Must be less than Max Budget">
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </Tooltip>
+                    </span>
+                  }
+                  name="soft_budget"
+                  help="Triggers alerts when this budget is reached (key continues working)"
+                  rules={[
+                    {
+                      validator: async (_, value) => {
+                        const maxBudget = form.getFieldValue('max_budget');
+                        if (value && maxBudget && value > maxBudget) {
+                          throw new Error(
+                            `Soft budget cannot exceed max budget: $${maxBudget}`
+                          );
+                        }
+                      },
+                    },
+                  ]}
+                >
+                  <NumericalInput step={0.01} precision={2} width={200} />
+                </Form.Item>
+                <Form.Item
+                  className="mt-4"
+                  label={
+                    <span>
                       Reset Budget{' '}
                       <Tooltip title="How often the budget should reset. For example, setting 'daily' will reset the budget every 24 hours">
                         <InfoCircleOutlined style={{ marginLeft: '4px' }} />
@@ -796,6 +833,25 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     placeholder="Enter tags"
                     tokenSeparators={[',']}
                     options={predefinedTags}
+                  />
+                </Form.Item>
+                <Form.Item 
+                  label={
+                    <span>
+                      Permissions{' '}
+                      <Tooltip title="Configure special permissions for this key. For example, allow_pii_controls enables PII masking control">
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </Tooltip>
+                    </span>
+                  }
+                  name="permissions" 
+                  className="mt-4"
+                  help="Special permissions configuration (JSON format)"
+                >
+                  <Input.TextArea 
+                    rows={3}
+                    placeholder='{"allow_pii_controls": true}'
+                    className="font-mono"
                   />
                 </Form.Item>
                 <Accordion className="mt-4 mb-4">

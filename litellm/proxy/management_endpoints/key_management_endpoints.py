@@ -603,9 +603,9 @@ async def generate_key_fn(  # noqa: PLR0915
             request_type="key", **data_json, table_name="key"
         )
 
-        response["soft_budget"] = (
-            data.soft_budget
-        )  # include the user-input soft budget in the response
+        response[
+            "soft_budget"
+        ] = data.soft_budget  # include the user-input soft budget in the response
 
         response = GenerateKeyResponse(**response)
 
@@ -681,9 +681,9 @@ async def _set_object_permission(
                 data=data_json["object_permission"],
             )
         )
-        data_json["object_permission_id"] = (
-            created_object_permission.object_permission_id
-        )
+        data_json[
+            "object_permission_id"
+        ] = created_object_permission.object_permission_id
 
         # delete the object_permission from the data_json
         data_json.pop("object_permission")
@@ -907,6 +907,33 @@ async def update_key_fn(
         non_default_values = await prepare_key_update_data(
             data=data, existing_key_row=existing_key_row
         )
+
+        # Remove soft_budget from non_default_values as it's handled separately
+        non_default_values.pop("soft_budget", None)
+
+        # Handle soft_budget update
+        if data.soft_budget is not None and existing_key_row.budget_id is not None:
+            # Update the existing budget table with new soft_budget
+            await prisma_client.db.litellm_budgettable.update(
+                where={"budget_id": existing_key_row.budget_id},
+                data={"soft_budget": data.soft_budget},
+            )
+        elif data.soft_budget is not None and existing_key_row.budget_id is None:
+            # Create a new budget entry if soft_budget is provided but no budget exists
+            budget_row = LiteLLM_BudgetTable(
+                soft_budget=data.soft_budget,
+                model_max_budget={},
+            )
+            new_budget = prisma_client.jsonify_object(
+                budget_row.json(exclude_none=True)
+            )
+            # Add created_by and updated_by fields
+            new_budget["created_by"] = user_api_key_dict.user_id or litellm_changed_by or "admin"
+            new_budget["updated_by"] = user_api_key_dict.user_id or litellm_changed_by or "admin"
+            _budget = await prisma_client.db.litellm_budgettable.create(
+                data=new_budget  # type: ignore
+            )
+            non_default_values["budget_id"] = _budget.budget_id
 
         await _enforce_unique_key_alias(
             key_alias=non_default_values.get("key_alias", None),
@@ -1667,10 +1694,10 @@ async def delete_verification_tokens(
     try:
         if prisma_client:
             tokens = [_hash_token_if_needed(token=key) for key in tokens]
-            _keys_being_deleted: List[LiteLLM_VerificationToken] = (
-                await prisma_client.db.litellm_verificationtoken.find_many(
-                    where={"token": {"in": tokens}}
-                )
+            _keys_being_deleted: List[
+                LiteLLM_VerificationToken
+            ] = await prisma_client.db.litellm_verificationtoken.find_many(
+                where={"token": {"in": tokens}}
             )
 
             if len(_keys_being_deleted) == 0:
@@ -1778,9 +1805,9 @@ async def _rotate_master_key(
     from litellm.proxy.proxy_server import proxy_config
 
     try:
-        models: Optional[List] = (
-            await prisma_client.db.litellm_proxymodeltable.find_many()
-        )
+        models: Optional[
+            List
+        ] = await prisma_client.db.litellm_proxymodeltable.find_many()
     except Exception:
         models = None
     # 2. process model table
@@ -2091,11 +2118,11 @@ async def validate_key_list_check(
             param="user_id",
             code=status.HTTP_403_FORBIDDEN,
         )
-    complete_user_info_db_obj: Optional[BaseModel] = (
-        await prisma_client.db.litellm_usertable.find_unique(
-            where={"user_id": user_api_key_dict.user_id},
-            include={"organization_memberships": True},
-        )
+    complete_user_info_db_obj: Optional[
+        BaseModel
+    ] = await prisma_client.db.litellm_usertable.find_unique(
+        where={"user_id": user_api_key_dict.user_id},
+        include={"organization_memberships": True},
     )
 
     if complete_user_info_db_obj is None:
@@ -2181,10 +2208,10 @@ async def get_admin_team_ids(
     if complete_user_info is None:
         return []
     # Get all teams that user is an admin of
-    teams: Optional[List[BaseModel]] = (
-        await prisma_client.db.litellm_teamtable.find_many(
-            where={"team_id": {"in": complete_user_info.teams}}
-        )
+    teams: Optional[
+        List[BaseModel]
+    ] = await prisma_client.db.litellm_teamtable.find_many(
+        where={"team_id": {"in": complete_user_info.teams}}
     )
     if teams is None:
         return []

@@ -85,6 +85,17 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
         delete formValues.mcp_servers;
       }
 
+      // Convert permissions back to an object if it exists and is a string
+      if (formValues.permissions && typeof formValues.permissions === "string") {
+        try {
+          formValues.permissions = JSON.parse(formValues.permissions);
+        } catch (error) {
+          console.error("Error parsing permissions JSON:", error);
+          message.error("Invalid permissions JSON");
+          return;
+        }
+      }
+
       // Convert metadata back to an object if it exists and is a string
       if (formValues.metadata && typeof formValues.metadata === "string") {
         try {

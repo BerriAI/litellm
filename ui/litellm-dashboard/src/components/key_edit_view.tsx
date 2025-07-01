@@ -100,7 +100,9 @@ export function KeyEditView({
     metadata: keyData.metadata ? JSON.stringify(keyData.metadata, null, 2) : "",
     guardrails: keyData.metadata?.guardrails || [],
     vector_stores: keyData.object_permission?.vector_stores || [],
-    mcp_servers: keyData.object_permission?.mcp_servers || []
+    mcp_servers: keyData.object_permission?.mcp_servers || [],
+    permissions: keyData.permissions ? JSON.stringify(keyData.permissions, null, 2) : "",
+    soft_budget: keyData.litellm_budget_table?.soft_budget || null
   };
 
   return (
@@ -135,6 +137,10 @@ export function KeyEditView({
 
       <Form.Item label="Max Budget (USD)" name="max_budget">
         <NumericalInput step={0.01} style={{ width: "100%" }} placeholder="Enter a numerical value"/>
+      </Form.Item>
+
+      <Form.Item label="Soft Budget (USD)" name="soft_budget">
+        <NumericalInput step={0.01} style={{ width: "100%" }} placeholder="Enter soft budget for alerts"/>
       </Form.Item>
 
       <Form.Item label="Reset Budget" name="budget_duration">
@@ -188,6 +194,14 @@ export function KeyEditView({
           value={form.getFieldValue('mcp_servers')}
           accessToken={accessToken || ""}
           placeholder="Select MCP servers"
+        />
+      </Form.Item>
+
+      <Form.Item label="Permissions" name="permissions">
+        <Input.TextArea 
+          rows={3} 
+          placeholder='{"allow_pii_controls": true}'
+          className="font-mono"
         />
       </Form.Item>
 
