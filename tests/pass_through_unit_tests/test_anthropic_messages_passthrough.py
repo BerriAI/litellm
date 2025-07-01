@@ -626,15 +626,7 @@ async def test_anthropic_messages_bedrock_credentials_passthrough():
                     messages=[{"role": "user", "content": "Hello, test credentials"}],
                     model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
                     max_tokens=100,
-                    aws_access_key_id=aws_params["aws_access_key_id"],
-                    aws_secret_access_key=aws_params["aws_secret_access_key"],
-                    aws_session_token=aws_params["aws_session_token"],
-                    aws_region_name=aws_params["aws_region_name"],
-                    aws_role_name=aws_params["aws_role_name"],
-                    aws_session_name=aws_params["aws_session_name"],
-                    aws_profile_name=aws_params["aws_profile_name"],
-                    aws_web_identity_token=aws_params["aws_web_identity_token"],
-                    aws_sts_endpoint=aws_params["aws_sts_endpoint"],
+                    **aws_params,
                 )
                 
                 # Verify get_credentials was called with the correct parameters
@@ -723,8 +715,5 @@ def test_sync_openai_messages():
 
     assert response is not None
     assert isinstance(response, dict)
-    assert "content" in response
-    assert response["content"] is not None
-    assert len(response["content"]) > 0
-    assert response["content"][0]["text"] is not None
+    assert response["content"][0].text is not None
 
