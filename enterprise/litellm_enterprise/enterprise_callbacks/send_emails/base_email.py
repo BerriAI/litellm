@@ -174,16 +174,15 @@ class BaseEmailLogger(CustomLogger):
 
         # If any custom fields were not applied, log a warning
         if unused_custom_fields:
-            import logging
-            logger = logging.getLogger(__name__)
             fields_str = ", ".join(unused_custom_fields)
             warning_msg = (
                 f"Email sent with default values instead of custom values for: {fields_str}. "
                 "This is an Enterprise feature. To use custom email fields, please upgrade to LiteLLM Enterprise. "
                 "Schedule a meeting here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat"
             )
-            logger.warning(warning_msg)
-            print(warning_msg)
+            verbose_proxy_logger.warning(
+                f"Prisma client not found. Unable to lookup user email for user_id: {user_id}"
+            )
 
         return EmailParams(
             logo_url=logo_url,
