@@ -901,6 +901,18 @@ class ServerToolUse(BaseModel):
 
 
 class Usage(CompletionUsage):
+    # Override with our wrappers
+    prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = Field(None)
+    completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = Field(None)
+
+    # Optional Openroute usage parameters when include_usage = true
+    cost: Optional[float] = None
+    is_byok: Optional[bool] = None
+
+    # Anthropic prompt caching parameters - public attributes
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
+
     _cache_creation_input_tokens: int = PrivateAttr(
         0
     )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
@@ -921,6 +933,8 @@ class Usage(CompletionUsage):
             Union[CompletionTokensDetailsWrapper, dict]
         ] = None,
         server_tool_use: Optional[ServerToolUse] = None,
+        cache_creation_input_tokens: int = 0,
+        cache_read_input_tokens: int = 0,
         **params,
     ):
         # handle reasoning_tokens
@@ -981,6 +995,10 @@ class Usage(CompletionUsage):
             completion_tokens_details=_completion_tokens_details or None,
             prompt_tokens_details=_prompt_tokens_details or None,
         )
+
+        # Set the explicit cache parameters
+        self.cache_creation_input_tokens = cache_creation_input_tokens
+        self.cache_read_input_tokens = cache_read_input_tokens
 
         if server_tool_use is not None:
             self.server_tool_use = server_tool_use
@@ -1117,6 +1135,7 @@ class ModelResponseBase(OpenAIObject):
 class ModelResponseStream(ModelResponseBase):
     choices: List[StreamingChoices]
     provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
+    usage: Optional[Usage] = Field(default=None)
 
     def __init__(
         self,

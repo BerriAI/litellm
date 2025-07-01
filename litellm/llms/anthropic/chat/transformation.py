@@ -911,6 +911,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 text_content = prefix_prompt + text_content
 
             _message = litellm.Message(
+                role="assistant",
                 tool_calls=tool_calls,
                 content=text_content or None,
                 provider_specific_fields={
@@ -1041,16 +1042,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     isinstance(args, dict)
                     and (values := args.get("values")) is not None
                 ):
-                    _message = litellm.Message(content=json.dumps(values))
+                    _message = litellm.Message(role="assistant", content=json.dumps(values))
                     return _message
                 else:
                     # a lot of the times the `values` key is not present in the tool response
                     # relevant issue: https://github.com/BerriAI/litellm/issues/6741
-                    _message = litellm.Message(content=json.dumps(args))
+                    _message = litellm.Message(role="assistant", content=json.dumps(args))
                     return _message
         except json.JSONDecodeError:
             # json decode error does occur, return the original tool response str
-            return litellm.Message(content=json_mode_content_str)
+            return litellm.Message(role="assistant", content=json_mode_content_str)
         return None
 
     def get_error_class(

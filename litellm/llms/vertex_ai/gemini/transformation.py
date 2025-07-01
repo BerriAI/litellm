@@ -366,18 +366,19 @@ def _transform_request_body(
             **filtered_params
         )
         data = RequestBody(contents=content)
-        if system_instructions is not None:
-            data["system_instruction"] = system_instructions
-        if tools is not None:
-            data["tools"] = tools
-        if tool_choice is not None:
-            data["toolConfig"] = tool_choice
+        if cached_content is not None:
+            data["cachedContent"] = cached_content
+        else:
+            if system_instructions is not None:
+                data["system_instruction"] = system_instructions
+            if tools is not None:
+                data["tools"] = tools
+            if tool_choice is not None:
+                data["toolConfig"] = tool_choice
         if safety_settings is not None:
             data["safetySettings"] = safety_settings
         if generation_config is not None:
             data["generationConfig"] = generation_config
-        if cached_content is not None:
-            data["cachedContent"] = cached_content
     except Exception as e:
         raise e
 
