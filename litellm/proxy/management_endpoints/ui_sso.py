@@ -721,7 +721,7 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
         f"user_role: {user_role}; ui_access_mode: {ui_access_mode}"
     )
     ## CHECK IF ROLE ALLOWED TO USE PROXY ##
-    is_admin_only_access = check_is_admin_only_access(ui_access_mode)
+    is_admin_only_access = check_is_admin_only_access(ui_access_mode or {})
     if is_admin_only_access:
         has_access = has_admin_ui_access(user_role)
         if not has_access:
@@ -828,22 +828,12 @@ async def cli_sso_callback(request: Request, key: Optional[str] = None):
         
         # Return success page
         from fastapi.responses import HTMLResponse
+
+        from litellm.proxy.management_helpers.html_render_utils import (
+            render_cli_sso_success_page,
+        )
         
-        html_content = f"""
-        <html>
-        <head><title>CLI Authentication Successful</title></head>
-        <body>
-            <h1>CLI Authentication Successful!</h1>
-            <p>Your CLI authentication is complete.</p>
-            <p>Return to your terminal - the CLI will automatically detect the successful authentication.</p>
-            <script>
-                setTimeout(function() {{
-                    window.close();
-                }}, 3000);
-            </script>
-        </body>
-        </html>
-        """
+        html_content = render_cli_sso_success_page()
         return HTMLResponse(content=html_content, status_code=200)
         
     except Exception as e:
