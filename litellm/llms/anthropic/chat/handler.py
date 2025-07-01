@@ -752,6 +752,25 @@ class ModelResponseIterator:
                         },
                         "index": self.tool_index,
                     }
+                elif content_block_start["content_block"]["type"] == "server_tool_use":
+                    # Handle server tool use (e.g., web search) in content block start
+                    content_block = content_block_start["content_block"]
+                    provider_specific_fields["server_tool_use"] = content_block
+                    
+                    self.tool_index += 1
+                    tool_use = {
+                        "id": content_block.get("id"),
+                        "type": "function",
+                        "function": {
+                            "name": content_block.get("name"),
+                            "arguments": json.dumps(content_block.get("input", {})),
+                        },
+                        "index": self.tool_index,
+                    }
+                elif content_block_start["content_block"]["type"] == "web_search_tool_result":
+                    # Handle web search tool result in content block start
+                    content_block = content_block_start["content_block"]
+                    provider_specific_fields["web_search_tool_result"] = content_block
                 elif (
                     content_block_start["content_block"]["type"] == "redacted_thinking"
                 ):

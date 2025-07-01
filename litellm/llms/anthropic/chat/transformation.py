@@ -387,7 +387,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         When using tools in this way: - https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
         - You usually want to provide a single tool
         - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
-        - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
+        - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model's perspective.
         """
 
         _tool = self._create_json_tool_call_for_response_format(
@@ -751,6 +751,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ],
         Optional[str],
         List[ChatCompletionToolCallChunk],
+        List[Dict],  # server_tool_uses
+        List[Dict],  # web_search_results
     ]:
         text_content = ""
         citations: Optional[List[Any]] = None
@@ -761,6 +763,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ] = None
         reasoning_content: Optional[str] = None
         tool_calls: List[ChatCompletionToolCallChunk] = []
+        server_tool_uses: List[Dict] = []
+        web_search_results: List[Dict] = []
+        
         for idx, content in enumerate(completion_response["content"]):
             if content["type"] == "text":
                 text_content += content["text"]
@@ -777,6 +782,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         index=idx,
                     )
                 )
+            elif content["type"] == "server_tool_use":
+                server_tool_uses.append(content)
+                tool_calls.append(
+                    ChatCompletionToolCallChunk(
+                        id=content["id"],
+                        type="function",
+                        function=ChatCompletionToolCallFunctionChunk(
+                            name=content["name"],
+                            arguments=json.dumps(content["input"]),
+                        ),
+                        index=idx,
+                    )
+                )
+            elif content["type"] == "web_search_tool_result":
+                web_search_results.append(content)
 
             elif content.get("thinking", None) is not None:
                 if thinking_blocks is None:
@@ -794,6 +814,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if citations is None:
                     citations = []
                 citations.append(content["citations"])
+        
         if thinking_blocks is not None:
             reasoning_content = ""
             for block in thinking_blocks:
@@ -801,7 +822,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if thinking_content is not None:
                     reasoning_content += thinking_content
 
-        return text_content, citations, thinking_blocks, reasoning_content, tool_calls
+        return text_content, citations, thinking_blocks, reasoning_content, tool_calls, server_tool_uses, web_search_results
 
     def calculate_usage(
         self, usage_object: dict, reasoning_content: Optional[str]
@@ -901,6 +922,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 thinking_blocks,
                 reasoning_content,
                 tool_calls,
+                server_tool_uses,
+                web_search_results,
             ) = self.extract_response_content(completion_response=completion_response)
 
             if (
@@ -910,14 +933,20 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             ):
                 text_content = prefix_prompt + text_content
 
+            provider_specific_fields = {
+                "citations": citations,
+                "thinking_blocks": thinking_blocks,
+            }
+            if server_tool_uses:
+                provider_specific_fields["server_tool_uses"] = server_tool_uses
+            if web_search_results:
+                provider_specific_fields["web_search_results"] = web_search_results
+
             _message = litellm.Message(
                 role="assistant",
                 tool_calls=tool_calls,
                 content=text_content or None,
-                provider_specific_fields={
-                    "citations": citations,
-                    "thinking_blocks": thinking_blocks,
-                },
+                provider_specific_fields=provider_specific_fields,
                 thinking_blocks=thinking_blocks,
                 reasoning_content=reasoning_content,
             )
