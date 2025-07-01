@@ -107,9 +107,9 @@ class ChunkProcessor:
         self, tool_call_chunks: List[Dict[str, Any]]
     ) -> List[ChatCompletionMessageToolCall]:
         tool_calls_list: List[ChatCompletionMessageToolCall] = []
-        tool_call_map: Dict[
-            int, Dict[str, Any]
-        ] = {}  # Map to store tool calls by index
+        tool_call_map: Dict[int, Dict[str, Any]] = (
+            {}
+        )  # Map to store tool calls by index
 
         for chunk in tool_call_chunks:
             choices = chunk["choices"]
@@ -415,6 +415,8 @@ class ChunkProcessor:
         if prompt_tokens_details is not None:
             returned_usage.prompt_tokens_details = prompt_tokens_details
 
+        # Return a new usage object with the new values
+        returned_usage = Usage(**returned_usage.model_dump())
         return returned_usage
 
 
