@@ -324,7 +324,7 @@ class VertexBase:
                     gemini_api_key  # cloudflare expects api key as bearer token
                 )
             else:
-                url = "{}:{}".format(api_base, endpoint)
+                url = "{}{}".format(api_base, endpoint)
 
             if stream is True:
                 url = url + "?alt=sse"

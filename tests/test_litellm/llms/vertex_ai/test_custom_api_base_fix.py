@@ -103,7 +103,7 @@ class TestCustomApiBaseFix:
         
         # Should produce the correct URL with custom base
         assert cloudflare_base in url
-        assert "/v1beta/models/gemini-2.5-flash:generateContent" in url
+        assert "/v1beta/models/gemini/gemini-2.5-flash:generateContent" in url
         assert token == "test-api-key"
         
     def test_missing_gemini_api_key_raises_error(self):
