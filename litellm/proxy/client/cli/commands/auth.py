@@ -58,6 +58,8 @@ def login(ctx: click.Context):
     import uuid
 
     import requests
+
+    from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
     
     base_url = ctx.obj["base_url"]
     
@@ -66,7 +68,7 @@ def login(ctx: click.Context):
     
     try:
         # Construct SSO login URL with CLI source and pre-generated key
-        sso_url = f"{base_url}/sso/key/generate?source=litellm-cli&key={key_id}"
+        sso_url = f"{base_url}/sso/key/generate?source={LITELLM_CLI_SOURCE_IDENTIFIER}&key={key_id}"
         
         click.echo(f"Opening browser to: {sso_url}")
         click.echo("Please complete the SSO authentication in your browser...")
