@@ -134,13 +134,20 @@ Customizing Email Branding is an Enterprise Feature [Get in touch with us for a 
 
 :::
 
-LiteLLM allows you to customize the:
+LiteLLM allows you to customize:
 - Logo on the Email
-- Email support contact 
+- Email support contact
+- Email signature
+- Email subject lines for different events
 
-Set the following in your env to customize your emails
+Set the following in your env to customize your emails:
 
 ```shell
 EMAIL_LOGO_URL="https://litellm-listing.s3.amazonaws.com/litellm_logo.png"  # public url to your logo
 EMAIL_SUPPORT_CONTACT="support@berri.ai"                                    # Your company support email
+EMAIL_SIGNATURE="Best regards,\nYour Company Team"                         # Custom email signature
+EMAIL_SUBJECT_INVITATION="Welcome to {company_name}!"                      # Subject for invitation emails
+EMAIL_SUBJECT_KEY_CREATED="Your API Key for {company_name}"               # Subject for key creation emails
 ```
+
+If custom subject templates are not provided, the system will use default templates in the format "LiteLLM: {event_message}".

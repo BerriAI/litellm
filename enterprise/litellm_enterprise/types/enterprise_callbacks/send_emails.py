@@ -1,7 +1,6 @@
-import enum
-from typing import Dict, List
-
-from pydantic import BaseModel, Field
+from enum import Enum
+from typing import Dict, List, Optional
+from pydantic import BaseModel
 
 from litellm.proxy._types import WebhookEvent
 
@@ -11,6 +10,8 @@ class EmailParams(BaseModel):
     support_contact: str
     base_url: str
     recipient_email: str
+    subject: str
+    signature: str
 
 
 class SendKeyCreatedEmailEvent(WebhookEvent):
@@ -22,7 +23,7 @@ class SendKeyCreatedEmailEvent(WebhookEvent):
     """
 
 
-class EmailEvent(str, enum.Enum):
+class EmailEvent(str, Enum):
     virtual_key_created = "Virtual Key Created"
     new_user_invitation = "New User Invitation"
 
