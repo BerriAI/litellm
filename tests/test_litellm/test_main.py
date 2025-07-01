@@ -268,6 +268,21 @@ def test_bedrock_latency_optimized_inference():
         assert json_data["performanceConfig"]["latency"] == "optimized"
 
 
+def test_custom_provider_with_extra_headers():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    with patch.object(litellm.llms.custom_httpx.http_handler.HTTPHandler, "post") as mock_post:
+        response = litellm.completion(
+            model="custom/custom",
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            headers={"X-Custom-Header": "custom-value"},
+            api_base="https://example.com/api/v1",
+        )
+
+        mock_post.assert_called_once()
+        assert mock_post.call_args[1]["headers"]["X-Custom-Header"] == "custom-value"
+
+
 @pytest.fixture(autouse=True)
 def set_openrouter_api_key():
     original_api_key = os.environ.get("OPENROUTER_API_KEY")
