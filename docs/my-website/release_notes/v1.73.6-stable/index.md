@@ -32,6 +32,23 @@ The `non-root` docker image has a known issue around the UI not loading. If you 
 
 This release is not out yet. The pre-release will be live on Sunday and the stable release will be live on Wednesday.
 
+<Tabs>
+<TabItem value="docker" label="Docker">
+
+``` showLineNumbers title="docker run litellm"
+docker run \
+-e STORE_MODEL_IN_DB=True \
+-p 4000:4000 \
+ghcr.io/berriai/litellm:v1.73.6.rc.1
+```
+</TabItem>
+
+<TabItem value="pip" label="Pip">
+
+The pip package is not yet available.
+
+</TabItem>
+</Tabs>
 
 ---
 

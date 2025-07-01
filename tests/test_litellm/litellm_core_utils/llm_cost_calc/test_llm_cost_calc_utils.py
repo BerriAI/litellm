@@ -142,6 +142,38 @@ def test_generic_cost_per_token_above_200k_tokens():
     )
 
 
+def test_generic_cost_per_token_anthropic_prompt_caching():
+    model = "claude-sonnet-4@20250514"
+    usage = Usage(
+        completion_tokens=90,
+        prompt_tokens=28436,
+        total_tokens=28526,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            accepted_prediction_tokens=None,
+            audio_tokens=None,
+            reasoning_tokens=0,
+            rejected_prediction_tokens=None,
+            text_tokens=None,
+        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=None, cached_tokens=0, text_tokens=None, image_tokens=None
+        ),
+        cache_creation_input_tokens=118,
+        cache_read_input_tokens=28432,
+    )
+
+    custom_llm_provider = "vertex_ai"
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    print(f"prompt_cost: {prompt_cost}")
+    assert prompt_cost < 0.085
+
+
 def test_string_cost_values():
     """Test that cost values defined as strings are properly converted to floats."""
     from unittest.mock import patch
