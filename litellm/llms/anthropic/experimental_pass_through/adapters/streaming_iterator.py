@@ -201,7 +201,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 # Check if this is a usage chunk and we have a held stop_reason chunk
                 if (
                     self.holding_stop_reason_chunk is not None
-                    and chunk.usage is not None
+                    and getattr(chunk, "usage", None) is not None
                 ):
                     # Merge usage into the held stop_reason chunk
                     merged_chunk = self.holding_stop_reason_chunk.copy()
