@@ -86,14 +86,18 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if chunk == "None" or chunk is None:
                     raise Exception
 
+                should_start_new_block = self._should_start_new_content_block(chunk)
+                if should_start_new_block:
+                    self._increment_content_block_index()
+
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
-                    response=chunk
+                    response=chunk,
+                    current_content_block_index=self.current_content_block_index,
                 )
 
                 # Check if we need to start a new content block
                 # This is where you'd add your logic to detect when a new content block should start
                 # For example, if the chunk indicates a tool call or different content type
-                should_start_new_block = self._should_start_new_content_block(chunk)
 
                 if should_start_new_block and not self.sent_content_block_finish:
                     # End current content block and prepare for new one
@@ -102,7 +106,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     self.pending_new_content_block = True
                     return {
                         "type": "content_block_stop",
-                        "index": self.current_content_block_index,
+                        "index": max(self.current_content_block_index - 1, 0),
                     }
 
                 if (
@@ -183,12 +187,15 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if chunk == "None" or chunk is None:
                     raise Exception
 
-                processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
-                    response=chunk
-                )
-
                 # Check if we need to start a new content block
                 should_start_new_block = self._should_start_new_content_block(chunk)
+                if should_start_new_block:
+                    self._increment_content_block_index()
+
+                processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
+                    response=chunk,
+                    current_content_block_index=self.current_content_block_index,
+                )
 
                 if should_start_new_block and not self.sent_content_block_finish:
                     # Queue the sequence: content_block_stop -> content_block_start -> current_chunk
@@ -197,12 +204,13 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     self.chunk_queue.append(
                         {
                             "type": "content_block_stop",
-                            "index": self.current_content_block_index,
+                            "index": max(
+                                self.current_content_block_index - 1, 0
+                            ),  # offset as self.current_content_block_index is incremented in should_start_new_content_block
                         }
                     )
 
                     # 2. Start new content block
-                    self.current_content_block_index += 1
                     self.chunk_queue.append(
                         {
                             "type": "content_block_start",
@@ -299,6 +307,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 # For non-dict chunks, forward the original value unchanged
                 yield chunk
 
+    def _increment_content_block_index(self):
+        self.current_content_block_index += 1
+
     def _should_start_new_content_block(self, chunk: "ModelResponseStream") -> bool:
         """
         Determine if we should start a new content block based on the processed chunk.
@@ -322,7 +333,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
         if block_type != self.current_content_block_type:
             self.current_content_block_type = block_type
-            self.current_content_block_index += 1
             self.current_content_block_start = content_block_start
             return True
 

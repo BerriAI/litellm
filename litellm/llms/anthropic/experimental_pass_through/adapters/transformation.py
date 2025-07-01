@@ -513,7 +513,7 @@ class LiteLLMAnthropicMessagesAdapter:
             return "text_delta", ContentTextBlockDelta(type="text_delta", text=text)
 
     def translate_streaming_openai_response_to_anthropic(
-        self, response: ModelResponse
+        self, response: ModelResponse, current_content_block_index: int
     ) -> Union[ContentBlockDelta, MessageBlockDelta]:
         ## base case - final chunk w/ finish reason
         if response.choices[0].finish_reason is not None:
@@ -549,6 +549,6 @@ class LiteLLMAnthropicMessagesAdapter:
         )
         return ContentBlockDelta(
             type="content_block_delta",
-            index=response.choices[0].index,
+            index=current_content_block_index,
             delta=content_block_delta,
         )
