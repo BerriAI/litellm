@@ -1,15 +1,11 @@
 import json
 import os
-import threading
 import time
 import webbrowser
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any, Dict, Optional
-from urllib.parse import parse_qs, quote, urlparse
 
 import click
-import jwt
 
 
 # Token storage utilities
@@ -53,157 +49,78 @@ def get_stored_api_key() -> Optional[str]:
         return token_data['key']
     return None
 
-# Callback server for SSO flow
-class CallbackHandler(BaseHTTPRequestHandler):
-    def __init__(self, *args, token_received_callback=None, **kwargs):
-        self.token_received_callback = token_received_callback
-        super().__init__(*args, **kwargs)
-    
-    def do_GET(self):
-        parsed_url = urlparse(self.path)
-        
-        if parsed_url.path == '/callback':
-            # Extract JWT token from URL parameters
-            query_params = parse_qs(parsed_url.query)
-            token = query_params.get('token', [None])[0]
-            
-            if token:
-                try:
-                    # Decode JWT token (without verification for now, just to extract data)
-                    # Note: In production, you might want to verify the token signature
-                    decoded_token = jwt.decode(token, options={"verify_signature": False})
-                    
-                    # Save token data
-                    save_token({
-                        'key': decoded_token.get('key'),
-                        'user_id': decoded_token.get('user_id'),
-                        'user_email': decoded_token.get('user_email'),
-                        'user_role': decoded_token.get('user_role'),
-                        'auth_header_name': decoded_token.get('auth_header_name', 'Authorization'),
-                        'jwt_token': token,
-                        'timestamp': time.time()
-                    })
-                    
-                    # Send success response
-                    self.send_response(200)
-                    self.send_header('Content-type', 'text/html')
-                    self.end_headers()
-                    self.wfile.write(b"""
-                    <html>
-                    <head><title>Login Success</title></head>
-                    <body>
-                        <h1>Login Successful!</h1>
-                        <p>You have successfully logged in to LiteLLM CLI.</p>
-                        <p>You can now close this browser window and return to the CLI.</p>
-                        <script>
-                            setTimeout(function() {
-                                window.close();
-                            }, 2000);
-                        </script>
-                    </body>
-                    </html>
-                    """)
-                    
-                    if self.token_received_callback:
-                        self.token_received_callback(decoded_token)
-                        
-                except Exception as e:
-                    click.echo(f"Error processing callback: {e}", err=True)
-                    self.send_response(400)
-                    self.send_header('Content-type', 'text/html')
-                    self.end_headers()
-                    self.wfile.write(b"<html><body><h1>Login Failed</h1><p>Error processing authentication.</p></body></html>")
-            else:
-                self.send_response(400)
-                self.send_header('Content-type', 'text/html')
-                self.end_headers()
-                self.wfile.write(b"<html><body><h1>Login Failed</h1><p>No authentication token received.</p></body></html>")
-        else:
-            self.send_response(404)
-            self.end_headers()
-    
-    def log_message(self, format, *args):
-        # Suppress default logging
-        pass
-
-class CallbackServer:
-    def __init__(self, port: int = 8765):
-        self.port = port
-        self.server = None
-        self.token_received = threading.Event()
-        self.received_token = None
-        
-    def token_callback(self, token_data):
-        self.received_token = token_data
-        self.token_received.set()
-        
-    def start(self):
-        """Start the callback server"""
-        def create_handler(*args, **kwargs):
-            return CallbackHandler(*args, token_received_callback=self.token_callback, **kwargs)
-            
-        self.server = HTTPServer(('localhost', self.port), create_handler)
-        
-        server_thread = threading.Thread(target=self.server.serve_forever)
-        server_thread.daemon = True
-        server_thread.start()
-        
-        return f"http://localhost:{self.port}/callback"
-    
-    def stop(self):
-        """Stop the callback server"""
-        if self.server:
-            self.server.shutdown()
-            self.server = None
-    
-    def wait_for_token(self, timeout: int = 300):
-        """Wait for token to be received"""
-        return self.token_received.wait(timeout)
+# Polling-based authentication - no local server needed
 
 @click.command(name="login")
-@click.option(
-    '--port',
-    default=8765,
-    help='Port to run the local callback server on (default: 8765)'
-)
 @click.pass_context
-def login(ctx: click.Context, port: int):
+def login(ctx: click.Context):
     """Login to LiteLLM proxy using SSO authentication"""
+    import uuid
+
+    import requests
     
     base_url = ctx.obj["base_url"]
     
-    # Start local callback server
-    callback_server = CallbackServer(port=port)
+    # Generate unique key ID for this login session
+    key_id = f"sk-{str(uuid.uuid4())}"
     
     try:
-        callback_url = callback_server.start()
-        click.echo(f"Started local callback server at {callback_url}")
-        
-        # Construct CLI SSO login URL with redirect parameter
-        sso_url = f"{base_url}/sso/cli/key/generate?redirect_url={quote(callback_url)}"
+        # Construct SSO login URL with CLI source and pre-generated key
+        sso_url = f"{base_url}/sso/key/generate?source=litellm-cli&key={key_id}"
         
         click.echo(f"Opening browser to: {sso_url}")
         click.echo("Please complete the SSO authentication in your browser...")
+        click.echo(f"Session ID: {key_id}")
         
         # Open browser
         webbrowser.open(sso_url)
         
-        # Wait for callback
-        click.echo("Waiting for authentication callback...")
+        # Poll for key creation
+        click.echo("Waiting for authentication...")
         
-        if callback_server.wait_for_token(timeout=300):  # 5 minute timeout
-            click.echo("✅ Login successful!")
+        poll_url = f"{base_url}/sso/cli/poll/{key_id}"
+        timeout = 300  # 5 minute timeout
+        poll_interval = 2  # Poll every 2 seconds
+        
+        for attempt in range(timeout // poll_interval):
+            try:
+                response = requests.get(poll_url, timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("status") == "ready":
+                        # Key is ready - save it
+                        api_key = data.get("key")
+                        if api_key:
+                            # Save token data (simplified for CLI - we just need the key)
+                            save_token({
+                                'key': api_key,
+                                'user_id': 'cli-user',
+                                'user_email': 'unknown',
+                                'user_role': 'cli',
+                                'auth_header_name': 'Authorization',
+                                'jwt_token': '',
+                                'timestamp': time.time()
+                            })
+                            
+                            click.echo("✅ Login successful!")
+                            click.echo(f"API Key: {api_key[:20]}...")
+                            click.echo("You can now use the CLI without specifying --api-key")
+                            return
+                elif response.status_code == 200:
+                    # Still pending
+                    if attempt % 10 == 0:  # Show progress every 20 seconds
+                        click.echo("Still waiting for authentication...")
+                else:
+                    click.echo(f"Polling error: HTTP {response.status_code}")
+                    
+            except requests.RequestException as e:
+                if attempt % 10 == 0:
+                    click.echo(f"Connection error (will retry): {e}")
             
-            token_data = load_token()
-            if token_data:
-                click.echo(f"Authenticated as: {token_data.get('user_email', 'Unknown User')}")
-                click.echo(f"User Role: {token_data.get('user_role', 'Unknown')}")
-                click.echo("You can now use the CLI without specifying --api-key")
-            else:
-                click.echo("⚠️ Warning: Token was processed but could not be loaded from storage")
-        else:
-            click.echo("❌ Authentication timed out. Please try again.")
-            return
+            time.sleep(poll_interval)
+        
+        click.echo("❌ Authentication timed out. Please try again.")
+        return
             
     except KeyboardInterrupt:
         click.echo("\n❌ Authentication cancelled by user.")
@@ -211,8 +128,6 @@ def login(ctx: click.Context, port: int):
     except Exception as e:
         click.echo(f"❌ Authentication failed: {e}")
         return
-    finally:
-        callback_server.stop()
 
 @click.command(name="logout")
 def logout():
