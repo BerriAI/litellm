@@ -2954,7 +2954,6 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
                     from sentry_sdk.scrubber import EventScrubber
 
                 
-                from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
 
                 sentry_sdk_instance = sentry_sdk
                 sentry_trace_rate = (
