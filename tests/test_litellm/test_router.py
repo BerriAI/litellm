@@ -602,3 +602,37 @@ def test_router_should_include_deployment():
     assert (
         result is True
     ), "Should return True when matching model with exact model_name"
+
+
+def test_router_responses_api_bridge():
+    """
+    Test that router.responses_api_bridge returns the correct response
+    """
+    import respx
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "[IP-approved] o3-pro",
+                "litellm_params": {
+                    "model": "azure/responses/o_series/webinterface-o3-pro",
+                    "api_base": "https://webhook.site/fba79dae-220a-4bb7-9a3a-8caa49604e55",
+                    "api_key": "sk-1234567890",
+                    "api_version": "preview",
+                    "stream": True,
+                },
+                "model_info": {
+                    "input_cost_per_token": 0.00002,
+                    "output_cost_per_token": 0.00008,
+                },
+            }
+        ],
+    )
+
+    ## CONFIRM BRIDGE IS CALLED
+    with patch.object(litellm, "responses", return_value=AsyncMock()) as mock_responses:
+        result = router.completion(
+            model="[IP-approved] o3-pro",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+        )
+        assert mock_responses.call_count == 1

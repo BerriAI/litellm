@@ -822,6 +822,31 @@ def mock_completion(
         raise Exception("Mock completion response failed - {}".format(e))
 
 
+def responses_api_bridge_check(
+    model: str,
+    custom_llm_provider: str,
+) -> dict:
+    model_info = {}
+    try:
+        model_info = _get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        if model_info.get("mode") is None and model.startswith("responses/"):
+            model = model.split("/")[1]
+            mode = "responses"
+            model_info["mode"] = mode
+    except Exception as e:
+        verbose_logger.debug("Error getting model info: {}".format(e))
+
+        if model.startswith(
+            "responses/"
+        ):  # handle azure models - `azure/responses/<deployment-name>`
+            model = model.split("/")[1]
+            mode = "responses"
+            model_info["mode"] = mode
+    return cast(dict, model_info)
+
+
 @tracer.wrap()
 @client
 def completion(  # type: ignore # noqa: PLR0915
@@ -1290,19 +1315,9 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
         ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
-        try:
-            model_info = _get_model_info_helper(
-                model=model, custom_llm_provider=custom_llm_provider
-            )
-        except Exception as e:
-            verbose_logger.debug("Error getting model info: {}".format(e))
-            model_info = {}
-            if model.startswith(
-                "responses/"
-            ):  # handle azure models - `azure/responses/<deployment-name>`
-                model = model.split("/")[1]
-                mode = "responses"
-                model_info["mode"] = mode
+        model_info = responses_api_bridge_check(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
 
         if model_info.get("mode") == "responses":
             from litellm.completion_extras import responses_api_bridge
@@ -4937,7 +4952,10 @@ def transcription(
             provider_config=provider_config,
             litellm_params=litellm_params_dict,
         )
-    elif custom_llm_provider in [LlmProviders.DEEPGRAM.value, LlmProviders.ELEVENLABS.value]:
+    elif custom_llm_provider in [
+        LlmProviders.DEEPGRAM.value,
+        LlmProviders.ELEVENLABS.value,
+    ]:
         response = base_llm_http_handler.audio_transcriptions(
             model=model,
             audio_file=file,
