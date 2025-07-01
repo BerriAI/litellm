@@ -434,9 +434,9 @@ router_settings:
 | DOCS_URL | The path to the Swagger API documentation. **By default this is "/"**
 | EMAIL_LOGO_URL | URL for the logo used in emails
 | EMAIL_SUPPORT_CONTACT | Support contact email address
-| EMAIL_SIGNATURE | Custom signature for emails
-| EMAIL_SUBJECT_INVITATION | Custom subject template for invitation emails
-| EMAIL_SUBJECT_KEY_CREATED | Custom subject template for key creation emails
+| EMAIL_SIGNATURE | Custom HTML footer/signature for all emails. Can include HTML tags for formatting and links.
+| EMAIL_SUBJECT_INVITATION | Custom subject template for invitation emails. 
+| EMAIL_SUBJECT_KEY_CREATED | Custom subject template for key creation emails. 
 | EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING | Flag to enable new multi-instance rate limiting. **Default is False**
 | FIREWORKS_AI_4_B | Size parameter for Fireworks AI 4B model. Default is 4
 | FIREWORKS_AI_16_B | Size parameter for Fireworks AI 16B model. Default is 16
