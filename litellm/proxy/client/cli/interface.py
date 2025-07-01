@@ -12,7 +12,6 @@ if TYPE_CHECKING:
 
 def styled_prompt():
     """Create a styled blue box prompt for user input."""
-    import os
 
     # Get terminal height to ensure we have enough space
     try:

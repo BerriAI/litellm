@@ -1,5 +1,4 @@
 # stdlib imports
-import sys
 from typing import Optional
 
 # third party imports
@@ -8,7 +7,6 @@ import click
 from litellm._version import version as litellm_version
 from litellm.proxy.client.health import HealthManagementClient
 
-from .banner import show_banner
 from .commands.auth import get_stored_api_key, login, logout, whoami
 from .commands.chat import chat
 from .commands.credentials import credentials

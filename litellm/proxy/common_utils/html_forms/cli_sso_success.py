@@ -1,4 +1,3 @@
-import os
 
 from litellm.proxy.client.cli.banner import LITELLM_BANNER
 
