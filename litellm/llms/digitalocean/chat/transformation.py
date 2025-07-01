@@ -96,23 +96,6 @@ class DigitalOceanConfig(OpenAILikeChatConfig):
         complete_url = f"{api_base}/api/v1/chat/completions"
         return complete_url
 
-    def _transform_messages(self, messages: List[AllMessageValues], model: str) -> List[AllMessageValues]:
-        for idx, message in enumerate(messages):
-
-            if isinstance(message, BaseModel):
-                _message = message.model_dump()
-            else:
-                _message = message
-            assistant_message = _message.get("role") == "assistant"
-            if assistant_message:
-                new_message = ChatCompletionAssistantMessage(role="assistant")
-                for k, v in _message.items():
-                    if v is not None:
-                        new_message[k] = v  # type: ignore
-                messages[idx] = new_message
-
-        return messages
-
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
