@@ -667,7 +667,8 @@ known_tokenizer_config = {
             "add_eos_token": False,
             "bos_token": {
                 "__type": "AddedToken",
-                "content": "<｜begin▁of▁sentence｜>",
+                "content": "
+",
                 "lstrip": False,
                 "normalized": True,
                 "rstrip": False,
@@ -676,7 +677,8 @@ known_tokenizer_config = {
             "clean_up_tokenization_spaces": False,
             "eos_token": {
                 "__type": "AddedToken",
-                "content": "<｜end▁of▁sentence｜>",
+                "content": "
+",
                 "lstrip": False,
                 "normalized": True,
                 "rstrip": False,
@@ -686,7 +688,8 @@ known_tokenizer_config = {
             "model_max_length": 16384,
             "pad_token": {
                 "__type": "AddedToken",
-                "content": "<｜end▁of▁sentence｜>",
+                "content": "
+",
                 "lstrip": False,
                 "normalized": True,
                 "rstrip": False,
@@ -695,7 +698,29 @@ known_tokenizer_config = {
             "sp_model_kwargs": {},
             "unk_token": None,
             "tokenizer_class": "LlamaTokenizerFast",
-            "chat_template": "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% set ns = namespace(is_first=false, is_tool=false, is_output_first=true, system_prompt='') %}{%- for message in messages %}{%- if message['role'] == 'system' %}{% set ns.system_prompt = message['content'] %}{%- endif %}{%- endfor %}{{bos_token}}{{ns.system_prompt}}{%- for message in messages %}{%- if message['role'] == 'user' %}{%- set ns.is_tool = false -%}{{'<｜User｜>' + message['content']}}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is none %}{%- set ns.is_tool = false -%}{%- for tool in message['tool_calls']%}{%- if not ns.is_first %}{{'<｜Assistant｜><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\\n' + '```json' + '\\n' + tool['function']['arguments'] + '\\n' + '```' + '<｜tool▁call▁end｜>'}}{%- set ns.is_first = true -%}{%- else %}{{'\\n' + '<｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\\n' + '```json' + '\\n' + tool['function']['arguments'] + '\\n' + '```' + '<｜tool▁call▁end｜>'}}{{'<｜tool▁calls▁end｜><｜end▁of▁sentence｜>'}}{%- endif %}{%- endfor %}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is not none %}{%- if ns.is_tool %}{{'<｜tool▁outputs▁end｜>' + message['content'] + '<｜end▁of▁sentence｜>'}}{%- set ns.is_tool = false -%}{%- else %}{% set content = message['content'] %}{% if '</think>' in content %}{% set content = content.split('</think>')[-1] %}{% endif %}{{'<｜Assistant｜>' + content + '<｜end▁of▁sentence｜>'}}{%- endif %}{%- endif %}{%- if message['role'] == 'tool' %}{%- set ns.is_tool = true -%}{%- if ns.is_output_first %}{{'<｜tool▁outputs▁begin｜><｜tool▁output▁begin｜>' + message['content'] + '<｜tool▁output▁end｜>'}}{%- set ns.is_output_first = false %}{%- else %}{{'\\n<｜tool▁output▁begin｜>' + message['content'] + '<｜tool▁output▁end｜>'}}{%- endif %}{%- endif %}{%- endfor -%}{% if ns.is_tool %}{{'<｜tool▁outputs▁end｜>'}}{% endif %}{% if add_generation_prompt and not ns.is_tool %}{{'<｜Assistant｜><think>\\n'}}{% endif %}",
+            "chat_template": "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% set ns = namespace(is_first=false, is_tool=false, is_output_first=true, system_prompt='') %}{%- for message in messages %}{%- if message['role'] == 'system' %}{% set ns.system_prompt = message['content'] %}{%- endif %}{%- endfor %}{{bos_token}}{{ns.system_prompt}}{%- for message in messages %}{%- if message['role'] == 'user' %}{%- set ns.is_tool = false -%}{{'
+' + message['content']}}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is none %}{%- set ns.is_tool = false -%}{%- for tool in message['tool_calls']%}{%- if not ns.is_first %}{{'
+' + tool['type'] + '
+' + tool['function']['name'] + '
+' + tool['function']['arguments'] + '
+' + '
+'}}{%- set ns.is_first = true -%}{%- else %}{{'
+' + tool['type'] + '
+' + tool['function']['name'] + '
+' + tool['function']['arguments'] + '
+' + '
+'}}{{'
+'}}{%- endif %}{%- endfor %}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is not none %}{%- if ns.is_tool %}{{'
+' + message['content'] + '
+'}}{%- set ns.is_tool = false -%}{%- else %}{% set content = message['content'] %}{% if '</think>' in content %}{% set content = content.split('</think>')[-1] %}{% endif %}{{'
+' + content + '
+'}}{%- endif %}{%- endif %}{%- if message['role'] == 'tool' %}{%- set ns.is_tool = true -%}{%- if ns.is_output_first %}{{'
+' + message['content'] + '
+'}}{%- set ns.is_output_first = false %}{%- else %}{{'
+' + message['content'] + '
+'}}{%- endif %}{%- endif %}{%- endfor -%}{% if ns.is_tool %}{{'
+'}}{% endif %}{% if add_generation_prompt and not ns.is_tool %}{{'
+'}}{% endif %}",
         },
         "status": "success",
     },
@@ -799,3 +824,35 @@ SPECIAL_LITELLM_AUTH_TOKEN = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(
     os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60)
 )
+
+# Sentry Scrubbing Configuration
+SENTRY_DENYLIST = [
+    # API Keys and Tokens
+    "api_key", "token", "key", "secret", "password", "auth", "credential",
+    "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AZURE_API_KEY", "COHERE_API_KEY",
+    "REPLICATE_API_KEY", "HUGGINGFACE_API_KEY", "TOGETHERAI_API_KEY",
+    "CLOUDFLARE_API_KEY", "BASETEN_KEY", "OPENROUTER_KEY", "DATAROBOT_API_TOKEN",
+    "FIREWORKS_API_KEY", "FIREWORKS_AI_API_KEY", "FIREWORKSAI_API_KEY",
+    
+    # Database and Connection Strings
+    "database_url", "redis_url", "connection_string",
+    
+    # Authentication and Security
+    "master_key", "LITELLM_MASTER_KEY", "auth_token", "jwt_token", "private_key",
+    "SLACK_WEBHOOK_URL", "webhook_url", "LANGFUSE_SECRET_KEY",
+    
+    # Email Configuration
+    "SMTP_PASSWORD", "SMTP_USERNAME", "email_password",
+    
+    # Cloud Provider Credentials
+    "aws_access_key", "aws_secret_key", "gcp_credentials",
+    "azure_credentials", "HCP_VAULT_TOKEN", "CIRCLE_OIDC_TOKEN",
+    
+    # Proxy and Environment Settings
+    "proxy_url", "proxy_key", "environment_variables"
+]
+
+SENTRY_PII_DENYLIST = [
+    "user_id", "email", "phone", "address", "ip_address",
+    "SMTP_SENDER_EMAIL", "TEST_EMAIL_ADDRESS"
+]
