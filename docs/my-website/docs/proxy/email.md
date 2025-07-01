@@ -124,9 +124,7 @@ On the Create Key Modal, Select Advanced Settings > Set Send Email to True.
 />
 
 
-
-
-## Customizing Email Branding
+## Email Customization
 
 :::info
 
@@ -140,14 +138,61 @@ LiteLLM allows you to customize:
 - Email signature
 - Email subject lines for different events
 
-Set the following in your env to customize your emails:
+## Environment Variables
 
-```shell
-EMAIL_LOGO_URL="https://litellm-listing.s3.amazonaws.com/litellm_logo.png"  # public url to your logo
-EMAIL_SUPPORT_CONTACT="support@berri.ai"                                    # Your company support email
-EMAIL_SIGNATURE="Best regards,\nYour Company Team"                         # Custom email signature
-EMAIL_SUBJECT_INVITATION="Welcome to {company_name}!"                      # Subject for invitation emails
-EMAIL_SUBJECT_KEY_CREATED="Your API Key for {company_name}"               # Subject for key creation emails
+You can customize the following aspects of emails through environment variables:
+
+```bash
+# Email Branding
+EMAIL_LOGO_URL="https://your-company.com/logo.png"  # Custom logo URL
+EMAIL_SUPPORT_CONTACT="support@your-company.com"     # Support contact email
+EMAIL_SIGNATURE="<p>Best regards,<br/>Your Company Team</p><p><a href='https://your-company.com'>Visit our website</a></p>"  # Custom HTML footer/signature
+
+# Email Subject Lines
+EMAIL_SUBJECT_INVITATION="Welcome to Your Company!"  # Subject for invitation emails
+EMAIL_SUBJECT_KEY_CREATED="Your API Key is Ready"    # Subject for key creation emails
 ```
 
-If custom subject templates are not provided, the system will use default templates in the format "LiteLLM: {event_message}".
+## HTML Support in Email Signature
+
+The `EMAIL_SIGNATURE` environment variable supports HTML formatting, allowing you to create rich, branded email footers. You can include:
+
+- Text formatting (bold, italic, etc.)
+- Line breaks using `<br/>`
+- Links using `<a href='...'>`
+- Paragraphs using `<p>`
+- Company information and social media links
+- Legal disclaimers or terms of service links
+
+Example HTML signature:
+```html
+<p>Best regards,<br/>The LiteLLM Team</p>
+<p>
+  <a href='https://docs.litellm.ai'>Documentation</a> |
+  <a href='https://github.com/BerriAI/litellm'>GitHub</a>
+</p>
+<p style='font-size: 12px; color: #666;'>
+  This is an automated message from LiteLLM Proxy
+</p>
+```
+
+## Default Templates
+
+If environment variables are not set, LiteLLM will use default templates:
+
+- Default logo: LiteLLM logo
+- Default support contact: support@berri.ai
+- Default signature: Standard LiteLLM footer
+- Default subjects: "LiteLLM: \{event_message\}" (replaced with actual event message)
+
+## Template Variables
+
+When setting custom email subjects, you can use template variables that will be replaced with actual values:
+
+```bash
+# Examples of template variable usage
+EMAIL_SUBJECT_INVITATION="Welcome to \{company_name\}!"
+EMAIL_SUBJECT_KEY_CREATED="Your \{company_name\} API Key"
+```
+
+The system will automatically replace `\{event_message\}` and other template variables with their actual values when sending emails.
