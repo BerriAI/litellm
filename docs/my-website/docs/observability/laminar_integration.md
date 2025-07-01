@@ -7,11 +7,17 @@ import Image from '@theme/IdealImage';
 [Laminar](https://www.lmnr.ai) is a comprehensive open-source platform
 for engineering AI agents.
 
+Laminar tracks
+- LLM call inputs and outputs,
+- Request and response parameters, such as temperature and top p,
+- Token counts and costs,
+- LLM call latency.
+
+Example complex LiteLLM trace on Laminar:
+
+<Image img={require('../../img/laminar_complex_trace_example.png')} />
+
 View a version of this guide in [Laminar docs](https://docs.lmnr.ai/tracing/integrations/litellm).
-
-Example trace for a [Skyvern](https://www.skyvern.com/) browser agent powered by LiteLLM.
-
-<Image img={require('../../img/laminar_trace_example.png')} />
 
 ## Getting started
 
@@ -57,13 +63,26 @@ you can make any calls to LiteLLM, and they all will be traced.
 ```python
 import litellm
 response = litellm.completion(
-    model="gpt-4.1-nano",
+    model="gpt-4.1",
     messages=[
-      {"role": "user", "content": "What is the capital of France?"}
+        {
+            "role": "user",
+            "content": "What is the capital of France? Tell me about the city."
+        }
     ],
 )
 ```
 
+Here is what this trace may look like on Laminar.
+
+<Image img={require('../../img/laminar_trace_example.png')} />
+
+Direct
+[link](https://www.lmnr.ai/shared/traces/caabbd7b-d2f5-b538-b93d-b4abafe05ef4)
+to the trace.
+
 ## Support
 
-For any question or issue with the integration you can reach out to the Laminar Team on [Discord](https://discord.gg/nNFUUDAKub) or via [email](mailto:founders@lmnr.ai).
+For any question or issue with the integration you can reach out to the 
+Laminar Team on [Discord](https://discord.gg/nNFUUDAKub) or
+via [email](mailto:founders@lmnr.ai).
