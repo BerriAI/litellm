@@ -27,6 +27,7 @@ def mock_env():
 
 @pytest.fixture
 def mock_keys_client():
+    # Patch where the class is imported in the commands module
     with patch(
         "litellm.proxy.client.cli.commands.keys.KeysManagementClient"
     ) as MockClient:
