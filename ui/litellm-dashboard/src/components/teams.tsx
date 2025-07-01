@@ -58,12 +58,10 @@ import {
 import { CogIcon } from "@heroicons/react/outline";
 import AvailableTeamsPanel from "@/components/team/available_teams";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
+import PremiumVectorStoreSelector from "./common_components/PremiumVectorStoreSelector";
+import PremiumMCPSelector from "./common_components/PremiumMCPSelector";
 import type { KeyResponse, Team } from "./key_team_helpers/key_list";
-const isLocal = process.env.NODE_ENV === "development";
-const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
-if (isLocal != true) {
-  console.log = function() {};
-}
+
 interface TeamProps {
   teams: Team[] | null;
   searchParams: any;
@@ -72,6 +70,7 @@ interface TeamProps {
   userID: string | null;
   userRole: string | null;
   organizations: Organization[] | null;
+  premiumUser?: boolean;
 }
 
 interface FilterState {
@@ -134,7 +133,8 @@ const Teams: React.FC<TeamProps> = ({
   setTeams,
   userID,
   userRole,
-  organizations
+  organizations,
+  premiumUser = false
 }) => {
   const [lastRefreshed, setLastRefreshed] = useState("");
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
@@ -325,12 +325,21 @@ const Teams: React.FC<TeamProps> = ({
         }
 
         message.info("Creating Team");
-        // Transform allowed_vector_store_ids into object_permission
+        // Transform allowed_vector_store_ids and allowed_mcp_server_ids into object_permission
         if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
           formValues.object_permission = {
             vector_stores: formValues.allowed_vector_store_ids
           };
           delete formValues.allowed_vector_store_ids;
+        }
+
+        // Transform allowed_mcp_server_ids into object_permission
+        if (formValues.allowed_mcp_server_ids && formValues.allowed_mcp_server_ids.length > 0) {
+          if (!formValues.object_permission) {
+            formValues.object_permission = {};
+          }
+          formValues.object_permission.mcp_servers = formValues.allowed_mcp_server_ids;
+          delete formValues.allowed_mcp_server_ids;
         }
         const response: any = await teamCreateCall(accessToken, formValues);
         if (teams !== null) {
@@ -441,7 +450,7 @@ const Teams: React.FC<TeamProps> = ({
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
         {
-          userRole == "Admin" || userRole == "Org Admin"? 
+          (userRole == "Admin" || userRole == "Org Admin") && !selectedTeamId? 
           <Button
             className="w-fit"
             onClick={() => setIsTeamModalVisible(true)}
@@ -1043,6 +1052,25 @@ const Teams: React.FC<TeamProps> = ({
                               }} 
                             />
                           </Form.Item>
+                          <Form.Item 
+                            label="Team Member Budget (USD)" 
+                            name="team_member_budget"
+                            normalize={(value) => value ? Number(value) : undefined}
+                            tooltip="This is the individual budget for a user in the team."
+                          >  
+                            <NumericalInput step={0.01} precision={2} width={200} />
+                          </Form.Item>
+                          <Form.Item 
+                            label="Team Member Key Duration" 
+                            name="team_member_key_duration"
+                            tooltip="Set a limit to the duration of a team member's key."
+                          >  
+                            <Select2 defaultValue={null} placeholder="n/a">
+                              <Select2.Option value="1d">1 day</Select2.Option>
+                              <Select2.Option value="1w">1 week</Select2.Option>
+                              <Select2.Option value="1mo">1 month</Select2.Option>
+                            </Select2>
+                          </Form.Item>
                           <Form.Item label="Metadata" name="metadata" help="Additional team metadata. Enter metadata as JSON object.">
                             <Input.TextArea rows={4} />
                           </Form.Item>
@@ -1086,11 +1114,33 @@ const Teams: React.FC<TeamProps> = ({
                             className="mt-8"
                             help="Select vector stores this team can access. Leave empty for access to all vector stores"
                           >
-                            <VectorStoreSelector
+                            <PremiumVectorStoreSelector
                               onChange={(values) => form.setFieldValue('allowed_vector_store_ids', values)}
                               value={form.getFieldValue('allowed_vector_store_ids')}
                               accessToken={accessToken || ''}
                               placeholder="Select vector stores (optional)"
+                              premiumUser={premiumUser}
+                            />
+                          </Form.Item>
+                          <Form.Item 
+                            label={
+                              <span>
+                                Allowed MCP Servers{' '}
+                                <Tooltip title="Select which MCP servers this team can access by default. Leave empty for access to all MCP servers">
+                                  <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                                </Tooltip>
+                              </span>
+                            }
+                            name="allowed_mcp_server_ids"
+                            className="mt-8"
+                            help="Select MCP servers this team can access. Leave empty for access to all MCP servers"
+                          >
+                            <PremiumMCPSelector
+                              onChange={(values) => form.setFieldValue('allowed_mcp_server_ids', values)}
+                              value={form.getFieldValue('allowed_mcp_server_ids')}
+                              accessToken={accessToken || ''}
+                              placeholder="Select MCP servers (optional)"
+                              premiumUser={premiumUser}
                             />
                           </Form.Item>
                         </AccordionBody>

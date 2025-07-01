@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.proxy._types import UserAPIKeyAuth
 
 from .integrations.custom_logger import CustomLogger
 from .integrations.datadog.datadog import DataDogLogger
@@ -15,11 +14,14 @@ from .types.services import ServiceLoggerPayload, ServiceTypes
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.proxy._types import UserAPIKeyAuth
+
     Span = Union[_Span, Any]
     OTELClass = OpenTelemetry
 else:
     Span = Any
     OTELClass = Any
+    UserAPIKeyAuth = Any
 
 
 class ServiceLogging(CustomLogger):

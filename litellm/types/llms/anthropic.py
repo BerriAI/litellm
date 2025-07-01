@@ -7,7 +7,7 @@ from .openai import ChatCompletionCachedContent, ChatCompletionThinkingBlock
 
 
 class AnthropicMessagesToolChoice(TypedDict, total=False):
-    type: Required[Literal["auto", "any", "tool"]]
+    type: Required[Literal["auto", "any", "tool", "none"]]
     name: str
     disable_parallel_tool_use: bool  # default is false
 
@@ -72,6 +72,18 @@ AllAnthropicToolsValues = Union[
 ]
 
 
+class AnthropicMcpServerToolConfiguration(TypedDict, total=False):
+    allowed_tools: Optional[List[str]]
+
+
+class AnthropicMcpServerTool(TypedDict, total=False):
+    type: Required[Literal["url"]]
+    url: Required[str]
+    name: Required[str]
+    tool_configuration: AnthropicMcpServerToolConfiguration
+    authorization_token: str
+
+
 class AnthropicMessagesTextParam(TypedDict, total=False):
     type: Required[Literal["text"]]
     text: Required[str]
@@ -114,6 +126,11 @@ class AnthropicContentParamSource(TypedDict):
     data: str
 
 
+class AnthropicContentParamSourceUrl(TypedDict):
+    type: Literal["url"]
+    url: str
+
+
 class AnthropicContentParamSourceFileId(TypedDict):
     type: Literal["file"]
     file_id: str
@@ -140,7 +157,11 @@ class CitationsObject(TypedDict):
 class AnthropicMessagesDocumentParam(TypedDict, total=False):
     type: Required[Literal["document"]]
     source: Required[
-        Union[AnthropicContentParamSource, AnthropicContentParamSourceFileId]
+        Union[
+            AnthropicContentParamSource,
+            AnthropicContentParamSourceFileId,
+            AnthropicContentParamSourceUrl,
+        ]
     ]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
     title: str
@@ -207,6 +228,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     tools: Optional[List[Union[AllAnthropicToolsValues, Dict]]]
     top_k: Optional[int]
     top_p: Optional[float]
+    mcp_servers: Optional[List[AnthropicMcpServerTool]]
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):

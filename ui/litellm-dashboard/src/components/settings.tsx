@@ -28,22 +28,20 @@ import {
 } from "@tremor/react";
 
 import {
-  PencilAltIcon
+  PencilAltIcon,
+  TrashIcon
 } from "@heroicons/react/outline";
 
 import { Modal, Typography, Form, Input, Select, Button as Button2, message } from "antd";
 import EmailSettings from "./email_settings";
 
 const { Title, Paragraph } = Typography;
-const isLocal = process.env.NODE_ENV === "development";
-const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
-if (isLocal != true) {
-  console.log = function() {};
-}
+
 import {
   getCallbacksCall,
   setCallbacksCall,
   serviceHealthCheck,
+  deleteCallback
 } from "./networking";
 import AlertingSettings from "./alerting/alerting_settings";
 import FormItem from "antd/es/form/FormItem";
@@ -136,6 +134,8 @@ const Settings: React.FC<SettingsPageProps> = ({
 
   const [showEditCallback, setShowEditCallback] = useState(false);
   const [selectedEditCallback, setSelectedEditCallback] = useState<any | null>(null);
+  const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
+  const [callbackToDelete, setCallbackToDelete] = useState<string | null>(null);
 
   const handleSwitchChange = (alertName: string) => {
     if (activeAlerts.includes(alertName)) {
@@ -451,6 +451,33 @@ const Settings: React.FC<SettingsPageProps> = ({
   const handleCallbackChange = (value: string) => {
     setSelectedCallback(value);
   };
+  const handleDeleteCallback = (callbackName: string) => {
+    setCallbackToDelete(callbackName);
+    setShowDeleteConfirmModal(true);
+  };
+
+  const confirmDeleteCallback = async () => {
+    if (!callbackToDelete || !accessToken) {
+      return;
+    }
+
+    try {
+      await deleteCallback(accessToken, callbackToDelete);
+      message.success(`Callback ${callbackToDelete} deleted successfully`);
+
+      // Refresh the callbacks list
+      if (userID && userRole) {
+        const data = await getCallbacksCall(accessToken, userID, userRole);
+        setCallbacks(data.callbacks);
+      }
+
+      setShowDeleteConfirmModal(false);
+      setCallbackToDelete(null);
+    } catch (error) {
+      console.error("Failed to delete callback:", error);
+      message.error(`Failed to delete callback: ${error}`);
+    }
+  };
 
   if (!accessToken) {
     return null;
@@ -501,6 +528,14 @@ const Settings: React.FC<SettingsPageProps> = ({
                                   setSelectedEditCallback(callback);
                                   setShowEditCallback(true);
                                 }}
+                              />
+                              <Icon
+                                icon={TrashIcon}
+                                size="sm"
+                                onClick={() =>
+                                  handleDeleteCallback(callback.name)
+                                }
+                                className="text-red-500 hover:text-red-700 cursor-pointer"
                               />
                               <Button
                                 onClick={() =>
@@ -733,6 +768,24 @@ const Settings: React.FC<SettingsPageProps> = ({
       </Form>
         
 
+    </Modal>
+
+    <Modal
+      title="Confirm Delete"
+      visible={showDeleteConfirmModal}
+      onOk={confirmDeleteCallback}
+      onCancel={() => {
+        setShowDeleteConfirmModal(false);
+        setCallbackToDelete(null);
+      }}
+      okText="Delete"
+      cancelText="Cancel"
+      okButtonProps={{ danger: true }}
+    >
+      <p>
+        Are you sure you want to delete the callback - {callbackToDelete}?
+        This action cannot be undone.
+      </p>
     </Modal>
     </div>
     

@@ -2,8 +2,9 @@
 ## File for 'response_cost' calculation in Logging
 import time
 from functools import lru_cache
-from typing import Any, List, Literal, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union, cast
 
+from httpx import Response
 from pydantic import BaseModel
 
 import litellm
@@ -45,6 +46,9 @@ from litellm.llms.openai.cost_calculation import (
     cost_per_second as openai_cost_per_second,
 )
 from litellm.llms.openai.cost_calculation import cost_per_token as openai_cost_per_token
+from litellm.llms.perplexity.cost_calculator import (
+    cost_per_token as perplexity_cost_per_token,
+)
 from litellm.llms.together_ai.cost_calculator import get_model_params_and_category
 from litellm.llms.vertex_ai.cost_calculator import (
     cost_per_character as google_cost_per_character,
@@ -89,6 +93,9 @@ from litellm.utils import (
     _cached_get_model_info_helper,
     token_counter,
 )
+
+if TYPE_CHECKING:
+    pass
 
 
 def _cost_per_token_custom_pricing_helper(
@@ -329,6 +336,8 @@ def cost_per_token(  # noqa: PLR0915
         return gemini_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "deepseek":
         return deepseek_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "perplexity":
+        return perplexity_cost_per_token(model=model, usage=usage_block)
     else:
         model_info = _cached_get_model_info_helper(
             model=model, custom_llm_provider=custom_llm_provider
@@ -650,9 +659,10 @@ def completion_cost(  # noqa: PLR0915
         potential_model_names = [selected_model]
         if model is not None:
             potential_model_names.append(model)
+
         for idx, model in enumerate(potential_model_names):
             try:
-                verbose_logger.info(
+                verbose_logger.debug(
                     f"selected model name for cost calculation: {model}"
                 )
 
@@ -661,9 +671,9 @@ def completion_cost(  # noqa: PLR0915
                     or isinstance(completion_response, dict)
                 ):  # tts returns a custom class
                     if isinstance(completion_response, dict):
-                        usage_obj: Optional[
-                            Union[dict, Usage]
-                        ] = completion_response.get("usage", {})
+                        usage_obj: Optional[Union[dict, Usage]] = (
+                            completion_response.get("usage", {})
+                        )
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
@@ -959,6 +969,7 @@ def response_cost_calculator(
         ResponsesAPIResponse,
         LiteLLMRealtimeStreamLoggingObject,
         OpenAIModerationResponse,
+        Response,
     ],
     model: str,
     custom_llm_provider: Optional[str],
@@ -1171,7 +1182,7 @@ def batch_cost_calculator(
         model=model, custom_llm_provider=custom_llm_provider
     )
 
-    verbose_logger.info(
+    verbose_logger.debug(
         "Calculating batch cost per token. model=%s, custom_llm_provider=%s",
         model,
         custom_llm_provider,
@@ -1209,28 +1220,7 @@ def batch_cost_calculator(
     return total_prompt_cost, total_completion_cost
 
 
-class RealtimeAPITokenUsageProcessor:
-    @staticmethod
-    def collect_usage_from_realtime_stream_results(
-        results: OpenAIRealtimeStreamList,
-    ) -> List[Usage]:
-        """
-        Collect usage from realtime stream results
-        """
-        response_done_events: List[OpenAIRealtimeStreamResponseBaseObject] = cast(
-            List[OpenAIRealtimeStreamResponseBaseObject],
-            [result for result in results if result["type"] == "response.done"],
-        )
-        usage_objects: List[Usage] = []
-        for result in response_done_events:
-            usage_object = (
-                ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-                    result["response"].get("usage", {})
-                )
-            )
-            usage_objects.append(usage_object)
-        return usage_objects
-
+class BaseTokenUsageProcessor:
     @staticmethod
     def combine_usage_objects(usage_objects: List[Usage]) -> Usage:
         """
@@ -1266,13 +1256,17 @@ class RealtimeAPITokenUsageProcessor:
                     combined.prompt_tokens_details = PromptTokensDetailsWrapper()
 
                 # Check what keys exist in the model's prompt_tokens_details
-                for attr in dir(usage.prompt_tokens_details):
-                    if not attr.startswith("_") and not callable(
-                        getattr(usage.prompt_tokens_details, attr)
+                for attr in usage.prompt_tokens_details.model_fields:
+                    if (
+                        hasattr(usage.prompt_tokens_details, attr)
+                        and not attr.startswith("_")
+                        and not callable(getattr(usage.prompt_tokens_details, attr))
                     ):
-                        current_val = getattr(combined.prompt_tokens_details, attr, 0)
-                        new_val = getattr(usage.prompt_tokens_details, attr, 0)
-                        if new_val is not None:
+                        current_val = (
+                            getattr(combined.prompt_tokens_details, attr, 0) or 0
+                        )
+                        new_val = getattr(usage.prompt_tokens_details, attr, 0) or 0
+                        if new_val is not None and isinstance(new_val, (int, float)):
                             setattr(
                                 combined.prompt_tokens_details,
                                 attr,
@@ -1307,6 +1301,29 @@ class RealtimeAPITokenUsageProcessor:
                             )
 
         return combined
+
+
+class RealtimeAPITokenUsageProcessor(BaseTokenUsageProcessor):
+    @staticmethod
+    def collect_usage_from_realtime_stream_results(
+        results: OpenAIRealtimeStreamList,
+    ) -> List[Usage]:
+        """
+        Collect usage from realtime stream results
+        """
+        response_done_events: List[OpenAIRealtimeStreamResponseBaseObject] = cast(
+            List[OpenAIRealtimeStreamResponseBaseObject],
+            [result for result in results if result["type"] == "response.done"],
+        )
+        usage_objects: List[Usage] = []
+        for result in response_done_events:
+            usage_object = (
+                ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                    result["response"].get("usage", {})
+                )
+            )
+            usage_objects.append(usage_object)
+        return usage_objects
 
     @staticmethod
     def collect_and_combine_usage_from_realtime_stream_results(

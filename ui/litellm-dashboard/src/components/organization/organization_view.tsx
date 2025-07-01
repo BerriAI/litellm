@@ -28,6 +28,9 @@ import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_
 import { Member, Organization, organizationInfoCall, organizationMemberAddCall, organizationMemberUpdateCall, organizationMemberDeleteCall, organizationUpdateCall } from "../networking";
 import UserSearchModal from "../common_components/user_search_modal";
 import MemberModal from "../team/edit_membership";
+import ObjectPermissionsView from "../object_permissions_view";
+import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 
 interface OrganizationInfoProps {
   organizationId: string;
@@ -139,7 +142,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     try {
       if (!accessToken) return;
 
-      const updateData = {
+      const updateData: any = {
         organization_id: organizationId,
         organization_alias: values.organization_alias,
         models: values.models,
@@ -151,6 +154,15 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         },
         metadata: values.metadata ? JSON.parse(values.metadata) : null,
       };
+
+      // Handle object_permission updates
+      if (values.vector_stores !== undefined || values.mcp_servers !== undefined) {
+        updateData.object_permission = {
+          ...orgData?.object_permission,
+          vector_stores: values.vector_stores || [],
+          mcp_servers: values.mcp_servers || []
+        };
+      }
       
       const response = await organizationUpdateCall(accessToken, updateData);
 
@@ -247,6 +259,12 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                 ))}
                 </div>
             </Card>
+
+            <ObjectPermissionsView 
+              objectPermission={orgData.object_permission} 
+              variant="card"
+              accessToken={accessToken}
+            />
             </Grid>
           </TabPanel>
 
@@ -322,7 +340,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
 
           {/* Settings Panel */}
           <TabPanel>
-            <Card>
+            <Card className="overflow-y-auto max-h-[65vh]">
               <div className="flex justify-between items-center mb-4">
                 <Title>Organization Settings</Title>
                 {(canEditOrg && !isEditing) && (
@@ -346,6 +364,8 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                     max_budget: orgData.litellm_budget_table.max_budget,
                     budget_duration: orgData.litellm_budget_table.budget_duration,
                     metadata: orgData.metadata ? JSON.stringify(orgData.metadata, null, 2) : "",
+                    vector_stores: orgData.object_permission?.vector_stores || [],
+                    mcp_servers: orgData.object_permission?.mcp_servers || []
                   }}
                   layout="vertical"
                 >
@@ -393,17 +413,37 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                     <NumericalInput step={1} style={{ width: "100%" }} />
                   </Form.Item>
 
+                  <Form.Item label="Vector Stores" name="vector_stores">
+                    <VectorStoreSelector
+                      onChange={(values) => form.setFieldValue('vector_stores', values)}
+                      value={form.getFieldValue('vector_stores')}
+                      accessToken={accessToken || ""}
+                      placeholder="Select vector stores"
+                    />
+                  </Form.Item>
+
+                  <Form.Item label="MCP Servers" name="mcp_servers">
+                    <MCPServerSelector
+                      onChange={(values) => form.setFieldValue('mcp_servers', values)}
+                      value={form.getFieldValue('mcp_servers')}
+                      accessToken={accessToken || ""}
+                      placeholder="Select MCP servers"
+                    />
+                  </Form.Item>
+
                   <Form.Item label="Metadata" name="metadata">  
                     <Input.TextArea rows={4} />
                   </Form.Item>
 
-                  <div className="flex justify-end gap-2 mt-6">
-                    <Button onClick={() => setIsEditing(false)}>
-                      Cancel
-                    </Button>
-                    <TremorButton type="submit">
-                      Save Changes
-                    </TremorButton>
+                  <div className="sticky z-10 bg-white p-4 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
+                    <div className="flex justify-end items-center gap-2">
+                      <Button onClick={() => setIsEditing(false)}>
+                        Cancel
+                      </Button>
+                      <TremorButton type="submit">
+                        Save Changes
+                      </TremorButton>
+                    </div>
                   </div>
                 </Form>
               ) : (
@@ -440,6 +480,13 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                     <div>Max: {orgData.litellm_budget_table.max_budget !== null ? `$${orgData.litellm_budget_table.max_budget}` : 'No Limit'}</div>
                     <div>Reset: {orgData.litellm_budget_table.budget_duration || 'Never'}</div>
                   </div>
+
+                  <ObjectPermissionsView 
+                    objectPermission={orgData.object_permission} 
+                    variant="inline"
+                    className="pt-4 border-t border-gray-200"
+                    accessToken={accessToken}
+                  />
                 </div>
               )}
             </Card>

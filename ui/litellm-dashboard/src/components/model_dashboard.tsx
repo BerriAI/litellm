@@ -43,6 +43,7 @@ import {
   MultiSelectItem,
   DateRangePickerValue,
 } from "@tremor/react";
+import UsageDatePicker from "./shared/usage_date_picker";
 import {
   modelInfoCall,
   userGetRequesedtModelsCall,
@@ -78,6 +79,7 @@ import {
   Space,
   Row,
   Col,
+  Checkbox,
 } from "antd";
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
@@ -99,7 +101,7 @@ import {
 } from "@heroicons/react/outline";
 import DeleteModelButton from "./delete_model_button";
 const { Title: Title2, Link } = Typography;
-import { UploadOutlined } from "@ant-design/icons";
+import { InfoCircleOutlined, UploadOutlined } from "@ant-design/icons";
 import type { UploadProps } from "antd";
 import { Upload } from "antd";
 import TimeToFirstToken from "./model_metrics/time_to_first_token";
@@ -112,6 +114,8 @@ import ModelInfoView from "./model_info_view";
 import AddModelTab from "./add_model/add_model_tab";
 import { ModelDataTable } from "./model_dashboard/table";
 import { columns } from "./model_dashboard/columns";
+import HealthCheckComponent from "./model_dashboard/HealthCheckComponent";
+import PassThroughSettings from "./pass_through_settings";
 import { all_admin_roles } from "@/utils/roles";
 import { Table as TableInstance } from '@tanstack/react-table';
 
@@ -195,11 +199,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     []
   );
   const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI);
-  const [healthCheckResponse, setHealthCheckResponse] = useState<string>("");
+  const [healthCheckResponse, setHealthCheckResponse] = useState<any>(null);
+  const [isHealthCheckLoading, setIsHealthCheckLoading] = useState<boolean>(false);
   const [editModalVisible, setEditModalVisible] = useState<boolean>(false);
 
   const [selectedModel, setSelectedModel] = useState<any>(null);
   const [availableModelGroups, setAvailableModelGroups] = useState<
+    Array<string>
+  >([]);
+  const [availableModelAccessGroups, setAvailableModelAccessGroups] = useState<
     Array<string>
   >([]);
   const [availableProviders, setavailableProviders] = useState<
@@ -251,12 +259,20 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [selectedTeam, setSelectedTeam] = useState<string | null>(null);
 
   const [selectedTeamFilter, setSelectedTeamFilter] = useState<string | null>(null);
+  const [selectedModelAccessGroupFilter, setSelectedModelAccessGroupFilter] = useState<string | null>(null);
+
+  // Add new state for current team and model view mode
+  const [currentTeam, setCurrentTeam] = useState<string>('personal'); // 'personal' or team_id
+  const [modelViewMode, setModelViewMode] = useState<'current_team' | 'all'>('current_team');
 
   const [showColumnDropdown, setShowColumnDropdown] = useState(false);
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const dropdownRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<TableInstance<any>>(null);
+
+
 
   const setProviderModelsFn = (provider: Providers) => {
     const _providerModels = getProviderModels(provider, modelMap);
@@ -290,15 +306,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     if (selected_customer === undefined) {
       selected_customer = null;
     }
-
-    // make startTime and endTime to last hour of the day
-    startTime.setHours(0);
-    startTime.setMinutes(0);
-    startTime.setSeconds(0);
-
-    endTime.setHours(23);
-    endTime.setMinutes(59);
-    endTime.setSeconds(59);
 
     try {
       const modelMetricsResponse = await modelMetricsCall(
@@ -519,7 +526,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           setProviderSettings(_providerSettings);
         }
 
-        
+
 
         // loop through modelDataResponse and get all`model_name` values
         let all_model_groups: Set<string> = new Set();
@@ -533,6 +540,22 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         _array_model_groups = _array_model_groups.sort();
 
         setAvailableModelGroups(_array_model_groups);
+
+        let all_model_access_groups: Set<string> = new Set();
+        for (let i = 0; i < modelDataResponse.data.length; i++) {
+          const model = modelDataResponse.data[i];
+          let model_info: any | null = model.model_info;
+          if (model_info) {
+            let access_groups = model_info.access_groups;
+            if (access_groups) {
+              for (let j = 0; j < access_groups.length; j++) {
+                all_model_access_groups.add(access_groups[j]);
+              }
+            }
+          }
+        }
+
+        setAvailableModelAccessGroups(Array.from(all_model_access_groups));
 
         console.log("array_model_groups:", _array_model_groups);
         let _initial_model_group = "all";
@@ -793,14 +816,19 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const runHealthCheck = async () => {
     try {
       message.info("Running health check...");
-      setHealthCheckResponse("");
+      setIsHealthCheckLoading(true);
+      setHealthCheckResponse(null);
       const response = await healthCheckCall(accessToken);
       setHealthCheckResponse(response);
     } catch (error) {
       console.error("Error running health check:", error);
       setHealthCheckResponse("Error running health check");
+    } finally {
+      setIsHealthCheckLoading(false);
     }
   };
+
+
 
   const FilterByContent = (
       <div >
@@ -1053,6 +1081,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             // Trigger a refresh to update UI
             handleRefreshClick();
           }}
+          modelAccessGroups={availableModelAccessGroups}
         />
       ) : (
         <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
@@ -1062,8 +1091,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               {all_admin_roles.includes(userRole) ? <Tab>All Models</Tab> : <Tab>Your Models</Tab>}
               <Tab>Add Model</Tab>
               {all_admin_roles.includes(userRole) && <Tab>LLM Credentials</Tab>}
+              {all_admin_roles.includes(userRole) && <Tab>Pass-Through Endpoints</Tab>}
               {all_admin_roles.includes(userRole) && <Tab>
-                <pre>/health Models</pre>
+                Health Status
               </Tab>}
               {all_admin_roles.includes(userRole) && <Tab>Model Analytics</Tab>}
               {all_admin_roles.includes(userRole) && <Tab>Model Retry Settings</Tab>}
@@ -1103,7 +1133,97 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   <div className="bg-white rounded-lg shadow">
                     <div className="border-b px-6 py-4">
                       <div className="flex flex-col space-y-4">
-                        {/* Search and Filter Controls */}
+                        {/* Current Team Selector - Prominent */}
+                        <div className="flex items-center justify-between bg-gray-50 rounded-lg p-4 border-2 border-gray-200">
+                          <div>
+                          <div className="flex items-center gap-4">
+                            <Text className="text-lg font-semibold text-gray-900">Current Team:</Text>
+                            <Select
+                              className="w-80"
+                              defaultValue="personal"
+                              value={currentTeam}
+                              onValueChange={(value) => setCurrentTeam(value)}
+                            >
+                              <SelectItem value="personal">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                                  <span className="font-medium">Personal</span>
+                                </div>
+                              </SelectItem>
+                              {teams?.filter(team => team.team_id).map((team) => (
+                                <SelectItem
+                                  key={team.team_id}
+                                  value={team.team_id}
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                                    <span className="font-medium">
+                                      {team.team_alias 
+                                        ? `${team.team_alias.slice(0, 30)}...`
+                                        : `Team ${team.team_id.slice(0, 30)}...`
+                                      }
+                                    </span>
+                                  </div>
+                                </SelectItem>
+                              ))}
+                            </Select>
+                            </div>
+                            {
+                              modelViewMode === "current_team" && (
+
+                            <div className="flex items-start gap-2 mt-2 bg-gray-50 rounded">
+                              <InfoCircleOutlined className="text-gray-400 mt-0.5 flex-shrink-0 text-xs" />
+                              <div className="text-xs text-gray-500">
+                                {currentTeam === "personal" ? (
+                                  <span>
+                                    To access these models: Create a Virtual Key without selecting a team on the {" "}
+                                    <a href="/?login=success&page=api-keys" className="text-gray-600 hover:text-gray-800 underline">
+                                      Virtual Keys page
+                                    </a>
+                                  </span>
+                                ) : (
+                                  <span>
+                                    To access these models: Create a Virtual Key and select Team as &quot;{currentTeam}&quot; on the {" "}
+                                    <a href="/?login=success&page=api-keys" className="text-gray-600 hover:text-gray-800 underline">
+                                      Virtual Keys page
+                                    </a>
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            )
+                          }
+                          </div>
+                          
+                          
+                          {/* Model View Mode Toggle - Also prominent */}
+                          <div className="flex items-center gap-4">
+                            <Text className="text-lg font-semibold text-gray-900">View:</Text>
+                            <Select
+                              className="w-64"
+                              defaultValue="current_team"
+                              value={modelViewMode}
+                              onValueChange={(value) => setModelViewMode(value as 'current_team' | 'all')}
+                            >
+                              <SelectItem value="current_team">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
+                                  <span className="font-medium">Current Team Models</span>
+                                </div>
+                              </SelectItem>
+                              <SelectItem value="all">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-2 h-2 bg-gray-500 rounded-full"></div>
+                                  <span className="font-medium">All Available Models</span>
+                                </div>
+                              </SelectItem>
+                            </Select>
+                          </div>
+                          
+                        </div>
+
+                        
+                        {/* Other Filters */}
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
                             {/* Model Name Filter */}
@@ -1127,97 +1247,89 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               </Select>
                             </div>
 
-                            {/* Team Filter */}
                             <div className="flex items-center gap-2">
-                              <Text>Filter by Team:</Text>
+                              <Text>Filter by Model Access Group:</Text>
                               <Select
                                 className="w-64"
                                 defaultValue="all"
-                                value={selectedTeamFilter ?? "all"}
-                                onValueChange={(value) => setSelectedTeamFilter(value === "all" ? null : value)}
+                                value={selectedModelAccessGroupFilter ?? "all"}
+                                onValueChange={(value) => setSelectedModelAccessGroupFilter(value === "all" ? null : value)}
                               >
-                                <SelectItem value="all">All Teams</SelectItem>
-                                {teams?.filter(team => team.team_id).map((team) => (
+                                <SelectItem value="all">All Model Access Groups</SelectItem>
+                                {availableModelAccessGroups.map((accessGroup, idx) => (
                                   <SelectItem
-                                    key={team.team_id}
-                                    value={team.team_id}
+                                    key={idx}
+                                    value={accessGroup}
                                   >
-                                    {team.team_alias 
-                                      ? `${team.team_alias} (${team.team_id.slice(0, 8)}...)`
-                                      : `Team ${team.team_id.slice(0, 8)}...`
-                                    }
+                                    {accessGroup}
                                   </SelectItem>
                                 ))}
                               </Select>
                             </div>
                           </div>
-                          
-                          {/* Column Selector will be rendered here */}
-                          {/* <div className="relative" ref={dropdownRef}>
-                            <button
-                              onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                            >
-                              <TableIcon className="h-4 w-4" />
-                              Columns
-                            </button>
-                            {isDropdownOpen && tableRef.current && (
-                              <div className="absolute right-0 mt-2 w-56 bg-white rounded-md shadow-lg ring-1 ring-black ring-opacity-5 z-50">
-                                <div className="py-1">
-                                  {tableRef.current.getAllLeafColumns().map((column: any) => {
-                                    if (column.id === 'actions') return null;
-                                    return (
-                                      <div
-                                        key={column.id}
-                                        className="flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
-                                        onClick={() => column.toggleVisibility()}
-                                      >
-                                        <input
-                                          type="checkbox"
-                                          checked={column.getIsVisible()}
-                                          onChange={() => column.toggleVisibility()}
-                                          className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                                        />
-                                        <span className="ml-2">
-                                          {typeof column.columnDef.header === 'string' 
-                                            ? column.columnDef.header 
-                                            : column.columnDef.header?.props?.children || column.id}
-                                        </span>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            )}
-                          </div> */}
+
                         </div>
 
                         {/* Results Count */}
                         <div className="flex justify-between items-center">
                           <Text className="text-sm text-gray-700">
-                            Showing {modelData && modelData.data.length > 0 ? modelData.data.length : 0} results
+                            Showing {modelData && modelData.data.length > 0 ? 
+                              modelData.data.filter((model: any) => {
+                                const modelNameMatch = selectedModelGroup === "all" || model.model_name === selectedModelGroup || !selectedModelGroup;
+                                const accessGroupMatch = selectedModelAccessGroupFilter === "all" || model.model_info["access_groups"]?.includes(selectedModelAccessGroupFilter) || !selectedModelAccessGroupFilter;
+                                let teamAccessMatch = true;
+                                if (modelViewMode === 'current_team') {
+                                  if (currentTeam === 'personal') {
+                                    teamAccessMatch = model.model_info?.direct_access === true;
+                                  } else {
+                                    teamAccessMatch = model.model_info?.access_via_team_ids?.includes(currentTeam) === true;
+                                  }
+                                }
+
+                                return modelNameMatch && accessGroupMatch && teamAccessMatch;
+                              }).length : 0} results
                           </Text>
                         </div>
                       </div>
                     </div>
 
                     <ModelDataTable
-                      columns={columns(
-                        userRole,
-                        userID,
-                        premiumUser,
-                        setSelectedModelId,
-                        setSelectedTeamId,
-                        getDisplayModelName,
-                        handleEditClick,
-                        handleRefreshClick,
-                        setEditModel,
-                      )}
+                        columns={columns(
+                          userRole,
+                          userID,
+                          premiumUser,
+                          setSelectedModelId,
+                          setSelectedTeamId,
+                          getDisplayModelName,
+                          handleEditClick,
+                          handleRefreshClick,
+                          setEditModel,
+                          expandedRows,
+                          setExpandedRows,
+                        )}
                       data={modelData.data.filter(
-                        (model: any) => (
-                          (selectedModelGroup === "all" || model.model_name === selectedModelGroup || !selectedModelGroup) &&
-                          (selectedTeamFilter === "all" || model.model_info["team_id"] === selectedTeamFilter || !selectedTeamFilter)
-                        )
+                        (model: any) => {
+                          // Model name filter
+                          const modelNameMatch = selectedModelGroup === "all" || model.model_name === selectedModelGroup || !selectedModelGroup;
+                          
+                          // Model access group filter
+                          const accessGroupMatch = selectedModelAccessGroupFilter === "all" || model.model_info["access_groups"]?.includes(selectedModelAccessGroupFilter) || !selectedModelAccessGroupFilter;
+                          
+                          // Team access filter based on current team and view mode
+                          let teamAccessMatch = true;
+                          if (modelViewMode === 'current_team') {
+                            if (currentTeam === 'personal') {
+                              // Show only models with direct access
+                              teamAccessMatch = model.model_info?.direct_access === true;
+                            } else {
+                              // Show only models accessible by the current team
+                              teamAccessMatch = model.model_info?.access_via_team_ids?.includes(currentTeam) === true;
+                            }
+                          }
+                          // For 'all' mode, show all models (teamAccessMatch remains true)
+                          
+                          return modelNameMatch && accessGroupMatch && teamAccessMatch;
+                        }
                       )}
                       isLoading={false}
                       table={tableRef}
@@ -1248,24 +1360,26 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               <CredentialsPanel accessToken={accessToken} uploadProps={uploadProps} credentialList={credentialsList} fetchCredentials={fetchCredentials} />
             </TabPanel>
             <TabPanel>
-              <Card>
-                <Text>
-                  `/health` will run a very small request through your models
-                  configured on litellm
-                </Text>
-
-                <Button onClick={runHealthCheck}>Run `/health`</Button>
-                {healthCheckResponse && (
-                  <pre>{JSON.stringify(healthCheckResponse, null, 2)}</pre>
-                )}
-              </Card>
+              <PassThroughSettings
+                accessToken={accessToken}
+                userRole={userRole}
+                userID={userID}
+                modelData={modelData}
+              />
+            </TabPanel>
+            <TabPanel>
+              <HealthCheckComponent
+                accessToken={accessToken}
+                modelData={modelData}
+                all_models_on_proxy={all_models_on_proxy}
+                getDisplayModelName={getDisplayModelName}
+                setSelectedModelId={setSelectedModelId}
+              />
             </TabPanel>
             <TabPanel>
               <Grid numItems={4} className="mt-2 mb-2">
                 <Col>
-                  <Text>Select Time Range</Text>
-                  <DateRangePicker
-                    enableSelect={true}
+                  <UsageDatePicker
                     value={dateValue}
                     className="mr-2"
                     onValueChange={(value) => {
@@ -1274,7 +1388,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                         selectedModelGroup,
                         value.from,
                         value.to
-                      ); // Call updateModelMetrics with the new date range
+                      );
                     }}
                   />
                 </Col>
@@ -1606,6 +1720,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           </TabPanels>
         </TabGroup>
       )}
+
     </div>  
   );
 };

@@ -69,7 +69,7 @@ def validate_stream_chunk(chunk):
     assert hasattr(chunk, "created")
     assert isinstance(chunk.created, int)
 
-
+@pytest.mark.flaky(retries=3, delay=2)
 def test_basic_response():
     client = get_test_client()
     response = client.responses.create(

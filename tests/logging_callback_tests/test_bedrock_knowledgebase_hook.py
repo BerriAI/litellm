@@ -19,7 +19,7 @@ import pytest
 import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
-from litellm.integrations.vector_stores.bedrock_vector_store import BedrockVectorStore
+from litellm.integrations.vector_store_integrations.bedrock_vector_store import BedrockVectorStore
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload, StandardLoggingVectorStoreRequest
@@ -33,6 +33,10 @@ class TestCustomLogger(CustomLogger):
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         self.standard_logging_payload = kwargs.get("standard_logging_object")
         pass
+
+@pytest.fixture(autouse=True)
+def add_aws_region_to_env(monkeypatch):
+    monkeypatch.setenv("AWS_REGION", "us-west-2")
 
 
 @pytest.fixture
@@ -52,7 +56,7 @@ def setup_vector_store_registry():
 @pytest.mark.asyncio
 async def test_basic_bedrock_knowledgebase_retrieval(setup_vector_store_registry):
 
-    bedrock_knowledgebase_hook = BedrockVectorStore()
+    bedrock_knowledgebase_hook = BedrockVectorStore(aws_region_name="us-west-2")
     response = await bedrock_knowledgebase_hook.make_bedrock_kb_retrieve_request(
         knowledge_base_id="T37J8R4WTM",
         query="what is litellm?",
@@ -116,7 +120,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call(setup_vecto
     # Init client
     litellm._turn_on_debug()
     async_client = AsyncHTTPHandler()
-    litellm.callbacks = [BedrockVectorStore()]
+    litellm.callbacks = [BedrockVectorStore(aws_region_name="us-west-2")]
     response = await litellm.acompletion(
         model="anthropic/claude-3-5-haiku-latest",
         messages=[{"role": "user", "content": "what is litellm?"}],
@@ -133,7 +137,7 @@ async def test_openai_with_knowledge_base_mock_openai(setup_vector_store_registr
     """
     Tests that knowledge base content is correctly passed to the OpenAI API call
     """
-    litellm.callbacks = [BedrockVectorStore()]
+    litellm.callbacks = [BedrockVectorStore(aws_region_name="us-west-2")]
     litellm.set_verbose = True
     from openai import AsyncOpenAI
 
@@ -181,7 +185,7 @@ async def test_openai_with_vector_store_ids_in_tool_call_mock_openai(setup_vecto
 
     This is the OpenAI format
     """
-    litellm.callbacks = [BedrockVectorStore()]
+    litellm.callbacks = [BedrockVectorStore(aws_region_name="us-west-2")]
     litellm.set_verbose = True
     from openai import AsyncOpenAI
 
@@ -206,6 +210,7 @@ async def test_openai_with_vector_store_ids_in_tool_call_mock_openai(setup_vecto
         # Verify the API was called
         mock_client.assert_called_once()
         request_body = mock_client.call_args.kwargs
+        print("request body:", json.dumps(request_body, indent=4, default=str))
         
         # Verify the request contains messages with knowledge base context
         assert "messages" in request_body
@@ -222,6 +227,48 @@ async def test_openai_with_vector_store_ids_in_tool_call_mock_openai(setup_vecto
         assert messages[1]["role"] == "user"
         assert BedrockVectorStore.CONTENT_PREFIX_STRING in messages[1]["content"]
 
+        # assert that the tool call was not sent to the upstream llm API if it's a litellm vector store
+        assert "tools" not in request_body
+
+
+@pytest.mark.asyncio
+async def test_openai_with_mixed_tool_call_mock_openai(setup_vector_store_registry):
+    """Ensure unrecognized vector store tools are forwarded to the provider"""
+    litellm.callbacks = [BedrockVectorStore(aws_region_name="us-west-2")]
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key="fake-api-key")
+
+    with patch.object(
+        client.chat.completions.with_raw_response, "create"
+    ) as mock_client:
+        try:
+            await litellm.acompletion(
+                model="gpt-4",
+                messages=[{"role": "user", "content": "what is litellm?"}],
+                tools=[
+                    {"type": "file_search", "vector_store_ids": ["T37J8R4WTM"]},
+                    {"type": "file_search", "vector_store_ids": ["unknownVS"]},
+                ],
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs
+
+        assert "messages" in request_body
+        messages = request_body["messages"]
+        assert len(messages) >= 2
+        assert messages[1]["role"] == "user"
+        assert BedrockVectorStore.CONTENT_PREFIX_STRING in messages[1]["content"]
+
+        assert "tools" in request_body
+        tools = request_body["tools"]
+        assert len(tools) == 1
+        assert tools[0]["vector_store_ids"] == ["unknownVS"]
+
 
 @pytest.mark.asyncio
 async def test_logging_with_knowledge_base_hook(setup_vector_store_registry):
@@ -229,7 +276,7 @@ async def test_logging_with_knowledge_base_hook(setup_vector_store_registry):
     Test that the knowledge base request was logged in standard logging payload
     """
     test_custom_logger = TestCustomLogger()
-    litellm.callbacks = [BedrockVectorStore(), test_custom_logger]
+    litellm.callbacks = [BedrockVectorStore(aws_region_name="us-west-2"), test_custom_logger]
     litellm.set_verbose = True
     await litellm.acompletion(
         model="gpt-4",
@@ -282,7 +329,7 @@ async def test_logging_with_knowledge_base_hook_no_vector_store_registry(setup_v
     Test that the knowledge base request was logged in standard logging payload
     """
     test_custom_logger = TestCustomLogger()
-    litellm.callbacks = [BedrockVectorStore(), test_custom_logger]
+    litellm.callbacks = [BedrockVectorStore(aws_region_name="us-west-2"), test_custom_logger]
     litellm.vector_store_registry = None
     await litellm.acompletion(
         model="gpt-4",

@@ -1560,12 +1560,13 @@ async def test_openai_compatible_custom_api_video(provider):
 
         mock_call.assert_called_once()
 
-
 def test_lm_studio_completion(monkeypatch):
     monkeypatch.delenv("LM_STUDIO_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    litellm._turn_on_debug()
     try:
         completion(
+            api_key="fake-key",
             model="lm_studio/typhoon2-quen2.5-7b-instruct",
             messages=[
                 {"role": "user", "content": "What's the weather like in San Francisco?"}
@@ -1576,7 +1577,6 @@ def test_lm_studio_completion(monkeypatch):
         pytest.fail(f"Error occurred: {e}")
     except litellm.APIError as e:
         print(e)
-
 
 # ################### Hugging Face Conversational models ########################
 # def hf_test_completion_conv():
