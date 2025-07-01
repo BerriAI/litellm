@@ -1,5 +1,15 @@
 import json
-from typing import Any, AsyncIterator, List, Literal, Optional, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
@@ -44,6 +54,9 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import Choices, ModelResponse, Usage
 
 from .streaming_iterator import AnthropicStreamWrapper
+
+if TYPE_CHECKING:
+    from litellm.types.llms.anthropic import ContentBlockContentBlockDict
 
 
 class AnthropicAdapter:
@@ -439,12 +452,45 @@ class LiteLLMAnthropicMessagesAdapter:
 
         return translated_obj
 
+    def _translate_streaming_openai_chunk_to_anthropic_content_block(
+        self, choices: List[OpenAIStreamingChoice]
+    ) -> Tuple[
+        Literal["text", "tool_use"],
+        "ContentBlockContentBlockDict",
+    ]:
+        import uuid
+
+        from litellm.types.llms.anthropic import (
+            ContentBlockStartText,
+            ContentBlockStartToolUse,
+            TextBlock,
+            ToolUseBlock,
+        )
+
+        for choice in choices:
+            if choice.delta.content is not None and len(choice.delta.content) > 0:
+                return "text", TextBlock(type="text", text="")
+            elif (
+                choice.delta.tool_calls is not None
+                and len(choice.delta.tool_calls) > 0
+                and choice.delta.tool_calls[0].function is not None
+            ):
+                return "tool_use", ToolUseBlock(
+                    type="tool_use",
+                    id=choice.delta.tool_calls[0].id or str(uuid.uuid4()),
+                    name=choice.delta.tool_calls[0].function.name or "",
+                    input={},
+                )
+
+        return "text", TextBlock(type="text", text="")
+
     def _translate_streaming_openai_chunk_to_anthropic(
         self, choices: List[OpenAIStreamingChoice]
     ) -> Tuple[
         Literal["text_delta", "input_json_delta"],
         Union[ContentTextBlockDelta, ContentJsonBlockDelta],
     ]:
+
         text: str = ""
         partial_json: Optional[str] = None
         for choice in choices:

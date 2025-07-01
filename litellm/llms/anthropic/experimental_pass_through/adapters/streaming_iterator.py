@@ -3,11 +3,15 @@
 import json
 import traceback
 import uuid
-from typing import Any, AsyncIterator, Iterator, Optional
+from collections import deque
+from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, Literal, Optional
 
 from litellm import verbose_logger
 from litellm.types.llms.anthropic import UsageDelta
 from litellm.types.utils import AdapterCompletionStreamWrapper
+
+if TYPE_CHECKING:
+    from litellm.types.utils import ModelResponseStream
 
 
 class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
@@ -17,6 +21,13 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     - finish_reason must map exactly to anthropic reason, else anthropic client won't be able to parse it.
     """
 
+    from litellm.types.llms.anthropic import (
+        ContentBlockContentBlockDict,
+        ContentBlockStart,
+        ContentBlockStartText,
+        TextBlock,
+    )
+
     def __init__(self, completion_stream: Any, model: str):
         super().__init__(completion_stream)
         self.model = model
@@ -24,8 +35,15 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     sent_first_chunk: bool = False
     sent_content_block_start: bool = False
     sent_content_block_finish: bool = False
+    current_content_block_type: Literal["text", "tool_use"] = "text"
     sent_last_message: bool = False
     holding_chunk: Optional[Any] = None
+    current_content_block_index: int = 0
+    current_content_block_start: ContentBlockContentBlockDict = TextBlock(
+        type="text",
+        text="",
+    )
+    chunk_queue: deque = deque()  # Queue for buffering multiple chunks
 
     def __next__(self):
         from .transformation import LiteLLMAnthropicMessagesAdapter
@@ -50,8 +68,18 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 self.sent_content_block_start = True
                 return {
                     "type": "content_block_start",
-                    "index": 0,
+                    "index": self.current_content_block_index,
                     "content_block": {"type": "text", "text": ""},
+                }
+
+            # Handle pending new content block start
+            if self.pending_new_content_block:
+                self.pending_new_content_block = False
+                self.sent_content_block_finish = False  # Reset for new block
+                return {
+                    "type": "content_block_start",
+                    "index": self.current_content_block_index,
+                    "content_block": self.current_content_block_start,
                 }
 
             for chunk in self.completion_stream:
@@ -61,6 +89,22 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk
                 )
+
+                # Check if we need to start a new content block
+                # This is where you'd add your logic to detect when a new content block should start
+                # For example, if the chunk indicates a tool call or different content type
+                should_start_new_block = self._should_start_new_content_block(chunk)
+
+                if should_start_new_block and not self.sent_content_block_finish:
+                    # End current content block and prepare for new one
+                    self.holding_chunk = processed_chunk
+                    self.sent_content_block_finish = True
+                    self.pending_new_content_block = True
+                    return {
+                        "type": "content_block_stop",
+                        "index": self.current_content_block_index,
+                    }
+
                 if (
                     processed_chunk["type"] == "message_delta"
                     and self.sent_content_block_finish is False
@@ -69,7 +113,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     self.sent_content_block_finish = True
                     return {
                         "type": "content_block_stop",
-                        "index": 0,
+                        "index": self.current_content_block_index,
                     }
                 elif self.holding_chunk is not None:
                     return_chunk = self.holding_chunk
@@ -100,60 +144,127 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
         try:
+            # Always return queued chunks first
+            if self.chunk_queue:
+                return self.chunk_queue.popleft()
+
+            # Queue initial chunks if not sent yet
             if self.sent_first_chunk is False:
                 self.sent_first_chunk = True
-                return {
-                    "type": "message_start",
-                    "message": {
-                        "id": "msg_{}".format(uuid.uuid4()),
-                        "type": "message",
-                        "role": "assistant",
-                        "content": [],
-                        "model": self.model,
-                        "stop_reason": None,
-                        "stop_sequence": None,
-                        "usage": UsageDelta(input_tokens=0, output_tokens=0),
-                    },
-                }
+                self.chunk_queue.append(
+                    {
+                        "type": "message_start",
+                        "message": {
+                            "id": "msg_{}".format(uuid.uuid4()),
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [],
+                            "model": self.model,
+                            "stop_reason": None,
+                            "stop_sequence": None,
+                            "usage": UsageDelta(input_tokens=0, output_tokens=0),
+                        },
+                    }
+                )
+                return self.chunk_queue.popleft()
+
             if self.sent_content_block_start is False:
                 self.sent_content_block_start = True
-                return {
-                    "type": "content_block_start",
-                    "index": 0,
-                    "content_block": {"type": "text", "text": ""},
-                }
+                self.chunk_queue.append(
+                    {
+                        "type": "content_block_start",
+                        "index": self.current_content_block_index,
+                        "content_block": {"type": "text", "text": ""},
+                    }
+                )
+                return self.chunk_queue.popleft()
+
             async for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
+
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk
                 )
+
+                # Check if we need to start a new content block
+                should_start_new_block = self._should_start_new_content_block(chunk)
+
+                if should_start_new_block and not self.sent_content_block_finish:
+                    # Queue the sequence: content_block_stop -> content_block_start -> current_chunk
+
+                    # 1. Stop current content block
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_stop",
+                            "index": self.current_content_block_index,
+                        }
+                    )
+
+                    # 2. Start new content block
+                    self.current_content_block_index += 1
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": self.current_content_block_start,
+                        }
+                    )
+
+                    # 3. Queue the current chunk (don't lose it!)
+                    self.chunk_queue.append(processed_chunk)
+
+                    # Reset state for new block
+                    self.sent_content_block_finish = False
+
+                    # Return the first queued item
+                    return self.chunk_queue.popleft()
+
                 if (
                     processed_chunk["type"] == "message_delta"
                     and self.sent_content_block_finish is False
                 ):
-                    self.holding_chunk = processed_chunk
+                    # Queue both the content_block_stop and the holding chunk
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_stop",
+                            "index": self.current_content_block_index,
+                        }
+                    )
+                    self.chunk_queue.append(processed_chunk)
                     self.sent_content_block_finish = True
-                    return {
-                        "type": "content_block_stop",
-                        "index": 0,
-                    }
+                    return self.chunk_queue.popleft()
                 elif self.holding_chunk is not None:
-                    return_chunk = self.holding_chunk
-                    self.holding_chunk = processed_chunk
-                    return return_chunk
+                    # Queue both chunks
+                    self.chunk_queue.append(self.holding_chunk)
+                    self.chunk_queue.append(processed_chunk)
+                    self.holding_chunk = None
+                    return self.chunk_queue.popleft()
                 else:
-                    return processed_chunk
+                    # Queue the current chunk
+                    self.chunk_queue.append(processed_chunk)
+                    return self.chunk_queue.popleft()
+
+            # Handle remaining chunks after stream ends
             if self.holding_chunk is not None:
-                return_chunk = self.holding_chunk
+                self.chunk_queue.append(self.holding_chunk)
                 self.holding_chunk = None
-                return return_chunk
-            if self.sent_last_message is False:
+
+            if not self.sent_last_message:
                 self.sent_last_message = True
-                return {"type": "message_stop"}
+                self.chunk_queue.append({"type": "message_stop"})
+
+            # Return queued items if any
+            if self.chunk_queue:
+                return self.chunk_queue.popleft()
+
             raise StopIteration
+
         except StopIteration:
-            if self.sent_last_message is False:
+            # Handle any remaining queued chunks before stopping
+            if self.chunk_queue:
+                return self.chunk_queue.popleft()
+            if not self.sent_last_message:
                 self.sent_last_message = True
                 return {"type": "message_stop"}
             raise StopAsyncIteration
@@ -187,3 +298,32 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             else:
                 # For non-dict chunks, forward the original value unchanged
                 yield chunk
+
+    def _should_start_new_content_block(self, chunk: "ModelResponseStream") -> bool:
+        """
+        Determine if we should start a new content block based on the processed chunk.
+        Override this method with your specific logic for detecting new content blocks.
+
+        Examples of when you might want to start a new content block:
+        - Switching from text to tool calls
+        - Different content types in the response
+        - Specific markers in the content
+        """
+        from .transformation import LiteLLMAnthropicMessagesAdapter
+
+        # Example logic - customize based on your needs:
+        # If chunk indicates a tool call
+        (
+            block_type,
+            content_block_start,
+        ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
+            choices=chunk.choices  # type: ignore
+        )
+
+        if block_type != self.current_content_block_type:
+            self.current_content_block_type = block_type
+            self.current_content_block_index += 1
+            self.current_content_block_start = content_block_start
+            return True
+
+        return False
