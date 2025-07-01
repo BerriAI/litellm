@@ -38,6 +38,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     current_content_block_type: Literal["text", "tool_use"] = "text"
     sent_last_message: bool = False
     holding_chunk: Optional[Any] = None
+    holding_stop_reason_chunk: Optional[Any] = None
     current_content_block_index: int = 0
     current_content_block_start: ContentBlockContentBlockDict = TextBlock(
         type="text",
@@ -197,6 +198,35 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     current_content_block_index=self.current_content_block_index,
                 )
 
+                # Check if this is a usage chunk and we have a held stop_reason chunk
+                if (
+                    self.holding_stop_reason_chunk is not None
+                    and chunk.usage is not None
+                ):
+                    # Merge usage into the held stop_reason chunk
+                    merged_chunk = self.holding_stop_reason_chunk.copy()
+                    if "delta" not in merged_chunk:
+                        merged_chunk["delta"] = {}
+
+                    # Add usage to the held chunk
+                    merged_chunk["usage"] = {
+                        "input_tokens": chunk.usage.prompt_tokens or 0,
+                        "output_tokens": chunk.usage.completion_tokens or 0,
+                    }
+
+                    # Queue the merged chunk and reset
+                    self.chunk_queue.append(merged_chunk)
+                    self.holding_stop_reason_chunk = None
+                    return self.chunk_queue.popleft()
+
+                # Check if this processed chunk has a stop_reason - hold it for next chunk
+                if (
+                    processed_chunk.get("type") == "message_delta"
+                    and processed_chunk.get("delta", {}).get("stop_reason") is not None
+                ):
+                    self.holding_stop_reason_chunk = processed_chunk
+                    continue  # Don't process this chunk yet, wait for usage
+
                 if should_start_new_block and not self.sent_content_block_finish:
                     # Queue the sequence: content_block_stop -> content_block_start -> current_chunk
 
@@ -204,9 +234,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     self.chunk_queue.append(
                         {
                             "type": "content_block_stop",
-                            "index": max(
-                                self.current_content_block_index - 1, 0
-                            ),  # offset as self.current_content_block_index is incremented in should_start_new_content_block
+                            "index": max(self.current_content_block_index - 1, 0),
                         }
                     )
 
@@ -253,7 +281,11 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     self.chunk_queue.append(processed_chunk)
                     return self.chunk_queue.popleft()
 
-            # Handle remaining chunks after stream ends
+            # Handle any remaining held chunks after stream ends
+            if self.holding_stop_reason_chunk is not None:
+                self.chunk_queue.append(self.holding_stop_reason_chunk)
+                self.holding_stop_reason_chunk = None
+
             if self.holding_chunk is not None:
                 self.chunk_queue.append(self.holding_chunk)
                 self.holding_chunk = None
@@ -272,6 +304,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             # Handle any remaining queued chunks before stopping
             if self.chunk_queue:
                 return self.chunk_queue.popleft()
+            # Handle any held stop_reason chunk
+            if self.holding_stop_reason_chunk is not None:
+                return self.holding_stop_reason_chunk
             if not self.sent_last_message:
                 self.sent_last_message = True
                 return {"type": "message_stop"}

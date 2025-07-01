@@ -15,6 +15,7 @@ from litellm.llms.vertex_ai.context_caching.transformation import (
 )
 import litellm
 from litellm import completion
+import json
 
 
 class TestGoogleAIStudioGemini(BaseLLMChatTest):
@@ -305,11 +306,68 @@ async def test_claude_tool_use_with_gemini():
 
     is_content_block_tool_use = False
     is_partial_json = False
+    has_usage_in_message_delta = False
+
     async for chunk in response:
         print(chunk)
-        if "tool_use" in str(chunk):
-            is_content_block_tool_use = True
-        if "partial_json" in str(chunk):
-            is_partial_json = True
+
+        # Handle bytes chunks (SSE format)
+        if isinstance(chunk, bytes):
+            chunk_str = chunk.decode("utf-8")
+
+            # Parse SSE format: event: <type>\ndata: <json>\n\n
+            if "data: " in chunk_str:
+                try:
+                    # Extract JSON from data line
+                    data_line = [
+                        line
+                        for line in chunk_str.split("\n")
+                        if line.startswith("data: ")
+                    ][0]
+                    json_str = data_line[6:]  # Remove 'data: ' prefix
+                    chunk_data = json.loads(json_str)
+
+                    # Check for tool_use
+                    if "tool_use" in json_str:
+                        is_content_block_tool_use = True
+                    if "partial_json" in json_str:
+                        is_partial_json = True
+
+                    # Check for usage in message_delta with stop_reason
+                    if (
+                        chunk_data.get("type") == "message_delta"
+                        and chunk_data.get("delta", {}).get("stop_reason") is not None
+                        and "usage" in chunk_data
+                    ):
+                        has_usage_in_message_delta = True
+                        # Verify usage has the expected structure
+                        usage = chunk_data["usage"]
+                        assert (
+                            "input_tokens" in usage
+                        ), "input_tokens should be present in usage"
+                        assert (
+                            "output_tokens" in usage
+                        ), "output_tokens should be present in usage"
+                        assert isinstance(
+                            usage["input_tokens"], int
+                        ), "input_tokens should be an integer"
+                        assert isinstance(
+                            usage["output_tokens"], int
+                        ), "output_tokens should be an integer"
+                        print(f"Found usage in message_delta: {usage}")
+
+                except (json.JSONDecodeError, IndexError) as e:
+                    # Skip chunks that aren't valid JSON
+                    pass
+        else:
+            # Handle dict chunks (fallback)
+            if "tool_use" in str(chunk):
+                is_content_block_tool_use = True
+            if "partial_json" in str(chunk):
+                is_partial_json = True
+
     assert is_content_block_tool_use, "content_block_tool_use should be present"
     assert is_partial_json, "partial_json should be present"
+    assert (
+        has_usage_in_message_delta
+    ), "Usage should be present in message_delta with stop_reason"
