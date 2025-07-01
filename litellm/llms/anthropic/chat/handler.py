@@ -40,7 +40,6 @@ from litellm.types.llms.openai import (
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
-    ChatCompletionToolCallFunctionChunk,
 )
 from litellm.types.utils import (
     Delta,
@@ -636,25 +635,25 @@ class ModelResponseIterator:
             text = content_block["delta"]["text"]
         elif "partial_json" in content_block["delta"]:
             if self.current_server_tool_id:
-                tool_use = ChatCompletionToolCallChunk(
-                    id=self.current_server_tool_id,
-                    type="function", 
-                    function=ChatCompletionToolCallFunctionChunk(
-                        name=self.current_server_tool_name,
-                        arguments=content_block["delta"]["partial_json"],
-                    ),
-                    index=self.tool_index,
-                )
+                tool_use = {
+                    "id": self.current_server_tool_id,
+                    "type": "function",
+                    "function": {
+                        "name": self.current_server_tool_name,
+                        "arguments": content_block["delta"]["partial_json"],
+                    },
+                    "index": self.tool_index,
+                }
             else:
-                tool_use = ChatCompletionToolCallChunk(
-                    id=None,
-                    type="function",
-                    function=ChatCompletionToolCallFunctionChunk(
-                        name=None,
-                        arguments=content_block["delta"]["partial_json"],
-                    ),
-                    index=self.tool_index,
-                )
+                tool_use = {
+                    "id": None,
+                    "type": "function",
+                    "function": {
+                        "name": None,
+                        "arguments": content_block["delta"]["partial_json"],
+                    },
+                    "index": self.tool_index,
+                }
         elif "citation" in content_block["delta"]:
             provider_specific_fields["citation"] = content_block["delta"]["citation"]
         elif (
@@ -775,15 +774,15 @@ class ModelResponseIterator:
                     self.current_server_tool_name = content_block.get("name")
                     
                     self.tool_index += 1
-                    tool_use = ChatCompletionToolCallChunk(
-                        id=content_block.get("id"),
-                        type="function",
-                        function=ChatCompletionToolCallFunctionChunk(
-                            name=content_block.get("name"),
-                            arguments="",  # Empty for server tool use - arguments will be streamed
-                        ),
-                        index=self.tool_index,
-                    )
+                    tool_use = {
+                        "id": content_block.get("id"),
+                        "type": "function",
+                        "function": {
+                            "name": content_block.get("name"),
+                            "arguments": "",  # Empty for server tool use - arguments will be streamed
+                        },
+                        "index": self.tool_index,
+                    }
                 elif content_block_start["content_block"]["type"] == "web_search_tool_result":
                     # Handle web search tool result in content block start
                     content_block = content_block_start["content_block"]
