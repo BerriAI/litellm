@@ -45,6 +45,7 @@ import {
 } from "./networking";
 import AlertingSettings from "./alerting/alerting_settings";
 import FormItem from "antd/es/form/FormItem";
+import { callback_logo_map } from "./provider_info_helpers";
 interface SettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
@@ -703,7 +704,24 @@ const Settings: React.FC<SettingsPageProps> = ({
             key={callback.litellm_callback_name} 
             value={callback.litellm_callback_name}
             >
-              {callback.ui_callback_name}
+              <div className="flex items-center">
+                <img 
+                  src={callback_logo_map[callback.litellm_callback_name]} 
+                  alt={callback.ui_callback_name} 
+                  className="w-5 h-5 mr-2"
+                  onError={(e) => {
+                    const target = e.target as HTMLImageElement;
+                    const parent = target.parentElement;
+                    if (parent) {
+                      const fallbackDiv = document.createElement('div');
+                      fallbackDiv.className = 'w-5 h-5 mr-2 rounded-full bg-gray-200 flex items-center justify-center text-xs';
+                      fallbackDiv.textContent = callback.ui_callback_name.charAt(0).toUpperCase();
+                      parent.replaceChild(fallbackDiv, target);
+                    }
+                  }}
+                />
+                {callback.ui_callback_name}
+              </div>
             </SelectItem>
           ))}
       </Select>
