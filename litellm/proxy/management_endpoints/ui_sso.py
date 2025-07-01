@@ -812,7 +812,7 @@ async def cli_sso_callback(request: Request, key: Optional[str] = None):
     
     # Generate a simple key for CLI usage with the pre-specified key ID
     try:
-        response = await generate_key_helper_fn(
+        await generate_key_helper_fn(
             request_type="key",
             duration="24hr",
             key_max_budget=litellm.max_ui_session_budget,
