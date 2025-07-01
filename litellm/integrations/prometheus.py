@@ -534,10 +534,10 @@ class PrometheusLogger(CustomLogger):
 
         except ImportError:
             # Fallback to simple logging if rich is not available
-            for error in validation_results.metric_errors:
-                verbose_logger.error(error.message)
-            for error in validation_results.label_errors:
-                verbose_logger.error(error.message)
+            for metric_error in validation_results.metric_errors:
+                verbose_logger.error(metric_error.message)
+            for label_error in validation_results.label_errors:
+                verbose_logger.error(label_error.message)
 
     def _pretty_print_invalid_labels_error(
         self, metric_name: str, invalid_labels: List[str], valid_labels: List[str]
