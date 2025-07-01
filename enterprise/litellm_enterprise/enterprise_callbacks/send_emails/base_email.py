@@ -181,7 +181,7 @@ class BaseEmailLogger(CustomLogger):
                 "Schedule a meeting here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat"
             )
             verbose_proxy_logger.warning(
-                f"Prisma client not found. Unable to lookup user email for user_id: {user_id}"
+                f"{warning_msg}"
             )
 
         return EmailParams(
