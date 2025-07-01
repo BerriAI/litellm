@@ -1342,3 +1342,28 @@ def test_anthropic_prefix_prompt():
     print(f"response: {response}")
     assert response is not None
     assert response.choices[0].message.content.startswith("Argentina")
+
+
+@pytest.mark.asyncio
+async def test_claude_tool_use_with_anthropic_acreate():
+    response = await litellm.anthropic.messages.acreate(
+        messages=[
+            {"role": "user", "content": "Hello, can you tell me the weather in Boston?"}
+        ],
+        model="anthropic/claude-3-5-sonnet-20240620",
+        stream=True,
+        max_tokens=100,
+        tools=[
+            {
+                "name": "get_weather",
+                "description": "Get current weather information for a specific location",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                },
+            }
+        ],
+    )
+
+    async for chunk in response:
+        print(chunk)
