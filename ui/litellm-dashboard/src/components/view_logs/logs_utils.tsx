@@ -10,12 +10,14 @@ export const getTimeRangeDisplay = (isCustomDate: boolean, startTime: string, en
   const start = moment(startTime);
   const diffMinutes = now.diff(start, 'minutes');
   
-  if (diffMinutes <= 15) return 'Last 15 Minutes';
-  if (diffMinutes <= 60) return 'Last Hour';
+  // Use exact ranges to prevent drift
+  if (diffMinutes >= 0 && diffMinutes < 2) return 'Last 1 Minute';
+  if (diffMinutes >= 2 && diffMinutes < 16) return 'Last 15 Minutes';
+  if (diffMinutes >= 16 && diffMinutes < 61) return 'Last Hour';
   
   const diffHours = now.diff(start, 'hours');
-  if (diffHours <= 4) return 'Last 4 Hours';
-  if (diffHours <= 24) return 'Last 24 Hours';
-  if (diffHours <= 168) return 'Last 7 Days';
+  if (diffHours >= 1 && diffHours < 5) return 'Last 4 Hours';
+  if (diffHours >= 5 && diffHours < 25) return 'Last 24 Hours';
+  if (diffHours >= 25 && diffHours < 169) return 'Last 7 Days';
   return `${start.format('MMM D')} - ${now.format('MMM D')}`;
 };

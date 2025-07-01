@@ -294,6 +294,36 @@ class RedisCache(BaseCache):
             )
             raise e
 
+    def async_register_script(self, script: str) -> Any:
+        """
+        Register a Lua script with Redis asynchronously.
+        Works with both standalone Redis and Redis Cluster.
+
+        Args:
+            script (str): The Lua script to register
+
+        Returns:
+            Any: A script object that can be called with keys and args
+        """
+        try:
+            _redis_client = self.init_async_client()
+            # For standalone Redis
+            if hasattr(_redis_client, "register_script"):
+                return _redis_client.register_script(script)  # type: ignore
+            # For Redis Cluster
+            elif hasattr(_redis_client, "script_load"):
+                # Load the script and get its SHA
+                script_sha = _redis_client.script_load(script)  # type: ignore
+
+                # Return a callable that uses evalsha
+                async def script_callable(keys: List[str], args: List[Any]) -> Any:
+                    return _redis_client.evalsha(script_sha, len(keys), *keys, *args)  # type: ignore
+
+                return script_callable
+        except Exception as e:
+            verbose_logger.error(f"Error registering Redis script: {str(e)}")
+            raise e
+
     async def async_set_cache(self, key, value, **kwargs):
         from redis.asyncio import Redis
 
@@ -980,8 +1010,11 @@ class RedisCache(BaseCache):
                 pipe.expire(cache_key, _td)
         # Execute the pipeline and return results
         results = await pipe.execute()
-        print_verbose(f"Increment ASYNC Redis Cache PIPELINE: results: {results}")
-        return results
+        # only return float values
+        verbose_logger.debug(
+            f"Increment ASYNC Redis Cache PIPELINE: results: {results}"
+        )
+        return [r for r in results if isinstance(r, float)]
 
     async def async_increment_pipeline(
         self, increment_list: List[RedisPipelineIncrementOperation], **kwargs
@@ -1010,8 +1043,6 @@ class RedisCache(BaseCache):
         try:
             async with _redis_client.pipeline(transaction=False) as pipe:
                 results = await self._pipeline_increment_helper(pipe, increment_list)
-
-            print_verbose(f"pipeline increment results: {results}")
 
             ## LOGGING ##
             end_time = time.time()

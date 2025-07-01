@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
 async def generate_key(session, models=[]):
     url = "http://0.0.0.0:4000/key/generate"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
@@ -30,8 +31,10 @@ async def generate_key(session, models=[]):
         return await response.json()
 
 
-async def get_models(session, key):
+async def get_models(session, key, only_model_access_groups=False):
     url = "http://0.0.0.0:4000/models"
+    if only_model_access_groups:
+        url += "?only_model_access_groups=True"
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
@@ -50,14 +53,27 @@ async def get_models(session, key):
 
 
 @pytest.mark.asyncio
-async def test_get_models():
+async def test_get_models_multiple_tests():
     async with aiohttp.ClientSession() as session:
         key_gen = await generate_key(session=session)
         key = key_gen["key"]
-        await get_models(session=session, key=key)
+        models = await get_models(session=session, key=key)
+        print(f"\n\nmodels: {models}")
+        assert len(models["data"]) > 0
+
+        ## Test only_model_access_groups
+        new_response = await get_models(
+            session=session, key=key, only_model_access_groups=True
+        )
+        print(f"\n\nnew_response: {new_response}")
+        assert (
+            len(new_response["data"]) == 0
+        )  # no model access groups set on config.yaml
 
 
-async def add_models(session, model_id="123", model_name="azure-gpt-3.5", key="sk-1234", team_id=None):
+async def add_models(
+    session, model_id="123", model_name="azure-gpt-3.5", key="sk-1234", team_id=None
+):
     url = "http://0.0.0.0:4000/model/new"
     headers = {
         "Authorization": f"Bearer {key}",
@@ -90,7 +106,10 @@ async def add_models(session, model_id="123", model_name="azure-gpt-3.5", key="s
         response_json = await response.json()
         return response_json
 
-async def update_model(session, model_id="123", model_name="azure-gpt-3.5", key="sk-1234"):
+
+async def update_model(
+    session, model_id="123", model_name="azure-gpt-3.5", key="sk-1234"
+):
     url = "http://0.0.0.0:4000/model/update"
     headers = {
         "Authorization": f"Bearer {key}",
@@ -446,12 +465,14 @@ async def test_add_model_run_health():
         # cleanup
         await delete_model(session=session, model_id=model_id)
 
+
 @pytest.mark.asyncio
 async def test_get_personal_models_for_user():
     """
     Test /models endpoint with team
     """
     from tests.test_users import new_user
+
     async with aiohttp.ClientSession() as session:
         # Creat a user
         user_data = await new_user(session=session, i=0, models=["gpt-3.5-turbo"])
@@ -463,6 +484,7 @@ async def test_get_personal_models_for_user():
 
         assert len(model_group_info["data"]) == 1
         assert model_group_info["data"][0]["model_group"] == "gpt-3.5-turbo"
+
 
 @pytest.mark.asyncio
 async def test_model_group_info_e2e():
@@ -507,6 +529,7 @@ async def test_team_model_e2e():
     from tests.test_users import new_user
     from tests.test_team import new_team
     import uuid
+
     async with aiohttp.ClientSession() as session:
         # Creat a user
         user_data = await new_user(session=session, i=0)
@@ -523,16 +546,20 @@ async def test_team_model_e2e():
         model_id = str(uuid.uuid4())
         model_name = "my-test-model"
         # Add model to team
-        model_data = await add_models(session=session, model_id=model_id, model_name=model_name, key=user_api_key, team_id=team_id)
+        model_data = await add_models(
+            session=session,
+            model_id=model_id,
+            model_name=model_name,
+            key=user_api_key,
+            team_id=team_id,
+        )
         model_id = model_data["model_id"]
 
         # Update model
-        model_data = await update_model(session=session, model_id=model_id, model_name=model_name, key=user_api_key)
+        model_data = await update_model(
+            session=session, model_id=model_id, model_name=model_name, key=user_api_key
+        )
         model_id = model_data["model_id"]
-        
+
         # Delete model
         await delete_model(session=session, model_id=model_id, key=user_api_key)
-
-
-        
-        

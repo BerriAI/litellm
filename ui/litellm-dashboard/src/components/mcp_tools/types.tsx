@@ -1,3 +1,11 @@
+// Default no auth value
+export const AUTH_TYPE = {
+  NONE: "none",
+  API_KEY: "api_key",
+  BEARER_TOKEN: "bearer_token",
+  BASIC: "basic",
+};
+
 export const TRANSPORT = {
   SSE: "sse",
   HTTP: "http",
@@ -14,11 +22,15 @@ export const handleTransport = (transport?: string | null): string => {
 
 export const handleAuth = (authType?: string | null): string => {
   if (authType === null || authType === undefined) {
-    return "none";
+    return AUTH_TYPE.NONE;
   }
 
   return authType;
 };
+
+export const mcpServerHasAuth = (authType?: string | null): boolean => {
+  return handleAuth(authType) !== AUTH_TYPE.NONE;
+} 
 
 // Define the structure for tool input schema properties
 export interface InputSchemaProperty {
@@ -89,6 +101,7 @@ export interface InputSchemaProperty {
   export interface MCPToolsViewerProps {
     serverId: string;
     accessToken: string | null;
+    auth_type?: string | null;
     userRole: string | null;
     userID: string | null;
   }

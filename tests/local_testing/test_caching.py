@@ -2524,7 +2524,7 @@ async def test_redis_increment_pipeline():
         results = await redis_cache.async_increment_pipeline(increment_list)
 
         # Verify results
-        assert len(results) == 8  # 4 increment operations + 4 expire operations
+        assert len(results) == 4 
 
         # Verify the values were actually set in Redis
         value1 = await redis_cache.async_get_cache("test_key1")
