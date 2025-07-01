@@ -460,12 +460,7 @@ class LiteLLMAnthropicMessagesAdapter:
     ]:
         import uuid
 
-        from litellm.types.llms.anthropic import (
-            ContentBlockStartText,
-            ContentBlockStartToolUse,
-            TextBlock,
-            ToolUseBlock,
-        )
+        from litellm.types.llms.anthropic import TextBlock, ToolUseBlock
 
         for choice in choices:
             if choice.delta.content is not None and len(choice.delta.content) > 0:
