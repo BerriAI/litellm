@@ -60,6 +60,7 @@ def login(ctx: click.Context):
     import requests
 
     from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
+    from litellm.proxy.client.cli.interface import show_commands
     
     base_url = ctx.obj["base_url"]
     
@@ -107,6 +108,10 @@ def login(ctx: click.Context):
                             click.echo("✅ Login successful!")
                             click.echo(f"API Key: {api_key[:20]}...")
                             click.echo("You can now use the CLI without specifying --api-key")
+                            
+                            # Show available commands after successful login
+                            click.echo("\n" + "="*60)
+                            show_commands()
                             return
                 elif response.status_code == 200:
                     # Still pending
