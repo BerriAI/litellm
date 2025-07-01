@@ -114,8 +114,8 @@ def _get_token_base_cost(model_info: ModelInfo, usage: Usage) -> Tuple[float, fl
     If input_tokens > threshold and `input_cost_per_token_above_[x]k_tokens` or `input_cost_per_token_above_[x]_tokens` is set,
     then we use the corresponding threshold cost.
     """
-    prompt_base_cost = _get_cost_per_unit(model_info, "input_cost_per_token")
-    completion_base_cost = _get_cost_per_unit(model_info, "output_cost_per_token")
+    prompt_base_cost = cast(float, _get_cost_per_unit(model_info, "input_cost_per_token"))
+    completion_base_cost = cast(float, _get_cost_per_unit(model_info, "output_cost_per_token"))
 
     ## CHECK IF ABOVE THRESHOLD
     threshold: Optional[float] = None
@@ -129,12 +129,12 @@ def _get_token_base_cost(model_info: ModelInfo, usage: Usage) -> Tuple[float, fl
                 )
                 if usage.prompt_tokens > threshold:
 
-                    prompt_base_cost = _get_cost_per_unit(model_info, key, prompt_base_cost)
-                    completion_base_cost = _get_cost_per_unit(
+                    prompt_base_cost = cast(float, _get_cost_per_unit(model_info, key, prompt_base_cost))
+                    completion_base_cost = cast(float, _get_cost_per_unit(
                         model_info,
                         f"output_cost_per_token_above_{threshold_str}_tokens",
                         completion_base_cost,
-                    ) 
+                    ))
                     break
             except (IndexError, ValueError):
                 continue
@@ -169,7 +169,7 @@ def calculate_cost_component(
     return 0.0
 
 
-def _get_cost_per_unit(model_info: ModelInfo, cost_key: str, default_value: float = 0.0) -> float:
+def _get_cost_per_unit(model_info: ModelInfo, cost_key: str, default_value: Optional[float] = 0.0) -> Optional[float]:
     # Sometimes the cost per unit is a string (e.g.: If a value like "3e-7" was read from the config.yaml)
     cost_per_unit = model_info.get(cost_key)
     if isinstance(cost_per_unit, float):
@@ -330,8 +330,8 @@ def generic_cost_per_token(
     ## TEXT COST
     completion_cost = float(text_tokens) * completion_base_cost
 
-    _output_cost_per_audio_token = _get_cost_per_unit(model_info, "output_cost_per_audio_token")
-    _output_cost_per_reasoning_token = _get_cost_per_unit(model_info, "output_cost_per_reasoning_token")
+    _output_cost_per_audio_token = _get_cost_per_unit(model_info, "output_cost_per_audio_token", None)
+    _output_cost_per_reasoning_token = _get_cost_per_unit(model_info, "output_cost_per_reasoning_token", None)
 
     ## AUDIO COST
     if not is_text_tokens_total and audio_tokens is not None and audio_tokens > 0:
