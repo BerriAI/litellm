@@ -67,6 +67,10 @@ def cli(ctx: click.Context, base_url: str, api_key: Optional[str]) -> None:
     if sys.stderr.isatty():
         click.secho(f"Accessing LiteLLM server: {base_url} ...\n", fg="yellow", err=True)
 
+    # If no API key provided via flag or environment variable, try to load from saved token
+    if api_key is None:
+        api_key = get_stored_api_key()
+
     ctx.obj["base_url"] = base_url
     ctx.obj["api_key"] = api_key
 
