@@ -829,7 +829,7 @@ async def cli_sso_callback(request: Request, key: Optional[str] = None):
         # Return success page
         from fastapi.responses import HTMLResponse
 
-        from litellm.proxy.management_helpers.html_render_utils import (
+        from litellm.proxy.common_utils.html_forms.cli_sso_success import (
             render_cli_sso_success_page,
         )
         

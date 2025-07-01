@@ -1,16 +1,15 @@
 # third party imports
 import click
 
-
-def show_banner():
-    """Display the LiteLLM CLI banner."""
-    banner = """
-   ██╗     ██╗████████╗███████╗██╗     ██╗     ███╗   ███╗
+# LiteLLM ASCII banner
+LITELLM_BANNER = """   ██╗     ██╗████████╗███████╗██╗     ██╗     ███╗   ███╗
    ██║     ██║╚══██╔══╝██╔════╝██║     ██║     ████╗ ████║
    ██║     ██║   ██║   █████╗  ██║     ██║     ██╔████╔██║
    ██║     ██║   ██║   ██╔══╝  ██║     ██║     ██║╚██╔╝██║
    ███████╗██║   ██║   ███████╗███████╗███████╗██║ ╚═╝ ██║
-   ╚══════╝╚═╝   ╚═╝   ╚══════╝╚══════╝╚══════╝╚═╝     ╚═╝
+   ╚══════╝╚═╝   ╚═╝   ╚══════╝╚══════╝╚══════╝╚═╝     ╚═╝"""
 
-"""
-    click.echo(banner) 
+
+def show_banner():
+    """Display the LiteLLM CLI banner."""
+    click.echo(f"\n{LITELLM_BANNER}\n") 

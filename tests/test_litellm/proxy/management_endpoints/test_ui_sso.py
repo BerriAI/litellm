@@ -907,7 +907,7 @@ class TestSSOHandlerIntegration:
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         # Mock request object
-        mock_request = Mock()
+        mock_request = MagicMock()
         mock_request.base_url = "https://test.litellm.ai/"
         
         # Test redirect URL generation
@@ -1033,20 +1033,15 @@ class TestHTMLIntegration:
 
     def test_html_render_utils_import(self):
         """Test that HTML render utils can be imported correctly"""
-        from litellm.proxy.management_helpers.html_render_utils import (
-            _get_litellm_banner,
+        from litellm.proxy.common_utils.html_forms.cli_sso_success import (
             render_cli_sso_success_page,
         )
 
-        # Test that functions exist and are callable
+        # Test that function exists and is callable
         assert callable(render_cli_sso_success_page)
-        assert callable(_get_litellm_banner)
         
-        # Test that they return expected types
-        banner = _get_litellm_banner()
+        # Test that it returns expected type
         html = render_cli_sso_success_page()
         
-        assert isinstance(banner, str)
         assert isinstance(html, str)
-        assert len(banner) > 0
         assert len(html) > 0
