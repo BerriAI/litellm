@@ -29,6 +29,10 @@ from litellm.types.integrations.slack_alerting import LITELLM_LOGO_URL
 class BaseEmailLogger(CustomLogger):
     DEFAULT_LITELLM_EMAIL = "notifications@alerts.litellm.ai"
     DEFAULT_SUPPORT_EMAIL = "support@berri.ai"
+    DEFAULT_SUBJECT_TEMPLATES = {
+        EmailEvent.new_user_invitation: "LiteLLM: {event_message}",
+        EmailEvent.virtual_key_created: "LiteLLM: {event_message}",
+    }
 
     async def send_user_invitation_email(self, event: WebhookEvent):
         """
@@ -38,8 +42,8 @@ class BaseEmailLogger(CustomLogger):
             email_event=EmailEvent.new_user_invitation,
             user_id=event.user_id,
             user_email=getattr(event, "user_email", None),
+            event_message=event.event_message,
         )
-        # Implement invitation email logic using email_params
 
         verbose_proxy_logger.debug(
             f"send_user_invitation_email_event: {json.dumps(event, indent=4, default=str)}"
@@ -50,13 +54,13 @@ class BaseEmailLogger(CustomLogger):
             recipient_email=email_params.recipient_email,
             base_url=email_params.base_url,
             email_support_contact=email_params.support_contact,
-            email_footer=EMAIL_FOOTER,
+            email_footer=email_params.signature,
         )
 
         await self.send_email(
             from_email=self.DEFAULT_LITELLM_EMAIL,
             to_email=[email_params.recipient_email],
-            subject=f"LiteLLM: {event.event_message}",
+            subject=email_params.subject,
             html_body=email_html_content,
         )
 
@@ -68,11 +72,11 @@ class BaseEmailLogger(CustomLogger):
         """
         Send email to user after creating key for the user
         """
-
         email_params = await self._get_email_params(
             user_id=send_key_created_email_event.user_id,
             user_email=send_key_created_email_event.user_email,
             email_event=EmailEvent.virtual_key_created,
+            event_message=send_key_created_email_event.event_message,
         )
 
         verbose_proxy_logger.debug(
@@ -86,13 +90,13 @@ class BaseEmailLogger(CustomLogger):
             key_token=send_key_created_email_event.virtual_key,
             base_url=email_params.base_url,
             email_support_contact=email_params.support_contact,
-            email_footer=EMAIL_FOOTER,
+            email_footer=email_params.signature,
         )
 
         await self.send_email(
             from_email=self.DEFAULT_LITELLM_EMAIL,
             to_email=[email_params.recipient_email],
-            subject=f"LiteLLM: {send_key_created_email_event.event_message}",
+            subject=email_params.subject,
             html_body=email_html_content,
         )
         pass
@@ -102,16 +106,34 @@ class BaseEmailLogger(CustomLogger):
         email_event: EmailEvent,
         user_id: Optional[str] = None,
         user_email: Optional[str] = None,
+        event_message: Optional[str] = None,
     ) -> EmailParams:
         """
         Get common email parameters used across different email sending methods
 
         Returns:
-            EmailParams object containing logo_url, support_contact, base_url, and recipient_email
+            EmailParams object containing logo_url, support_contact, base_url, recipient_email, subject, and signature
         """
         logo_url = os.getenv("EMAIL_LOGO_URL", None) or LITELLM_LOGO_URL
         support_contact = os.getenv("EMAIL_SUPPORT_CONTACT", self.DEFAULT_SUPPORT_EMAIL)
         base_url = os.getenv("PROXY_BASE_URL", "http://0.0.0.0:4000")
+        signature = os.getenv("EMAIL_SIGNATURE", EMAIL_FOOTER)
+
+        # Get custom subject template based on email event type
+        if email_event == EmailEvent.new_user_invitation:
+            subject_template = os.getenv(
+                "EMAIL_SUBJECT_INVITATION",
+                self.DEFAULT_SUBJECT_TEMPLATES[EmailEvent.new_user_invitation]
+            )
+        elif email_event == EmailEvent.virtual_key_created:
+            subject_template = os.getenv(
+                "EMAIL_SUBJECT_KEY_CREATED",
+                self.DEFAULT_SUBJECT_TEMPLATES[EmailEvent.virtual_key_created]
+            )
+        else:
+            subject_template = "LiteLLM: {event_message}"
+
+        subject = subject_template.format(event_message=event_message) if event_message else "LiteLLM Notification"
 
         recipient_email: Optional[
             str
@@ -132,6 +154,8 @@ class BaseEmailLogger(CustomLogger):
             support_contact=support_contact,
             base_url=base_url,
             recipient_email=recipient_email,
+            subject=subject,
+            signature=signature,
         )
 
     def _format_key_budget(self, max_budget: Optional[float]) -> str:
