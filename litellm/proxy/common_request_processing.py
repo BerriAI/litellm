@@ -108,7 +108,6 @@ async def create_streaming_response(
     final_status_code = default_status_code
 
     try:
-
         # Handle coroutine that returns a generator
         if asyncio.iscoroutine(generator):
             generator = await generator
@@ -164,7 +163,6 @@ async def create_streaming_response(
             with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
                 yield first_chunk_value
         async for chunk in generator:
-
             with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
                 yield chunk
 
@@ -303,6 +301,13 @@ class ProxyBaseLLMRequestProcessing:
             self.data["temperature"] = user_temperature
         if user_request_timeout:
             self.data["request_timeout"] = user_request_timeout
+        elif (
+            user_request_timeout is None
+            and hasattr(litellm, "request_timeout")
+            and litellm.request_timeout is not None
+        ):
+            # If no explicit request_timeout is passed but litellm.request_timeout is set (e.g., from config file)
+            self.data["request_timeout"] = litellm.request_timeout
         if user_max_tokens:
             self.data["max_tokens"] = user_max_tokens
         if user_api_base:
@@ -465,7 +470,6 @@ class ProxyBaseLLMRequestProcessing:
             if route_type == "allm_passthrough_route":
                 # Check if response is an async generator
                 if self._is_streaming_response(response):
-
                     if asyncio.iscoroutine(response):
                         generator = await response
                     else:
