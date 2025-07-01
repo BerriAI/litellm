@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 # third party imports
 import click
 
+from litellm._logger import verbose_logger
+
 if TYPE_CHECKING:
     pass
 
@@ -20,8 +22,9 @@ def styled_prompt():
         if terminal_height < 10:
             # If terminal is too small, just add some newlines to push content up
             click.echo("\n" * 3)
-    except:
+    except Exception as e:
         # Fallback if we can't get terminal size
+        verbose_logger.debug(f"Error getting terminal size: {e}")
         click.echo("\n" * 3)
     
     # Unicode box drawing characters
@@ -96,8 +99,8 @@ def show_commands():
     click.echo()
 
 
-def interactive_shell(ctx: click.Context):
-    """Run the interactive shell."""
+def setup_shell(ctx: click.Context):
+    """Set up the interactive shell with banner and initial info."""
     from .banner import show_banner
     
     show_banner()
@@ -107,6 +110,74 @@ def interactive_shell(ctx: click.Context):
     click.secho(f"Connected to LiteLLM server: {base_url}\n", fg="green")
     
     show_commands()
+
+
+def handle_special_commands(user_input: str) -> bool:
+    """Handle special commands like exit, help, clear. Returns True if command was handled."""
+    if user_input.lower() in ["exit", "quit"]:
+        click.echo("Goodbye!")
+        return True
+    elif user_input.lower() == "help":
+        click.echo("")  # Add space before help
+        show_commands()
+        return True
+    elif user_input.lower() == "clear":
+        click.clear()
+        from .banner import show_banner
+        show_banner()
+        show_commands()
+        return True
+    
+    return False
+
+
+def execute_command(user_input: str, ctx: click.Context):
+    """Parse and execute a command."""
+    # Parse command and arguments
+    parts = user_input.split()
+    command = parts[0]
+    args = parts[1:] if len(parts) > 1 else []
+    
+    # Import cli here to avoid circular import
+    from . import main
+    cli = main.cli
+    
+    # Check if command exists
+    if command not in cli.commands:
+        click.echo(f"Unknown command: {command}")
+        click.echo("Type 'help' to see available commands.")
+        return
+    
+    # Execute the command
+    try:
+        # Create a new argument list for click to parse
+        sys.argv = ["litellm-proxy"] + [command] + args
+        
+        # Get the command object and invoke it
+        cmd = cli.commands[command]
+        
+        # Create a new context for the subcommand
+        with ctx.scope():
+            cmd.main(
+                args,
+                parent=ctx,
+                standalone_mode=False
+            )
+            
+    except click.ClickException as e:
+        e.show()
+    except click.Abort:
+        click.echo("Command aborted.")
+    except SystemExit:
+        # Prevent the interactive shell from exiting on command errors
+        pass
+    except Exception as e:
+        click.echo(f"Error executing command: {e}")
+
+
+def interactive_shell(ctx: click.Context):
+    """Run the interactive shell."""
+    setup_shell(ctx)
     
     while True:
         try:
@@ -120,59 +191,13 @@ def interactive_shell(ctx: click.Context):
                 continue
                 
             # Handle special commands
-            if user_input.lower() in ["exit", "quit"]:
-                click.echo("Goodbye!")
-                break
-            elif user_input.lower() == "help":
-                click.echo("")  # Add space before help
-                show_commands()
-                continue
-            elif user_input.lower() == "clear":
-                click.clear()
-                show_banner()
-                show_commands()
+            if handle_special_commands(user_input):
+                if user_input.lower() in ["exit", "quit"]:
+                    break
                 continue
             
-            # Parse command and arguments
-            parts = user_input.split()
-            command = parts[0]
-            args = parts[1:] if len(parts) > 1 else []
-            
-            # Import cli here to avoid circular import
-            from . import main
-            cli = main.cli
-            
-            # Check if command exists
-            if command not in cli.commands:
-                click.echo(f"Unknown command: {command}")
-                click.echo("Type 'help' to see available commands.")
-                continue
-            
-            # Execute the command
-            try:
-                # Create a new argument list for click to parse
-                sys.argv = ["litellm-proxy"] + [command] + args
-                
-                # Get the command object and invoke it
-                cmd = cli.commands[command]
-                
-                # Create a new context for the subcommand
-                with ctx.scope():
-                    cmd.main(
-                        args,
-                        parent=ctx,
-                        standalone_mode=False
-                    )
-                    
-            except click.ClickException as e:
-                e.show()
-            except click.Abort:
-                click.echo("Command aborted.")
-            except SystemExit:
-                # Prevent the interactive shell from exiting on command errors
-                pass
-            except Exception as e:
-                click.echo(f"Error executing command: {e}")
+            # Execute regular commands
+            execute_command(user_input, ctx)
                 
         except (KeyboardInterrupt, EOFError):
             click.echo("\nGoodbye!")
