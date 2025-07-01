@@ -282,6 +282,51 @@ def test_custom_provider_with_extra_headers():
         mock_post.assert_called_once()
         assert mock_post.call_args[1]["headers"]["X-Custom-Header"] == "custom-value"
 
+def test_custom_provider_with_extra_body():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    
+    with patch.object(litellm.llms.custom_httpx.http_handler.HTTPHandler, "post") as mock_post:
+        response = litellm.completion(
+            model="custom/custom",
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            extra_body={"X-Custom-BodyValue": "custom-value", "X-Custom-BodyValue2": "custom-value2"},
+            api_base="https://example.com/api/v1",
+        )
+        mock_post.assert_called_once()
+
+        assert mock_post.call_args[1]["json"]["X-Custom-BodyValue"] == "custom-value"
+        assert mock_post.call_args[1]["json"] == {
+            'model': 'custom',
+            'params': {
+                'prompt': ['Hello, how are you?'],
+                'max_tokens': None,
+                'temperature': None,
+                'top_p': None,
+                'top_k': None
+            },
+            'X-Custom-BodyValue': 'custom-value',
+            'X-Custom-BodyValue2': 'custom-value2'
+        }
+
+    # test that extra_body is not passed if not provided
+    with patch.object(litellm.llms.custom_httpx.http_handler.HTTPHandler, "post") as mock_post:
+        response = litellm.completion(
+            model="custom/custom",
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            api_base="https://example.com/api/v1",
+        )
+        mock_post.assert_called_once()
+        assert mock_post.call_args[1]["json"] == {
+            'model': 'custom',
+            'params': {
+                'prompt': ['Hello, how are you?'],
+                'max_tokens': None,
+                'temperature': None,
+                'top_p': None,
+                'top_k': None
+            }
+        }
+
 
 @pytest.fixture(autouse=True)
 def set_openrouter_api_key():
