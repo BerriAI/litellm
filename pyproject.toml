@@ -125,7 +125,7 @@ types-PyYAML = "*"
 opentelemetry-api = "1.25.0"
 opentelemetry-sdk = "1.25.0"
 opentelemetry-exporter-otlp = "1.25.0"
-langfuse = "^2.45.0"
+langfuse = { version = "^2.60.7", markers = "python_version >= '3.9' and python_version != '3.9.7'" }
 
 [tool.poetry.group.proxy-dev.dependencies]
 prisma = "0.11.0"

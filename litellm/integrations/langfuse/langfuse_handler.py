@@ -86,11 +86,7 @@ class LangFuseHandler:
         if globalLangfuseLogger is not None:
             return globalLangfuseLogger
 
-        credentials_dict: Dict[
-            str, Any
-        ] = (
-            {}
-        )  # the global langfuse logger uses Environment Variables, there are no dynamic credentials
+        credentials_dict: Dict[str, Any] = ({})  # the global langfuse logger uses Environment Variables, there are no dynamic credentials
         globalLangfuseLogger = in_memory_dynamic_logger_cache.get_cache(
             credentials=credentials_dict,
             service_name="langfuse",
@@ -119,6 +115,7 @@ class LangFuseHandler:
             langfuse_public_key=credentials.get("langfuse_public_key"),
             langfuse_secret=credentials.get("langfuse_secret"),
             langfuse_host=credentials.get("langfuse_host"),
+            langfuse_environment=credentials.get("langfuse_environment"),
         )
         in_memory_dynamic_logger_cache.set_cache(
             credentials=credentials,
@@ -143,10 +140,9 @@ class LangFuseHandler:
         return LangfuseLoggingConfig(
             langfuse_secret=standard_callback_dynamic_params.get("langfuse_secret")
             or standard_callback_dynamic_params.get("langfuse_secret_key"),
-            langfuse_public_key=standard_callback_dynamic_params.get(
-                "langfuse_public_key"
-            ),
+            langfuse_public_key=standard_callback_dynamic_params.get("langfuse_public_key"),
             langfuse_host=standard_callback_dynamic_params.get("langfuse_host"),
+            langfuse_environment=standard_callback_dynamic_params.get("langfuse_environment", "default"),
         )
 
     @staticmethod
@@ -165,6 +161,7 @@ class LangFuseHandler:
             or standard_callback_dynamic_params.get("langfuse_public_key") is not None
             or standard_callback_dynamic_params.get("langfuse_secret") is not None
             or standard_callback_dynamic_params.get("langfuse_secret_key") is not None
+            or standard_callback_dynamic_params.get("langfuse_environment") is not None
         ):
             return True
         return False

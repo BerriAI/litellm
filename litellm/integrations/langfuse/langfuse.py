@@ -44,6 +44,7 @@ class LangFuseLogger:
         langfuse_public_key=None,
         langfuse_secret=None,
         langfuse_host=None,
+        langfuse_environment=None,
         flush_interval=1,
     ):
         try:
@@ -67,6 +68,7 @@ class LangFuseLogger:
             self.langfuse_host = "http://" + self.langfuse_host
         self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
+        self.langfuse_environment = langfuse_environment or os.getenv("LANGFUSE_TRACING_ENVIRONMENT", "default")
         self.langfuse_flush_interval = LangFuseLogger._get_langfuse_flush_interval(
             flush_interval
         )
@@ -81,6 +83,7 @@ class LangFuseLogger:
             "debug": self.langfuse_debug,
             "flush_interval": self.langfuse_flush_interval,  # flush interval in seconds
             "httpx_client": self.langfuse_client,
+            "environment": self.langfuse_environment,
         }
         self.langfuse_sdk_version: str = langfuse.version.__version__
 
@@ -111,6 +114,9 @@ class LangFuseLogger:
             self.upstream_langfuse_host = os.getenv("UPSTREAM_LANGFUSE_HOST")
             self.upstream_langfuse_release = os.getenv("UPSTREAM_LANGFUSE_RELEASE")
             self.upstream_langfuse_debug = os.getenv("UPSTREAM_LANGFUSE_DEBUG")
+            self.upstream_langfuse_environment = os.getenv(
+                "UPSTREAM_LANGFUSE_TRACING_ENVIRONMENT", "default"
+            )
             self.upstream_langfuse = Langfuse(
                 public_key=self.upstream_langfuse_public_key,
                 secret_key=self.upstream_langfuse_secret_key,
@@ -121,6 +127,7 @@ class LangFuseLogger:
                     if upstream_langfuse_debug is not None
                     else False
                 ),
+                environment=self.upstream_langfuse_environment,
             )
         else:
             self.upstream_langfuse = None

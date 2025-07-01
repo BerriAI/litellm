@@ -27,6 +27,11 @@ def initialize_standard_callback_dynamic_params(
                     and "os.environ/" in _param_value
                 ):
                     _param_value = get_secret_str(secret_name=_param_value)
+                
                 standard_callback_dynamic_params[param] = _param_value  # type: ignore
-
+                continue
+            
+            if param in kwargs.get("metadata", {}):
+                _param_value = kwargs.get("metadata", {}).pop(param)
+                standard_callback_dynamic_params[param] = _param_value  # type: ignore
     return standard_callback_dynamic_params
