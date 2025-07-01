@@ -57,12 +57,8 @@ def test_translate_streaming_openai_chunk_to_anthropic_content_block():
 
     assert block_type == "tool_use"
     assert content_block_start == {
-        "type": "content_block_start",
-        "index": 0,
-        "content_block": {
-            "type": "tool_use",
-            "id": "call_d581d130-e234-4315-94e8-27e7ff7c4e55",
-            "name": "get_weather",
-            "input": {},
-        },
+        "type": "tool_use",
+        "id": "call_d581d130-e234-4315-94e8-27e7ff7c4e55",
+        "name": "get_weather",
+        "input": {},
     }
