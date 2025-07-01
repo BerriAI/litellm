@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 # third party imports
 import click
 
-from litellm._logger import verbose_logger
+from litellm._logging import verbose_logger
 
 if TYPE_CHECKING:
     pass
