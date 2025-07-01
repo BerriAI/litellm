@@ -17,7 +17,6 @@ import litellm
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
-
 @pytest.mark.asyncio
 async def test_ssl_security_level(monkeypatch):
     # Set environment variable for SSL security level
@@ -43,6 +42,7 @@ async def test_ssl_security_level(monkeypatch):
     assert isinstance(ssl_context, ssl.SSLContext)
     # Optionally, check the ciphers string if needed
     # assert "DEFAULT@SECLEVEL=1" in ssl_context.get_ciphers()
+
 
 @pytest.mark.asyncio
 async def test_ssl_verify_false(monkeypatch):
@@ -97,7 +97,8 @@ async def test_ssl_verify_true(monkeypatch):
 @pytest.mark.asyncio
 async def test_ssl_verify_none(monkeypatch):
     # Ensure environment variable for SSL security level is not set. Default to checking
-    monkeypatch.setenv("SSL_VERIFY", None)
+    #monkeypatch.setenv("SSL_VERIFY", None)
+    print(f"SSL_VERIFY: {os.getenv('SSL_VERIFY"')}")
 
     # Create async client with SSL verification disabled to isolate SSL context testing
     client = HTTPHandler()
@@ -118,7 +119,6 @@ async def test_ssl_verify_none(monkeypatch):
     # Verify that the SSL context exists and has the correct verify mode
     assert isinstance(ssl_context, ssl.SSLContext)
     assert ssl_context.verify_mode == ssl.CERT_REQUIRED
-
 
 @pytest.mark.asyncio
 async def test_force_ipv4_transport():

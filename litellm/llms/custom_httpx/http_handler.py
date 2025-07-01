@@ -119,11 +119,14 @@ class AsyncHTTPHandler:
         event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]],
         ssl_verify: Optional[VerifyTypes] = None,
     ) -> httpx.AsyncClient:
+        
+        from litellm.secret_managers.main import str_to_bool
+        
         # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
         # /path/to/certificate.pem
         if ssl_verify is None:
             # handles the string "False" coming from the shell
-            ssl_verify = (os.getenv("SSL_VERIFY") != "False") if os.getenv("SSL_VERIFY") is not None else litellm.ssl_verify
+            ssl_verify = str_to_bool(os.getenv("SSL_VERIFY", "True"))
 
         ssl_security_level = os.getenv("SSL_SECURITY_LEVEL")
 
@@ -635,6 +638,9 @@ class HTTPHandler:
         client: Optional[httpx.Client] = None,
         ssl_verify: Optional[Union[bool, str]] = None,
     ):
+        
+        from litellm.secret_managers.main import str_to_bool
+
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
 
@@ -643,7 +649,8 @@ class HTTPHandler:
 
         if ssl_verify is None:
             # handles the string "False" coming from the shell
-            ssl_verify = (os.getenv("SSL_VERIFY") != "False") if os.getenv("SSL_VERIFY") is not None else litellm.ssl_verify
+
+            ssl_verify = str_to_bool(os.getenv("SSL_VERIFY", "True"))
 
         # An SSL certificate used by the requested host to authenticate the client.
         # /path/to/client.pem
