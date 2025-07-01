@@ -96,9 +96,11 @@ class AnthropicAdapter:
         )
 
     def translate_completion_output_params_streaming(
-        self, completion_stream: Any
+        self, completion_stream: Any, model: str
     ) -> Union[AsyncIterator[bytes], None]:
-        anthropic_wrapper = AnthropicStreamWrapper(completion_stream=completion_stream)
+        anthropic_wrapper = AnthropicStreamWrapper(
+            completion_stream=completion_stream, model=model
+        )
         # Return the SSE-wrapped version for proper event formatting
         return anthropic_wrapper.async_anthropic_sse_wrapper()
 

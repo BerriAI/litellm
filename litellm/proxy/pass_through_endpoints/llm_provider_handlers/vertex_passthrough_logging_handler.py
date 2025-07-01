@@ -190,6 +190,7 @@ class VertexPassthroughLoggingHandler:
         endpoint_type: EndpointType,
         start_time: datetime,
         all_chunks: List[str],
+        model: Optional[str],
         end_time: datetime,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
@@ -200,7 +201,7 @@ class VertexPassthroughLoggingHandler:
         - Logs in litellm callbacks
         """
         kwargs: Dict[str, Any] = {}
-        model = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
+        model = model or VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
         complete_streaming_response = (
             VertexPassthroughLoggingHandler._build_complete_streaming_response(
                 all_chunks=all_chunks,
@@ -272,26 +273,11 @@ class VertexPassthroughLoggingHandler:
             return None
         if len(parsed_chunks) == 0:
             return None
-        litellm_custom_stream_wrapper = litellm.CustomStreamWrapper(
-            completion_stream=vertex_iterator,
-            model=model,
-            logging_obj=litellm_logging_obj,
-            custom_llm_provider="vertex_ai",
-        )
         all_openai_chunks = []
         for parsed_chunk in parsed_chunks:
-            try:
-                litellm_chunk = litellm_custom_stream_wrapper.chunk_creator(
-                    chunk=parsed_chunk
-                )
-            except Exception as e:
-                verbose_proxy_logger.error(
-                    "Error creating litellm chunk from vertex passthrough endpoint: %s",
-                    str(e),
-                )
+            if parsed_chunk is None:
                 continue
-            if litellm_chunk is not None:
-                all_openai_chunks.append(litellm_chunk)
+            all_openai_chunks.append(parsed_chunk)
 
         complete_streaming_response = litellm.stream_chunk_builder(
             chunks=all_openai_chunks

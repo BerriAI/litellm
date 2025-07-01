@@ -135,3 +135,18 @@ On the models dropdown select `thinking-anthropic-claude-3-7-sonnet`
 
 ## Additional Resources
 - Running LiteLLM and Open WebUI on Windows Localhost: A Comprehensive Guide [https://www.tanyongsheng.com/note/running-litellm-and-openwebui-on-windows-localhost-a-comprehensive-guide/](https://www.tanyongsheng.com/note/running-litellm-and-openwebui-on-windows-localhost-a-comprehensive-guide/)
+
+
+## Add Custom Headers to Spend Tracking
+
+You can add custom headers to the request to track spend and usage.
+
+```yaml
+litellm_settings:
+  extra_spend_tag_headers:
+    - "x-custom-header"
+```
+
+You can add custom headers to the request to track spend and usage.
+
+<Image img={require('../../img/custom_tag_headers.png')} />
