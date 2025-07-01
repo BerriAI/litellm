@@ -5,14 +5,13 @@ from litellm.proxy.client.cli.banner import LITELLM_BANNER
 
 def render_cli_sso_success_page() -> str:
     """
-    Renders the CLI SSO authentication success page with modern UI styling
-    matching the LiteLLM login page theme
+    Renders the CLI SSO authentication success page with minimal styling
     
     Returns:
         str: HTML content for the success page
     """
     
-    html_content = """
+    html_content = f"""
     <!DOCTYPE html>
     <html lang="en">
     <head>
@@ -20,7 +19,7 @@ def render_cli_sso_success_page() -> str:
         <title>CLI Authentication Successful - LiteLLM</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
-            body {
+            body {{
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
                 background-color: #f8fafc;
                 margin: 0;
@@ -29,84 +28,45 @@ def render_cli_sso_success_page() -> str:
                 justify-content: center;
                 align-items: center;
                 min-height: 100vh;
-                color: #333;
-            }
+                color: #1e293b;
+            }}
 
-            .container {
+            .container {{
                 background-color: #fff;
                 padding: 40px;
                 border-radius: 8px;
-                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
                 width: 450px;
                 max-width: 100%;
                 text-align: center;
-            }
+            }}
             
-            .logo-container {
-                margin-bottom: 30px;
-            }
+            .logo-container {{
+                margin-bottom: 20px;
+            }}
             
-            .logo {
+            .logo {{
                 font-size: 24px;
                 font-weight: 600;
                 color: #1e293b;
-            }
+            }}
             
-            h1 {
+            h1 {{
                 margin: 0 0 10px;
                 color: #1e293b;
                 font-size: 28px;
                 font-weight: 600;
-            }
+            }}
             
-            .subtitle {
+            .subtitle {{
                 color: #64748b;
-                margin: 0 0 20px;
+                margin: 0 0 30px;
                 font-size: 16px;
-            }
+            }}
 
-            .success-box {
-                background-color: #f0fdf4;
-                border-radius: 6px;
-                padding: 20px;
-                margin-bottom: 30px;
-                border-left: 4px solid #22c55e;
-            }
-            
-            .success-header {
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                margin-bottom: 12px;
-                color: #16a34a;
-                font-weight: 600;
-                font-size: 16px;
-            }
-            
-            .success-header svg {
-                margin-right: 8px;
-            }
-            
-            .success-box p {
-                color: #475569;
-                margin: 8px 0;
-                line-height: 1.5;
-                font-size: 14px;
-            }
-
-            .countdown {
-                color: #f59e0b;
-                font-size: 14px;
-                font-weight: 500;
-                padding: 12px;
-                background-color: #fffbeb;
-                border-radius: 6px;
-                border: 1px solid #fde68a;
-            }
-
-            .banner {
-                background-color: #1e293b;
-                color: #00ff00;
+            .banner {{
+                background-color: #f8fafc;
+                color: #334155;
                 font-family: 'Courier New', Consolas, monospace;
                 font-size: 10px;
                 line-height: 1.1;
@@ -115,38 +75,77 @@ def render_cli_sso_success_page() -> str:
                 border-radius: 6px;
                 margin: 20px 0;
                 text-align: center;
-                border: 1px solid #334155;
+                border: 1px solid #e2e8f0;
                 overflow-x: auto;
-            }
+            }}
 
-            .instructions {
-                background-color: #f1f5f9;
+            .success-box {{
+                background-color: #f8fafc;
                 border-radius: 6px;
                 padding: 20px;
-                margin-bottom: 20px;
-                border-left: 4px solid #3b82f6;
-            }
+                margin-bottom: 30px;
+                border: 1px solid #e2e8f0;
+            }}
             
-            .instructions-header {
+            .success-header {{
                 display: flex;
                 align-items: center;
                 justify-content: center;
                 margin-bottom: 12px;
-                color: #1e40af;
+                color: #1e293b;
                 font-weight: 600;
                 font-size: 16px;
-            }
+            }}
             
-            .instructions-header svg {
+            .success-header svg {{
                 margin-right: 8px;
-            }
+            }}
             
-            .instructions p {
-                color: #475569;
+            .success-box p {{
+                color: #64748b;
                 margin: 8px 0;
                 line-height: 1.5;
                 font-size: 14px;
-            }
+            }}
+
+            .instructions {{
+                background-color: #f8fafc;
+                border-radius: 6px;
+                padding: 20px;
+                margin-bottom: 20px;
+                border: 1px solid #e2e8f0;
+            }}
+            
+            .instructions-header {{
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                margin-bottom: 12px;
+                color: #1e293b;
+                font-weight: 600;
+                font-size: 16px;
+            }}
+            
+            .instructions-header svg {{
+                margin-right: 8px;
+            }}
+            
+            .instructions p {{
+                color: #64748b;
+                margin: 8px 0;
+                line-height: 1.5;
+                font-size: 14px;
+            }}
+
+            .countdown {{
+                color: #64748b;
+                font-size: 14px;
+                font-weight: 500;
+                padding: 12px;
+                background-color: #f8fafc;
+                border-radius: 6px;
+                border: 1px solid #e2e8f0;
+            }}
         </style>
     </head>
     <body>
@@ -193,16 +192,16 @@ def render_cli_sso_success_page() -> str:
             let seconds = 3;
             const countdownElement = document.getElementById('countdown');
             
-            const countdown = setInterval(function() {
+            const countdown = setInterval(function() {{
                 seconds--;
-                if (seconds > 0) {
-                    countdownElement.textContent = `This window will close in ${seconds} second${seconds === 1 ? '' : 's'}...`;
-                } else {
+                if (seconds > 0) {{
+                    countdownElement.textContent = `This window will close in ${{seconds}} second${{seconds === 1 ? '' : 's'}}...`;
+                }} else {{
                     countdownElement.textContent = 'Closing...';
                     clearInterval(countdown);
                     window.close();
-                }
-            }, 1000);
+                }}
+            }}, 1000);
         </script>
     </body>
     </html>
