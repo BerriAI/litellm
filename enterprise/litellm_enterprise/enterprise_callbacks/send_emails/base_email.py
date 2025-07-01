@@ -114,21 +114,44 @@ class BaseEmailLogger(CustomLogger):
         Returns:
             EmailParams object containing logo_url, support_contact, base_url, recipient_email, subject, and signature
         """
-        logo_url = os.getenv("EMAIL_LOGO_URL", None) or LITELLM_LOGO_URL
-        support_contact = os.getenv("EMAIL_SUPPORT_CONTACT", self.DEFAULT_SUPPORT_EMAIL)
-        base_url = os.getenv("PROXY_BASE_URL", "http://0.0.0.0:4000")
-        signature = os.getenv("EMAIL_SIGNATURE", EMAIL_FOOTER)
+        # Get email parameters with premium check for custom values
+        custom_logo = os.getenv("EMAIL_LOGO_URL", None)
+        custom_support = os.getenv("EMAIL_SUPPORT_CONTACT", None)
+        custom_signature = os.getenv("EMAIL_SIGNATURE", None)
+        custom_subject_invitation = os.getenv("EMAIL_SUBJECT_INVITATION", None)
+        custom_subject_key_created = os.getenv("EMAIL_SUBJECT_KEY_CREATED", None)
+
+        # Track which custom values were not applied
+        unused_custom_fields = []
+
+        # Function to safely get custom value or default
+        def get_custom_or_default(custom_value: Optional[str], default_value: str, field_name: str) -> str:
+            if custom_value is not None:  # Only check premium if trying to use custom value
+                from litellm.proxy.proxy_server import premium_user
+                if premium_user is not True:
+                    unused_custom_fields.append(field_name)
+                    return default_value
+                return custom_value
+            return default_value
+
+        # Get parameters, falling back to defaults if custom values aren't allowed
+        logo_url = get_custom_or_default(custom_logo, LITELLM_LOGO_URL, "logo URL")
+        support_contact = get_custom_or_default(custom_support, self.DEFAULT_SUPPORT_EMAIL, "support contact")
+        base_url = os.getenv("PROXY_BASE_URL", "http://0.0.0.0:4000")  # Not a premium feature
+        signature = get_custom_or_default(custom_signature, EMAIL_FOOTER, "email signature")
 
         # Get custom subject template based on email event type
         if email_event == EmailEvent.new_user_invitation:
-            subject_template = os.getenv(
-                "EMAIL_SUBJECT_INVITATION",
-                self.DEFAULT_SUBJECT_TEMPLATES[EmailEvent.new_user_invitation]
+            subject_template = get_custom_or_default(
+                custom_subject_invitation,
+                self.DEFAULT_SUBJECT_TEMPLATES[EmailEvent.new_user_invitation],
+                "invitation subject template"
             )
         elif email_event == EmailEvent.virtual_key_created:
-            subject_template = os.getenv(
-                "EMAIL_SUBJECT_KEY_CREATED",
-                self.DEFAULT_SUBJECT_TEMPLATES[EmailEvent.virtual_key_created]
+            subject_template = get_custom_or_default(
+                custom_subject_key_created,
+                self.DEFAULT_SUBJECT_TEMPLATES[EmailEvent.virtual_key_created],
+                "key created subject template"
             )
         else:
             subject_template = "LiteLLM: {event_message}"
@@ -148,6 +171,19 @@ class BaseEmailLogger(CustomLogger):
             base_url = await self._get_invitation_link(
                 user_id=user_id, base_url=base_url
             )
+
+        # If any custom fields were not applied, log a warning
+        if unused_custom_fields:
+            import logging
+            logger = logging.getLogger(__name__)
+            fields_str = ", ".join(unused_custom_fields)
+            warning_msg = (
+                f"Email sent with default values instead of custom values for: {fields_str}. "
+                "This is an Enterprise feature. To use custom email fields, please upgrade to LiteLLM Enterprise. "
+                "Schedule a meeting here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat"
+            )
+            logger.warning(warning_msg)
+            print(warning_msg)
 
         return EmailParams(
             logo_url=logo_url,
