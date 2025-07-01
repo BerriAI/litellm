@@ -40,6 +40,7 @@ from litellm.types.llms.openai import (
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
+    ChatCompletionToolCallFunctionChunk,
 )
 from litellm.types.utils import (
     Delta,
@@ -490,6 +491,9 @@ class ModelResponseIterator:
         self.accumulated_usage: Optional[Dict[str, Any]] = None
         # Track accumulated reasoning content for final usage calculation
         self.accumulated_reasoning_content: Optional[str] = None
+        # Track the current server tool call details for proper accumulation
+        self.current_server_tool_id: Optional[str] = None
+        self.current_server_tool_name: Optional[str] = None
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -631,15 +635,26 @@ class ModelResponseIterator:
         if "text" in content_block["delta"]:
             text = content_block["delta"]["text"]
         elif "partial_json" in content_block["delta"]:
-            tool_use = {
-                "id": None,
-                "type": "function",
-                "function": {
-                    "name": None,
-                    "arguments": content_block["delta"]["partial_json"],
-                },
-                "index": self.tool_index,
-            }
+            if self.current_server_tool_id:
+                tool_use = ChatCompletionToolCallChunk(
+                    id=self.current_server_tool_id,
+                    type="function", 
+                    function=ChatCompletionToolCallFunctionChunk(
+                        name=self.current_server_tool_name,
+                        arguments=content_block["delta"]["partial_json"],
+                    ),
+                    index=self.tool_index,
+                )
+            else:
+                tool_use = ChatCompletionToolCallChunk(
+                    id=None,
+                    type="function",
+                    function=ChatCompletionToolCallFunctionChunk(
+                        name=None,
+                        arguments=content_block["delta"]["partial_json"],
+                    ),
+                    index=self.tool_index,
+                )
         elif "citation" in content_block["delta"]:
             provider_specific_fields["citation"] = content_block["delta"]["citation"]
         elif (
@@ -753,20 +768,22 @@ class ModelResponseIterator:
                         "index": self.tool_index,
                     }
                 elif content_block_start["content_block"]["type"] == "server_tool_use":
-                    # Handle server tool use (e.g., web search) in content block start
                     content_block = content_block_start["content_block"]
                     provider_specific_fields["server_tool_use"] = content_block
                     
+                    self.current_server_tool_id = content_block.get("id")
+                    self.current_server_tool_name = content_block.get("name")
+                    
                     self.tool_index += 1
-                    tool_use = {
-                        "id": content_block.get("id"),
-                        "type": "function",
-                        "function": {
-                            "name": content_block.get("name"),
-                            "arguments": json.dumps(content_block.get("input", {})),
-                        },
-                        "index": self.tool_index,
-                    }
+                    tool_use = ChatCompletionToolCallChunk(
+                        id=content_block.get("id"),
+                        type="function",
+                        function=ChatCompletionToolCallFunctionChunk(
+                            name=content_block.get("name"),
+                            arguments="",  # Empty for server tool use - arguments will be streamed
+                        ),
+                        index=self.tool_index,
+                    )
                 elif content_block_start["content_block"]["type"] == "web_search_tool_result":
                     # Handle web search tool result in content block start
                     content_block = content_block_start["content_block"]
@@ -783,6 +800,10 @@ class ModelResponseIterator:
                     )
             elif type_chunk == "content_block_stop":
                 ContentBlockStop(**chunk)  # type: ignore
+                # Clear server tool use tracking when content block stops
+                self.current_server_tool_id = None
+                self.current_server_tool_name = None
+                
                 # check if tool call content block
                 is_empty = self.check_empty_tool_call_args()
 
