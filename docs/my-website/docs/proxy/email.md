@@ -132,11 +132,40 @@ Customizing Email Branding is an Enterprise Feature [Get in touch with us for a 
 
 :::
 
-LiteLLM allows you to customize:
-- Logo on the Email
-- Email support contact
-- Email signature
-- Email subject lines for different events
+LiteLLM allows you to customize various aspects of your email notifications. Below is a complete reference of all customizable fields:
+
+| Field | Environment Variable | Type | Default Value | Example | Description |
+|-------|-------------------|------|---------------|---------|-------------|
+| Logo URL | `EMAIL_LOGO_URL` | string | LiteLLM logo | `"https://your-company.com/logo.png"` | Public URL to your company logo |
+| Support Contact | `EMAIL_SUPPORT_CONTACT` | string | support@berri.ai | `"support@your-company.com"` | Email address for user support |
+| Email Signature | `EMAIL_SIGNATURE` | string (HTML) | Standard LiteLLM footer | `"<p>Best regards,<br/>Your Team</p><p><a href='https://your-company.com'>Visit us</a></p>"` | HTML-formatted footer for all emails |
+| Invitation Subject | `EMAIL_SUBJECT_INVITATION` | string | "LiteLLM: New User Invitation" | `"Welcome to Your Company!"` | Subject line for invitation emails |
+| Key Creation Subject | `EMAIL_SUBJECT_KEY_CREATED` | string | "LiteLLM: API Key Created" | `"Your New API Key is Ready"` | Subject line for key creation emails |
+
+
+## HTML Support in Email Signature
+
+The `EMAIL_SIGNATURE` field supports HTML formatting for rich, branded email footers. Here's an example of what you can include:
+
+```html
+<p>Best regards,<br/>The LiteLLM Team</p>
+<p>
+  <a href='https://docs.litellm.ai'>Documentation</a> |
+  <a href='https://github.com/BerriAI/litellm'>GitHub</a>
+</p>
+<p style='font-size: 12px; color: #666;'>
+  This is an automated message from LiteLLM Proxy
+</p>
+```
+
+Supported HTML features:
+- Text formatting (bold, italic, etc.)
+- Line breaks (`<br/>`)
+- Links (`<a href='...'>`)
+- Paragraphs (`<p>`)
+- Basic inline styling
+- Company information and social media links
+- Legal disclaimers or terms of service links
 
 ## Environment Variables
 
