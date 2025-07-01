@@ -8,6 +8,12 @@ DEFAULT_S3_FLUSH_INTERVAL_SECONDS = int(
     os.getenv("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", 10)
 )
 DEFAULT_S3_BATCH_SIZE = int(os.getenv("DEFAULT_S3_BATCH_SIZE", 512))
+DEFAULT_SQS_FLUSH_INTERVAL_SECONDS = int(
+    os.getenv("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10)
+)
+DEFAULT_SQS_BATCH_SIZE = int(os.getenv("DEFAULT_SQS_BATCH_SIZE", 512))
+SQS_SEND_MESSAGE_ACTION = "SendMessage"
+SQS_API_VERSION = "2012-11-05"
 DEFAULT_MAX_RETRIES = int(os.getenv("DEFAULT_MAX_RETRIES", 2))
 DEFAULT_MAX_RECURSE_DEPTH = int(os.getenv("DEFAULT_MAX_RECURSE_DEPTH", 100))
 DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER = int(
@@ -712,6 +718,8 @@ MAXIMUM_TRACEBACK_LINES_TO_LOG = int(os.getenv("MAXIMUM_TRACEBACK_LINES_TO_LOG",
 
 # Headers to control callbacks
 X_LITELLM_DISABLE_CALLBACKS = "x-litellm-disable-callbacks"
+LITELLM_METADATA_FIELD = "litellm_metadata"
+OLD_LITELLM_METADATA_FIELD = "metadata"
 
 ########################### LiteLLM Proxy Specific Constants ###########################
 ########################################################################################
