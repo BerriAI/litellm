@@ -645,7 +645,7 @@ class ModelResponseIterator:
                 if chunk.get("content_block", {}).get("type") == "tool_use":
                     content_block_start = ContentBlockStartToolUse(**chunk)  # type: ignore
                 else:
-                    content_block_start = ContentBlockStartText(**chunk)
+                    content_block_start = ContentBlockStartText(**chunk)  # type: ignore
                 self.content_blocks = []  # reset content blocks when new block starts
                 if content_block_start["content_block"]["type"] == "text":
                     text = content_block_start["content_block"]["text"]
