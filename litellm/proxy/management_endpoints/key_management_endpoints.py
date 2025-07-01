@@ -603,9 +603,9 @@ async def generate_key_fn(  # noqa: PLR0915
             request_type="key", **data_json, table_name="key"
         )
 
-        response["soft_budget"] = (
-            data.soft_budget
-        )  # include the user-input soft budget in the response
+        response[
+            "soft_budget"
+        ] = data.soft_budget  # include the user-input soft budget in the response
 
         response = GenerateKeyResponse(**response)
 
@@ -681,9 +681,9 @@ async def _set_object_permission(
                 data=data_json["object_permission"],
             )
         )
-        data_json["object_permission_id"] = (
-            created_object_permission.object_permission_id
-        )
+        data_json[
+            "object_permission_id"
+        ] = created_object_permission.object_permission_id
 
         # delete the object_permission from the data_json
         data_json.pop("object_permission")
@@ -1667,10 +1667,10 @@ async def delete_verification_tokens(
     try:
         if prisma_client:
             tokens = [_hash_token_if_needed(token=key) for key in tokens]
-            _keys_being_deleted: List[LiteLLM_VerificationToken] = (
-                await prisma_client.db.litellm_verificationtoken.find_many(
-                    where={"token": {"in": tokens}}
-                )
+            _keys_being_deleted: List[
+                LiteLLM_VerificationToken
+            ] = await prisma_client.db.litellm_verificationtoken.find_many(
+                where={"token": {"in": tokens}}
             )
 
             if len(_keys_being_deleted) == 0:
@@ -1778,9 +1778,9 @@ async def _rotate_master_key(
     from litellm.proxy.proxy_server import proxy_config
 
     try:
-        models: Optional[List] = (
-            await prisma_client.db.litellm_proxymodeltable.find_many()
-        )
+        models: Optional[
+            List
+        ] = await prisma_client.db.litellm_proxymodeltable.find_many()
     except Exception:
         models = None
     # 2. process model table
@@ -2091,11 +2091,11 @@ async def validate_key_list_check(
             param="user_id",
             code=status.HTTP_403_FORBIDDEN,
         )
-    complete_user_info_db_obj: Optional[BaseModel] = (
-        await prisma_client.db.litellm_usertable.find_unique(
-            where={"user_id": user_api_key_dict.user_id},
-            include={"organization_memberships": True},
-        )
+    complete_user_info_db_obj: Optional[
+        BaseModel
+    ] = await prisma_client.db.litellm_usertable.find_unique(
+        where={"user_id": user_api_key_dict.user_id},
+        include={"organization_memberships": True},
     )
 
     if complete_user_info_db_obj is None:
@@ -2181,10 +2181,10 @@ async def get_admin_team_ids(
     if complete_user_info is None:
         return []
     # Get all teams that user is an admin of
-    teams: Optional[List[BaseModel]] = (
-        await prisma_client.db.litellm_teamtable.find_many(
-            where={"team_id": {"in": complete_user_info.teams}}
-        )
+    teams: Optional[
+        List[BaseModel]
+    ] = await prisma_client.db.litellm_teamtable.find_many(
+        where={"team_id": {"in": complete_user_info.teams}}
     )
     if teams is None:
         return []
@@ -2394,7 +2394,10 @@ async def _list_key_helper(
     # Base conditions for user's own keys
     user_condition: Dict[str, Any] = {}
     if user_id and isinstance(user_id, str):
-        user_condition["user_id"] = user_id
+        user_condition["user_id"] = {
+            "contains": user_id,
+            "mode": "insensitive",  # Case-insensitive search
+        }
     if team_id and isinstance(team_id, str):
         user_condition["team_id"] = team_id
     if key_alias and isinstance(key_alias, str):

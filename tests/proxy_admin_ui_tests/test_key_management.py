@@ -91,7 +91,9 @@ from litellm.proxy._types import (
     UpdateUserRequest,
     UserAPIKeyAuth,
 )
-from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
+from litellm.types.proxy.management_endpoints.ui_sso import (
+    LiteLLM_UpperboundKeyGenerateParams,
+)
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -1182,6 +1184,137 @@ async def test_list_key_helper_team_filtering(prisma_client):
                     user_id="admin",
                 ),
             )
+
+
+@pytest.mark.asyncio
+async def test_list_key_helper_user_id_partial_matching(prisma_client):
+    """
+    Test _list_key_helper function with partial user_id matching:
+    1. Exact match still works
+    2. Partial match (substring) works
+    3. Case-insensitive matching works
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _list_key_helper,
+    )
+
+    # Setup - create multiple test keys
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    # Create test data with specific user IDs for partial matching
+    test_id = str(uuid.uuid4())[:8]  # Short unique ID for this test run
+    test_users = [
+        f"user_john_smith_123_{test_id}",
+        f"user_jane_doe_456_{test_id}",
+        f"admin_john_admin_{test_id}",
+        f"test_user_789_{test_id}",
+    ]
+
+    # Create keys for each test user
+    for user_id in test_users:
+        await generate_key_fn(
+            data=GenerateKeyRequest(
+                user_id=user_id,
+                key_alias=f"key_for_{user_id}_{uuid.uuid4()}",  # Make alias unique
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="admin",
+            ),
+        )
+
+    # Test 1: Partial match - search for substring that exists in 2 user IDs
+    result = await _list_key_helper(
+        prisma_client=prisma_client,
+        page=1,
+        size=100,  # Increase size to get all results
+        user_id="john_",  # This substring exists in "user_john_smith" and "admin_john_admin"
+        team_id=None,
+        key_alias=None,
+        key_hash=None,
+        organization_id=None,
+        return_full_object=True,  # Return full objects so we can filter by user_id
+    )
+    # Filter results to only count those from this test run
+    test_keys = [k for k in result["keys"] if test_id in k.user_id]
+    assert (
+        len(test_keys) == 2
+    ), f"Should return 2 keys containing 'john_' from test_id {test_id}"
+
+    # Test 2: Case-insensitive match - search for "JOHN_" should also return 2 keys
+    result = await _list_key_helper(
+        prisma_client=prisma_client,
+        page=1,
+        size=100,  # Increase size to get all results
+        user_id="JOHN_",  # Search for JOHN_ in uppercase
+        team_id=None,
+        key_alias=None,
+        key_hash=None,
+        organization_id=None,
+        return_full_object=True,  # Return full objects so we can filter by user_id
+    )
+    # Filter results to only count those from this test run
+    test_keys = [k for k in result["keys"] if test_id in k.user_id]
+    assert (
+        len(test_keys) == 2
+    ), "Should return 2 keys containing 'john_' (case-insensitive)"
+
+    # Test 3: Partial match with numbers - search for test_id should return all 4 keys
+    result = await _list_key_helper(
+        prisma_client=prisma_client,
+        page=1,
+        size=10,
+        user_id=test_id,  # Search for the test_id which is in all user IDs
+        team_id=None,
+        key_alias=None,
+        key_hash=None,
+        organization_id=None,
+    )
+    assert len(result["keys"]) == 4, f"Should return 4 keys containing '{test_id}'"
+
+    # Test 4: Partial match prefix - search for "user_j" should return 2 keys
+    result = await _list_key_helper(
+        prisma_client=prisma_client,
+        page=1,
+        size=10,
+        user_id=f"user_j",  # Generic prefix search
+        team_id=None,
+        key_alias=None,
+        key_hash=None,
+        organization_id=None,
+    )
+    assert (
+        len(result["keys"]) >= 2
+    ), "Should return at least 2 keys starting with 'user_j'"
+
+    # Test 5: Exact match still works - full user_id should return exactly 1 key
+    result = await _list_key_helper(
+        prisma_client=prisma_client,
+        page=1,
+        size=10,
+        user_id=test_users[0],  # Use the exact first test user ID
+        team_id=None,
+        key_alias=None,
+        key_hash=None,
+        organization_id=None,
+    )
+    assert len(result["keys"]) == 1, "Exact match should still work and return 1 key"
+
+    # Test 6: No match - search for non-existent pattern
+    result = await _list_key_helper(
+        prisma_client=prisma_client,
+        page=1,
+        size=10,
+        user_id="nonexistent",
+        team_id=None,
+        key_alias=None,
+        key_hash=None,
+        organization_id=None,
+    )
+    assert len(result["keys"]) == 0, "Should return 0 keys for non-existent pattern"
 
 
 @pytest.mark.asyncio
