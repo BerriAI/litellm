@@ -222,6 +222,7 @@ def test_vertex_batches_endpoint():
     pass
 
 
+@pytest.mark.skip(reason="Local only test to verify if things work well")
 @pytest.mark.asyncio
 async def test_list_batches_with_target_model_names():
     """
