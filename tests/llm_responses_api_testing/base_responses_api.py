@@ -1,4 +1,3 @@
-
 import httpx
 import json
 import pytest
@@ -51,8 +50,8 @@ def validate_responses_api_response(response, final_chunk: bool = False):
         response["id"], str
     ), "Response should have a string 'id' field"
     assert "created_at" in response and isinstance(
-        response["created_at"], (int, float)
-    ), "Response should have a numeric 'created_at' field"
+        response["created_at"], int
+    ), "Response should have an integer 'created_at' field"
     assert "output" in response and isinstance(
         response["output"], list
     ), "Response should have a list 'output' field"
@@ -80,6 +79,7 @@ def validate_responses_api_response(response, final_chunk: bool = False):
         "truncation": (str, type(None)),
         "usage": ResponseAPIUsage,
         "user": (str, type(None)),
+        "store": (bool, type(None)),
     }
     if final_chunk is False:
         optional_fields["usage"] = type(None)
