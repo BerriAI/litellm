@@ -800,6 +800,7 @@ def function_setup(  # noqa: PLR0915
         litellm_params: Dict[str, Any] = {"api_base": ""}
         if "metadata" in kwargs:
             litellm_params["metadata"] = kwargs["metadata"]
+
         logging_obj.update_environment_variables(
             model=model,
             user="",
@@ -6612,7 +6613,7 @@ def validate_chat_completion_tool_choice(
             and "function" not in tool_choice
         ):
             return tool_choice
-        
+
         # Standard OpenAI format: {"type": "function", "function": {...}}
         if tool_choice.get("type") is None or tool_choice.get("function") is None:
             raise Exception(
@@ -6911,6 +6912,7 @@ class ProviderConfigManager:
             from litellm.llms.elevenlabs.audio_transcription.transformation import (
                 ElevenLabsAudioTranscriptionConfig,
             )
+
             return ElevenLabsAudioTranscriptionConfig()
         elif litellm.LlmProviders.OPENAI == provider:
             if "gpt-4o" in model:
