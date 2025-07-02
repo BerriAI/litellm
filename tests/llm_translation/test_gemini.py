@@ -307,9 +307,12 @@ async def test_claude_tool_use_with_gemini():
     is_content_block_tool_use = False
     is_partial_json = False
     has_usage_in_message_delta = False
+    is_content_block_stop = False
 
     async for chunk in response:
         print(chunk)
+        if "content_block_stop" in str(chunk):
+            is_content_block_stop = True
 
         # Handle bytes chunks (SSE format)
         if isinstance(chunk, bytes):
@@ -332,6 +335,8 @@ async def test_claude_tool_use_with_gemini():
                         is_content_block_tool_use = True
                     if "partial_json" in json_str:
                         is_partial_json = True
+                    if "content_block_stop" in json_str:
+                        is_content_block_stop = True
 
                     # Check for usage in message_delta with stop_reason
                     if (
@@ -365,9 +370,12 @@ async def test_claude_tool_use_with_gemini():
                 is_content_block_tool_use = True
             if "partial_json" in str(chunk):
                 is_partial_json = True
+            if "content_block_stop" in str(chunk):
+                is_content_block_stop = True
 
     assert is_content_block_tool_use, "content_block_tool_use should be present"
     assert is_partial_json, "partial_json should be present"
     assert (
         has_usage_in_message_delta
     ), "Usage should be present in message_delta with stop_reason"
+    assert is_content_block_stop, "is_content_block_stop should be present"

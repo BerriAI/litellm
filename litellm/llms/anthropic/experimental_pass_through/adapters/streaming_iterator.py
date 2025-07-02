@@ -221,12 +221,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     return self.chunk_queue.popleft()
 
                 # Check if this processed chunk has a stop_reason - hold it for next chunk
-                if (
-                    processed_chunk.get("type") == "message_delta"
-                    and processed_chunk.get("delta", {}).get("stop_reason") is not None
-                ):
-                    self.holding_stop_reason_chunk = processed_chunk
-                    continue  # Don't process this chunk yet, wait for usage
 
                 if should_start_new_block and not self.sent_content_block_finish:
                     # Queue the sequence: content_block_stop -> content_block_start -> current_chunk
@@ -268,8 +262,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             "index": self.current_content_block_index,
                         }
                     )
-                    self.chunk_queue.append(processed_chunk)
                     self.sent_content_block_finish = True
+                    if processed_chunk.get("delta", {}).get("stop_reason") is not None:
+
+                        self.holding_stop_reason_chunk = processed_chunk
+                    else:
+                        self.chunk_queue.append(processed_chunk)
                     return self.chunk_queue.popleft()
                 elif self.holding_chunk is not None:
                     # Queue both chunks
@@ -360,6 +358,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
         # Example logic - customize based on your needs:
         # If chunk indicates a tool call
+        if chunk.choices[0].finish_reason is not None:
+            return False
+
         (
             block_type,
             content_block_start,
