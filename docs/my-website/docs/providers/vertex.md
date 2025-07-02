@@ -1853,7 +1853,7 @@ All OpenAI compatible models from Vertex Model Garden are supported.
 | Property | Details |
 |----------|---------|
 | Provider Route | `vertex_ai/openai/{MODEL_ID}` |
-| Vertex Documentation | [Vertex Model Garden - OpenAI Chat Completions](https://github.com/GoogleCloudPlatform/vertex-ai-samples/blob/main/notebooks/community/model_garden/model_garden_gradio_streaming_chat_completions.ipynb), [Vertex Model Garden](https://cloud.google.com/model-garden?hl=en) |
+| Vertex Documentation | [SDK for Deploy & OpenAI Chat Completions](https://github.com/GoogleCloudPlatform/generative-ai/blob/main/open-models/get_started_with_model_garden_sdk.ipynb), [Vertex Model Garden](https://cloud.google.com/model-garden?hl=en) |
 | Supported Operations | `/chat/completions`, `/embeddings` |
 
 <Tabs>
