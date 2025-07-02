@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
-import { Form, Select, Button, Card, Space, Tooltip, Divider } from 'antd';
-import { MinusCircleOutlined, PlusOutlined, InfoCircleOutlined, SettingOutlined } from '@ant-design/icons';
+import { Form, Select, Space, Tooltip, Divider } from 'antd';
+import { InfoCircleOutlined } from '@ant-design/icons';
+import { Button, Card } from '@tremor/react';
+import { PlusIcon, TrashIcon, CogIcon } from '@heroicons/react/outline';
 import { callbackInfo, Callbacks, callback_map } from '../callback_info_helpers';
 
 const { Option } = Select;
@@ -125,18 +127,17 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({ value = [], onChange 
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <div className="flex items-center space-x-2">
-          <SettingOutlined className="text-blue-500" />
+          <CogIcon className="w-5 h-5 text-blue-500" />
           <span className="text-base font-semibold text-gray-800">Logging Integrations</span>
-          <Tooltip title="Configure callback logging integrations for this team. These will be stored in the team metadata.">
+          <Tooltip title="Configure callback logging integrations for this team.">
             <InfoCircleOutlined className="text-gray-400 cursor-help" />
           </Tooltip>
         </div>
         <Button
-          type="primary"
-          ghost
+          variant="secondary"
           onClick={addLoggingConfig}
-          icon={<PlusOutlined />}
-          size="small"
+          icon={PlusIcon}
+          size="sm"
           className="hover:border-blue-400 hover:text-blue-500"
         >
           Add Integration
@@ -154,18 +155,10 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({ value = [], onChange 
             <Card
               key={index}
               className="border border-gray-200 shadow-sm hover:shadow-md transition-shadow duration-200"
-              bodyStyle={{ padding: '16px' }}
-              extra={
-                <Button
-                  type="text"
-                  icon={<MinusCircleOutlined />}
-                  onClick={() => removeLoggingConfig(index)}
-                  size="small"
-                  danger
-                  className="hover:bg-red-50"
-                />
-              }
-              title={
+              decoration="top"
+              decorationColor="blue"
+            >
+              <div className="flex justify-between items-start mb-4">
                 <div className="flex items-center space-x-2">
                   {logoUrl && (
                     <img src={logoUrl} alt={callbackDisplayName} className="w-5 h-5 object-contain" />
@@ -174,8 +167,17 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({ value = [], onChange 
                     {callbackDisplayName || 'New Integration'} Configuration
                   </span>
                 </div>
-              }
-            >
+                <Button
+                  variant="light"
+                  onClick={() => removeLoggingConfig(index)}
+                  icon={TrashIcon}
+                  size="xs"
+                  color="red"
+                  className="hover:bg-red-50"
+                >
+                  Remove
+                </Button>
+              </div>
               <div className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
@@ -245,7 +247,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({ value = [], onChange 
 
       {value.length === 0 && (
         <div className="text-center py-12 text-gray-500 border-2 border-dashed border-gray-200 rounded-lg bg-gray-50/50">
-          <SettingOutlined className="text-3xl text-gray-300 mb-3" />
+          <CogIcon className="w-12 h-12 text-gray-300 mb-3 mx-auto" />
           <div className="text-base font-medium mb-1">No logging integrations configured</div>
           <div className="text-sm text-gray-400">Click "Add Integration" to configure logging for this team</div>
         </div>

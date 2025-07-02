@@ -936,7 +936,7 @@ const Teams: React.FC<TeamProps> = ({
                 <Modal
                   title="Create Team"
                   visible={isTeamModalVisible}
-                  width={800}
+                  width={1000}
                   footer={null}
                   onOk={handleOk}
                   onCancel={handleCancel}
