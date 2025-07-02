@@ -83,7 +83,11 @@ class VertexBase:
             if "type" in json_obj and json_obj["type"] == "external_account":
                 # If environment_id key contains "aws" value it corresponds to an AWS config file
                 credential_source = json_obj.get("credential_source", {})
-                environment_id = credential_source.get("environment_id", "") if isinstance(credential_source, dict) else ""
+                environment_id = (
+                    credential_source.get("environment_id", "")
+                    if isinstance(credential_source, dict)
+                    else ""
+                )
                 if isinstance(environment_id, str) and "aws" in environment_id:
                     creds = self._credentials_from_identity_pool_with_aws(json_obj)
                 else:
@@ -130,7 +134,7 @@ class VertexBase:
         from google.auth import identity_pool
 
         return identity_pool.Credentials.from_info(json_obj)
-    
+
     def _credentials_from_identity_pool_with_aws(self, json_obj):
         from google.auth import aws
 
@@ -297,7 +301,21 @@ class VertexBase:
         """
         if api_base:
             if custom_llm_provider == "gemini":
-                url = "{}:{}".format(api_base, endpoint)
+                # Extract the path from the original URL to preserve the model structure
+                # Original URL format: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=...
+                # We need to extract: /v1beta/models/gemini-2.5-flash:generateContent
+                from urllib.parse import urlparse
+
+                parsed_original = urlparse(url)
+                path_and_query = parsed_original.path
+
+                # Remove any query parameters from the path (they'll be re-added if needed)
+                if "?" in path_and_query:
+                    path_and_query = path_and_query.split("?")[0]
+
+                # Construct the new URL with the custom base and the original path
+                url = "{}{}".format(api_base.rstrip("/"), path_and_query)
+
                 if gemini_api_key is None:
                     raise ValueError(
                         "Missing gemini_api_key, please set `GEMINI_API_KEY`"
@@ -306,7 +324,7 @@ class VertexBase:
                     gemini_api_key  # cloudflare expects api key as bearer token
                 )
             else:
-                url = "{}:{}".format(api_base, endpoint)
+                url = "{}{}".format(api_base, endpoint)
 
             if stream is True:
                 url = url + "?alt=sse"
@@ -341,7 +359,7 @@ class VertexBase:
                 stream=stream,
                 gemini_api_key=gemini_api_key,
             )
-            auth_header = None  # this field is not used for gemin
+            auth_header = None  # this field is not used for gemini
         else:
             vertex_location = self.get_vertex_region(
                 vertex_region=vertex_location,
@@ -490,7 +508,7 @@ class VertexBase:
             headers.update(extra_headers)
 
         return headers
-    
+
     @staticmethod
     def get_vertex_ai_project(litellm_params: dict) -> Optional[str]:
         return (
@@ -499,7 +517,7 @@ class VertexBase:
             or litellm.vertex_project
             or get_secret_str("VERTEXAI_PROJECT")
         )
-    
+
     @staticmethod
     def get_vertex_ai_credentials(litellm_params: dict) -> Optional[str]:
         return (
@@ -507,7 +525,7 @@ class VertexBase:
             or litellm_params.pop("vertex_ai_credentials", None)
             or get_secret_str("VERTEXAI_CREDENTIALS")
         )
-    
+
     @staticmethod
     def get_vertex_ai_location(litellm_params: dict) -> Optional[str]:
         return (
