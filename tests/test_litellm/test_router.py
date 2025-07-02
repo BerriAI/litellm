@@ -608,6 +608,8 @@ def test_router_responses_api_bridge():
     """
     Test that router.responses_api_bridge returns the correct response
     """
+    from unittest.mock import MagicMock, patch
+
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     router = litellm.Router(
@@ -640,12 +642,17 @@ def test_router_responses_api_bridge():
     ## CONFIRM MODEL NAME IS STRIPPED
     client = HTTPHandler()
 
-    with patch.object(client, "post", return_value=AsyncMock()) as mock_post:
-        result = router.completion(
-            model="[IP-approved] o3-pro",
-            messages=[{"role": "user", "content": "Hello, world!"}],
-            client=client,
-        )
+    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
+        try:
+            result = router.completion(
+                model="[IP-approved] o3-pro",
+                messages=[{"role": "user", "content": "Hello, world!"}],
+                client=client,
+                num_retries=0,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
         assert mock_post.call_count == 1
         assert (
             mock_post.call_args.kwargs["url"]

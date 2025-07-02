@@ -836,7 +836,7 @@ def responses_api_bridge_check(
             ),
         )
         if model_info.get("mode") is None and model.startswith("responses/"):
-            model = model.split("/")[1]
+            model = model.replace("responses/", "")
             mode = "responses"
             model_info["mode"] = mode
     except Exception as e:
@@ -845,7 +845,7 @@ def responses_api_bridge_check(
         if model.startswith(
             "responses/"
         ):  # handle azure models - `azure/responses/<deployment-name>`
-            model = model.split("/")[1]
+            model = model.replace("responses/", "")
             mode = "responses"
             model_info["mode"] = mode
     return model_info, model
