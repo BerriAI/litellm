@@ -13,9 +13,6 @@ import click
 import httpx
 from dotenv import load_dotenv
 
-# Import banner module for ASCII art display
-from litellm.proxy.client.cli.banner import show_banner
-
 # Optional Rich imports with fallback
 try:
     from rich.console import Console
@@ -44,6 +41,19 @@ if litellm_mode == "DEV":
 from enum import Enum
 
 telemetry = None
+
+# LiteLLM ASCII banner
+LITELLM_BANNER = """   ██╗     ██╗████████╗███████╗██╗     ██╗     ███╗   ███╗
+   ██║     ██║╚══██╔══╝██╔════╝██║     ██║     ████╗ ████║
+   ██║     ██║   ██║   █████╗  ██║     ██║     ██╔████╔██║
+   ██║     ██║   ██║   ██╔══╝  ██║     ██║     ██║╚██╔╝██║
+   ███████╗██║   ██║   ███████╗███████╗███████╗██║ ╚═╝ ██║
+   ╚══════╝╚═╝   ╚═╝   ╚══════╝╚══════╝╚══════╝╚═╝     ╚═╝"""
+
+
+def show_banner():
+    """Display the LiteLLM CLI banner."""
+    click.echo(f"\n{LITELLM_BANNER}\n")
 
 
 class LiteLLMDatabaseConnectionPool(Enum):
