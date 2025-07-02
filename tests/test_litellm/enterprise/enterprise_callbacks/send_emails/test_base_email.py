@@ -365,23 +365,25 @@ async def test_get_email_params_user_invitation(
             "PROXY_BASE_URL": "http://test.com",
         },
     ):
-        # Mock invitation link
-        with mock.patch.object(
-            base_email_logger,
-            "_get_invitation_link",
-            return_value="http://test.com/ui?invitation_id=test-id",
-        ):
-            # Test with user invitation event
-            result = await base_email_logger._get_email_params(
-                email_event=EmailEvent.new_user_invitation,
-                user_id="test-user",
-                user_email="test@example.com",
-            )
+        # Mock premium_user as True to use custom values
+        with patch("litellm.proxy.proxy_server.premium_user", True):
+            # Mock invitation link
+            with mock.patch.object(
+                base_email_logger,
+                "_get_invitation_link",
+                return_value="http://test.com/ui?invitation_id=test-id",
+            ):
+                # Test with user invitation event
+                result = await base_email_logger._get_email_params(
+                    email_event=EmailEvent.new_user_invitation,
+                    user_id="test-user",
+                    user_email="test@example.com",
+                )
 
-            assert result.logo_url == "https://test-logo.com"
-            assert result.support_contact == "support@test.com"
-            assert result.base_url == "http://test.com/ui?invitation_id=test-id"
-            assert result.recipient_email == "test@example.com"
+                assert result.logo_url == "https://test-logo.com"
+                assert result.support_contact == "support@test.com"
+                assert result.base_url == "http://test.com/ui?invitation_id=test-id"
+                assert result.recipient_email == "test@example.com"
 
 
 
@@ -406,6 +408,7 @@ async def test_get_email_params_custom_templates_premium_user(mock_env_vars):
         # Test invitation email params
         invitation_params = await email_logger._get_email_params(
             email_event=EmailEvent.new_user_invitation,
+            user_id=None,
             user_email="test@example.com",
             event_message="New User Invitation"
         )
@@ -419,6 +422,7 @@ async def test_get_email_params_custom_templates_premium_user(mock_env_vars):
         # Test key created email params
         key_params = await email_logger._get_email_params(
             email_event=EmailEvent.virtual_key_created,
+            user_id=None,
             user_email="test@example.com",
             event_message="API Key Created"
         )
@@ -436,6 +440,7 @@ async def test_get_email_params_non_premium_user(mock_env_vars):
         # Test invitation email params
         email_params = await email_logger._get_email_params(
             email_event=EmailEvent.new_user_invitation,
+            user_id=None,
             user_email="test@example.com",
             event_message="New User Invitation"
         )
@@ -450,6 +455,7 @@ async def test_get_email_params_non_premium_user(mock_env_vars):
         # Test key created email params
         key_params = await email_logger._get_email_params(
             email_event=EmailEvent.virtual_key_created,
+            user_id=None,
             user_email="test@example.com",
             event_message="API Key Created"
         )
@@ -472,6 +478,7 @@ async def test_get_email_params_default_templates(monkeypatch):
         # Test invitation email params with default template
         invitation_params = await email_logger._get_email_params(
             email_event=EmailEvent.new_user_invitation,
+            user_id=None,
             user_email="test@example.com",
             event_message="New User Invitation"
         )
@@ -482,6 +489,7 @@ async def test_get_email_params_default_templates(monkeypatch):
         # Test key created email params with default template
         key_params = await email_logger._get_email_params(
             email_event=EmailEvent.virtual_key_created,
+            user_id=None,
             user_email="test@example.com",
             event_message="API Key Created"
         )
