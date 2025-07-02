@@ -1152,3 +1152,37 @@ def test_mcp_tools_with_responses_api():
     print(response_with_mcp_call)
 
 
+@pytest.mark.asyncio
+async def test_openai_responses_api_field_types():
+    """Test that specific fields in the response have the correct types"""
+    litellm._turn_on_debug()
+    litellm.set_verbose = True
+    
+    # Test with store=True
+    response = await litellm.aresponses(
+        model="gpt-4o",
+        input="hi",
+        store=True
+    )
+    
+    # Verify created_at is an integer
+    assert isinstance(response.created_at, int), "created_at should be an integer"
+    
+    # Verify store field is present and matches input
+    assert hasattr(response, "store"), "store field should be present"
+    assert response.store is True, "store field should match input value"
+    
+    # Test without store parameter
+    response_without_store = await litellm.aresponses(
+        model="gpt-4o",
+        input="hi"
+    )
+    
+    # Verify created_at is still an integer
+    assert isinstance(response_without_store.created_at, int), "created_at should be an integer"
+    
+    # Verify store field is present but None when not specified
+    assert hasattr(response_without_store, "store"), "store field should be present"
+    assert response_without_store.store is None, "store field should be None when not specified"
+
+

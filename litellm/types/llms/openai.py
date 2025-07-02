@@ -1034,6 +1034,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     truncation: Optional[Literal["auto", "disabled"]]
     usage: Optional[ResponseAPIUsage]
     user: Optional[str]
+    store: Optional[bool] = None
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 

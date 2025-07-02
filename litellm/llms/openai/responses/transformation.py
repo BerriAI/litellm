@@ -11,6 +11,7 @@ from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 
 from ..common_utils import OpenAIError
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import _safe_convert_created_field
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -85,11 +86,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         """No transform applied since outputs are in OpenAI spec already"""
         try:
             raw_response_json = raw_response.json()
+            if "created_at" in raw_response_json:
+                raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["created_at"])
+            return ResponsesAPIResponse(**raw_response_json)
         except Exception:
             raise OpenAIError(
                 message=raw_response.text, status_code=raw_response.status_code
             )
-        return ResponsesAPIResponse(**raw_response_json)
 
     def validate_environment(
         self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
