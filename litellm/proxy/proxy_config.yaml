@@ -1,20 +1,21 @@
 model_list:
-  - model_name: azure_ai/*
+  - model_name: anthropic/*
     litellm_params:
-      model: azure_ai/*
+      model: anthropic/*
+  - model_name: openai/*
+    litellm_params:
+      model: openai/*
 
-
-mcp_servers:
-  deepwiki_mcp:
-    url: "https://mcp.deepwiki.com/mcp"
-    transport: "http"
-
-general_settings:
-  store_model_in_db: true
-  store_prompts_in_spend_logs: true
 
 litellm_settings:
-  callbacks: ["langfuse", "datadog"]
-  cache: True
-  cache_params:        # set cache params for redis
-    type: redis
+  callbacks: ["prometheus"]
+  prometheus_metrics_config:
+    - group: totals
+      metrics:
+        - litellm_spend_metric
+        - litellm_total_tokens
+        - litellm_input_tokens_metric
+        - litellm_output_tokens_metric
+      include_labels:
+        - requested_modela
+        - model

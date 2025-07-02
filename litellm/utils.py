@@ -244,6 +244,7 @@ from litellm.llms.base_llm.image_generation.transformation import (
 from litellm.llms.base_llm.image_variations.transformation import (
     BaseImageVariationConfig,
 )
+from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
@@ -538,9 +539,9 @@ def function_setup(  # noqa: PLR0915
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Optional[
-            List[Union[str, Callable, CustomLogger]]
-        ] = kwargs.pop("callbacks", None)
+        dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]] = (
+            kwargs.pop("callbacks", None)
+        )
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
         if len(all_callbacks) > 0:
@@ -799,6 +800,7 @@ def function_setup(  # noqa: PLR0915
         litellm_params: Dict[str, Any] = {"api_base": ""}
         if "metadata" in kwargs:
             litellm_params["metadata"] = kwargs["metadata"]
+
         logging_obj.update_environment_variables(
             model=model,
             user="",
@@ -1151,6 +1153,7 @@ def client(original_function):  # noqa: PLR0915
                 and (
                     call_type == CallTypes.acompletion.value
                     or call_type == CallTypes.completion.value
+                    or call_type == CallTypes.anthropic_messages.value
                 )
             ):
                 try:
@@ -1258,9 +1261,9 @@ def client(original_function):  # noqa: PLR0915
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs[
-                        "retry_policy"
-                    ] = reset_retry_policy()  # prevent infinite loops
+                    kwargs["retry_policy"] = (
+                        reset_retry_policy()
+                    )  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -1369,6 +1372,40 @@ def client(original_function):  # noqa: PLR0915
             elif _caching_handler_response.embedding_all_elements_cache_hit is True:
                 return _caching_handler_response.final_embedding_cached_response
 
+            # CHECK MAX TOKENS
+            if (
+                kwargs.get("max_tokens", None) is not None
+                and model is not None
+                and litellm.modify_params
+                is True  # user is okay with params being modified
+                and (
+                    call_type == CallTypes.acompletion.value
+                    or call_type == CallTypes.completion.value
+                    or call_type == CallTypes.anthropic_messages.value
+                )
+            ):
+                try:
+                    base_model = model
+                    if kwargs.get("hf_model_name", None) is not None:
+                        base_model = f"huggingface/{kwargs.get('hf_model_name')}"
+                    messages = None
+                    if len(args) > 1:
+                        messages = args[1]
+                    elif kwargs.get("messages", None):
+                        messages = kwargs["messages"]
+                    user_max_tokens = kwargs.get("max_tokens")
+                    modified_max_tokens = get_modified_max_tokens(
+                        model=model,
+                        base_model=base_model,
+                        messages=messages,
+                        user_max_tokens=user_max_tokens,
+                        buffer_num=None,
+                        buffer_perc=None,
+                    )
+                    kwargs["max_tokens"] = modified_max_tokens
+                except Exception as e:
+                    print_verbose(f"Error while checking max token limit: {str(e)}")
+            
             # MODEL CALL
             result = await original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
@@ -1577,10 +1614,13 @@ def _is_streaming_request(
         except ValueError:
             return False
 
-    if call_type == CallTypes.generate_content_stream or call_type == CallTypes.agenerate_content_stream:
+    if (
+        call_type == CallTypes.generate_content_stream
+        or call_type == CallTypes.agenerate_content_stream
+    ):
         return True
     #########################################################
-    
+
     return False
 
 
@@ -2941,10 +2981,10 @@ def pre_process_non_default_params(
 
     if "response_format" in non_default_params:
         if provider_config is not None:
-            non_default_params[
-                "response_format"
-            ] = provider_config.get_json_schema_from_pydantic_object(
-                response_format=non_default_params["response_format"]
+            non_default_params["response_format"] = (
+                provider_config.get_json_schema_from_pydantic_object(
+                    response_format=non_default_params["response_format"]
+                )
             )
         else:
             non_default_params["response_format"] = type_to_response_format_param(
@@ -3071,16 +3111,16 @@ def pre_process_optional_params(
                     True  # so that main.py adds the function call to the prompt
                 )
                 if "tools" in non_default_params:
-                    optional_params[
-                        "functions_unsupported_model"
-                    ] = non_default_params.pop("tools")
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.pop("tools")
+                    )
                     non_default_params.pop(
                         "tool_choice", None
                     )  # causes ollama requests to hang
                 elif "functions" in non_default_params:
-                    optional_params[
-                        "functions_unsupported_model"
-                    ] = non_default_params.pop("functions")
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.pop("functions")
+                    )
             elif (
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
@@ -4163,9 +4203,9 @@ def _count_characters(text: str) -> int:
 
 
 def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream]) -> str:
-    _choices: Union[
-        List[Union[Choices, StreamingChoices]], List[StreamingChoices]
-    ] = response_obj.choices
+    _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
+        response_obj.choices
+    )
 
     response_str = ""
     for choice in _choices:
@@ -4699,7 +4739,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 output_cost_per_second=_model_info.get("output_cost_per_second", None),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
                 output_vector_size=_model_info.get("output_vector_size", None),
-                citation_cost_per_token=_model_info.get("citation_cost_per_token", None),
+                citation_cost_per_token=_model_info.get(
+                    "citation_cost_per_token", None
+                ),
                 litellm_provider=_model_info.get(
                     "litellm_provider", custom_llm_provider
                 ),
@@ -6565,6 +6607,14 @@ def validate_chat_completion_tool_choice(
     elif isinstance(tool_choice, str):
         return tool_choice
     elif isinstance(tool_choice, dict):
+        # Handle Cursor IDE format: {"type": "auto"} -> return as-is
+        if (
+            tool_choice.get("type") in ["auto", "none", "required"]
+            and "function" not in tool_choice
+        ):
+            return tool_choice
+
+        # Standard OpenAI format: {"type": "function", "function": {...}}
         if tool_choice.get("type") is None or tool_choice.get("function") is None:
             raise Exception(
                 f"Invalid tool choice, tool_choice={tool_choice}. Please ensure tool_choice follows the OpenAI spec"
@@ -6858,6 +6908,12 @@ class ProviderConfigManager:
             return litellm.FireworksAIAudioTranscriptionConfig()
         elif litellm.LlmProviders.DEEPGRAM == provider:
             return litellm.DeepgramAudioTranscriptionConfig()
+        elif litellm.LlmProviders.ELEVENLABS == provider:
+            from litellm.llms.elevenlabs.audio_transcription.transformation import (
+                ElevenLabsAudioTranscriptionConfig,
+            )
+
+            return ElevenLabsAudioTranscriptionConfig()
         elif litellm.LlmProviders.OPENAI == provider:
             if "gpt-4o" in model:
                 return litellm.OpenAIGPTAudioTranscriptionConfig()
@@ -6920,6 +6976,26 @@ class ProviderConfigManager:
         return None
 
     @staticmethod
+    def get_provider_passthrough_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BasePassthroughConfig]:
+        if LlmProviders.BEDROCK == provider:
+            from litellm.llms.bedrock.passthrough.transformation import (
+                BedrockPassthroughConfig,
+            )
+
+            return BedrockPassthroughConfig()
+        elif LlmProviders.VLLM == provider:
+            from litellm.llms.vllm.passthrough.transformation import (
+                VLLMPassthroughConfig,
+            )
+
+            return VLLMPassthroughConfig()
+
+        return None
+
+    @staticmethod
     def get_provider_image_variation_config(
         model: str,
         provider: LlmProviders,
@@ -6958,7 +7034,6 @@ class ProviderConfigManager:
         if LlmProviders.BEDROCK == provider:
             return BedrockVectorStore.get_initialized_custom_logger()
         return None
-    
 
     @staticmethod
     def get_provider_vector_stores_config(
@@ -6971,11 +7046,13 @@ class ProviderConfigManager:
             from litellm.llms.openai.vector_stores.transformation import (
                 OpenAIVectorStoreConfig,
             )
+
             return OpenAIVectorStoreConfig()
         elif litellm.LlmProviders.AZURE == provider:
             from litellm.llms.azure.vector_stores.transformation import (
                 AzureOpenAIVectorStoreConfig,
             )
+
             return AzureOpenAIVectorStoreConfig()
         return None
 
@@ -7027,7 +7104,7 @@ class ProviderConfigManager:
 
             return AzureImageEditConfig()
         return None
-    
+
     @staticmethod
     def get_provider_google_genai_generate_content_config(
         model: str,

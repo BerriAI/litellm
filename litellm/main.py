@@ -3221,6 +3221,7 @@ def completion(  # type: ignore # noqa: PLR0915
             prompt = " ".join([message["content"] for message in messages])  # type: ignore
             resp = litellm.module_level_client.post(
                 url,
+                headers=headers,
                 json={
                     "model": model,
                     "params": {
@@ -3230,6 +3231,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         "top_p": top_p,
                         "top_k": kwargs.get("top_k"),
                     },
+                    **kwargs.get("extra_body", {}),
                 },
             )
             response_json = resp.json()
@@ -4937,7 +4939,7 @@ def transcription(
             provider_config=provider_config,
             litellm_params=litellm_params_dict,
         )
-    elif custom_llm_provider == "deepgram":
+    elif custom_llm_provider in [LlmProviders.DEEPGRAM.value, LlmProviders.ELEVENLABS.value]:
         response = base_llm_http_handler.audio_transcriptions(
             model=model,
             audio_file=file,
@@ -4959,7 +4961,7 @@ def transcription(
             logging_obj=litellm_logging_obj,
             api_base=api_base,
             api_key=api_key,
-            custom_llm_provider="deepgram",
+            custom_llm_provider=custom_llm_provider,
             headers={},
             provider_config=provider_config,
         )

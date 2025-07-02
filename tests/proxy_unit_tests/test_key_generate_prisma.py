@@ -94,11 +94,11 @@ verbose_proxy_logger.setLevel(level=logging.DEBUG)
 from starlette.datastructures import URL
 
 from litellm.caching.caching import DualCache
+from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
 from litellm.proxy._types import (
     DynamoDBArgs,
     GenerateKeyRequest,
     KeyRequest,
-    LiteLLM_UpperboundKeyGenerateParams,
     NewCustomerRequest,
     NewTeamRequest,
     NewUserRequest,
@@ -3608,7 +3608,7 @@ async def test_key_generate_with_secret_manager_call(prisma_client):
     assert it is deleted from the secret manager
     """
     from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
-    from litellm.proxy._types import KeyManagementSystem, KeyManagementSettings
+    from litellm.types.secret_managers.main import KeyManagementSystem, KeyManagementSettings
 
     from litellm.proxy.hooks.key_management_event_hooks import (
         LITELLM_PREFIX_STORED_VIRTUAL_KEYS,

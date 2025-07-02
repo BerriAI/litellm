@@ -17,7 +17,7 @@ Pre-requisites:
 model_list:
     - model_name: codex-mini    
       litellm_params:
-        model: codex-mini
+        model: openai/codex-mini
         api_key: sk-proj-1234567890
         api_base: https://api.openai.com/v1
 ```

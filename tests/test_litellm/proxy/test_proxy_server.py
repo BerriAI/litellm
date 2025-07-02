@@ -320,7 +320,7 @@ async def test_get_all_team_models():
     # Mock router
     mock_router = MagicMock()
 
-    def mock_get_model_list(model_name):
+    def mock_get_model_list(model_name, team_id=None):
         if model_name == "gpt-4":
             return mock_models_gpt4
         elif model_name == "gpt-3.5-turbo":
@@ -355,10 +355,10 @@ async def test_get_all_team_models():
 
         # Verify router.get_model_list was called for each model
         expected_calls = [
-            mock.call(model_name="gpt-4"),
-            mock.call(model_name="gpt-3.5-turbo"),
-            mock.call(model_name="claude-3"),
-            mock.call(model_name="gpt-4"),  # Called again for team2
+            mock.call(model_name="gpt-4", team_id="team1"),
+            mock.call(model_name="gpt-3.5-turbo", team_id="team1"),
+            mock.call(model_name="claude-3", team_id="team2"),
+            mock.call(model_name="gpt-4", team_id="team2"),
         ]
         mock_router.get_model_list.assert_has_calls(expected_calls, any_order=True)
 
@@ -386,8 +386,8 @@ async def test_get_all_team_models():
 
         # Verify router.get_model_list was called only for team1 models
         expected_calls = [
-            mock.call(model_name="gpt-4"),
-            mock.call(model_name="gpt-3.5-turbo"),
+            mock.call(model_name="gpt-4", team_id="team1"),
+            mock.call(model_name="gpt-3.5-turbo", team_id="team1"),
         ]
         mock_router.get_model_list.assert_has_calls(expected_calls, any_order=True)
 
@@ -413,7 +413,7 @@ async def test_get_all_team_models():
     mock_router.reset_mock()
     mock_litellm_teamtable.find_many.return_value = [mock_team1]
 
-    def mock_get_model_list_with_none(model_name):
+    def mock_get_model_list_with_none(model_name, team_id=None):
         if model_name == "gpt-4":
             return mock_models_gpt4
         # Return None for gpt-3.5-turbo to test None handling
@@ -539,3 +539,75 @@ async def test_delete_deployment_type_mismatch():
         assert (
             "12345679" not in deleted_ids
         ), f"Model 12345679 should NOT be deleted. Deleted IDs: {deleted_ids}"
+
+
+@pytest.mark.asyncio
+async def test_get_config_from_file(tmp_path, monkeypatch):
+    """
+    Test the _get_config_from_file method of ProxyConfig class.
+    Tests various scenarios: valid file, non-existent file, no file path, None config.
+    """
+    import yaml
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    # Create a ProxyConfig instance
+    proxy_config = ProxyConfig()
+
+    # Test Case 1: Valid YAML config file exists
+    test_config = {
+        "model_list": [{"model_name": "gpt-4", "litellm_params": {"model": "gpt-4"}}],
+        "general_settings": {"master_key": "sk-test"},
+        "router_settings": {"enable_pre_call_checks": True},
+        "litellm_settings": {"drop_params": True},
+    }
+
+    config_file = tmp_path / "test_config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(test_config, f)
+
+    # Clear global user_config_file_path for this test
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_config_file_path", None)
+
+    result = await proxy_config._get_config_from_file(str(config_file))
+    assert result == test_config
+
+    # Verify that user_config_file_path was set
+    from litellm.proxy.proxy_server import user_config_file_path
+
+    assert user_config_file_path == str(config_file)
+
+    # Test Case 2: File path provided but file doesn't exist
+    non_existent_file = tmp_path / "non_existent.yaml"
+
+    with pytest.raises(Exception, match=f"Config file not found: {non_existent_file}"):
+        await proxy_config._get_config_from_file(str(non_existent_file))
+
+    # Test Case 3: No file path provided (should return default config)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_config_file_path", None)
+
+    expected_default = {
+        "model_list": [],
+        "general_settings": {},
+        "router_settings": {},
+        "litellm_settings": {},
+    }
+
+    result = await proxy_config._get_config_from_file(None)
+    assert result == expected_default
+
+    # Test Case 4: Empty YAML file (should raise exception for None config)
+    empty_file = tmp_path / "empty_config.yaml"
+    with open(empty_file, "w") as f:
+        f.write("")  # Write empty content which will result in None when loaded
+
+    with pytest.raises(Exception, match="Config cannot be None or Empty."):
+        await proxy_config._get_config_from_file(str(empty_file))
+
+    # Test Case 5: Using global user_config_file_path when no config_file_path provided
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_config_file_path", str(config_file)
+    )
+
+    result = await proxy_config._get_config_from_file(None)
+    assert result == test_config

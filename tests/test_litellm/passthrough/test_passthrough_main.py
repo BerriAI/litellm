@@ -27,13 +27,13 @@ def test_llm_passthrough_route():
         return_value=MagicMock(status_code=200, json={"message": "Hello, world!"}),
     ) as mock_post:
         response = llm_passthrough_route(
-            model="gpt-3.5-turbo",
+            model="vllm/anthropic.claude-3-5-sonnet-20240620-v1:0",
             endpoint="v1/chat/completions",
             method="POST",
             request_url="http://localhost:8000/v1/chat/completions",
             api_base="http://localhost:8090",
             json={
-                "model": "gpt-3.5-turbo",
+                "model": "my-custom-model",
                 "messages": [{"role": "user", "content": "Hello, world!"}],
             },
             client=client,
