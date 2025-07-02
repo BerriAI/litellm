@@ -28,7 +28,6 @@ export enum Providers {
     FireworksAI = "Fireworks AI",
     Triton = "Triton",
     Deepgram = "Deepgram"
-
   }
   
 export const provider_map: Record<string, string> = {
@@ -89,18 +88,6 @@ export const providerLogoMap: Record<string, string> = {
     [Providers.xAI]: `${asset_logos_folder}xai.svg`,
     [Providers.Triton]: `${asset_logos_folder}nvidia_triton.png`,
     [Providers.Deepgram]: `${asset_logos_folder}deepgram.png`
-};
-
-export const callback_logo_map: Record<string, string> = {
-    "langfuse": `${asset_logos_folder}langfuse.svg`,
-    "otel": `${asset_logos_folder}otel.svg`,
-    "s3": `${asset_logos_folder}s3.svg`,
-    "openmeter": `${asset_logos_folder}openmeter.svg`,
-    "custom_callback_api": `${asset_logos_folder}custom_callback_api.svg`,
-    "datadog": `${asset_logos_folder}datadog.svg`,
-    "braintrust": `${asset_logos_folder}braintrust.svg`,
-    "langsmith": `${asset_logos_folder}langsmith.svg`,
-    "lago": `${asset_logos_folder}lago.svg`,
 };
 
 export const getProviderLogoAndName = (providerValue: string): { logo: string, displayName: string } => {

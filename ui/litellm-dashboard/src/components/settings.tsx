@@ -45,7 +45,7 @@ import {
 } from "./networking";
 import AlertingSettings from "./alerting/alerting_settings";
 import FormItem from "antd/es/form/FormItem";
-import { callback_logo_map } from "./provider_info_helpers";
+import { callback_map, callbackLogoMap, Callbacks } from "./callback_info_helpers";
 interface SettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
@@ -55,7 +55,7 @@ interface SettingsPageProps {
 
 
 interface genericCallbackParams {
-  
+
   litellm_callback_name: string  // what to send in request
   ui_callback_name: string // what to show on UI
   litellm_callback_params: string[] | null // known required params for this callback
@@ -488,7 +488,7 @@ const Settings: React.FC<SettingsPageProps> = ({
   return (
     <div className="w-full mx-4">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
-        
+
         <TabGroup>
           <TabList variant="line" defaultValue="1">
             <Tab value="1">Logging Callbacks</Tab>
@@ -498,68 +498,68 @@ const Settings: React.FC<SettingsPageProps> = ({
           </TabList>
           <TabPanels>
             <TabPanel>
-            <Title level={4}>Active Logging Callbacks</Title>
+              <Title level={4}>Active Logging Callbacks</Title>
 
-            <Grid numItems={2}>
+              <Grid numItems={2}>
 
-              <Card className="max-h-[50vh]">
-                
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableHeaderCell>Callback Name</TableHeaderCell>
-                      {/* <TableHeaderCell>Callback Env Vars</TableHeaderCell> */}
+                <Card className="max-h-[50vh]">
 
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {callbacks
-                      .map((callback, index) => (
-                        <TableRow key={index} className="flex justify-between">
+                  <Table>
+                    <TableHead>
+                      <TableRow>
+                        <TableHeaderCell>Callback Name</TableHeaderCell>
+                        {/* <TableHeaderCell>Callback Env Vars</TableHeaderCell> */}
 
-                          <TableCell>
-                            <Text>{callback.name}</Text>
-                          </TableCell>
-                          <TableCell>
-                            <Grid numItems={2} className="flex justify-between">
-                            <Icon
-                                icon={PencilAltIcon}
-                                size="sm"
-                                onClick={() => {
-                                  setSelectedEditCallback(callback);
-                                  setShowEditCallback(true);
-                                }}
-                              />
-                              <Icon
-                                icon={TrashIcon}
-                                size="sm"
-                                onClick={() =>
-                                  handleDeleteCallback(callback.name)
-                                }
-                                className="text-red-500 hover:text-red-700 cursor-pointer"
-                              />
-                              <Button
-                                onClick={() =>
-                                  serviceHealthCheck(accessToken, callback.name)
-                                }
-                                className="ml-2"
-                                variant="secondary"
-                              >
-                                Test Callback
-                              </Button>
-                            </Grid>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                  </TableBody>
-                </Table>
-              </Card>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {callbacks
+                        .map((callback, index) => (
+                          <TableRow key={index} className="flex justify-between">
+
+                            <TableCell>
+                              <Text>{callback.name}</Text>
+                            </TableCell>
+                            <TableCell>
+                              <Grid numItems={2} className="flex justify-between">
+                                <Icon
+                                  icon={PencilAltIcon}
+                                  size="sm"
+                                  onClick={() => {
+                                    setSelectedEditCallback(callback);
+                                    setShowEditCallback(true);
+                                  }}
+                                />
+                                <Icon
+                                  icon={TrashIcon}
+                                  size="sm"
+                                  onClick={() =>
+                                    handleDeleteCallback(callback.name)
+                                  }
+                                  className="text-red-500 hover:text-red-700 cursor-pointer"
+                                />
+                                <Button
+                                  onClick={() =>
+                                    serviceHealthCheck(accessToken, callback.name)
+                                  }
+                                  className="ml-2"
+                                  variant="secondary"
+                                >
+                                  Test Callback
+                                </Button>
+                              </Grid>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                    </TableBody>
+                  </Table>
+                </Card>
               </Grid>
               <Button
-              className="mt-2"
+                className="mt-2"
                 onClick={() => setShowAddCallbacksModal(true)}>
-                  Add Callback
-                </Button>
+                Add Callback
+              </Button>
             </TabPanel>
             <TabPanel>
               <Card>
@@ -653,7 +653,7 @@ const Settings: React.FC<SettingsPageProps> = ({
               />
             </TabPanel>
             <TabPanel>
-              <EmailSettings 
+              <EmailSettings
                 accessToken={accessToken}
                 premiumUser={premiumUser}
                 alerts={alerts}
@@ -663,150 +663,158 @@ const Settings: React.FC<SettingsPageProps> = ({
         </TabGroup>
       </Grid>
 
-      
+
       <Modal
-      title="Add Logging Callback"
-      visible={showAddCallbacksModal}
-      width={800}
-      onCancel= {() => setShowAddCallbacksModal(false)}
-      footer={null}
-      >
-        
-      <a href="https://docs.litellm.ai/docs/proxy/logging" className="mb-8 mt-4" target="_blank" style={{ color: "blue" }}> LiteLLM Docs: Logging</a>
-
-
-      <Form 
-      form={form} 
-      onFinish={addNewCallbackCall}
-      labelCol={{ span: 8 }}
-      wrapperCol={{ span: 16 }}
-      labelAlign="left"
+        title="Add Logging Callback"
+        visible={showAddCallbacksModal}
+        width={800}
+        onCancel={() => setShowAddCallbacksModal(false)}
+        footer={null}
       >
 
-      <>
-        <FormItem
-          label="Callback"
-          name="callback"
-          rules={[{ required: true, message: "Please select a callback" }]}
+        <a href="https://docs.litellm.ai/docs/proxy/logging" className="mb-8 mt-4" target="_blank" style={{ color: "blue" }}> LiteLLM Docs: Logging</a>
+
+
+        <Form
+          form={form}
+          onFinish={addNewCallbackCall}
+          labelCol={{ span: 8 }}
+          wrapperCol={{ span: 16 }}
+          labelAlign="left"
         >
-          <Select
-          onChange={(value) => {
-            const selectedCallback = allCallbacks[value];
-            if (selectedCallback) {
-              console.log(selectedCallback.ui_callback_name);
-              handleSelectedCallbackChange(selectedCallback);
-            }
-          }}
-          >
-        {allCallbacks &&
-          Object.values(allCallbacks).map((callback) => (
-            <SelectItem 
-            key={callback.litellm_callback_name} 
-            value={callback.litellm_callback_name}
-            >
-              <div className="flex items-center">
-                <img 
-                  src={callback_logo_map[callback.litellm_callback_name]} 
-                  alt={callback.ui_callback_name} 
-                  className="w-5 h-5 mr-2"
-                  onError={(e) => {
-                    const target = e.target as HTMLImageElement;
-                    const parent = target.parentElement;
-                    if (parent) {
-                      const fallbackDiv = document.createElement('div');
-                      fallbackDiv.className = 'w-5 h-5 mr-2 rounded-full bg-gray-200 flex items-center justify-center text-xs';
-                      fallbackDiv.textContent = callback.ui_callback_name.charAt(0).toUpperCase();
-                      parent.replaceChild(fallbackDiv, target);
-                    }
-                  }}
-                />
-                {callback.ui_callback_name}
-              </div>
-            </SelectItem>
-          ))}
-      </Select>
-        </FormItem>
 
-
-        {
-          selectedCallbackParams && selectedCallbackParams.map((param) => (
+          <>
             <FormItem
-              label={param}
-              name={param}
-              key={param}
-              rules={[{ required: true, message: "Please enter the value for " + param}]}
+              label="Callback"
+              name="callback"
+              rules={[{ required: true, message: "Please select a callback" }]}
             >
-              <TextInput type="password" />
+              <Select
+                onChange={(value) => {
+                  const selectedCallback = allCallbacks[value];
+                  if (selectedCallback) {
+                    console.log(selectedCallback.ui_callback_name);
+                    handleSelectedCallbackChange(selectedCallback);
+                  }
+                }}
+              >
+                {Object.entries(Callbacks).map(([callbackEnum, callbackDisplayName]) => (
+                  <SelectItem
+                    key={callbackDisplayName}
+                    value={callback_map[callbackEnum]}
+                  >
+                    <div className="flex items-center space-x-2">
+                      {callbackLogoMap[callbackDisplayName] ? (
+                        <div className="w-5 h-5 flex items-center justify-center">
+                          <img
+                            src={callbackLogoMap[callbackDisplayName]}
+                            alt={`${callbackEnum} logo`}
+                            className="w-5 h-5"
+                            onError={() => {
+                              if (callbackLogoMap[callbackDisplayName]) {
+                                delete callbackLogoMap[callbackDisplayName];
+                              }
+                            }}
+                            style={{ display: callbackLogoMap[callbackDisplayName] ? 'block' : 'none' }}
+                          />
+                          {!callbackLogoMap[callbackDisplayName] && (
+                            <div className="w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs">
+                              {callbackDisplayName.charAt(0).toUpperCase()}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs">
+                          {(callbackDisplayName as string).charAt(0).toUpperCase()}
+                        </div>
+                      )}
+                      <span>{callbackDisplayName}</span>
+                    </div>
+                  </SelectItem>
+                ))}
+              </Select>
             </FormItem>
-          ))
-        }
 
-          <div style={{ textAlign: "right", marginTop: "10px" }}>
+
+            {
+              selectedCallbackParams && selectedCallbackParams.map((param) => (
+                <FormItem
+                  label={param}
+                  name={param}
+                  key={param}
+                  rules={[{ required: true, message: "Please enter the value for " + param }]}
+                >
+                  <TextInput type="password" />
+                </FormItem>
+              ))
+            }
+
+            <div style={{ textAlign: "right", marginTop: "10px" }}>
               <Button2 htmlType="submit">Save</Button2>
-          </div>
+            </div>
 
           </>
         </Form>
-    </Modal>
+      </Modal>
 
-    <Modal
-    visible={showEditCallback}
-    width={800}
-    title={`Edit ${selectedEditCallback?.name } Settings`}
-    onCancel= {() => setShowEditCallback(false)}
-    footer={null}
-    >
-
-      <Form 
-      form={form} 
-      onFinish={updateCallbackCall}
-      labelCol={{ span: 8 }}
-      wrapperCol={{ span: 16 }}
-      labelAlign="left"
+      <Modal
+        visible={showEditCallback}
+        width={800}
+        title={`Edit ${selectedEditCallback?.name} Settings`}
+        onCancel={() => setShowEditCallback(false)}
+        footer={null}
       >
-      <>
-      {
-        selectedEditCallback && selectedEditCallback.variables && Object.entries(selectedEditCallback.variables).map(([param, value]) => (
-          <FormItem
-            label={param}
-            name={param}
-            key={param}
-          >
-            <TextInput type="password" defaultValue={value as string}/>
-          </FormItem>
-        ))
-      }
 
-      </>
+        <Form
+          form={form}
+          onFinish={updateCallbackCall}
+          labelCol={{ span: 8 }}
+          wrapperCol={{ span: 16 }}
+          labelAlign="left"
+        >
+          <>
+            {
+              selectedEditCallback && selectedEditCallback.variables && Object.entries(selectedEditCallback.variables).map(([param, value]) => (
+                <FormItem
+                  label={param}
+                  name={param}
+                  key={param}
+                >
+                  <TextInput type="password" defaultValue={value as string} />
+                </FormItem>
+              ))
+            }
 
-      <div style={{ textAlign: "right", marginTop: "10px" }}>
-              <Button2 htmlType="submit">Save</Button2>
+          </>
+
+          <div style={{ textAlign: "right", marginTop: "10px" }}>
+            <Button2 htmlType="submit">Save</Button2>
           </div>
 
-      </Form>
-        
+        </Form>
 
-    </Modal>
 
-    <Modal
-      title="Confirm Delete"
-      visible={showDeleteConfirmModal}
-      onOk={confirmDeleteCallback}
-      onCancel={() => {
-        setShowDeleteConfirmModal(false);
-        setCallbackToDelete(null);
-      }}
-      okText="Delete"
-      cancelText="Cancel"
-      okButtonProps={{ danger: true }}
-    >
-      <p>
-        Are you sure you want to delete the callback - {callbackToDelete}?
-        This action cannot be undone.
-      </p>
-    </Modal>
+      </Modal>
+
+      <Modal
+        title="Confirm Delete"
+        visible={showDeleteConfirmModal}
+        onOk={confirmDeleteCallback}
+        onCancel={() => {
+          setShowDeleteConfirmModal(false);
+          setCallbackToDelete(null);
+        }}
+        okText="Delete"
+        cancelText="Cancel"
+        okButtonProps={{ danger: true }}
+      >
+        <p>
+          Are you sure you want to delete the callback - {callbackToDelete}?
+          This action cannot be undone.
+        </p>
+      </Modal>
     </div>
-    
+
   );
 };
 
