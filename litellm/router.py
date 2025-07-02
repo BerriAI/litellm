@@ -2515,7 +2515,9 @@ class Router:
 
             ### get custom
 
-            response = original_function(
+            kwargs["original_function"] = original_function
+            kwargs["model"] = model
+            response = await self.async_function_with_fallbacks(
                 **{
                     **data,
                     "caching": self.cache_responses,
@@ -4240,37 +4242,42 @@ class Router:
 
     def log_retry(self, kwargs: dict, e: Exception) -> dict:
         """
-        When a retry or fallback happens, log the details of the just failed model call - similar to Sentry breadcrumbing
+        Log the retry attempt
+
+        Args:
+            kwargs: The keyword arguments passed to the function
+            e: The exception that triggered the retry
+
+        Returns:
+            kwargs: The updated keyword arguments
         """
-        try:
-            # Log failed model as the previous model
-            previous_model = {
-                "exception_type": type(e).__name__,
-                "exception_string": str(e),
-            }
-            for (
-                k,
-                v,
-            ) in (
-                kwargs.items()
-            ):  # log everything in kwargs except the old previous_models value - prevent nesting
-                if k not in ["metadata", "messages", "original_function"]:
-                    previous_model[k] = v
-                elif k == "metadata" and isinstance(v, dict):
-                    previous_model["metadata"] = {}  # type: ignore
-                    for metadata_k, metadata_v in kwargs["metadata"].items():
-                        if metadata_k != "previous_models":
-                            previous_model[k][metadata_k] = metadata_v  # type: ignore
+        model_group = None
+        metadata = kwargs.get("metadata", {}) or {}
+        litellm_metadata = kwargs.get("litellm_metadata", {}) or {}
+        
+        # Check both metadata fields for model_group
+        if "model_group" in metadata:
+            model_group = metadata["model_group"]
+        elif "model_group" in litellm_metadata:
+            model_group = litellm_metadata["model_group"]
 
-            # check current size of self.previous_models, if it's larger than 3, remove the first element
-            if len(self.previous_models) > 3:
-                self.previous_models.pop(0)
+        # Log the retry attempt
+        verbose_router_logger.debug(
+            f"Router retry triggered by exception: {e}. Model group: {model_group}"
+        )
 
-            self.previous_models.append(previous_model)
-            kwargs["metadata"]["previous_models"] = self.previous_models
-            return kwargs
-        except Exception as e:
-            raise e
+        # Update retry count in both metadata fields if they exist
+        if "metadata" in kwargs:
+            metadata.setdefault("retry_count", 0)
+            metadata["retry_count"] += 1
+            kwargs["metadata"] = metadata
+
+        if "litellm_metadata" in kwargs:
+            litellm_metadata.setdefault("retry_count", 0)
+            litellm_metadata["retry_count"] += 1
+            kwargs["litellm_metadata"] = litellm_metadata
+
+        return kwargs
 
     def _update_usage(
         self, deployment_id: str, parent_otel_span: Optional[Span]
