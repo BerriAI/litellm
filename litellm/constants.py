@@ -758,6 +758,10 @@ HEALTH_CHECK_TIMEOUT_SECONDS = int(
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 
+########################### CLI SSO AUTHENTICATION CONSTANTS ###########################
+LITELLM_CLI_SOURCE_IDENTIFIER = "litellm-cli"
+LITELLM_CLI_SESSION_TOKEN_PREFIX = "litellm-session-token"
+
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
 PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME = "prometheus_emit_budget_metrics"
