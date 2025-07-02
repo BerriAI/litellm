@@ -74,42 +74,70 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             self.guardrailIdentifier,
             self.guardrailVersion,
         )
+    
+
+    def _create_bedrock_input_content_request(self, messages: Optional[List[AllMessageValues]]) -> BedrockRequest:
+        """
+        Create a bedrock request for the input content - the LLM request.
+        """
+        bedrock_request: BedrockRequest = BedrockRequest(source="INPUT")
+        bedrock_request_content: List[BedrockContentItem] = []
+        if messages is None:
+            return bedrock_request
+        for message in messages:
+            message_text_content: Optional[List[str]] = (
+                self.get_content_for_message(message=message)
+            )
+            if message_text_content is None:
+                continue
+            for text_content in message_text_content:
+                bedrock_content_item = BedrockContentItem(
+                    text=BedrockTextContent(text=text_content)
+                )
+                bedrock_request_content.append(bedrock_content_item)
+
+        bedrock_request["content"] = bedrock_request_content
+        return bedrock_request
+
+    def _create_bedrock_output_content_request(self, response: Union[Any, ModelResponse]) -> BedrockRequest:
+        """
+        Create a bedrock request for the output content - the LLM response.
+        """
+        bedrock_request: BedrockRequest = BedrockRequest(source="OUTPUT")
+        bedrock_request_content: List[BedrockContentItem] = []
+        if isinstance(response, litellm.ModelResponse):
+            for choice in response.choices:
+                if isinstance(choice, litellm.Choices):
+                    if choice.message.content and isinstance(
+                        choice.message.content, str
+                    ):
+                        bedrock_content_item = BedrockContentItem(
+                            text=BedrockTextContent(text=choice.message.content)
+                        )
+                        bedrock_request_content.append(bedrock_content_item)
+            bedrock_request["content"] = bedrock_request_content
+        return bedrock_request
 
     def convert_to_bedrock_format(
         self,
+        source: Literal["INPUT", "OUTPUT"],
         messages: Optional[List[AllMessageValues]] = None,
         response: Optional[Union[Any, ModelResponse]] = None,
     ) -> BedrockRequest:
-        bedrock_request: BedrockRequest = BedrockRequest(source="INPUT")
-        bedrock_request_content: List[BedrockContentItem] = []
+        """
+        Convert the litellm messages/response to the bedrock request format.
 
-        if messages:
-            for message in messages:
-                message_text_content: Optional[List[str]] = (
-                    self.get_content_for_message(message=message)
-                )
-                if message_text_content is None:
-                    continue
-                for text_content in message_text_content:
-                    bedrock_content_item = BedrockContentItem(
-                        text=BedrockTextContent(text=text_content)
-                    )
-                    bedrock_request_content.append(bedrock_content_item)
+        If source is "INPUT", then messages is required.
+        If source is "OUTPUT", then response is required.
 
-            bedrock_request["content"] = bedrock_request_content
-        if response:
-            bedrock_request["source"] = "OUTPUT"
-            if isinstance(response, litellm.ModelResponse):
-                for choice in response.choices:
-                    if isinstance(choice, litellm.Choices):
-                        if choice.message.content and isinstance(
-                            choice.message.content, str
-                        ):
-                            bedrock_content_item = BedrockContentItem(
-                                text=BedrockTextContent(text=choice.message.content)
-                            )
-                            bedrock_request_content.append(bedrock_content_item)
-                bedrock_request["content"] = bedrock_request_content
+        Returns:
+            BedrockRequest: The bedrock request object.
+        """
+        bedrock_request: BedrockRequest = BedrockRequest(source=source)
+        if source == "INPUT":
+            bedrock_request = self._create_bedrock_input_content_request(messages=messages)
+        elif source == "OUTPUT":
+            bedrock_request = self._create_bedrock_output_content_request(response=response)
         return bedrock_request
 
     #### CALL HOOKS - proxy only ####
@@ -187,20 +215,27 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return prepped_request
 
     async def make_bedrock_api_request(
-        self, kwargs: dict, response: Optional[Union[Any, litellm.ModelResponse]] = None
+        self, 
+        source: Literal["INPUT", "OUTPUT"],
+        messages: Optional[List[AllMessageValues]] = None,
+        response: Optional[Union[Any, litellm.ModelResponse]] = None,
+        request_data: Optional[dict] = None
     ) -> BedrockGuardrailResponse:
         credentials, aws_region_name = self._load_credentials()
         bedrock_request_data: dict = dict(
             self.convert_to_bedrock_format(
-                messages=kwargs.get("messages"), response=response
+                source=source, 
+                messages=messages, 
+                response=response
             )
         )
         bedrock_guardrail_response: BedrockGuardrailResponse = (
             BedrockGuardrailResponse()
         )
-        bedrock_request_data.update(
-            self.get_guardrail_dynamic_request_body_params(request_data=kwargs)
-        )
+        if request_data:
+            bedrock_request_data.update(
+                self.get_guardrail_dynamic_request_body_params(request_data=request_data)
+            )
         prepared_request = self._prepare_request(
             credentials=credentials,
             data=bedrock_request_data,
@@ -357,7 +392,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
-        bedrock_guardrail_response = await self.make_bedrock_api_request(kwargs=data)
+        bedrock_guardrail_response = await self.make_bedrock_api_request(
+            source="INPUT", messages=new_messages, request_data=data
+        )
         #########################################################
 
         #########################################################
@@ -411,7 +448,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
-        bedrock_guardrail_response = await self.make_bedrock_api_request(kwargs=data)
+        bedrock_guardrail_response = await self.make_bedrock_api_request(
+            source="INPUT", messages=new_messages, request_data=data
+        )
         #########################################################
 
         #########################################################
@@ -461,28 +500,20 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return
 
         #########################################################
-        ########## 1. Make the Bedrock API request ##########
+        ########## 1. Make parallel Bedrock API requests ##########
         #########################################################
-        bedrock_guardrail_response = await self.make_bedrock_api_request(
-            kwargs=data, response=response
-        )
-        #########################################################
+        output_content_bedrock = await self.make_bedrock_api_request(
+            source="OUTPUT", 
+            response=response,
+            request_data=data
+        )  # Only response
 
         #########################################################
-        ########## 2. Update the messages with the guardrail response ##########
+        ########## 2. Apply masking to response with output guardrail response ##########
         #########################################################
-        data["messages"] = (
-            self._update_messages_with_updated_bedrock_guardrail_response(
-                messages=new_messages,
-                bedrock_guardrail_response=bedrock_guardrail_response,
-            )
-        )
-
-
-        ########## 3. Apply masking to response if enabled ##########
         self._apply_masking_to_response(
             response=response,
-            bedrock_guardrail_response=bedrock_guardrail_response,
+            bedrock_guardrail_response=output_content_bedrock,
         )
 
         #########################################################
@@ -543,9 +574,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         Process streaming response chunks.
 
-        Collect content from the stream and make a bedrock api request to get the guardrail response.
+        Collect content from the stream and make parallel bedrock api requests to get the guardrail responses.
         """
         # Import here to avoid circular imports
+        import asyncio
+
         from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
         from litellm.main import stream_chunk_builder
         from litellm.types.utils import TextCompletionResponse
@@ -562,20 +595,29 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
         if isinstance(assembled_model_response, ModelResponse):
             ####################################################################
-            ########## 1. Make the Bedrock Apply Guardrail API request ##########
+            ########## 1. Make parallel Bedrock Apply Guardrail API requests ##########
 
             # Bedrock will raise an exception if this violates the guardrail policy
             ###################################################################
-            bedrock_guardrail_response = await self.make_bedrock_api_request(
-                kwargs=request_data, response=assembled_model_response
+            # Create tasks for parallel execution
+            input_task = self.make_bedrock_api_request(
+                source="INPUT", messages=request_data.get("messages"), request_data=request_data
+            )  # Only input messages
+            output_task = self.make_bedrock_api_request(
+                source="OUTPUT", response=assembled_model_response
+            )  # Only response
+
+            # Execute both requests in parallel
+            _, output_guardrail_response = await asyncio.gather(
+                input_task, output_task
             )
 
             #########################################################################
-            ########## 2. Apply masking to response if enabled ##########
+            ########## 2. Apply masking to response with output guardrail response ##########
             #########################################################################
             self._apply_masking_to_response(
                 response=assembled_model_response,
-                bedrock_guardrail_response=bedrock_guardrail_response,
+                bedrock_guardrail_response=output_guardrail_response,
             )
 
             #########################################################################
