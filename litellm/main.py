@@ -827,10 +827,13 @@ def responses_api_bridge_check(
     model: str,
     custom_llm_provider: str,
 ) -> Tuple[dict, str]:
-    model_info = {}
+    model_info: Dict[str, Any] = {}
     try:
-        model_info = _get_model_info_helper(
-            model=model, custom_llm_provider=custom_llm_provider
+        model_info = cast(
+            dict,
+            _get_model_info_helper(
+                model=model, custom_llm_provider=custom_llm_provider
+            ),
         )
         if model_info.get("mode") is None and model.startswith("responses/"):
             model = model.split("/")[1]
@@ -845,7 +848,7 @@ def responses_api_bridge_check(
             model = model.split("/")[1]
             mode = "responses"
             model_info["mode"] = mode
-    return cast(dict, model_info), model
+    return model_info, model
 
 
 @tracer.wrap()
