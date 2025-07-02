@@ -61,7 +61,7 @@ class MCPClient:
         try:
             await self.connect()
             return self
-        except Exception as e:
+        except Exception:
             await self.disconnect()
             raise
 
@@ -93,7 +93,7 @@ class MCPClient:
                 self._session_ctx = ClientSession(self._transport[0], self._transport[1])
                 self._session = await self._session_ctx.__aenter__()
                 await self._session.initialize()
-        except Exception as e:
+        except Exception:
             await self.disconnect()
             raise
 
@@ -168,7 +168,7 @@ class MCPClient:
         except asyncio.CancelledError:
             await self.disconnect()
             raise
-        except Exception as e:
+        except Exception:
             await self.disconnect()
             raise
 
@@ -193,7 +193,7 @@ class MCPClient:
         except asyncio.CancelledError:
             await self.disconnect()
             raise
-        except Exception as e:
+        except Exception:
             await self.disconnect()
             raise
         
