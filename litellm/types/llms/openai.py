@@ -1134,7 +1134,7 @@ class ReasoningSummaryTextDeltaEvent(BaseLiteLLMOpenAIResponseObject):
 class OutputItemAddedEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
     output_index: int
-    item: dict
+    item: Optional[dict]
 
 
 class OutputItemDoneEvent(BaseLiteLLMOpenAIResponseObject):

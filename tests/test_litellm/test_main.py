@@ -487,3 +487,34 @@ def test_bedrock_llama():
         request["raw_request_body"]["prompt"]
         == "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\nhi<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
     )
+
+
+def test_responses_api_bridge_check_strips_responses_prefix():
+    """Test that responses_api_bridge_check strips 'responses/' prefix and sets mode."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 4096}
+
+        model_info, model = responses_api_bridge_check(
+            model="responses/gpt-4-responses",
+            custom_llm_provider="openai",
+        )
+
+        assert model == "gpt-4-responses"
+        assert model_info["mode"] == "responses"
+
+
+def test_responses_api_bridge_check_handles_exception():
+    """Test that responses_api_bridge_check handles exceptions and still processes responses/ models."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.side_effect = Exception("Model not found")
+
+        model_info, model = responses_api_bridge_check(
+            model="responses/custom-model", custom_llm_provider="custom"
+        )
+
+        assert model == "custom-model"
+        assert model_info["mode"] == "responses"
