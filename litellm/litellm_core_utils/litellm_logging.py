@@ -44,6 +44,8 @@ from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
+    SENTRY_DENYLIST,
+    SENTRY_PII_DENYLIST,
 )
 from litellm.cost_calculator import (
     RealtimeAPITokenUsageProcessor,
@@ -56,6 +58,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.mlflow import MlflowLogger
+from litellm.integrations.sqs import SQSLogger
 from litellm.integrations.vector_store_integrations.bedrock_vector_store import (
     BedrockVectorStore,
 )
@@ -2948,6 +2951,10 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
                         [sys.executable, "-m", "pip", "install", "sentry_sdk"]
                     )
                     import sentry_sdk
+                from sentry_sdk.scrubber import EventScrubber
+
+                
+
                 sentry_sdk_instance = sentry_sdk
                 sentry_trace_rate = (
                     os.environ.get("SENTRY_API_TRACE_RATE")
@@ -2964,6 +2971,11 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
                     traces_sample_rate=float(sentry_trace_rate),  # type: ignore
                     sample_rate=float(
                         sentry_sample_rate if sentry_sample_rate else 1.0
+                    ),
+                    send_default_pii=False,  # Prevent sending Personal Identifiable Information
+                    event_scrubber=EventScrubber(
+                        denylist=SENTRY_DENYLIST,
+                        pii_denylist=SENTRY_PII_DENYLIST
                     ),
                 )
                 capture_exception = sentry_sdk_instance.capture_exception
@@ -3142,6 +3154,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _s3_v2_logger = S3V2Logger()
             _in_memory_loggers.append(_s3_v2_logger)
             return _s3_v2_logger  # type: ignore
+        elif logging_integration == "aws_sqs":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, SQSLogger):
+                    return callback  # type: ignore
+
+            _aws_sqs_logger = SQSLogger()
+            _in_memory_loggers.append(_aws_sqs_logger)
+            return _aws_sqs_logger  # type: ignore
         elif logging_integration == "azure_storage":
             for callback in _in_memory_loggers:
                 if isinstance(callback, AzureBlobStorageLogger):
@@ -3476,6 +3496,13 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
             for callback in _in_memory_loggers:
                 if isinstance(callback, S3V2Logger):
                     return callback
+        elif logging_integration == "aws_sqs":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, SQSLogger):
+                    return callback
+            _aws_sqs_logger = SQSLogger()
+            _in_memory_loggers.append(_aws_sqs_logger)
+            return _aws_sqs_logger  # type: ignore
         elif logging_integration == "azure_storage":
             for callback in _in_memory_loggers:
                 if isinstance(callback, AzureBlobStorageLogger):

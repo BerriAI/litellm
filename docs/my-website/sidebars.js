@@ -142,6 +142,7 @@ const sidebars = {
             "proxy/token_auth",
             "proxy/service_accounts",
             "proxy/access_control",
+            "proxy/cli_sso",
             "proxy/custom_auth",
             "proxy/ip_address",
             "proxy/email",

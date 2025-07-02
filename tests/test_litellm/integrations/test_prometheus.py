@@ -230,12 +230,8 @@ def test_prometheus_config_parsing():
                 "litellm_proxy_total_requests_metric",
             ],
             "include_labels": [
-                "litellm_model_name",
                 "requested_model",
-                "api_base",
-                "api_provider",
-                "exception_status",
-                "exception_class",
+                "team",
             ],
         }
     ]
@@ -251,12 +247,8 @@ def test_prometheus_config_parsing():
 
     # Verify label filters exist for each metric
     expected_labels = [
-        "litellm_model_name",
         "requested_model",
-        "api_base",
-        "api_provider",
-        "exception_status",
-        "exception_class",
+        "team",
     ]
 
     expected_metrics = [
@@ -373,6 +365,107 @@ def test_basic_functionality():
     )
 
     print("Basic prometheus configuration test passed!")
+
+
+# ==============================================================================
+# VALIDATION TESTS - Test the new validation logic for metrics and labels
+# ==============================================================================
+
+def test_invalid_metric_name_validation():
+    """Test that invalid metric names are caught and raise ValueError"""
+    # Clear registry before test
+    clear_prometheus_registry()
+
+    # Set up test configuration with invalid metric name
+    test_config = [
+        {
+            "group": "service_metrics", 
+            "metrics": [
+                "invalid_metric_name_that_does_not_exist",
+                "litellm_deployment_total_requests",  # valid metric
+            ],
+            "include_labels": ["litellm_model_name"],
+        }
+    ]
+
+    litellm.prometheus_metrics_config = test_config
+
+    # Creating PrometheusLogger should raise ValueError due to invalid metric
+    with pytest.raises(ValueError) as exc_info:
+        PrometheusLogger()
+    
+    # Verify error message contains information about invalid metric
+    assert "invalid_metric_name_that_does_not_exist" in str(exc_info.value)
+    assert "Configuration validation failed" in str(exc_info.value)
+
+
+def test_invalid_labels_validation():
+    """Test that invalid labels for metrics are caught and raise ValueError"""
+    # Clear registry before test
+    clear_prometheus_registry()
+
+    # Set up test configuration with invalid labels
+    test_config = [
+        {
+            "group": "service_metrics",
+            "metrics": ["litellm_deployment_total_requests"],
+            "include_labels": [
+                "litellm_model_name",  # valid label
+                "invalid_label_name",  # invalid label
+                "another_invalid_label",  # another invalid label
+            ],
+        }
+    ]
+
+    litellm.prometheus_metrics_config = test_config
+
+    # Creating PrometheusLogger should raise ValueError due to invalid labels
+    with pytest.raises(ValueError) as exc_info:
+        PrometheusLogger()
+    
+    # Verify error message contains information about invalid labels
+    assert "invalid_label_name" in str(exc_info.value)
+    assert "Configuration validation failed" in str(exc_info.value)
+
+
+def test_valid_configuration_passes_validation():
+    """Test that valid configuration passes validation without errors"""
+    # Clear registry before test
+    clear_prometheus_registry()
+
+    # Set up test configuration with all valid metrics and labels
+    test_config = [
+        {
+            "group": "service_metrics",
+            "metrics": [
+                "litellm_deployment_total_requests",
+                "litellm_deployment_failure_responses",
+            ],
+            "include_labels": [
+                "litellm_model_name",
+                "api_provider", 
+                "requested_model",
+            ],
+        }
+    ]
+
+    litellm.prometheus_metrics_config = test_config
+
+    # This should not raise any exceptions
+    try:
+        logger = PrometheusLogger()
+        # Verify the logger was created successfully
+        assert logger is not None
+        assert hasattr(logger, 'enabled_metrics')
+        assert 'litellm_deployment_total_requests' in logger.enabled_metrics
+        assert 'litellm_deployment_failure_responses' in logger.enabled_metrics
+    except Exception as e:
+        pytest.fail(f"Valid configuration should not raise exception: {e}")
+
+
+# ==============================================================================
+# END VALIDATION TESTS
+# ==============================================================================
 
 
 # ==============================================================================

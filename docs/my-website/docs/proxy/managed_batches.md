@@ -147,7 +147,7 @@ print(file_response.text)
 ```python showLineNumbers title="create_batch.py"
 ...
 
-client.batches.list(limit=10, extra_body={"target_model_names": "gpt-4o-batch"})
+client.batches.list(limit=10, extra_query={"target_model_names": "gpt-4o-batch"})
 ```
 
 ### [Coming Soon] Cancel a batch
