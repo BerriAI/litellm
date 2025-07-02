@@ -169,7 +169,6 @@ class PrometheusMetricLabels:
     litellm_proxy_total_requests_metric = [
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
-        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
@@ -182,7 +181,6 @@ class PrometheusMetricLabels:
     litellm_proxy_failed_requests_metric = [
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
-        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
@@ -323,7 +321,6 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
         UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
-        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
     ]
@@ -335,7 +332,6 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.API_BASE.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
-        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
     ]
