@@ -767,46 +767,49 @@ try:
     current_dir = os.path.dirname(os.path.abspath(__file__))
     ui_path = os.path.join(current_dir, "_experimental", "out")
     litellm_asset_prefix = "/litellm-asset-prefix"
-    # Iterate through files in the UI directory
-    for root, dirs, files in os.walk(ui_path):
-        for filename in files:
-            file_path = os.path.join(root, filename)
-            # Skip binary files and files that don't need path replacement
-            if filename.endswith(
-                (
-                    ".png",
-                    ".jpg",
-                    ".jpeg",
-                    ".gif",
-                    ".ico",
-                    ".woff",
-                    ".woff2",
-                    ".ttf",
-                    ".eot",
-                )
-            ):
-                continue
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    content = f.read()
 
-                # Replace the asset prefix with the server root path
-                modified_content = content.replace(
-                    f"{litellm_asset_prefix}",
-                    f"{server_root_path}",
-                )
+    # Only modify files if a custom server root path is set
+    if server_root_path and server_root_path != "/":
+        # Iterate through files in the UI directory
+        for root, dirs, files in os.walk(ui_path):
+            for filename in files:
+                file_path = os.path.join(root, filename)
+                # Skip binary files and files that don't need path replacement
+                if filename.endswith(
+                    (
+                        ".png",
+                        ".jpg",
+                        ".jpeg",
+                        ".gif",
+                        ".ico",
+                        ".woff",
+                        ".woff2",
+                        ".ttf",
+                        ".eot",
+                    )
+                ):
+                    continue
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        content = f.read()
 
-                # Replace the /.well-known/litellm-ui-config with the server root path
-                modified_content = modified_content.replace(
-                    "/litellm/.well-known/litellm-ui-config",
-                    f"{server_root_path}/.well-known/litellm-ui-config",
-                )
+                    # Replace the asset prefix with the server root path
+                    modified_content = content.replace(
+                        f"{litellm_asset_prefix}",
+                        f"{server_root_path}",
+                    )
 
-                with open(file_path, "w", encoding="utf-8") as f:
-                    f.write(modified_content)
-            except UnicodeDecodeError:
-                # Skip binary files that can't be decoded
-                continue
+                    # Replace the /.well-known/litellm-ui-config with the server root path
+                    modified_content = modified_content.replace(
+                        "/litellm/.well-known/litellm-ui-config",
+                        f"{server_root_path}/.well-known/litellm-ui-config",
+                    )
+
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write(modified_content)
+                except UnicodeDecodeError:
+                    # Skip binary files that can't be decoded
+                    continue
 
     # # Mount the _next directory at the root level
     app.mount(
