@@ -512,3 +512,91 @@ def test_generate_stable_server_id():
     assert zapier_sse_hash != github_http_hash
 
 
+@pytest.mark.asyncio
+async def test_list_tools_rest_api_server_not_found():
+    """Test the list_tools REST API when server is not found"""
+    from litellm.proxy._experimental.mcp_server.rest_endpoints import list_tool_rest_api
+    from fastapi import Query
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    # Mock UserAPIKeyAuth
+    mock_user_auth = UserAPIKeyAuth(api_key="test", user_id="test")
+
+    # Test with non-existent server ID
+    response = await list_tool_rest_api(
+        server_id="non_existent_server_id",
+        user_api_key_dict=mock_user_auth
+    )
+    
+    assert isinstance(response, dict)
+    assert response["tools"] == []
+    assert response["error"] == "server_not_found"
+    assert "Server with id non_existent_server_id not found" in response["message"]
+
+@pytest.mark.asyncio
+async def test_list_tools_rest_api_success():
+    """Test the list_tools REST API successful case"""
+    from litellm.proxy._experimental.mcp_server.rest_endpoints import list_tool_rest_api, global_mcp_server_manager
+    from fastapi import Query
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    # Store original registry to restore after test
+    original_registry = global_mcp_server_manager.get_registry().copy()
+    original_tool_mapping = global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.copy()
+    try:
+        # Clear existing registry
+        global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.clear()
+        global_mcp_server_manager.registry.clear()
+        global_mcp_server_manager.config_mcp_servers.clear()
+        
+        # Mock successful tools
+        mock_tools = [
+            MCPTool(
+                name="test_tool",
+                description="A test tool",
+                inputSchema={"type": "object"}
+            )
+        ]
+        
+        # Create mock client
+        mock_client = AsyncMock()
+        mock_client.list_tools = AsyncMock(return_value=mock_tools)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        
+        def mock_client_constructor(*args, **kwargs):
+            return mock_client
+        
+        with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient', mock_client_constructor):
+            # Load server config into global manager
+            global_mcp_server_manager.load_servers_from_config({
+                "test_server": {
+                    "url": "https://test-server.com/mcp",
+                    "transport": MCPTransport.http,
+                }
+            })
+            
+            # Mock UserAPIKeyAuth
+            mock_user_auth = UserAPIKeyAuth(api_key="test", user_id="test")
+            
+            # Get the server ID
+            server_id = list(global_mcp_server_manager.get_registry().keys())[0]
+            
+            # Test successful case
+            response = await list_tool_rest_api(
+                server_id=server_id,
+                user_api_key_dict=mock_user_auth
+            )
+            
+            assert isinstance(response, dict)
+            assert len(response["tools"]) == 1
+            assert response["tools"][0].name == "test_tool"
+            assert response["error"] is None
+            assert response["message"] == "Successfully retrieved tools"
+    finally:
+        # Restore original state
+        global_mcp_server_manager.registry = {}
+        global_mcp_server_manager.config_mcp_servers = original_registry
+        global_mcp_server_manager.tool_name_to_mcp_server_name_mapping = original_tool_mapping
+
+

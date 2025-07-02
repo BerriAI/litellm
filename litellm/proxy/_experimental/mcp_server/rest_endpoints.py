@@ -1,5 +1,5 @@
 import importlib
-from typing import List, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 
@@ -38,54 +38,98 @@ if MCP_AVAILABLE:
             None, description="The server id to list tools for"
         ),
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    ) -> List[ListMCPToolsRestAPIResponseObject]:
+    ) -> dict:
         """
         List all available tools with information about the server they belong to.
 
         Example response:
-        Tools:
-        [
-            {
-                "name": "create_zap",
-                "description": "Create a new zap",
-                "inputSchema": "tool_input_schema",
-                "mcp_info": {
-                    "server_name": "zapier",
-                    "logo_url": "https://www.zapier.com/logo.png",
+        {
+            "tools": [
+                {
+                    "name": "create_zap",
+                    "description": "Create a new zap",
+                    "inputSchema": "tool_input_schema",
+                    "mcp_info": {
+                        "server_name": "zapier",
+                        "logo_url": "https://www.zapier.com/logo.png",
+                    }
                 }
-            },
-            {
-                "name": "fetch_data",
-                "description": "Fetch data from a URL",
-                "inputSchema": "tool_input_schema",
-                "mcp_info": {
-                    "server_name": "fetch",
-                    "logo_url": "https://www.fetch.com/logo.png",
-                }
-            }
-        ]
+            ],
+            "error": null,
+            "message": "Successfully retrieved tools"
+        }
         """
-        list_tools_result: List[ListMCPToolsRestAPIResponseObject] = []
-        for server in global_mcp_server_manager.get_registry().values():
-            if server_id and server.server_id != server_id:
-                continue
-            try:
-                tools = await global_mcp_server_manager._get_tools_from_server(
-                    server=server,
-                )
-                for tool in tools:
-                    list_tools_result.append(
-                        ListMCPToolsRestAPIResponseObject(
-                            name=tool.name,
-                            description=tool.description,
-                            inputSchema=tool.inputSchema,
-                            mcp_info=server.mcp_info,
-                        )
+        try:
+            list_tools_result = []
+            error_message = None
+            
+            # If server_id is specified, only query that specific server
+            if server_id:
+                server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+                if server is None:
+                    return {
+                        "tools": [],
+                        "error": "server_not_found",
+                        "message": f"Server with id {server_id} not found"
+                    }
+                try:
+                    tools = await global_mcp_server_manager._get_tools_from_server(
+                        server=server,
                     )
-            except Exception as e:
-                verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
-                continue
-        return list_tools_result
+                    for tool in tools:
+                        list_tools_result.append(
+                            ListMCPToolsRestAPIResponseObject(
+                                name=tool.name,
+                                description=tool.description,
+                                inputSchema=tool.inputSchema,
+                                mcp_info=server.mcp_info,
+                            )
+                        )
+                except Exception as e:
+                    verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
+                    return {
+                        "tools": [],
+                        "error": "server_error",
+                        "message": f"Failed to get tools from server {server.name}: {str(e)}"
+                    }
+            else:
+                # Query all servers
+                errors = []
+                for server in global_mcp_server_manager.get_registry().values():
+                    try:
+                        tools = await global_mcp_server_manager._get_tools_from_server(
+                            server=server,
+                        )
+                        for tool in tools:
+                            list_tools_result.append(
+                                ListMCPToolsRestAPIResponseObject(
+                                    name=tool.name,
+                                    description=tool.description,
+                                    inputSchema=tool.inputSchema,
+                                    mcp_info=server.mcp_info,
+                                )
+                            )
+                    except Exception as e:
+                        verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
+                        errors.append(f"{server.name}: {str(e)}")
+                        continue
+                
+                if errors and not list_tools_result:
+                    error_message = "Failed to get tools from servers: " + "; ".join(errors)
+            
+            return {
+                "tools": list_tools_result,
+                "error": "partial_failure" if error_message else None,
+                "message": error_message if error_message else "Successfully retrieved tools"
+            }
+            
+        except Exception as e:
+            verbose_logger.exception("Unexpected error in list_tool_rest_api: %s", str(e))
+            return {
+                "tools": [],
+                "error": "unexpected_error",
+                "message": f"An unexpected error occurred: {str(e)}"
+            }
 
     @router.post("/tools/call", dependencies=[Depends(user_api_key_auth)])
     async def call_tool_rest_api(
