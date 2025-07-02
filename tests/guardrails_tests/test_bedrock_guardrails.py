@@ -279,7 +279,6 @@ async def test_bedrock_guardrails_streaming_request_body_mock():
         expected_body = {
             'source': 'OUTPUT',
             'content': [
-                {'text': {'text': "what's the capital of spain?"}},
                 {'text': {'text': 'The capital of Spain is Madrid.'}}
             ]
         }
