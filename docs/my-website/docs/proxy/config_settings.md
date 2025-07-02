@@ -319,6 +319,7 @@ router_settings:
 | ATHINA_API_KEY | API key for Athina service
 | ATHINA_BASE_URL | Base URL for Athina service (defaults to `https://log.athina.ai`)
 | AUTH_STRATEGY | Strategy used for authentication (e.g., OAuth, API key)
+| ANTHROPIC_API_KEY | API key for Anthropic service
 | AWS_ACCESS_KEY_ID | Access Key ID for AWS services
 | AWS_PROFILE_NAME | AWS CLI profile name to be used
 | AWS_REGION_NAME | Default AWS region for service interactions
@@ -415,6 +416,8 @@ router_settings:
 | DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND | Default price per second for Replicate GPU. Default is 0.001400
 | DEFAULT_REPLICATE_POLLING_DELAY_SECONDS | Default delay in seconds for Replicate polling. Default is 1
 | DEFAULT_REPLICATE_POLLING_RETRIES | Default number of retries for Replicate polling. Default is 5
+| DEFAULT_SQS_BATCH_SIZE | Default batch size for SQS logging. Default is 512
+| DEFAULT_SQS_FLUSH_INTERVAL_SECONDS | Default flush interval for SQS logging. Default is 10
 | DEFAULT_S3_BATCH_SIZE | Default batch size for S3 logging. Default is 512
 | DEFAULT_S3_FLUSH_INTERVAL_SECONDS | Default flush interval for S3 logging. Default is 10
 | DEFAULT_SLACK_ALERTING_THRESHOLD | Default threshold for Slack alerting. Default is 300
@@ -431,6 +434,9 @@ router_settings:
 | DOCS_URL | The path to the Swagger API documentation. **By default this is "/"**
 | EMAIL_LOGO_URL | URL for the logo used in emails
 | EMAIL_SUPPORT_CONTACT | Support contact email address
+| EMAIL_SIGNATURE | Custom HTML footer/signature for all emails. Can include HTML tags for formatting and links.
+| EMAIL_SUBJECT_INVITATION | Custom subject template for invitation emails. 
+| EMAIL_SUBJECT_KEY_CREATED | Custom subject template for key creation emails. 
 | EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING | Flag to enable new multi-instance rate limiting. **Default is False**
 | FIREWORKS_AI_4_B | Size parameter for Fireworks AI 4B model. Default is 4
 | FIREWORKS_AI_16_B | Size parameter for Fireworks AI 16B model. Default is 16

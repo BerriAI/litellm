@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 💰 Setting Team Budgets
+# Setting Team Budgets
 
 Track spend, set budgets for your Internal Team
 
@@ -318,7 +318,7 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
   -H 'Content-Type: application/json' \
   -H 'Authorization: sk-...' \ # 👈 key from step 2.
-  -D '{
+  -d '{
   "model": "gpt-3.5-turbo",
   "messages": [
       {

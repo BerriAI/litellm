@@ -52,7 +52,7 @@ litellm --config /path/to/config.yaml
 curl -X POST 'http://0.0.0.0:4000/v1/images/generations' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--D '{
+-d '{
     "model": "gpt-image-1",
     "prompt": "A cute baby sea otter",
     "n": 1,
