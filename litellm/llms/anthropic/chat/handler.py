@@ -515,9 +515,7 @@ class ModelResponseIterator:
             usage_object=cast(dict, anthropic_usage_chunk), reasoning_content=None
         )
 
-    def _content_block_delta_helper(
-        self, chunk: dict
-    ) -> Tuple[
+    def _content_block_delta_helper(self, chunk: dict) -> Tuple[
         str,
         Optional[ChatCompletionToolCallChunk],
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]],
@@ -600,6 +598,19 @@ class ModelResponseIterator:
 
         return thinking_blocks, provider_specific_fields
 
+    def get_content_block_start(self, chunk: dict) -> ContentBlockStart:
+        from litellm.types.llms.anthropic import (
+            ContentBlockStartText,
+            ContentBlockStartToolUse,
+        )
+
+        if chunk.get("content_block", {}).get("type") == "tool_use":
+            content_block_start = ContentBlockStartToolUse(**chunk)  # type: ignore
+        else:
+            content_block_start = ContentBlockStartText(**chunk)  # type: ignore
+
+        return content_block_start
+
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
             type_chunk = chunk.get("type", "") or ""
@@ -639,7 +650,8 @@ class ModelResponseIterator:
                 event: content_block_start
                 data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01T1x1fJ34qAmk2tNTrN7Up6","name":"get_weather","input":{}}}
                 """
-                content_block_start = ContentBlockStart(**chunk)  # type: ignore
+
+                content_block_start = self.get_content_block_start(chunk=chunk)
                 self.content_blocks = []  # reset content blocks when new block starts
                 if content_block_start["content_block"]["type"] == "text":
                     text = content_block_start["content_block"]["text"]

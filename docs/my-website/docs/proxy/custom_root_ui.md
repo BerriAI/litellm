@@ -12,6 +12,9 @@ Requires v1.72.3 or higher.
 
 :::
 
+Limitations:
+- This does not work in [litellm non-root](./deploy#non-root---without-internet-connection) images, as it requires write access to the UI files.
+
 ## Usage
 
 ### 1. Set `SERVER_ROOT_PATH` in your .env

@@ -45,7 +45,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   };
 
   return (
-    <div className="p-4">
+    <div className="p-4 max-w-full">
       <div className="flex justify-between items-center mb-6">
         <div>
           <Button onClick={onBack} className="mb-4">
@@ -86,7 +86,9 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
 
               <Card>
                 <Text>Host Url</Text>
-                <div className="mt-2 flex flex-wrap gap-2">{mcpServer.url}</div>
+                <div className="mt-2">
+                  <Text className="break-all overflow-wrap-anywhere">{mcpServer.url}</Text>
+                </div>
               </Card>
             </Grid>
           </TabPanel>
@@ -132,7 +134,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                   </div>
                   <div>
                     <Text className="font-medium">URL</Text>
-                    <div className="font-mono">{mcpServer.url}</div>
+                    <div className="font-mono break-all overflow-wrap-anywhere max-w-full">{mcpServer.url}</div>
                   </div>
                   <div>
                     <Text className="font-medium">Transport</Text>

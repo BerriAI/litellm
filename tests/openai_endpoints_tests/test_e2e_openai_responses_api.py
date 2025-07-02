@@ -119,3 +119,12 @@ def test_bad_request_bad_param_error():
         client.responses.create(
             model="gpt-4o", input="This should fail", temperature=2000
         )
+
+def test_anthropic_with_responses_api():
+    client = get_test_client()
+    response = client.responses.create(
+        model="anthropic/claude-3-5-sonnet-20240620", 
+        input="just respond with the word 'ping'",
+        previous_response_id="hi",
+    )
+    print("anthropic response=", response)
