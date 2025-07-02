@@ -5374,6 +5374,9 @@ async def ahealth_check(
                 **_filter_model_params(model_params),
                 prompt=prompt,
             ),
+            "batch": lambda: litellm.acompletion(
+                **model_params,
+            ),
             "rerank": lambda: litellm.arerank(
                 **_filter_model_params(model_params),
                 query=prompt or "",
