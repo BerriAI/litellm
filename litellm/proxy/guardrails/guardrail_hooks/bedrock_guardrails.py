@@ -479,8 +479,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         user_api_key_dict: UserAPIKeyAuth,
         response,
     ):
-        import asyncio
-
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
@@ -504,40 +502,22 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make parallel Bedrock API requests ##########
         #########################################################
-        # Create tasks for parallel execution
-        input_content_task = self.make_bedrock_api_request(
-            source="INPUT", messages=new_messages, request_data=data
-        )  # Only input messages
-        output_content_task = self.make_bedrock_api_request(
+        output_content_bedrock = await self.make_bedrock_api_request(
             source="OUTPUT", 
             response=response,
             request_data=data
         )  # Only response
 
-        # Execute both requests in parallel
-        input_guardrail_response, output_guardrail_response = await asyncio.gather(
-            input_content_task, output_content_task
-        )
         #########################################################
-
+        ########## 2. Apply masking to response with output guardrail response ##########
         #########################################################
-        ########## 2. Update the messages with the input guardrail response ##########
-        #########################################################
-        data["messages"] = (
-            self._update_messages_with_updated_bedrock_guardrail_response(
-                messages=new_messages,
-                bedrock_guardrail_response=input_guardrail_response,
-            )
-        )
-
-        ########## 3. Apply masking to response with output guardrail response ##########
         self._apply_masking_to_response(
             response=response,
-            bedrock_guardrail_response=output_guardrail_response,
+            bedrock_guardrail_response=output_content_bedrock,
         )
 
         #########################################################
-        ########## 4. Add the guardrail to the applied guardrails header ##########
+        ########## 3. Add the guardrail to the applied guardrails header ##########
         #########################################################
         add_guardrail_to_applied_guardrails_header(
             request_data=data, guardrail_name=self.guardrail_name
