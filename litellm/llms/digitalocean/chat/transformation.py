@@ -1,15 +1,8 @@
-"""
-Translate from OpenAI's `/v1/chat/completions` to DigitalOcean AI Agent's `/v1/chat/completions`
-"""
-
 from typing import List, Optional, Tuple, Union, Dict
-
-from pydantic import BaseModel
 
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
-    ChatCompletionAssistantMessage,
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
 )
