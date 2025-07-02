@@ -608,7 +608,7 @@ def test_router_responses_api_bridge():
     """
     Test that router.responses_api_bridge returns the correct response
     """
-    import respx
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     router = litellm.Router(
         model_list=[
@@ -636,3 +636,19 @@ def test_router_responses_api_bridge():
             messages=[{"role": "user", "content": "Hello, world!"}],
         )
         assert mock_responses.call_count == 1
+
+    ## CONFIRM MODEL NAME IS STRIPPED
+    client = HTTPHandler()
+
+    with patch.object(client, "post", return_value=AsyncMock()) as mock_post:
+        result = router.completion(
+            model="[IP-approved] o3-pro",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            client=client,
+        )
+        assert mock_post.call_count == 1
+        assert (
+            mock_post.call_args.kwargs["url"]
+            == "https://webhook.site/fba79dae-220a-4bb7-9a3a-8caa49604e55/openai/v1/responses?api-version=preview"
+        )
+        assert mock_post.call_args.kwargs["json"]["model"] == "webinterface-o3-pro"
