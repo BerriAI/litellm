@@ -1,38 +1,37 @@
 import React, { useState, useEffect } from "react";
 import {
   Card,
-
-  Subtitle,
   Table,
   TableHead,
   TableRow,
-  Badge,
   TableHeaderCell,
   TableCell,
   TableBody,
-  Metric,
   Text,
   Grid,
   Button,
   TextInput,
   Switch,
-  Col,
   TabPanel,
   TabPanels,
   TabGroup,
   TabList,
   Tab,
-  Callout,
   SelectItem,
   Icon,
 } from "@tremor/react";
 
-import {
-  PencilAltIcon,
-  TrashIcon
-} from "@heroicons/react/outline";
+import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 
-import { Modal, Typography, Form, Input, Select, Button as Button2, message } from "antd";
+import {
+  Modal,
+  Typography,
+  Form,
+  Input,
+  Select,
+  Button as Button2,
+  message,
+} from "antd";
 import EmailSettings from "./email_settings";
 
 const { Title, Paragraph } = Typography;
@@ -41,11 +40,15 @@ import {
   getCallbacksCall,
   setCallbacksCall,
   serviceHealthCheck,
-  deleteCallback
+  deleteCallback,
 } from "./networking";
 import AlertingSettings from "./alerting/alerting_settings";
 import FormItem from "antd/es/form/FormItem";
-import { callback_map, callbackLogoMap, Callbacks } from "./callback_info_helpers";
+import {
+  callback_map,
+  callbackLogoMap,
+  Callbacks,
+} from "./callback_info_helpers";
 interface SettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
@@ -53,14 +56,11 @@ interface SettingsPageProps {
   premiumUser: boolean;
 }
 
-
 interface genericCallbackParams {
-
-  litellm_callback_name: string  // what to send in request
-  ui_callback_name: string // what to show on UI
-  litellm_callback_params: string[] | null // known required params for this callback
+  litellm_callback_name: string; // what to send in request
+  ui_callback_name: string; // what to show on UI
+  litellm_callback_params: string[] | null; // known required params for this callback
 }
-
 
 interface AlertingVariables {
   SLACK_WEBHOOK_URL: string | null;
@@ -114,8 +114,7 @@ const Settings: React.FC<SettingsPageProps> = ({
   userID,
   premiumUser,
 }) => {
-  const [callbacks, setCallbacks] =
-    useState<AlertingObject[]>([]);
+  const [callbacks, setCallbacks] = useState<AlertingObject[]>([]);
   const [alerts, setAlerts] = useState<any[]>([]);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [form] = Form.useForm();
@@ -130,11 +129,17 @@ const Settings: React.FC<SettingsPageProps> = ({
   const [showAddCallbacksModal, setShowAddCallbacksModal] = useState(false);
   const [allCallbacks, setAllCallbacks] = useState<genericCallbackParams[]>([]);
 
-  const [selectedCallbacktoAdd, setSelectedCallbacktoAdd] = useState<string | null>(null);
-  const [selectedCallbackParams, setSelectedCallbackParams] = useState<string[]>([]);
+  const [selectedCallbacktoAdd, setSelectedCallbacktoAdd] = useState<
+    string | null
+  >(null);
+  const [selectedCallbackParams, setSelectedCallbackParams] = useState<
+    string[]
+  >([]);
 
   const [showEditCallback, setShowEditCallback] = useState(false);
-  const [selectedEditCallback, setSelectedEditCallback] = useState<any | null>(null);
+  const [selectedEditCallback, setSelectedEditCallback] = useState<any | null>(
+    null
+  );
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
   const [callbackToDelete, setCallbackToDelete] = useState<string | null>(null);
 
@@ -161,20 +166,15 @@ const Settings: React.FC<SettingsPageProps> = ({
       return;
     }
     getCallbacksCall(accessToken, userID, userRole).then((data) => {
-      console.log("callbacks", data);
-
       setCallbacks(data.callbacks);
       setAllCallbacks(data.available_callbacks);
       // setCallbacks(callbacks_data);
 
       let alerts_data = data.alerts;
-      console.log("alerts_data", alerts_data);
       if (alerts_data) {
         if (alerts_data.length > 0) {
           let _alert_info = alerts_data[0];
-          console.log("_alert_info", _alert_info);
           let catch_all_webhook = _alert_info.variables.SLACK_WEBHOOK_URL;
-          console.log("catch_all_webhook", catch_all_webhook);
 
           let active_alerts = _alert_info.active_alerts;
           setActiveAlerts(active_alerts);
@@ -191,23 +191,6 @@ const Settings: React.FC<SettingsPageProps> = ({
     return activeAlerts && activeAlerts.includes(alertName);
   };
 
-  const handleAddCallback = () => {
-    console.log("Add callback clicked");
-    setIsModalVisible(true);
-  };
-
-  const handleCancel = () => {
-    setIsModalVisible(false);
-    form.resetFields();
-    setSelectedCallback(null);
-  };
-
-  const handleChange = (values: any) => {
-    setSelectedAlertValues(values);
-    // Here, you can perform any additional logic with the selected values
-    console.log("Selected values:", values);
-  };
-
   const updateCallbackCall = async (formValues: Record<string, any>) => {
     if (!accessToken) {
       return;
@@ -217,13 +200,12 @@ const Settings: React.FC<SettingsPageProps> = ({
     // add all other variables
     Object.entries(formValues).forEach(([key, value]) => {
       if (key !== "callback") {
-        env_vars[key] = value
+        env_vars[key] = value;
       }
     });
     let payload = {
       environment_variables: env_vars,
-    }
-
+    };
 
     try {
       let newCallback = await setCallbacksCall(accessToken, payload);
@@ -234,22 +216,19 @@ const Settings: React.FC<SettingsPageProps> = ({
     } catch (error) {
       message.error("Failed to add callback: " + error, 20);
     }
-  }
-
-
-
+  };
 
   const addNewCallbackCall = async (formValues: Record<string, any>) => {
     if (!accessToken) {
       return;
     }
-    let new_callback = formValues?.callback
+    let new_callback = formValues?.callback;
 
     let env_vars: Record<string, string> = {};
     // add all other variables
     Object.entries(formValues).forEach(([key, value]) => {
       if (key !== "callback") {
-        env_vars[key] = value
+        env_vars[key] = value;
       }
     });
 
@@ -258,8 +237,7 @@ const Settings: React.FC<SettingsPageProps> = ({
       litellm_settings: {
         success_callback: [new_callback],
       },
-    }
-
+    };
 
     try {
       let newCallback = await setCallbacksCall(accessToken, payload);
@@ -270,19 +248,15 @@ const Settings: React.FC<SettingsPageProps> = ({
     } catch (error) {
       message.error("Failed to add callback: " + error, 20);
     }
-  }
+  };
 
-
-
-  const handleSelectedCallbackChange = (callbackObject: genericCallbackParams) => {
-
-    console.log("inside handleSelectedCallbackChange", callbackObject);
+  const handleSelectedCallbackChange = (
+    callbackObject: genericCallbackParams
+  ) => {
     setSelectedCallback(callbackObject.litellm_callback_name);
 
-    console.log("all callbacks", allCallbacks);
     if (callbackObject && callbackObject.litellm_callback_params) {
       setSelectedCallbackParams(callbackObject.litellm_callback_params);
-      console.log("selectedCallbackParams", selectedCallbackParams);
     } else {
       setSelectedCallbackParams([]);
     }
@@ -298,14 +272,9 @@ const Settings: React.FC<SettingsPageProps> = ({
       const webhookInput = document.querySelector(
         `input[name="${key}"]`
       ) as HTMLInputElement;
-      console.log("key", key);
-      console.log("webhookInput", webhookInput);
       const newWebhookValue = webhookInput?.value || "";
-      console.log("newWebhookValue", newWebhookValue);
       updatedAlertToWebhooks[key] = newWebhookValue;
     });
-
-    console.log("updatedAlertToWebhooks", updatedAlertToWebhooks);
 
     const payload = {
       general_settings: {
@@ -313,8 +282,6 @@ const Settings: React.FC<SettingsPageProps> = ({
         alert_types: activeAlerts,
       },
     };
-
-    console.log("payload", payload);
 
     try {
       setCallbacksCall(accessToken, payload);
@@ -336,9 +303,6 @@ const Settings: React.FC<SettingsPageProps> = ({
           ?.value || value,
       ])
     );
-
-    console.log("updatedVariables", updatedVariables);
-    console.log("updateAlertTypes", selectedAlertValues);
 
     const payload = {
       environment_variables: updatedVariables,
@@ -363,7 +327,6 @@ const Settings: React.FC<SettingsPageProps> = ({
     // Handle form submission
     form.validateFields().then((values) => {
       // Call API to add the callback
-      console.log("Form values:", values);
       let payload;
       if (values.callback === "langfuse") {
         payload = {
@@ -389,7 +352,6 @@ const Settings: React.FC<SettingsPageProps> = ({
         // add langfuse to callbacks
         setCallbacks(callbacks ? [...callbacks, newCallback] : [newCallback]);
       } else if (values.callback === "slack") {
-        console.log(`values.slackWebhookUrl: ${values.slackWebhookUrl}`);
         payload = {
           general_settings: {
             alerting: ["slack"],
@@ -400,9 +362,6 @@ const Settings: React.FC<SettingsPageProps> = ({
           },
         };
         setCallbacksCall(accessToken, payload);
-
-        // add slack to callbacks
-        console.log(`values.callback: ${values.callback}`);
 
         let newCallback: AlertingObject = {
           name: values.callback,
@@ -416,7 +375,6 @@ const Settings: React.FC<SettingsPageProps> = ({
         };
         setCallbacks(callbacks ? [...callbacks, newCallback] : [newCallback]);
       } else if (values.callback == "openmeter") {
-        console.log(`values.openMeterApiKey: ${values.openMeterApiKey}`);
         payload = {
           environment_variables: {
             OPENMETER_API_KEY: values.openMeterApiKey,
@@ -484,11 +442,9 @@ const Settings: React.FC<SettingsPageProps> = ({
     return null;
   }
 
-  console.log(`callbacks: ${callbacks}`);
   return (
     <div className="w-full mx-4">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
-
         <TabGroup>
           <TabList variant="line" defaultValue="1">
             <Tab value="1">Logging Callbacks</Tab>
@@ -501,63 +457,59 @@ const Settings: React.FC<SettingsPageProps> = ({
               <Title level={4}>Active Logging Callbacks</Title>
 
               <Grid numItems={2}>
-
                 <Card className="max-h-[50vh]">
-
                   <Table>
                     <TableHead>
                       <TableRow>
                         <TableHeaderCell>Callback Name</TableHeaderCell>
                         {/* <TableHeaderCell>Callback Env Vars</TableHeaderCell> */}
-
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {callbacks
-                        .map((callback, index) => (
-                          <TableRow key={index} className="flex justify-between">
-
-                            <TableCell>
-                              <Text>{callback.name}</Text>
-                            </TableCell>
-                            <TableCell>
-                              <Grid numItems={2} className="flex justify-between">
-                                <Icon
-                                  icon={PencilAltIcon}
-                                  size="sm"
-                                  onClick={() => {
-                                    setSelectedEditCallback(callback);
-                                    setShowEditCallback(true);
-                                  }}
-                                />
-                                <Icon
-                                  icon={TrashIcon}
-                                  size="sm"
-                                  onClick={() =>
-                                    handleDeleteCallback(callback.name)
-                                  }
-                                  className="text-red-500 hover:text-red-700 cursor-pointer"
-                                />
-                                <Button
-                                  onClick={() =>
-                                    serviceHealthCheck(accessToken, callback.name)
-                                  }
-                                  className="ml-2"
-                                  variant="secondary"
-                                >
-                                  Test Callback
-                                </Button>
-                              </Grid>
-                            </TableCell>
-                          </TableRow>
-                        ))}
+                      {callbacks.map((callback, index) => (
+                        <TableRow key={index} className="flex justify-between">
+                          <TableCell>
+                            <Text>{callback.name}</Text>
+                          </TableCell>
+                          <TableCell>
+                            <Grid numItems={2} className="flex justify-between">
+                              <Icon
+                                icon={PencilAltIcon}
+                                size="sm"
+                                onClick={() => {
+                                  setSelectedEditCallback(callback);
+                                  setShowEditCallback(true);
+                                }}
+                              />
+                              <Icon
+                                icon={TrashIcon}
+                                size="sm"
+                                onClick={() =>
+                                  handleDeleteCallback(callback.name)
+                                }
+                                className="text-red-500 hover:text-red-700 cursor-pointer"
+                              />
+                              <Button
+                                onClick={() =>
+                                  serviceHealthCheck(accessToken, callback.name)
+                                }
+                                className="ml-2"
+                                variant="secondary"
+                              >
+                                Test Callback
+                              </Button>
+                            </Grid>
+                          </TableCell>
+                        </TableRow>
+                      ))}
                     </TableBody>
                   </Table>
                 </Card>
               </Grid>
               <Button
                 className="mt-2"
-                onClick={() => setShowAddCallbacksModal(true)}>
+                onClick={() => setShowAddCallbacksModal(true)}
+              >
                 Add Callback
               </Button>
             </TabPanel>
@@ -663,7 +615,6 @@ const Settings: React.FC<SettingsPageProps> = ({
         </TabGroup>
       </Grid>
 
-
       <Modal
         title="Add Logging Callback"
         visible={showAddCallbacksModal}
@@ -671,9 +622,15 @@ const Settings: React.FC<SettingsPageProps> = ({
         onCancel={() => setShowAddCallbacksModal(false)}
         footer={null}
       >
-
-        <a href="https://docs.litellm.ai/docs/proxy/logging" className="mb-8 mt-4" target="_blank" style={{ color: "blue" }}> LiteLLM Docs: Logging</a>
-
+        <a
+          href="https://docs.litellm.ai/docs/proxy/logging"
+          className="mb-8 mt-4"
+          target="_blank"
+          style={{ color: "blue" }}
+        >
+          {" "}
+          LiteLLM Docs: Logging
+        </a>
 
         <Form
           form={form}
@@ -682,7 +639,6 @@ const Settings: React.FC<SettingsPageProps> = ({
           wrapperCol={{ span: 16 }}
           labelAlign="left"
         >
-
           <>
             <FormItem
               label="Callback"
@@ -693,66 +649,75 @@ const Settings: React.FC<SettingsPageProps> = ({
                 onChange={(value) => {
                   const selectedCallback = allCallbacks[value];
                   if (selectedCallback) {
-                    console.log(selectedCallback.ui_callback_name);
                     handleSelectedCallbackChange(selectedCallback);
                   }
                 }}
               >
-                {Object.entries(Callbacks).map(([callbackEnum, callbackDisplayName]) => (
-                  <SelectItem
-                    key={callbackDisplayName}
-                    value={callback_map[callbackEnum]}
-                  >
-                    <div className="flex items-center space-x-2">
-                      {callbackLogoMap[callbackDisplayName] ? (
-                        <div className="w-5 h-5 flex items-center justify-center">
-                          <img
-                            src={callbackLogoMap[callbackDisplayName]}
-                            alt={`${callbackEnum} logo`}
-                            className="w-5 h-5"
-                            onError={() => {
-                              if (callbackLogoMap[callbackDisplayName]) {
-                                delete callbackLogoMap[callbackDisplayName];
-                              }
-                            }}
-                            style={{ display: callbackLogoMap[callbackDisplayName] ? 'block' : 'none' }}
-                          />
-                          {!callbackLogoMap[callbackDisplayName] && (
-                            <div className="w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs">
-                              {callbackDisplayName.charAt(0).toUpperCase()}
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs">
-                          {(callbackDisplayName as string).charAt(0).toUpperCase()}
-                        </div>
-                      )}
-                      <span>{callbackDisplayName}</span>
-                    </div>
-                  </SelectItem>
-                ))}
+                {Object.entries(Callbacks).map(
+                  ([callbackEnum, callbackDisplayName]) => (
+                    <SelectItem
+                      key={callbackDisplayName}
+                      value={callback_map[callbackEnum]}
+                    >
+                      <div className="flex items-center space-x-2">
+                        {callbackLogoMap[callbackDisplayName] ? (
+                          <div className="w-5 h-5 flex items-center justify-center">
+                            <img
+                              src={callbackLogoMap[callbackDisplayName]}
+                              alt={`${callbackEnum} logo`}
+                              className="w-5 h-5"
+                              onError={() => {
+                                if (callbackLogoMap[callbackDisplayName]) {
+                                  delete callbackLogoMap[callbackDisplayName];
+                                }
+                              }}
+                              style={{
+                                display: callbackLogoMap[callbackDisplayName]
+                                  ? "block"
+                                  : "none",
+                              }}
+                            />
+                            {!callbackLogoMap[callbackDisplayName] && (
+                              <div className="w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs">
+                                {callbackDisplayName.charAt(0).toUpperCase()}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs">
+                            {(callbackDisplayName as string)
+                              .charAt(0)
+                              .toUpperCase()}
+                          </div>
+                        )}
+                        <span>{callbackDisplayName}</span>
+                      </div>
+                    </SelectItem>
+                  )
+                )}
               </Select>
             </FormItem>
 
-
-            {
-              selectedCallbackParams && selectedCallbackParams.map((param) => (
+            {selectedCallbackParams &&
+              selectedCallbackParams.map((param) => (
                 <FormItem
                   label={param}
                   name={param}
                   key={param}
-                  rules={[{ required: true, message: "Please enter the value for " + param }]}
+                  rules={[
+                    {
+                      required: true,
+                      message: "Please enter the value for " + param,
+                    },
+                  ]}
                 >
                   <TextInput type="password" />
                 </FormItem>
-              ))
-            }
+              ))}
 
             <div style={{ textAlign: "right", marginTop: "10px" }}>
               <Button2 htmlType="submit">Save</Button2>
             </div>
-
           </>
         </Form>
       </Modal>
@@ -764,7 +729,6 @@ const Settings: React.FC<SettingsPageProps> = ({
         onCancel={() => setShowEditCallback(false)}
         footer={null}
       >
-
         <Form
           form={form}
           onFinish={updateCallbackCall}
@@ -773,27 +737,21 @@ const Settings: React.FC<SettingsPageProps> = ({
           labelAlign="left"
         >
           <>
-            {
-              selectedEditCallback && selectedEditCallback.variables && Object.entries(selectedEditCallback.variables).map(([param, value]) => (
-                <FormItem
-                  label={param}
-                  name={param}
-                  key={param}
-                >
-                  <TextInput type="password" defaultValue={value as string} />
-                </FormItem>
-              ))
-            }
-
+            {selectedEditCallback &&
+              selectedEditCallback.variables &&
+              Object.entries(selectedEditCallback.variables).map(
+                ([param, value]) => (
+                  <FormItem label={param} name={param} key={param}>
+                    <TextInput type="password" defaultValue={value as string} />
+                  </FormItem>
+                )
+              )}
           </>
 
           <div style={{ textAlign: "right", marginTop: "10px" }}>
             <Button2 htmlType="submit">Save</Button2>
           </div>
-
         </Form>
-
-
       </Modal>
 
       <Modal
@@ -814,7 +772,6 @@ const Settings: React.FC<SettingsPageProps> = ({
         </p>
       </Modal>
     </div>
-
   );
 };
 
