@@ -878,11 +878,9 @@ class FineTuningJobCreate(BaseModel):
 
 
 class LiteLLMFineTuningJobCreate(FineTuningJobCreate):
-    custom_llm_provider: Optional[Literal["openai", "azure", "vertex_ai"]] = None
+    model_config = ConfigDict(extra="allow")  # This allows the model to accept additional fields
 
-    model_config = {
-        "extra": "allow"
-    }  # This allows the model to accept additional fields
+    custom_llm_provider: Optional[Literal["openai", "azure", "vertex_ai"]] = None
 
 
 AllEmbeddingInputValues = Union[str, List[str], List[int], List[List[int]]]
