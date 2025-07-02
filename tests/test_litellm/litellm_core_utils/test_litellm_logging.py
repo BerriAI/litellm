@@ -13,6 +13,7 @@ import time
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import set_callbacks
+from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
 
 
 @pytest.fixture
@@ -309,3 +310,46 @@ def test_response_cost_calculator_with_response_cost_in_hidden_params(logging_ob
 
     assert response_cost is not None
     assert response_cost > 100
+
+
+def test_sentry_scrubbing():
+    """
+    Test that Sentry denylists contain expected sensitive data patterns
+    """
+    from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
+
+    # Test API keys and sensitive credentials are in denylist
+    api_keys = [
+        "api_key",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "AZURE_API_KEY",
+        "COHERE_API_KEY",
+    ]
+    for key in api_keys:
+        assert key in SENTRY_DENYLIST, f"{key} should be in SENTRY_DENYLIST"
+
+    # Test authentication and security related fields are in denylist
+    auth_fields = [
+        "master_key",
+        "LITELLM_MASTER_KEY",
+        "auth_token",
+        "private_key",
+    ]
+    for field in auth_fields:
+        assert field in SENTRY_DENYLIST, f"{field} should be in SENTRY_DENYLIST"
+
+    # Test PII fields are in PII denylist
+    pii_fields = [
+        "user_id",
+        "email",
+        "phone",
+        "address",
+        "ip_address",
+    ]
+    for field in pii_fields:
+        assert field in SENTRY_PII_DENYLIST, f"{field} should be in SENTRY_PII_DENYLIST"
+
+
+
+
