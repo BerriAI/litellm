@@ -2077,6 +2077,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     # Arize dynamic params
     arize_api_key: Optional[str]
     arize_space_key: Optional[str]
+    arize_space_id: Optional[str]
 
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
