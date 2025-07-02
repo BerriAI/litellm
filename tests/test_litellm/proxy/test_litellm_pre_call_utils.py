@@ -8,10 +8,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi import Request
 
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import TeamCallbackMetadata, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
     LiteLLMProxyRequestSetup,
+    _get_dynamic_logging_metadata,
     _get_enforced_params,
     add_litellm_data_to_request,
     check_if_token_is_service_account,
@@ -297,3 +298,43 @@ def test_team_dynamic_logging_settings():
     )
     result = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(key_without_team_logging)
     assert result is None
+
+
+def test_get_dynamic_logging_metadata_with_arize_team_logging():
+    """
+    Test _get_dynamic_logging_metadata function with arize team logging and dynamic parameters
+    """
+    # Setup user with arize team logging including callback_vars
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        metadata={},
+        team_metadata={
+            "logging": [
+                {
+                    "callback_name": "arize",
+                    "callback_type": "success",
+                    "callback_vars": {
+                        "arize_api_key": "test_arize_api_key",
+                        "arize_space_id": "test_arize_space_id"
+                    }
+                }
+            ]
+        }
+    )
+    
+    # Mock proxy_config (not used in this test path since we have team dynamic logging)
+    mock_proxy_config = MagicMock()
+    
+    # Call the function
+    result = _get_dynamic_logging_metadata(
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=mock_proxy_config
+    )
+    
+    # Verify the result
+    assert result is not None
+    assert isinstance(result, TeamCallbackMetadata)
+    assert result.success_callback == ["arize"]
+    assert result.callback_vars is not None
+    assert result.callback_vars["arize_api_key"] == "test_arize_api_key"
+    assert result.callback_vars["arize_space_id"] == "test_arize_space_id"
