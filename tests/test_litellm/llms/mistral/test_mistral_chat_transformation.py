@@ -477,3 +477,130 @@ class TestMistralEmptyContentHandling:
         assert result["choices"][0]["message"]["content"] is None
         # Second choice should remain as empty string
         assert result["choices"][1]["message"]["content"] is None
+
+
+class TestMistralTransformResponseIntegration:
+    """Test suite for Mistral transform_response integration with llm_http_handler."""
+
+    @patch('litellm.llms.mistral.mistral_chat_transformation.MistralConfig.transform_response')
+    @patch('litellm.llms.mistral.handler.base_llm_http_handler')
+    def test_transform_response_method_is_called(self, mock_base_handler, mock_transform_response):
+        from litellm.llms.mistral.handler import completion as mistral_completion
+        import litellm
+        import httpx
+        from unittest.mock import MagicMock
+
+        # Create a fake httpx.Response object
+        fake_response = httpx.Response(
+            status_code=200,
+            json={
+                "id": "test-123",
+                "choices": [
+                    {
+                        "message": {
+                            "content": "Hello!",
+                            "role": "assistant"
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+            }
+        )
+
+        # Mock transform_response to return a ModelResponse
+        mock_response = litellm.ModelResponse()
+        mock_response.choices = []
+        mock_transform_response.return_value = mock_response
+
+        # Mock the base handler's completion method to call transform_response
+        def mock_completion(*args, **kwargs):
+            # Extract the provider_config from kwargs
+            provider_config = kwargs.get('provider_config')
+            if provider_config:
+                # Call transform_response with the fake response
+                return provider_config.transform_response(
+                    model=kwargs.get('model', 'mistral/mistral-tiny'),
+                    raw_response=fake_response,
+                    model_response=kwargs.get('model_response'),
+                    logging_obj=kwargs.get('logging_obj'),
+                    request_data={},
+                    messages=kwargs.get('messages', []),
+                    optional_params=kwargs.get('optional_params', {}),
+                    litellm_params=kwargs.get('litellm_params', {}),
+                    encoding=kwargs.get('encoding'),
+                    api_key=kwargs.get('api_key'),
+                    json_mode=kwargs.get('json_mode', False)
+                )
+            return mock_response
+
+        mock_base_handler.completion.side_effect = mock_completion
+
+        # Call the Mistral completion function
+        result = mistral_completion(
+            model="mistral/mistral-tiny",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_base="https://api.mistral.ai/v1",
+            custom_llm_provider="mistral",
+            model_response=litellm.ModelResponse(),
+            encoding=None,
+            logging_obj=MagicMock(),
+            optional_params={},
+            timeout=30,
+            litellm_params={},
+            acompletion=False,
+            stream=False,
+            api_key="test-key",
+            headers={},
+            client=None
+        )
+
+        # Debug: Check if the mock was called
+        print(f"Mock called: {mock_transform_response.called}")
+        print(f"Mock call count: {mock_transform_response.call_count}")
+        print(f"Mock call args: {mock_transform_response.call_args}")
+        print(f"Mock call args list: {mock_transform_response.call_args_list}")
+        
+        # Verify that transform_response was called
+        mock_transform_response.assert_called_once()
+        call_args = mock_transform_response.call_args
+        assert call_args is not None
+        # Check that the 'model' keyword argument is correct
+        assert call_args[1]['model'] == "mistral/mistral-tiny"
+
+    def test_mistral_handler_uses_correct_api_base_and_key(self):
+        """Test that the Mistral handler correctly sets up API base and key."""
+        from litellm.llms.mistral.handler import completion as mistral_completion
+        import litellm
+        
+        # Test with custom API base and key
+        custom_api_base = "https://custom.mistral.ai/v1"
+        custom_api_key = "custom-key-123"
+        
+        with patch('litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.completion') as mock_base_handler:
+            model_response = litellm.ModelResponse()
+            model_response.choices = []
+            mock_base_handler.return_value = model_response
+            
+            result = mistral_completion(
+                model="mistral/mistral-tiny",
+                messages=[{"role": "user", "content": "Hello"}],
+                api_base=custom_api_base,
+                custom_llm_provider="mistral",
+                model_response=model_response,
+                encoding=None,
+                logging_obj=MagicMock(),
+                optional_params={},
+                timeout=30,
+                litellm_params={},
+                acompletion=False,
+                stream=False,
+                api_key=custom_api_key,
+                headers={},
+                client=None
+            )
+            
+            # Verify the base handler was called with the correct API base
+            mock_base_handler.assert_called_once()
+            call_args = mock_base_handler.call_args
+            assert call_args.kwargs['api_base'] == custom_api_base
+            assert call_args.kwargs['api_key'] == custom_api_key
