@@ -230,12 +230,8 @@ def test_prometheus_config_parsing():
                 "litellm_proxy_total_requests_metric",
             ],
             "include_labels": [
-                "litellm_model_name",
                 "requested_model",
-                "api_base",
-                "api_provider",
-                "exception_status",
-                "exception_class",
+                "team",
             ],
         }
     ]
@@ -251,12 +247,8 @@ def test_prometheus_config_parsing():
 
     # Verify label filters exist for each metric
     expected_labels = [
-        "litellm_model_name",
         "requested_model",
-        "api_base",
-        "api_provider",
-        "exception_status",
-        "exception_class",
+        "team",
     ]
 
     expected_metrics = [
