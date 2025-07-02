@@ -67,8 +67,8 @@ async def test_send_key_created_email(
     with mock.patch.dict(
         os.environ,
         {
-            "EMAIL_LOGO_URL": "https://test-logo.com",
-            "EMAIL_SUPPORT_CONTACT": "support@test.com",
+            "EMAIL_LOGO_URL": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png",
+            "EMAIL_SUPPORT_CONTACT": "support@berri.ai",
             "PROXY_BASE_URL": "http://test.com",
         },
     ):
@@ -103,8 +103,8 @@ async def test_send_user_invitation_email(
     with mock.patch.dict(
         os.environ,
         {
-            "EMAIL_LOGO_URL": "https://test-logo.com",
-            "EMAIL_SUPPORT_CONTACT": "support@test.com",
+            "EMAIL_LOGO_URL": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png",
+            "EMAIL_SUPPORT_CONTACT": "support@berri.ai",
             "PROXY_BASE_URL": "http://test.com",
         },
     ):
@@ -140,8 +140,8 @@ async def test_send_user_invitation_email_from_db(
     with mock.patch.dict(
         os.environ,
         {
-            "EMAIL_LOGO_URL": "https://test-logo.com",
-            "EMAIL_SUPPORT_CONTACT": "support@test.com",
+            "EMAIL_LOGO_URL": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png",
+            "EMAIL_SUPPORT_CONTACT": "support@berri.ai",
             "PROXY_BASE_URL": "http://test.com",
         },
     ):
@@ -360,8 +360,8 @@ async def test_get_email_params_user_invitation(
     with mock.patch.dict(
         os.environ,
         {
-            "EMAIL_LOGO_URL": "https://test-logo.com",
-            "EMAIL_SUPPORT_CONTACT": "support@test.com",
+            "EMAIL_LOGO_URL": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png",
+            "EMAIL_SUPPORT_CONTACT": "support@berri.ai",
             "PROXY_BASE_URL": "http://test.com",
         },
     ):
@@ -378,8 +378,8 @@ async def test_get_email_params_user_invitation(
                 user_email="test@example.com",
             )
 
-            assert result.logo_url == "https://test-logo.com"
-            assert result.support_contact == "support@test.com"
+            assert result.logo_url == "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
+            assert result.support_contact == "support@berri.ai"
             assert result.base_url == "http://test.com/ui?invitation_id=test-id"
             assert result.recipient_email == "test@example.com"
 
