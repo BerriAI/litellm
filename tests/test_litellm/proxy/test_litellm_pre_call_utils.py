@@ -10,6 +10,7 @@ from fastapi import Request
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import (
+    KeyAndTeamLoggingSettings,
     LiteLLMProxyRequestSetup,
     _get_enforced_params,
     add_litellm_data_to_request,
@@ -216,3 +217,83 @@ async def test_add_litellm_data_to_request_audio_transcription_multipart():
         "jobID:214590dsff09fds",
         "taskName:run_page_classification",
     ]
+
+
+def test_key_dynamic_logging_settings():
+    """
+    Test KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings method with arize and langfuse callbacks
+    """
+    # Test with arize logging
+    key_with_arize = UserAPIKeyAuth(
+        api_key="test-key",
+        metadata={
+            "logging": [
+                {"callback_name": "arize", "callback_type": "success"}
+            ]
+        },
+        team_metadata={}
+    )
+    result = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(key_with_arize)
+    assert result == [{"callback_name": "arize", "callback_type": "success"}]
+
+    # Test with langfuse logging
+    key_with_langfuse = UserAPIKeyAuth(
+        api_key="test-key",
+        metadata={
+            "logging": [
+                {"callback_name": "langfuse", "callback_type": "success"}
+            ]
+        },
+        team_metadata={}
+    )
+    result = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(key_with_langfuse)
+    assert result == [{"callback_name": "langfuse", "callback_type": "success"}]
+
+    # Test with no logging metadata
+    key_without_logging = UserAPIKeyAuth(
+        api_key="test-key",
+        metadata={},
+        team_metadata={}
+    )
+    result = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(key_without_logging)
+    assert result is None
+
+
+def test_team_dynamic_logging_settings():
+    """
+    Test KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings method with arize and langfuse callbacks
+    """
+    # Test with arize team logging
+    key_with_team_arize = UserAPIKeyAuth(
+        api_key="test-key",
+        metadata={},
+        team_metadata={
+            "logging": [
+                {"callback_name": "arize", "callback_type": "failure"}
+            ]
+        }
+    )
+    result = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(key_with_team_arize)
+    assert result == [{"callback_name": "arize", "callback_type": "failure"}]
+
+    # Test with langfuse team logging
+    key_with_team_langfuse = UserAPIKeyAuth(
+        api_key="test-key",
+        metadata={},
+        team_metadata={
+            "logging": [
+                {"callback_name": "langfuse", "callback_type": "success"}
+            ]
+        }
+    )
+    result = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(key_with_team_langfuse)
+    assert result == [{"callback_name": "langfuse", "callback_type": "success"}]
+
+    # Test with no team logging metadata
+    key_without_team_logging = UserAPIKeyAuth(
+        api_key="test-key",
+        metadata={},
+        team_metadata={}
+    )
+    result = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(key_without_team_logging)
+    assert result is None
