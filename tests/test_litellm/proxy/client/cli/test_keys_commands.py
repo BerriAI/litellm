@@ -119,4 +119,6 @@ def test_keys_delete_error_handling(mock_keys_client, cli_runner):
     mock_keys_client.return_value.delete.side_effect = Exception("API Error")
     result = cli_runner.invoke(cli, ["keys", "delete", "--keys", "abc123"])
     assert result.exit_code != 0
+    # Check that the exception is properly propagated
+    assert result.exception is not None
     assert "API Error" in str(result.exception)
