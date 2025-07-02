@@ -1550,7 +1550,7 @@ def test_set_llm_deployment_success_metrics_with_label_filtering():
                 "litellm_deployment_total_requests",
             ],
             include_labels=[
-                "requested_model",
+                "litellm_model_name",
                 "api_provider",
                 "hashed_api_key",
             ],  # Limited labels
@@ -1628,7 +1628,7 @@ def test_set_llm_deployment_success_metrics_with_label_filtering():
         )
 
         # Should only contain the filtered labels that are supported for this metric
-        expected_filtered_labels = {"requested_model", "api_provider", "hashed_api_key"}
+        expected_filtered_labels = {"litellm_model_name", "api_provider", "hashed_api_key"}
         actual_labels = set(k for k in overhead_labels.keys() if k is not None)
 
         # Verify that only expected labels are present (subset of configured labels)
