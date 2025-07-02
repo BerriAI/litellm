@@ -31,6 +31,7 @@ from typing import (
     Literal,
     Mapping,
     Optional,
+    Tuple,
     Type,
     Union,
     cast,
@@ -825,7 +826,7 @@ def mock_completion(
 def responses_api_bridge_check(
     model: str,
     custom_llm_provider: str,
-) -> dict:
+) -> Tuple[dict, str]:
     model_info = {}
     try:
         model_info = _get_model_info_helper(
@@ -844,7 +845,7 @@ def responses_api_bridge_check(
             model = model.split("/")[1]
             mode = "responses"
             model_info["mode"] = mode
-    return cast(dict, model_info)
+    return cast(dict, model_info), model
 
 
 @tracer.wrap()
@@ -1315,7 +1316,7 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
         ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
-        model_info = responses_api_bridge_check(
+        model_info, model = responses_api_bridge_check(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
