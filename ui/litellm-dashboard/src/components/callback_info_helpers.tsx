@@ -6,7 +6,7 @@ export enum Callbacks {
   LangSmith = "LangSmith",
   Lago = "Lago",
   OpenMeter = "OpenMeter",
-  OTel = "OTel",
+  OTel = "Open Telemetry",
   S3 = "S3",
 }
 
