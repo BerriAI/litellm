@@ -2,7 +2,6 @@
 Utility functions for cleaning up async HTTP clients to prevent resource leaks.
 """
 import asyncio
-from typing import Any
 
 
 async def close_litellm_async_clients():
