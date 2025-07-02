@@ -146,7 +146,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             )
             raise StopAsyncIteration
 
-    async def __anext__(self):
+    async def __anext__(self):  # noqa: PLR0915
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
         try:
