@@ -13,6 +13,9 @@ import click
 import httpx
 from dotenv import load_dotenv
 
+# Import banner module for ASCII art display
+from litellm.proxy.client.cli.banner import show_banner
+
 # Optional Rich imports with fallback
 try:
     from rich.console import Console
@@ -976,11 +979,17 @@ def run_server(  # noqa: PLR0915
             if loop_type:
                 uvicorn_args["loop"] = loop_type
 
+            # Display the LiteLLM ASCII banner before starting the server
+            show_banner()
+            
             uvicorn.run(
                 **uvicorn_args,
                 workers=num_workers,
             )
         elif run_gunicorn is True:
+            # Display the LiteLLM ASCII banner before starting the server
+            show_banner()
+            
             ProxyInitializationHelpers._run_gunicorn_server(
                 host=host,
                 port=port,
@@ -990,6 +999,9 @@ def run_server(  # noqa: PLR0915
                 ssl_keyfile_path=ssl_keyfile_path,
             )
         elif run_hypercorn is True:
+            # Display the LiteLLM ASCII banner before starting the server
+            show_banner()
+            
             ProxyInitializationHelpers._init_hypercorn_server(
                 app=app,
                 host=host,
