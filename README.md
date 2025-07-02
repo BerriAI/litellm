@@ -72,7 +72,7 @@ messages = [{ "content": "Hello, how are you?","role": "user"}]
 response = completion(model="openai/gpt-4o", messages=messages)
 
 # anthropic call
-response = completion(model="anthropic/claude-3-sonnet-20240229", messages=messages)
+response = completion(model="anthropic/claude-3-5-sonnet-20241022", messages=messages)
 print(response)
 ```
 
@@ -80,27 +80,27 @@ print(response)
 
 ```json
 {
-    "id": "chatcmpl-565d891b-a42e-4c39-8d14-82a1f5208885",
-    "created": 1734366691,
-    "model": "claude-3-sonnet-20240229",
-    "object": "chat.completion",
-    "system_fingerprint": null,
+    "id": "chatcmpl-d53d958b-f78f-437f-91cd-fa819aabfdbd",
     "choices": [
         {
             "finish_reason": "stop",
             "index": 0,
             "message": {
-                "content": "Hello! As an AI language model, I don't have feelings, but I'm operating properly and ready to assist you with any questions or tasks you may have. How can I help you today?",
+                "content": "I'm doing well, thank you! How are you today?",
                 "role": "assistant",
                 "tool_calls": null,
                 "function_call": null
             }
         }
     ],
+    "created": 1751460786,
+    "model": "claude-3-5-sonnet-20241022",
+    "object": "chat.completion",
+    "system_fingerprint": null,
     "usage": {
-        "completion_tokens": 43,
+        "completion_tokens": 16,
         "prompt_tokens": 13,
-        "total_tokens": 56,
+        "total_tokens": 29,
         "completion_tokens_details": null,
         "prompt_tokens_details": {
             "audio_tokens": null,
@@ -141,8 +141,8 @@ response = completion(model="openai/gpt-4o", messages=messages, stream=True)
 for part in response:
     print(part.choices[0].delta.content or "")
 
-# claude 2
-response = completion('anthropic/claude-3-sonnet-20240229', messages, stream=True)
+# claude 3-5
+response = completion('anthropic/claude-3-5-sonnet-20241022', messages, stream=True)
 for part in response:
     print(part)
 ```
@@ -151,17 +151,13 @@ for part in response:
 
 ```json
 {
-    "id": "chatcmpl-2be06597-eb60-4c70-9ec5-8cd2ab1b4697",
-    "created": 1734366925,
-    "model": "claude-3-sonnet-20240229",
-    "object": "chat.completion.chunk",
-    "system_fingerprint": null,
+    "id": "chatcmpl-e4e2634a-51a2-49a7-ac65-9c28ac171298",
     "choices": [
         {
             "finish_reason": null,
             "index": 0,
             "delta": {
-                "content": "Hello",
+                "content": "I",
                 "role": "assistant",
                 "function_call": null,
                 "tool_calls": null,
@@ -169,7 +165,11 @@ for part in response:
             },
             "logprobs": null
         }
-    ]
+    ],
+    "created": 1751460974,
+    "model": "claude-3-5-sonnet-20241022",
+    "object": "chat.completion.chunk",
+    "system_fingerprint": null
 }
 ```
 
