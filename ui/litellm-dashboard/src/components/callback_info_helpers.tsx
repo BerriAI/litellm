@@ -29,10 +29,27 @@ const asset_logos_folder = '/ui/assets/logos/';
 interface CallbackInfo {
   logo: string;
   supports_key_team_logging: boolean;
-  dynamic_params: Record<string, string>;
+  dynamic_params: Record<string, "text" | "password" | "select" | "upload">;
 }
 
 export const callbackInfo: Record<string, CallbackInfo> = {
+  [Callbacks.Langfuse]: {
+    logo: `${asset_logos_folder}langfuse.png`,
+    supports_key_team_logging: true,
+    dynamic_params: {
+        "langfuse_public_key": "text",
+        "langfuse_secret_key": "password",
+        "langfuse_host": "text"
+    }
+    },
+    [Callbacks.Arize]: {
+      logo: `${asset_logos_folder}arize.png`,
+      supports_key_team_logging: true,
+      dynamic_params: {
+        "arize_api_key": "password",
+        "arize_space_id": "text",
+      }
+    },
     [Callbacks.Braintrust]: {
         logo: `${asset_logos_folder}braintrust.png`,
         supports_key_team_logging: false,
@@ -47,15 +64,6 @@ export const callbackInfo: Record<string, CallbackInfo> = {
         logo: `${asset_logos_folder}datadog.png`,
         supports_key_team_logging: false,
         dynamic_params: {}
-    },
-    [Callbacks.Langfuse]: {
-        logo: `${asset_logos_folder}langfuse.png`,
-        supports_key_team_logging: true,
-        dynamic_params: {
-            "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY", // [RECOMMENDED] reference key in proxy environment
-            "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY", // [RECOMMENDED] reference key in proxy environment
-            "langfuse_host": "https://cloud.langfuse.com"
-        }
     },
     [Callbacks.LangSmith]: {
         logo: `${asset_logos_folder}langsmith.png`,
@@ -81,11 +89,6 @@ export const callbackInfo: Record<string, CallbackInfo> = {
         logo: `${asset_logos_folder}aws.svg`,
         supports_key_team_logging: false,
         dynamic_params: {}
-    },
-    [Callbacks.Arize]: {
-        logo: `${asset_logos_folder}arize.png`,
-        supports_key_team_logging: false,
-        dynamic_params: {}
-    },
+    }
 };
   
