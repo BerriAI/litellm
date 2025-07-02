@@ -49,9 +49,11 @@ def test_hosted_vllm_chat_transformation_with_audio_url():
     from litellm import completion
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    client = HTTPHandler()
+    client = MagicMock()
 
-    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
+    with patch.object(
+        client.chat.completions.with_raw_response, "create", return_value=MagicMock()
+    ) as mock_post:
         try:
             response = completion(
                 model="hosted_vllm/llama-3.1-70b-instruct",
@@ -73,3 +75,14 @@ def test_hosted_vllm_chat_transformation_with_audio_url():
 
         mock_post.assert_called_once()
         print(f"mock_post.call_args.kwargs: {mock_post.call_args.kwargs}")
+        assert mock_post.call_args.kwargs["messages"] == [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "audio_url",
+                        "audio_url": {"url": "https://example.com/audio.mp3"},
+                    }
+                ],
+            }
+        ]
