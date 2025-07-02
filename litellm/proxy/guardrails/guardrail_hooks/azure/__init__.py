@@ -28,6 +28,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
             api_key=litellm_params.api_key,
             api_base=litellm_params.api_base,
             default_on=litellm_params.default_on,
+            event_hook=litellm_params.mode,
         )
 
     else:

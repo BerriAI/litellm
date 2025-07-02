@@ -48,9 +48,19 @@ class AzureContentSafetyPromptShieldGuardrail(CustomGuardrail):
         **kwargs,
     ):
         """Initialize Azure Prompt Shield guardrail handler."""
+        from litellm.types.guardrails import GuardrailEventHooks
 
         # Initialize parent CustomGuardrail
-        super().__init__(guardrail_name=guardrail_name, **kwargs)
+
+        supported_event_hooks = [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
+        ]
+        super().__init__(
+            guardrail_name=guardrail_name,
+            supported_event_hooks=supported_event_hooks,
+            **kwargs,
+        )
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
