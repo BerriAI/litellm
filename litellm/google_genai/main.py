@@ -375,7 +375,7 @@ async def agenerate_content_stream(
         if setup_result.generate_content_provider_config is None:
             # Use the adapter to convert to completion format
             return await GenerateContentToCompletionHandler.async_generate_content_handler(
-                model=setup_result.model,
+                model=model,
                 contents=contents,  # type: ignore
                 config=setup_result.generate_content_config_dict,
                 litellm_params=setup_result.litellm_params,
