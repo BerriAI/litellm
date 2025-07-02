@@ -3,7 +3,6 @@
 Azure Prompt Shield Native Guardrail Integrationfor LiteLLM
 """
 
-import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, cast
 
 from fastapi import HTTPException
@@ -178,7 +177,7 @@ class AzureContentSafetyPromptShieldGuardrail(CustomGuardrail):
                     f"Azure Prompt Shield: User prompt: {user_prompt}"
                 )
                 azure_prompt_shield_response = await self.async_make_request(
-                    user_prompt
+                    user_prompt=user_prompt,
                 )
                 if azure_prompt_shield_response["userPromptAnalysis"].get(
                     "attackDetected"
