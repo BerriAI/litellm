@@ -545,8 +545,12 @@ def _get_response_for_spend_logs_payload(
 
 def _should_store_prompts_and_responses_in_spend_logs() -> bool:
     from litellm.proxy.proxy_server import general_settings
+    from litellm.secret_managers.main import get_secret_bool
 
-    return general_settings.get("store_prompts_in_spend_logs") is True
+    return (
+        general_settings.get("store_prompts_in_spend_logs") is True
+        or get_secret_bool("STORE_PROMPTS_IN_SPEND_LOGS") is True
+    )
 
 
 def _get_status_for_spend_log(
