@@ -1077,8 +1077,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         elif (
             finish_reason and finish_reason in mapped_finish_reason.keys()
         ):  # vertex ai
+
             return mapped_finish_reason[finish_reason]
         else:
+
             return "stop"
 
     @staticmethod
@@ -1261,7 +1263,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 status_code=422,
                 headers=raw_response.headers,
             )
-        
 
         return self._transform_google_generate_content_to_openai_model_response(
             completion_response=completion_response,
@@ -1270,7 +1271,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             logging_obj=logging_obj,
             raw_response=raw_response,
         )
-    
 
     def _transform_google_generate_content_to_openai_model_response(
         self,
