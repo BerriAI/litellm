@@ -25,7 +25,7 @@ export const callback_map: Record<string, string> = {
 const asset_logos_folder = '/ui/assets/logos/';
 
 export const callbackLogoMap: Record<string, string> = {
-    [Callbacks.Braintrust]: `${asset_logos_folder}braintrust.svg`,
+    [Callbacks.Braintrust]: `${asset_logos_folder}braintrust.png`,
     [Callbacks.Datadog]: `${asset_logos_folder}datadog.png`,
     [Callbacks.Langfuse]: `${asset_logos_folder}langfuse.png`,
     [Callbacks.LangSmith]: `${asset_logos_folder}langsmith.png`,
