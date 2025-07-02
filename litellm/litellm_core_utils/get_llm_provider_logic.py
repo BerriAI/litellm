@@ -196,6 +196,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.cerebras.ai/v1":
                         custom_llm_provider = "cerebras"
                         dynamic_api_key = get_secret_str("CEREBRAS_API_KEY")
+                    elif endpoint == "https://api.centml.com/openai/v1":
+                        custom_llm_provider = "centml"
+                        dynamic_api_key = get_secret_str("CENTML_API_KEY")
                     elif endpoint == "https://api.sambanova.ai/v1":
                         custom_llm_provider = "sambanova"
                         dynamic_api_key = get_secret_str("SAMBANOVA_API_KEY")
@@ -271,6 +274,9 @@ def get_llm_provider(  # noqa: PLR0915
         ## cohere chat models
         elif model in litellm.cohere_chat_models:
             custom_llm_provider = "cohere_chat"
+        ## centml
+        elif model in litellm.centml_models:
+            custom_llm_provider = "centml"
         ## replicate
         elif model in litellm.replicate_models or (
             ":" in model and len(model) > REPLICATE_MODEL_NAME_WITH_ID_LENGTH
@@ -453,6 +459,11 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base or get_secret("CEREBRAS_API_BASE") or "https://api.cerebras.ai/v1"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("CEREBRAS_API_KEY")
+    elif custom_llm_provider == "centml":
+        api_base = (
+            api_base or get_secret("CENTML_API_BASE") or "https://api.centml.com/openai/v1"
+        )  # type: ignore
+        dynamic_api_key = api_key or get_secret_str("CENTML_API_KEY")
     elif custom_llm_provider == "sambanova":
         api_base = (
             api_base

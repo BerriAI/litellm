@@ -238,6 +238,7 @@ LITELLM_CHAT_PROVIDERS = [
     "groq",
     "nvidia_nim",
     "cerebras",
+    "centml",
     "ai21_chat",
     "volcengine",
     "codestral",
@@ -401,6 +402,7 @@ openai_compatible_providers: List = [
     "groq",
     "nvidia_nim",
     "cerebras",
+    "centml",
     "sambanova",
     "ai21_chat",
     "ai21",
@@ -575,6 +577,24 @@ together_ai_models: List = [
     "upstage/SOLAR-0-70b-16bit",
     "WizardLM/WizardLM-70B-V1.0",
 ]  # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
+
+centml_models: list[str] = [
+    # ─── JSON ✓, Tool-Calling ✓ ────────────────────────────────────────────────
+    "meta-llama/Llama-3.3-70B-Instruct",                    # 0.35 / 0.35   JSON ✓  Tool ✓
+    "meta-llama/Llama-4-Scout-17B-16E-Instruct",            # 0.10 / 0.10   JSON ✓  Tool ✓  Image ✓
+    "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",    # 0.20 / 0.20   JSON ✓  Tool ✓  Image ✓  (multimodal)
+
+    # ─── JSON ✓ only ──────────────────────────────────────────────────────────
+    "deepseek-ai/DeepSeek-R1",                              # 2.99 / 2.99   JSON ✓
+    "deepseek-ai/DeepSeek-R1-0528",                         # 2.99 / 2.99   JSON ✓
+    "deepseek-ai/DeepSeek-V3-0324",                         # 0.43 / 1.40   JSON ✓
+    "microsoft/Phi-4-mini-instruct",                        # 0.12 / 0.12   JSON ✓
+    "Qwen/Qwen2.5-VL-7B-Instruct",                          # 0.15 / 0.15   JSON ✓           Image ✓  (multimodal)
+
+    # ─── No JSON / Tool ───────────────────────────────────────────────────────
+    "meta-llama/Llama-Guard-4-12B",                         # 0.01 / 0.01   Image ✓  (multimodal)
+    "Qwen/QwQ-32B",                                         # 0.65 / 0.65
+]
 
 
 baseten_models: List = [
