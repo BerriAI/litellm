@@ -376,7 +376,7 @@ def completion(  # noqa: PLR0915
                 location=vertex_location,
             )
             request_str += f"llm_model = aiplatform.Endpoint(endpoint_name={model}, project={vertex_project}, location={vertex_location})\n"
-            request_str += f"llm_model.predict({prompt}, **{optional_params}).text\n"
+            request_str += f"llm_model.predict(instances={instances})\n"
             response = llm_model.predict(
                 instances=instances,
             ).predictions
