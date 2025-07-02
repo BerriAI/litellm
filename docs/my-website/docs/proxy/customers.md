@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 🙋‍♂️ Customers / End-User Budgets
+# Customers / End-User Budgets
 
 Track spend, set budgets for your customers.
 

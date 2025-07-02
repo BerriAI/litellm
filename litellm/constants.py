@@ -397,7 +397,6 @@ openai_compatible_endpoints: List = [
 
 openai_compatible_providers: List = [
     "anyscale",
-    "mistral",
     "groq",
     "nvidia_nim",
     "cerebras",
