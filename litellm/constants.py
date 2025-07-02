@@ -803,3 +803,29 @@ SPECIAL_LITELLM_AUTH_TOKEN = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(
     os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60)
 )
+
+# Sentry Scrubbing Configuration
+SENTRY_DENYLIST = [
+    # API Keys and Tokens
+    "api_key", "token", "key", "secret", "password", "auth", "credential",
+    "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AZURE_API_KEY", "COHERE_API_KEY",
+    "REPLICATE_API_KEY", "HUGGINGFACE_API_KEY", "TOGETHERAI_API_KEY",
+    "CLOUDFLARE_API_KEY", "BASETEN_KEY", "OPENROUTER_KEY", "DATAROBOT_API_TOKEN",
+    "FIREWORKS_API_KEY", "FIREWORKS_AI_API_KEY", "FIREWORKSAI_API_KEY",
+    # Database and Connection Strings
+    "database_url", "redis_url", "connection_string",
+    # Authentication and Security
+    "master_key", "LITELLM_MASTER_KEY", "auth_token", "jwt_token", "private_key",
+    "SLACK_WEBHOOK_URL", "webhook_url", "LANGFUSE_SECRET_KEY",
+    # Email Configuration
+    "SMTP_PASSWORD", "SMTP_USERNAME", "email_password",
+    # Cloud Provider Credentials
+    "aws_access_key", "aws_secret_key", "gcp_credentials",
+    "azure_credentials", "HCP_VAULT_TOKEN", "CIRCLE_OIDC_TOKEN",
+    # Proxy and Environment Settings
+    "proxy_url", "proxy_key", "environment_variables"
+]
+SENTRY_PII_DENYLIST = [
+    "user_id", "email", "phone", "address", "ip_address",
+    "SMTP_SENDER_EMAIL", "TEST_EMAIL_ADDRESS"
+]
