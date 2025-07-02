@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.integrations.arize.arize import ArizeLogger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.types.services import ServiceLoggerPayload
@@ -429,6 +428,8 @@ class OpenTelemetry(CustomLogger):
         extracting headers from standard_callback_dynamic_params.
         """
         from opentelemetry import trace
+
+        from litellm.integrations.arize.arize import ArizeLogger
 
         standard_callback_dynamic_params: Optional[
             StandardCallbackDynamicParams
