@@ -121,6 +121,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         litellm_params: dict,
         headers: dict,
         litellm_logging_obj: "LiteLLMLoggingObj",
+        client: Optional[Any] = None,
     ) -> dict:
         from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 
@@ -186,6 +187,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             "input": input_items,
             "litellm_logging_obj": litellm_logging_obj,
             **litellm_params,
+            "client": client,
         }
 
         verbose_logger.debug(

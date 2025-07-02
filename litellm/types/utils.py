@@ -162,7 +162,12 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     litellm_provider: Required[str]
     mode: Required[
         Literal[
-            "completion", "embedding", "image_generation", "chat", "audio_transcription"
+            "completion",
+            "embedding",
+            "image_generation",
+            "chat",
+            "audio_transcription",
+            "responses",
         ]
     ]
     tpm: Optional[int]

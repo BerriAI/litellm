@@ -23,8 +23,9 @@ class LiteLLMPydanticObjectBase(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
 
-
 class BaseLiteLLMOpenAIResponseObject(BaseModel):
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
+
     def __getitem__(self, key):
         return self.__dict__[key]
 
