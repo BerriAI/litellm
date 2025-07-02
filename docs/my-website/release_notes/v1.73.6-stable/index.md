@@ -26,6 +26,8 @@ import TabItem from '@theme/TabItem';
 
 The `non-root` docker image has a known issue around the UI not loading. If you use the `non-root` docker image we recommend waiting before upgrading to this version. We will post a patch fix for this.
 
+Update: this will be fixed in v1.73.7.rc.2
+
 :::
 
 ## Deploy this version
