@@ -176,10 +176,13 @@ class LassoGuardrail(CustomGuardrail):
 
             if response_messages:
                 # Include litellm_call_id from original data for conversation_id consistency
-                response_data = {"messages": response_messages, "litellm_call_id": data.get("litellm_call_id")}
+                response_data = {
+                    "messages": response_messages,
+                    "litellm_call_id": data.get("litellm_call_id"),
+                }
 
                 # Copy stored conversation_id from pre-call hook
-                if data.get("_lasso_internal", {}).get("conversation_id"):
+                if data.get("_lasso_internal", {}).get("conversation_id") and isinstance(response_data, dict):
                     response_data.setdefault("_lasso_internal", {})["conversation_id"] = data["_lasso_internal"][
                         "conversation_id"
                     ]
@@ -340,7 +343,7 @@ class LassoGuardrail(CustomGuardrail):
         self,
         messages: List[Dict[str, str]],
         message_type: Literal["PROMPT", "COMPLETION"] = "PROMPT",
-        data: dict = None,
+        data: Optional[dict] = None,
         cache: Optional[DualCache] = None,
     ) -> Dict[str, Any]:
         """
@@ -377,7 +380,10 @@ class LassoGuardrail(CustomGuardrail):
         return payload
 
     async def _call_lasso_api(
-        self, headers: Dict[str, str], payload: Dict[str, Any], api_url: Optional[str] = None
+        self,
+        headers: Dict[str, str],
+        payload: Dict[str, Any],
+        api_url: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Call the Lasso API and return the response."""
         url = api_url or self.api_base
@@ -441,7 +447,9 @@ class LassoGuardrail(CustomGuardrail):
         return violated_deputies
 
     def _apply_masking_to_model_response(
-        self, model_response: litellm.ModelResponse, masked_messages: List[Dict[str, str]]
+        self,
+        model_response: litellm.ModelResponse,
+        masked_messages: List[Dict[str, str]],
     ) -> None:
         """Apply masking to the actual model response when mask=True and masked content is available."""
         masked_index = 0
