@@ -1,7 +1,8 @@
 model_list:
-  - model_name: anthropic/*
+  - model_name: groq/*
     litellm_params:
-      model: anthropic/*
+      model: groq/*
+      api_key: bad
   - model_name: openai/*
     litellm_params:
       model: openai/*
