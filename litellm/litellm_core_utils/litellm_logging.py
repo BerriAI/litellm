@@ -2951,7 +2951,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
                         [sys.executable, "-m", "pip", "install", "sentry_sdk"]
                     )
                     import sentry_sdk
-                    from sentry_sdk.scrubber import EventScrubber
+                from sentry_sdk.scrubber import EventScrubber
 
                 
 

@@ -312,44 +312,35 @@ def test_response_cost_calculator_with_response_cost_in_hidden_params(logging_ob
     assert response_cost > 100
 
 
-def test_sentry_scrubbing():
-    """
-    Test that Sentry denylists contain expected sensitive data patterns
-    """
-    from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
+def test_sentry_event_scrubber_initialization(monkeypatch):
+    # Step 1: Create a fake sentry_sdk.scrubber module
+    mock_event_scrubber_instance = MagicMock()
+    mock_event_scrubber_cls = MagicMock(return_value=mock_event_scrubber_instance)
 
-    # Test API keys and sensitive credentials are in denylist
-    api_keys = [
-        "api_key",
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "AZURE_API_KEY",
-        "COHERE_API_KEY",
-    ]
-    for key in api_keys:
-        assert key in SENTRY_DENYLIST, f"{key} should be in SENTRY_DENYLIST"
+    mock_scrubber_module = MagicMock()
+    mock_scrubber_module.EventScrubber = mock_event_scrubber_cls
 
-    # Test authentication and security related fields are in denylist
-    auth_fields = [
-        "master_key",
-        "LITELLM_MASTER_KEY",
-        "auth_token",
-        "private_key",
-    ]
-    for field in auth_fields:
-        assert field in SENTRY_DENYLIST, f"{field} should be in SENTRY_DENYLIST"
+    # Step 2: Create a fake sentry_sdk module and insert into sys.modules
+    mock_sentry_sdk = MagicMock()
+    mock_sentry_sdk.scrubber = mock_scrubber_module
+    mock_init = MagicMock()
+    mock_sentry_sdk.init = mock_init
 
-    # Test PII fields are in PII denylist
-    pii_fields = [
-        "user_id",
-        "email",
-        "phone",
-        "address",
-        "ip_address",
-    ]
-    for field in pii_fields:
-        assert field in SENTRY_PII_DENYLIST, f"{field} should be in SENTRY_PII_DENYLIST"
+    # Step 3: Inject both into sys.modules BEFORE import occurs
+    sys.modules["sentry_sdk"] = mock_sentry_sdk
+    sys.modules["sentry_sdk.scrubber"] = mock_scrubber_module
 
+    # Step 4: Run the actual sentry setup code
+    set_callbacks(["sentry"])
 
+    # Step 5: Assert the EventScrubber was constructed correctly
+    mock_event_scrubber_cls.assert_called_once_with(
+        denylist=SENTRY_DENYLIST,
+        pii_denylist=SENTRY_PII_DENYLIST,
+    )
 
-
+    # Step 6: Assert the event_scrubber and PII args were passed
+    mock_init.assert_called_once()
+    call_args = mock_init.call_args[1]
+    assert call_args["event_scrubber"] == mock_event_scrubber_instance
+    assert call_args["send_default_pii"] is False
