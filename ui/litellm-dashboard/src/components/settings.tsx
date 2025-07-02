@@ -75,39 +75,6 @@ interface AlertingObject {
   variables: AlertingVariables;
 }
 
-const defaultLoggingObject: AlertingObject[] = [
-  {
-    name: "slack",
-    variables: {
-      LANGFUSE_HOST: null,
-      LANGFUSE_PUBLIC_KEY: null,
-      LANGFUSE_SECRET_KEY: null,
-      OPENMETER_API_KEY: null,
-      SLACK_WEBHOOK_URL: null,
-    },
-  },
-  {
-    name: "langfuse",
-    variables: {
-      LANGFUSE_HOST: null,
-      LANGFUSE_PUBLIC_KEY: null,
-      LANGFUSE_SECRET_KEY: null,
-      OPENMETER_API_KEY: null,
-      SLACK_WEBHOOK_URL: null,
-    },
-  },
-  {
-    name: "openmeter",
-    variables: {
-      LANGFUSE_HOST: null,
-      LANGFUSE_PUBLIC_KEY: null,
-      LANGFUSE_SECRET_KEY: null,
-      OPENMETER_API_KEY: null,
-      SLACK_WEBHOOK_URL: null,
-    },
-  },
-];
-
 const Settings: React.FC<SettingsPageProps> = ({
   accessToken,
   userRole,
@@ -119,7 +86,6 @@ const Settings: React.FC<SettingsPageProps> = ({
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [form] = Form.useForm();
   const [selectedCallback, setSelectedCallback] = useState<string | null>(null);
-  const [selectedAlertValues, setSelectedAlertValues] = useState([]);
   const [catchAllWebhookURL, setCatchAllWebhookURL] = useState<string>("");
   const [alertToWebhooks, setAlertToWebhooks] = useState<
     Record<string, string>
@@ -129,9 +95,6 @@ const Settings: React.FC<SettingsPageProps> = ({
   const [showAddCallbacksModal, setShowAddCallbacksModal] = useState(false);
   const [allCallbacks, setAllCallbacks] = useState<genericCallbackParams[]>([]);
 
-  const [selectedCallbacktoAdd, setSelectedCallbacktoAdd] = useState<
-    string | null
-  >(null);
   const [selectedCallbackParams, setSelectedCallbackParams] = useState<
     string[]
   >([]);
@@ -208,7 +171,7 @@ const Settings: React.FC<SettingsPageProps> = ({
     };
 
     try {
-      let newCallback = await setCallbacksCall(accessToken, payload);
+      await setCallbacksCall(accessToken, payload);
       message.success(`Callback added successfully`);
       setIsModalVisible(false);
       form.resetFields();
@@ -240,7 +203,7 @@ const Settings: React.FC<SettingsPageProps> = ({
     };
 
     try {
-      let newCallback = await setCallbacksCall(accessToken, payload);
+      await setCallbacksCall(accessToken, payload);
       message.success(`Callback ${new_callback} added successfully`);
       setIsModalVisible(false);
       form.resetFields();
@@ -407,9 +370,6 @@ const Settings: React.FC<SettingsPageProps> = ({
     });
   };
 
-  const handleCallbackChange = (value: string) => {
-    setSelectedCallback(value);
-  };
   const handleDeleteCallback = (callbackName: string) => {
     setCallbackToDelete(callbackName);
     setShowDeleteConfirmModal(true);
