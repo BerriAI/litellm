@@ -72,7 +72,7 @@ router = APIRouter()
 
 
 @router.get("/sso/key/generate", tags=["experimental"], include_in_schema=False)
-async def google_login(request: Request):  # noqa: PLR0915
+async def google_login(request: Request, source: Optional[str] = None, key: Optional[str] = None):  # noqa: PLR0915
     """
     Create Proxy API Keys using Google Workspace SSO. Requires setting PROXY_BASE_URL in .env
     PROXY_BASE_URL should be the your deployed proxy endpoint, e.g. PROXY_BASE_URL="https://litellm-production-7002.up.railway.app/"
@@ -111,10 +111,16 @@ async def google_login(request: Request):  # noqa: PLR0915
         return missing_env_vars
     ui_username = os.getenv("UI_USERNAME")
 
-    # get url from request
+    # get url from request - always use regular callback, but set state for CLI
     redirect_url = SSOAuthenticationHandler.get_redirect_url_for_sso(
         request=request,
         sso_callback_route="sso/callback",
+    )
+    
+    # Store CLI key in state for OAuth flow
+    cli_state: Optional[str] = SSOAuthenticationHandler._get_cli_state(
+        source=source,
+        key=key,
     )
 
     # Check if we should use SSO handler
@@ -132,6 +138,7 @@ async def google_login(request: Request):  # noqa: PLR0915
             microsoft_client_id=microsoft_client_id,
             google_client_id=google_client_id,
             generic_client_id=generic_client_id,
+            state=cli_state,
         )
     elif ui_username is not None:
         # No Google, Microsoft SSO
@@ -495,9 +502,18 @@ async def check_and_update_if_proxy_admin_id(
 
 
 @router.get("/sso/callback", tags=["experimental"], include_in_schema=False)
-async def auth_callback(request: Request):  # noqa: PLR0915
+async def auth_callback(request: Request, state: Optional[str] = None):  # noqa: PLR0915
     """Verify login"""
-    verbose_proxy_logger.info("Starting SSO callback")
+    verbose_proxy_logger.info(f"Starting SSO callback with state: {state}")
+    
+    # Check if this is a CLI login (state starts with our CLI prefix)
+    from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
+    if state and state.startswith(f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:"):
+        # Extract the key ID from the state
+        key_id = state.split(":", 1)[1]
+        verbose_proxy_logger.info(f"CLI SSO callback detected for key: {key_id}")
+        return await cli_sso_callback(request, key=key_id)
+    
     from litellm.proxy._types import LiteLLM_JWTAuth
     from litellm.proxy.auth.handle_jwt import JWTHandler
     from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -705,7 +721,7 @@ async def auth_callback(request: Request):  # noqa: PLR0915
         f"user_role: {user_role}; ui_access_mode: {ui_access_mode}"
     )
     ## CHECK IF ROLE ALLOWED TO USE PROXY ##
-    is_admin_only_access = check_is_admin_only_access(ui_access_mode)
+    is_admin_only_access = check_is_admin_only_access(ui_access_mode or {})
     if is_admin_only_access:
         has_access = has_admin_ui_access(user_role)
         if not has_access:
@@ -772,6 +788,99 @@ async def auth_callback(request: Request):  # noqa: PLR0915
     redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
     redirect_response.set_cookie(key="token", value=jwt_token)
     return redirect_response
+
+
+async def cli_sso_callback(request: Request, key: Optional[str] = None):
+    """CLI SSO callback - generates the key with pre-specified ID"""
+    verbose_proxy_logger.info(f"CLI SSO callback for key: {key}")
+    
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_helper_fn,
+    )
+    from litellm.proxy.proxy_server import prisma_client
+    
+    if not key or not key.startswith('sk-'):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid key parameter. Must be a valid key ID starting with 'sk-'"
+        )
+    
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
+        )
+    
+    # Generate a simple key for CLI usage with the pre-specified key ID
+    try:
+        await generate_key_helper_fn(
+            request_type="key",
+            duration="24hr",
+            key_max_budget=litellm.max_ui_session_budget,
+            aliases={},
+            config={},
+            spend=0,
+            team_id="litellm-cli",
+            table_name="key",
+            token=key,  # Use the pre-specified key ID
+        )
+        
+        verbose_proxy_logger.info(f"Generated CLI key: {key}")
+        
+        # Return success page
+        from fastapi.responses import HTMLResponse
+
+        from litellm.proxy.common_utils.html_forms.cli_sso_success import (
+            render_cli_sso_success_page,
+        )
+        
+        html_content = render_cli_sso_success_page()
+        return HTMLResponse(content=html_content, status_code=200)
+        
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error generating CLI key: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate key: {str(e)}"
+        )
+
+
+@router.get("/sso/cli/poll/{key_id}", tags=["experimental"], include_in_schema=False)
+async def cli_poll_key(key_id: str):
+    """CLI polling endpoint - checks if key exists in DB"""
+    from litellm.proxy.proxy_server import prisma_client
+    
+    if not key_id.startswith('sk-'):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid key ID format"
+        )
+    
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
+        )
+    
+    try:
+        # Check if key exists in database
+        from litellm.proxy.utils import hash_token
+        hashed_token = hash_token(key_id)
+        
+        key_obj = await prisma_client.db.litellm_verificationtoken.find_unique(
+            where={"token": hashed_token}
+        )
+        
+        if key_obj:
+            verbose_proxy_logger.info(f"CLI key found: {key_id}")
+            return {"status": "ready", "key": key_id}
+        else:
+            return {"status": "pending"}
+            
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error polling for CLI key: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error checking key status: {str(e)}"
+        )
 
 
 async def insert_sso_user(
@@ -879,6 +988,7 @@ class SSOAuthenticationHandler:
         google_client_id: Optional[str] = None,
         microsoft_client_id: Optional[str] = None,
         generic_client_id: Optional[str] = None,
+        state: Optional[str] = None,
     ) -> Optional[RedirectResponse]:
         """
         Step 1. Call Get Login Redirect for the SSO provider. Send the redirect response to `redirect_url`
@@ -913,7 +1023,7 @@ class SSOAuthenticationHandler:
                 f"In /google-login/key/generate, \nGOOGLE_REDIRECT_URI: {redirect_url}\nGOOGLE_CLIENT_ID: {google_client_id}"
             )
             with google_sso:
-                return await google_sso.get_login_redirect()
+                return await google_sso.get_login_redirect(state=state)
         # Microsoft SSO Auth
         elif microsoft_client_id is not None:
             from fastapi_sso.sso.microsoft import MicrosoftSSO
@@ -935,7 +1045,7 @@ class SSOAuthenticationHandler:
                 allow_insecure_http=True,
             )
             with microsoft_sso:
-                return await microsoft_sso.get_login_redirect()
+                return await microsoft_sso.get_login_redirect(state=state)
         elif generic_client_id is not None:
             from fastapi_sso.sso.base import DiscoveryDocument
             from fastapi_sso.sso.generic import create_provider
@@ -1224,6 +1334,20 @@ class SSOAuthenticationHandler:
             _new_team_request.update(_default_team_params)
             team_request = NewTeamRequest(**_new_team_request)
         return team_request
+    
+
+    @staticmethod
+    def _get_cli_state(source: Optional[str], key: Optional[str]) -> Optional[str]:
+        """
+        Checks the request 'source' if a cli state token was passed in
+
+        This is used to authenticate through the CLI login flow
+        """
+        from litellm.constants import (
+            LITELLM_CLI_SESSION_TOKEN_PREFIX,
+            LITELLM_CLI_SOURCE_IDENTIFIER,
+        )
+        return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}" if source == LITELLM_CLI_SOURCE_IDENTIFIER and key else None
 
 
 class MicrosoftSSOHandler:
