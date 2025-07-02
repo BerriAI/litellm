@@ -8,7 +8,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-from litellm.llms.mistral.mistral_chat_transformation import MistralConfig
+from litellm.llms.mistral.chat.transformation import MistralConfig
 
 
 @pytest.mark.asyncio
