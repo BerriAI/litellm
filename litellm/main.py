@@ -1911,8 +1911,8 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
 
         elif custom_llm_provider == "mistral":
-            # Use the new Mistral handler with llm_http_handler pattern
-            from litellm.llms.mistral.handler import completion as mistral_completion
+            # Use the base_llm_http_handler with Mistral config
+            from litellm.llms.mistral.mistral_chat_transformation import MistralConfig
             
             api_key = api_key or litellm.api_key or get_secret("MISTRAL_API_KEY")
             api_base = (
@@ -1922,7 +1922,10 @@ def completion(  # type: ignore # noqa: PLR0915
                 or "https://api.mistral.ai/v1"
             )
             
-            response = mistral_completion(
+            # Create Mistral config for transformations
+            provider_config = MistralConfig()
+            
+            response = base_llm_http_handler.completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -1938,6 +1941,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_key=api_key,
                 headers=headers,
                 client=client,
+                provider_config=provider_config,
             )
         elif (
             "replicate" in model
