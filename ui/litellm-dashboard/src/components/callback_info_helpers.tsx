@@ -8,6 +8,7 @@ export enum Callbacks {
   OpenMeter = "OpenMeter",
   OTel = "Open Telemetry",
   S3 = "S3",
+  Arize = "Arize",
 }
 
 export const callback_map: Record<string, string> = {
@@ -20,6 +21,7 @@ export const callback_map: Record<string, string> = {
   OpenMeter: "openmeter",
   OTel: "otel",
   S3: "s3",
+  Arize: "arize",
 }
 
 const asset_logos_folder = '/ui/assets/logos/';
@@ -33,5 +35,6 @@ export const callbackLogoMap: Record<string, string> = {
     [Callbacks.OpenMeter]: `${asset_logos_folder}openmeter.png`,
     [Callbacks.OTel]: `${asset_logos_folder}otel.png`,
     [Callbacks.S3]: `${asset_logos_folder}aws.svg`,
+    [Callbacks.Arize]: `${asset_logos_folder}arize.png`,
     [Callbacks.CustomCallbackAPI]: `${asset_logos_folder}custom.svg`,
 };
