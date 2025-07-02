@@ -912,28 +912,16 @@ async def update_key_fn(
         non_default_values.pop("soft_budget", None)
 
         # Handle soft_budget update
-        if data.soft_budget is not None and existing_key_row.budget_id is not None:
-            # Update the existing budget table with new soft_budget
-            await prisma_client.db.litellm_budgettable.update(
-                where={"budget_id": existing_key_row.budget_id},
-                data={"soft_budget": data.soft_budget},
-            )
-        elif data.soft_budget is not None and existing_key_row.budget_id is None:
-            # Create a new budget entry if soft_budget is provided but no budget exists
-            budget_row = LiteLLM_BudgetTable(
-                soft_budget=data.soft_budget,
-                model_max_budget={},
-            )
-            new_budget = prisma_client.jsonify_object(
-                budget_row.json(exclude_none=True)
-            )
-            # Add created_by and updated_by fields
-            new_budget["created_by"] = user_api_key_dict.user_id or litellm_changed_by or "admin"
-            new_budget["updated_by"] = user_api_key_dict.user_id or litellm_changed_by or "admin"
-            _budget = await prisma_client.db.litellm_budgettable.create(
-                data=new_budget  # type: ignore
-            )
-            non_default_values["budget_id"] = _budget.budget_id
+        new_budget_id = await _handle_soft_budget_update(
+            soft_budget=data.soft_budget,
+            existing_key_row=existing_key_row,
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
+        )
+        
+        if new_budget_id is not None:
+            non_default_values["budget_id"] = new_budget_id
 
         await _enforce_unique_key_alias(
             key_alias=non_default_values.get("key_alias", None),
@@ -2926,6 +2914,58 @@ async def test_key_logging(
             status="healthy",
             details=f"No logger exceptions triggered, system is healthy. Manually check if logs were sent to {logging_callbacks} ",
         )
+
+
+async def _handle_soft_budget_update(
+    soft_budget: Optional[float],
+    existing_key_row: Any,
+    prisma_client: Any,
+    user_api_key_dict: Any,
+    litellm_changed_by: Optional[str],
+) -> Optional[str]:
+    """
+    Handle soft budget updates for API keys.
+    
+    This function handles two cases:
+    1. Updating existing budget table with new soft_budget value
+    2. Creating new budget entry if soft_budget is provided but no budget exists
+    
+    Args:
+        soft_budget: The new soft budget value to set
+        existing_key_row: The existing key row from database
+        prisma_client: Prisma client instance
+        user_api_key_dict: User API key authentication dict
+        litellm_changed_by: Optional user who initiated the change
+        
+    Returns:
+        Optional[str]: The budget_id if a new budget was created, None otherwise
+    """
+    if soft_budget is None:
+        return None
+        
+    if existing_key_row.budget_id is not None:
+        # Update the existing budget table with new soft_budget
+        await prisma_client.db.litellm_budgettable.update(
+            where={"budget_id": existing_key_row.budget_id},
+            data={"soft_budget": soft_budget},
+        )
+        return None
+    else:
+        # Create a new budget entry if soft_budget is provided but no budget exists
+        budget_row = LiteLLM_BudgetTable(
+            soft_budget=soft_budget,
+            model_max_budget={},
+        )
+        new_budget = prisma_client.jsonify_object(
+            budget_row.json(exclude_none=True)
+        )
+        # Add created_by and updated_by fields
+        new_budget["created_by"] = user_api_key_dict.user_id or litellm_changed_by or "admin"
+        new_budget["updated_by"] = user_api_key_dict.user_id or litellm_changed_by or "admin"
+        _budget = await prisma_client.db.litellm_budgettable.create(
+            data=new_budget  # type: ignore
+        )
+        return _budget.budget_id
 
 
 async def _enforce_unique_key_alias(
