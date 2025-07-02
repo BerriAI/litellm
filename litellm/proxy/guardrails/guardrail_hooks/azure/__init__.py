@@ -1,0 +1,47 @@
+from typing import TYPE_CHECKING
+
+from litellm.types.guardrails import SupportedGuardrailIntegrations
+
+from .prompt_shield import AzureContentSafetyPromptShieldGuardrail
+
+if TYPE_CHECKING:
+    from litellm.types.guardrails import Guardrail, LitellmParams
+
+
+def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
+    import litellm
+
+    if not litellm_params.api_key:
+        raise ValueError("Azure Content Safety: api_key is required")
+    if not litellm_params.api_base:
+        raise ValueError("Azure Content Safety: api_base is required")
+
+    azure_guardrail = litellm_params.guardrail.split("/")[1]
+
+    guardrail_name = guardrail.get("guardrail_name")
+    if not guardrail_name:
+        raise ValueError("Azure Content Safety: guardrail_name is required")
+
+    if azure_guardrail == "prompt_shield":
+        azure_content_safety_guardrail = AzureContentSafetyPromptShieldGuardrail(
+            guardrail_name=guardrail_name,
+            api_key=litellm_params.api_key,
+            api_base=litellm_params.api_base,
+            default_on=litellm_params.default_on,
+        )
+
+    else:
+        raise ValueError(
+            f"Azure Content Safety: {azure_guardrail} is not a valid guardrail"
+        )
+
+    litellm.logging_callback_manager.add_litellm_callback(
+        azure_content_safety_guardrail
+    )
+    return azure_content_safety_guardrail
+
+
+guardrail_initializer_registry = {
+    SupportedGuardrailIntegrations.AZURE_PROMPT_SHIELD.value: initialize_guardrail,
+    SupportedGuardrailIntegrations.AZURE_TEXT_MODERATIONS.value: initialize_guardrail,
+}
