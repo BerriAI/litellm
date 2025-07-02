@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.integrations.arize.arize import ArizeLogger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.types.services import ServiceLoggerPayload
@@ -439,19 +440,7 @@ class OpenTelemetry(CustomLogger):
         dynamic_headers = {}
 
         # Handle Arize headers
-        if standard_callback_dynamic_params.get("arize_space_key"):
-            dynamic_headers["space_key"] = standard_callback_dynamic_params.get(
-                "arize_space_key"
-            )
-        if standard_callback_dynamic_params.get("arize_api_key"):
-            dynamic_headers["api_key"] = standard_callback_dynamic_params.get(
-                "arize_api_key"
-            )
-        
-        if standard_callback_dynamic_params.get("arize_space_id"):
-            dynamic_headers["arize-space-id"] = standard_callback_dynamic_params.get(
-                "arize_space_id"
-            )
+        dynamic_headers = ArizeLogger.construct_dynamic_arize_headers(standard_callback_dynamic_params=standard_callback_dynamic_params)
 
         # Only create a span processor if we have headers to use
         if len(dynamic_headers) > 0:

@@ -109,6 +109,12 @@ class ArizeLogger(OpenTelemetry):
     def construct_dynamic_arize_headers(
         standard_callback_dynamic_params: StandardCallbackDynamicParams
     ):
+        """
+        Construct dynamic Arize headers from standard callback dynamic params
+
+        Returns:
+            dict: A dictionary of dynamic Arize headers
+        """
         dynamic_headers = {}
         if standard_callback_dynamic_params.get("arize_space_key"):
             dynamic_headers["space_key"] = standard_callback_dynamic_params.get(
