@@ -254,8 +254,9 @@ async def test_bedrock_guardrails_streaming_request_body_mock():
 
         # Call the method that should make the Bedrock API request
         await guardrail.make_bedrock_api_request(
-            kwargs=request_data, 
-            response=mock_response
+            source="OUTPUT",
+            response=mock_response,
+            request_data=request_data
         )
 
         # Verify the API call was made
@@ -322,7 +323,7 @@ async def test_bedrock_guardrail_aws_param_persistence():
                 mock_response.status_code = 200
                 mock_response.json = MagicMock(return_value={"action": "NONE", "outputs": []})
                 mock_post.return_value = mock_response
-                await guardrail.make_bedrock_api_request(kwargs=request_data, response=None)
+                await guardrail.make_bedrock_api_request(source="INPUT", messages=request_data.get("messages"), request_data=request_data)
 
         assert mock_get_creds.call_count == 3
         for call in mock_get_creds.call_args_list:
@@ -777,3 +778,111 @@ async def test_bedrock_guardrail_response_pii_masking_streaming():
         assert "Sure! My email is {EMAIL} and SSN is {US_SSN}" == full_content
         print("✓ Streaming response PII masking test passed")
 
+
+@pytest.mark.asyncio
+async def test_convert_to_bedrock_format_input_source():
+    """Test convert_to_bedrock_format with INPUT source and mock messages"""
+    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+    from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockRequest
+    from unittest.mock import patch
+    
+    # Create the guardrail instance
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT"
+    )
+    
+    # Mock messages
+    mock_messages = [
+        {"role": "user", "content": "Hello, how are you?"},
+        {"role": "assistant", "content": "I'm doing well, thank you!"},
+        {"role": "user", "content": [
+            {"type": "text", "text": "What's the weather like?"},
+            {"type": "text", "text": "Is it sunny today?"}
+        ]}
+    ]
+    
+    # Call the method
+    result = guardrail.convert_to_bedrock_format(
+        source="INPUT",
+        messages=mock_messages
+    )
+    
+    # Verify the result structure
+    assert isinstance(result, dict)
+    assert result.get("source") == "INPUT"
+    assert "content" in result
+    assert isinstance(result.get("content"), list)
+    
+    # Verify content items
+    expected_content_items = [
+        {"text": {"text": "Hello, how are you?"}},
+        {"text": {"text": "I'm doing well, thank you!"}},
+        {"text": {"text": "What's the weather like?"}},
+        {"text": {"text": "Is it sunny today?"}}
+    ]
+    
+    assert result.get("content") == expected_content_items
+    print("✅ INPUT source test passed - result:", result)
+
+
+@pytest.mark.asyncio 
+async def test_convert_to_bedrock_format_output_source():
+    """Test convert_to_bedrock_format with OUTPUT source and mock ModelResponse"""
+    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+    from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockRequest
+    import litellm
+    from unittest.mock import patch
+    
+    # Create the guardrail instance  
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT"
+    )
+    
+    # Mock ModelResponse
+    mock_response = litellm.ModelResponse(
+        id="test-response-id",
+        choices=[
+            litellm.Choices(
+                index=0,
+                message=litellm.Message(
+                    role="assistant",
+                    content="This is a test response from the model."
+                ),
+                finish_reason="stop"
+            ),
+            litellm.Choices(
+                index=1, 
+                message=litellm.Message(
+                    role="assistant",
+                    content="This is a second choice response."
+                ),
+                finish_reason="stop"
+            )
+        ],
+        created=1234567890,
+        model="gpt-4o",
+        object="chat.completion"
+    )
+    
+    # Call the method
+    result = guardrail.convert_to_bedrock_format(
+        source="OUTPUT",
+        response=mock_response
+    )
+    
+    # Verify the result structure
+    assert isinstance(result, dict)
+    assert result.get("source") == "OUTPUT"
+    assert "content" in result
+    assert isinstance(result.get("content"), list)
+    
+    # Verify content items - should contain both choice contents
+    expected_content_items = [
+        {"text": {"text": "This is a test response from the model."}},
+        {"text": {"text": "This is a second choice response."}}
+    ]
+    
+    assert result.get("content") == expected_content_items
+    print("✅ OUTPUT source test passed - result:", result)
