@@ -34,26 +34,8 @@ def create_vertex_url(
     api_base: Optional[str] = None,
 ) -> str:
     """Return the base url for the vertex garden models"""
-    try:
-        from google.cloud import aiplatform  # type: ignore
-    except Exception:
-        raise VertexAIError(
-            status_code=400,
-            message="vertexai import failed please run `pip install google-cloud-aiplatform`. This is required for the 'vertex_ai/' route on LiteLLM",
-        )
-
-    try:
-        aiplatform.init(project=vertex_project, location=vertex_location)
-        endpoint = aiplatform.Endpoint(
-            f"projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}"
-        )
-        if endpoint.dedicated_endpoint_enabled:
-            return f"https://{endpoint.dedicated_endpoint_dns}/v1beta1/{endpoint.resource_name}"
-        return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/{endpoint.resource_name}"
-    except Exception as e:
-        if isinstance(e, VertexAIError):
-            raise e
-        return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}"
+    #  f"https://{self.endpoint.location}-aiplatform.googleapis.com/v1beta1/projects/{PROJECT_ID}/locations/{self.endpoint.location}"
+    return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}"
 
 
 class VertexAIModelGardenModels(VertexBase):
