@@ -379,3 +379,52 @@ async def test_claude_tool_use_with_gemini():
         has_usage_in_message_delta
     ), "Usage should be present in message_delta with stop_reason"
     assert is_content_block_stop, "is_content_block_stop should be present"
+
+
+def test_gemini_tool_use():
+    data = {
+        "max_tokens": 8192,
+        "stream": True,
+        "temperature": 0.3,
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "What's the weather like in Lima, Peru today?"},
+        ],
+        "model": "gemini/gemini-2.0-flash",
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Retrieve current weather for a specific location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "City and country, e.g., Lima, Peru",
+                            },
+                            "unit": {
+                                "type": "string",
+                                "enum": ["celsius", "fahrenheit"],
+                                "description": "Temperature unit",
+                            },
+                        },
+                        "required": ["location"],
+                    },
+                },
+            }
+        ],
+        "stream_options": {"include_usage": True},
+    }
+
+    response = litellm.completion(**data)
+    print(response)
+
+    stop_reason = None
+    for chunk in response:
+        print(chunk)
+        if chunk.choices[0].finish_reason:
+            stop_reason = chunk.choices[0].finish_reason
+    assert stop_reason is not None
+    assert stop_reason == "tool_calls"
