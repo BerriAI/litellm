@@ -4,6 +4,10 @@ import pytest
 import asyncio
 from typing import Optional
 from unittest.mock import patch, AsyncMock
+from litellm.responses.litellm_completion_transformation.handler import LiteLLMCompletionTransformationHandler
+from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
+from litellm.types.utils import ModelResponse
+
 
 sys.path.insert(0, os.path.abspath("../.."))
 import litellm
@@ -103,4 +107,33 @@ def test_multiturn_tool_calls():
     print("follow_up_response=", follow_up_response)
         
 
-    
+
+
+@pytest.mark.asyncio
+async def test_async_response_api_handler_merges_trace_id_without_error():
+    handler = LiteLLMCompletionTransformationHandler()
+
+    async def fake_session_handler(previous_response_id, litellm_completion_request):
+        litellm_completion_request["litellm_trace_id"] = "session-trace"
+        return litellm_completion_request
+
+    with patch.object(
+        LiteLLMCompletionResponsesConfig,
+        "async_responses_api_session_handler",
+        side_effect=fake_session_handler,
+    ):
+        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
+            mock_acompletion.return_value = ModelResponse(
+                id="id", created=0, model="test", object="chat.completion", choices=[]
+            )
+            await handler.async_response_api_handler(
+                litellm_completion_request={"model": "test"},
+                request_input="hi",
+                responses_api_request={"previous_response_id": "123"},
+                litellm_trace_id="original-trace",
+            )
+            # ensure acompletion called once with merged trace_id
+            assert mock_acompletion.call_count == 1
+            assert (
+                mock_acompletion.call_args.kwargs["litellm_trace_id"] == "session-trace"
+            )

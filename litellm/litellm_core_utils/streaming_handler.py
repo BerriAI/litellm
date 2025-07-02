@@ -758,6 +758,7 @@ class CustomStreamWrapper:
         is_chunk_non_empty = self.is_chunk_non_empty(
             completion_obj, model_response, response_obj
         )
+
         if (
             is_chunk_non_empty
         ):  # cannot set content of an OpenAI Object to be an empty string
@@ -1203,6 +1204,7 @@ class CustomStreamWrapper:
                 if response_obj is None:
                     return
                 completion_obj["content"] = response_obj["text"]
+                self.received_finish_reason = response_obj.get("finish_reason", None)
                 if response_obj["is_finished"]:
                     if response_obj["finish_reason"] == "error":
                         raise Exception(
@@ -1210,7 +1212,6 @@ class CustomStreamWrapper:
                                 self.custom_llm_provider, response_obj
                             )
                         )
-                    self.received_finish_reason = response_obj["finish_reason"]
                 if response_obj.get("original_chunk", None) is not None:
                     if hasattr(response_obj["original_chunk"], "id"):
                         model_response = self.set_model_id(

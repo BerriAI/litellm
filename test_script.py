@@ -1,4 +1,3 @@
-import os
 import json
 
 mistral_model_cost_map = json.load(open("model_prices_and_context_window.json"))
