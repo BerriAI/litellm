@@ -22,7 +22,7 @@ export const callback_map: Record<string, string> = {
   S3: "s3",
 }
 
-const asset_logos_folder = '/assets/logos/';
+const asset_logos_folder = '/ui/assets/logos/';
 
 export const callbackLogoMap: Record<string, string> = {
     [Callbacks.Braintrust]: `${asset_logos_folder}braintrust.svg`,
