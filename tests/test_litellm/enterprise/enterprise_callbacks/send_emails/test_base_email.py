@@ -406,6 +406,7 @@ async def test_get_email_params_custom_templates_premium_user(mock_env_vars):
         # Test invitation email params
         invitation_params = await email_logger._get_email_params(
             email_event=EmailEvent.new_user_invitation,
+            user_id="testid",
             user_email="test@example.com",
             event_message="New User Invitation"
         )
@@ -419,6 +420,7 @@ async def test_get_email_params_custom_templates_premium_user(mock_env_vars):
         # Test key created email params
         key_params = await email_logger._get_email_params(
             email_event=EmailEvent.virtual_key_created,
+            user_id="testid",
             user_email="test@example.com",
             event_message="API Key Created"
         )
