@@ -137,6 +137,12 @@ const Settings: React.FC<SettingsPageProps> = ({
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
   const [callbackToDelete, setCallbackToDelete] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (showEditCallback && selectedEditCallback) {
+      form.setFieldsValue(selectedEditCallback.variables)
+    }
+  }, [showEditCallback, selectedEditCallback, form]);
+
   const handleSwitchChange = (alertName: string) => {
     if (activeAlerts.includes(alertName)) {
       setActiveAlerts(activeAlerts.filter((alert) => alert !== alertName));
@@ -208,30 +214,39 @@ const Settings: React.FC<SettingsPageProps> = ({
   };
 
   const updateCallbackCall = async (formValues: Record<string, any>) => {
-    if (!accessToken) {
+    if (!accessToken || !selectedEditCallback) {
       return;
     }
 
-    let env_vars: Record<string, string> = {};
-    // add all other variables
-    Object.entries(formValues).forEach(([key, value]) => {
-      if (key !== "callback") {
-        env_vars[key] = value
+    // Filter out null or empty values from formValues
+    const filteredFormValues: Record<string, any> = {};
+    for (const key in formValues) {
+      if (formValues[key] !== null && formValues[key] !== "") {
+        filteredFormValues[key] = formValues[key];
       }
-    });
+    }
+
     let payload = {
-      environment_variables: env_vars,
+      environment_variables: filteredFormValues,
+      litellm_settings: {
+        "success_callback": [selectedEditCallback.name]
+      }
     }
 
 
     try {
-      let newCallback = await setCallbacksCall(accessToken, payload);
-      message.success(`Callback added successfully`);
-      setIsModalVisible(false);
-      form.resetFields();
-      setSelectedCallback(null);
+      await setCallbacksCall(accessToken, payload);
+      message.success(`Callback updated successfully`);
+      setShowEditCallback(false);
+      setSelectedEditCallback(null);
+      
+      // Refresh the callbacks list
+      if (userID && userRole) {
+        const updatedData = await getCallbacksCall(accessToken, userID, userRole);
+        setCallbacks(updatedData.callbacks);
+      }
     } catch (error) {
-      message.error("Failed to add callback: " + error, 20);
+      message.error("Failed to update callback: " + error, 20);
     }
   }
 
@@ -261,11 +276,15 @@ const Settings: React.FC<SettingsPageProps> = ({
 
 
     try {
-      let newCallback = await setCallbacksCall(accessToken, payload);
+      await setCallbacksCall(accessToken, payload);
       message.success(`Callback ${new_callback} added successfully`);
-      setIsModalVisible(false);
-      form.resetFields();
+      setShowAddCallbacksModal(false);
       setSelectedCallback(null);
+      setSelectedCallbackParams([]);
+      
+      // Refresh the callbacks list
+      const updatedData = await getCallbacksCall(accessToken, userID || "", userRole || "");
+      setCallbacks(updatedData.callbacks);
     } catch (error) {
       message.error("Failed to add callback: " + error, 20);
     }
@@ -667,8 +686,13 @@ const Settings: React.FC<SettingsPageProps> = ({
       title="Add Logging Callback"
       visible={showAddCallbacksModal}
       width={800}
-      onCancel= {() => setShowAddCallbacksModal(false)}
+      onCancel= {() => {
+        setShowAddCallbacksModal(false)
+        setSelectedCallback(null);
+        setSelectedCallbackParams([]);
+      }}
       footer={null}
+      destroyOnClose={true}
       >
         
       <a href="https://docs.litellm.ai/docs/proxy/logging" className="mb-8 mt-4" target="_blank" style={{ color: "blue" }}> LiteLLM Docs: Logging</a>
@@ -735,8 +759,12 @@ const Settings: React.FC<SettingsPageProps> = ({
     visible={showEditCallback}
     width={800}
     title={`Edit ${selectedEditCallback?.name } Settings`}
-    onCancel= {() => setShowEditCallback(false)}
+    onCancel= {() => {
+      setShowEditCallback(false);
+      setSelectedEditCallback(null);
+    }}
     footer={null}
+    destroyOnClose={true}
     >
 
       <Form 
@@ -754,7 +782,7 @@ const Settings: React.FC<SettingsPageProps> = ({
             name={param}
             key={param}
           >
-            <TextInput type="password" defaultValue={value as string}/>
+            <TextInput type="password" placeholder={value as string}/>
           </FormItem>
         ))
       }
