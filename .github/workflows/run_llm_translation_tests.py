@@ -12,9 +12,6 @@ import subprocess
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from datetime import datetime
-from pathlib import Path
-import json
-from typing import Dict, List, Tuple, Optional
 
 # ANSI color codes for terminal output
 class Colors:
