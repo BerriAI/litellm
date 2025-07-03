@@ -12,3 +12,13 @@ export function updateExistingKeys<Source extends Object>(
 
   return clonedTarget;
 }
+
+export const formatNumberWithCommas = (value: number | null | undefined, decimals: number = 0): string => {
+  if (value === null || value === undefined) {
+    return '-';
+  }
+  return value.toLocaleString('en-US', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+};

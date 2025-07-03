@@ -38,6 +38,7 @@ import {
 import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
 import { Badge, Text } from "@tremor/react";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 interface AllKeysTableProps {
   keys: KeyResponse[];
@@ -352,16 +353,19 @@ export function AllKeysTable({
       id: "spend",
       accessorKey: "spend",
       header: "Spend (USD)",
-      cell: (info) => Number(info.getValue()).toFixed(4),
+      cell: (info) => formatNumberWithCommas(info.getValue() as number, 4),
     },
     {
       id: "max_budget",
       accessorKey: "max_budget",
       header: "Budget (USD)",
-      cell: (info) =>
-        info.getValue() !== null && info.getValue() !== undefined
-          ? info.getValue()
-          : "Unlimited",
+      cell: (info) => {
+        const maxBudget = info.getValue() as number | null;
+        if (maxBudget === null) {
+          return "Unlimited";
+        }
+        return `$${formatNumberWithCommas(maxBudget)}`;
+      },
     },
     {
       id: "budget_reset_at",
