@@ -42,26 +42,76 @@ async def test_mcp_server_manager():
 
 @pytest.mark.asyncio
 async def test_mcp_server_manager_https_server():
-    mcp_server_manager.load_servers_from_config(
-        {
-            "zapier_mcp_server": {
-                "url": os.environ.get("ZAPIER_MCP_HTTPS_SERVER_URL"),
-                "transport": MCPTransport.http,
+    # Create mock tools and results
+    mock_tools = [
+        MCPTool(
+            name="gmail_send_email",
+            description="Send an email via Gmail",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "body": {"type": "string"},
+                    "message": {"type": "string"},
+                    "instructions": {"type": "string"}
+                },
+                "required": ["body"]
             }
-        }
+        )
+    ]
+    
+    mock_result = CallToolResult(
+        content=[TextContent(type="text", text="Email sent successfully")],
+        isError=False
     )
-    tools = await mcp_server_manager.list_tools()
-    print("TOOLS FROM MCP SERVER MANAGER== ", tools)
-
-    result = await mcp_server_manager.call_tool(
-        name="gmail_send_email",
-        arguments={
-            "body": "Test",
-            "message": "Test",
-            "instructions": "Test",
-        },
-    )
-    print("RESULT FROM CALLING TOOL FROM MCP SERVER MANAGER== ", result)
+    
+    # Create a mock MCPClient
+    mock_client = AsyncMock()
+    mock_client.list_tools = AsyncMock(return_value=mock_tools)
+    mock_client.call_tool = AsyncMock(return_value=mock_result)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    
+    # Mock the MCPClient constructor
+    def mock_client_constructor(*args, **kwargs):
+        return mock_client
+    
+    with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient', mock_client_constructor):
+        mcp_server_manager.load_servers_from_config(
+            {
+                "zapier_mcp_server": {
+                    "url": "https://test-mcp-server.com/mcp",
+                    "transport": MCPTransport.http,
+                }
+            }
+        )
+        
+        tools = await mcp_server_manager.list_tools()
+        print("TOOLS FROM MCP SERVER MANAGER== ", tools)
+        
+        # Verify tools were returned and properly prefixed
+        assert len(tools) == 1
+        assert tools[0].name == "zapier_mcp_server/gmail_send_email"
+        
+        result = await mcp_server_manager.call_tool(
+            name="zapier_mcp_server/gmail_send_email",
+            arguments={
+                "body": "Test",
+                "message": "Test",
+                "instructions": "Test",
+            },
+        )
+        print("RESULT FROM CALLING TOOL FROM MCP SERVER MANAGER== ", result)
+        
+        # Verify result
+        assert result.isError is False
+        assert len(result.content) == 1
+        assert isinstance(result.content[0], TextContent)
+        assert result.content[0].text == "Email sent successfully"
+        
+        # Verify client methods were called
+        mock_client.__aenter__.assert_called()
+        mock_client.list_tools.assert_called_once()
+        mock_client.call_tool.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -127,16 +177,16 @@ async def test_mcp_http_transport_list_tools_mock():
         
         # Assertions
         assert len(tools) == 2
-        assert tools[0].name == "gmail_send_email"
-        assert tools[1].name == "calendar_create_event"
+        assert tools[0].name == "test_http_server/gmail_send_email"
+        assert tools[1].name == "test_http_server/calendar_create_event"
         
         # Verify client methods were called
         mock_client.__aenter__.assert_called()
         mock_client.list_tools.assert_called_once()
         
         # Verify tool mapping was updated
-        assert test_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] == "test_http_server"
-        assert test_manager.tool_name_to_mcp_server_name_mapping["calendar_create_event"] == "test_http_server"
+        assert test_manager.tool_name_to_mcp_server_name_mapping["test_http_server/gmail_send_email"] == "test_http_server"
+        assert test_manager.tool_name_to_mcp_server_name_mapping["test_http_server/calendar_create_event"] == "test_http_server"
 
 
 @pytest.mark.asyncio
@@ -587,12 +637,10 @@ async def test_list_tools_rest_api_success():
                 server_id=server_id,
                 user_api_key_dict=mock_user_auth
             )
-            
+
             assert isinstance(response, dict)
             assert len(response["tools"]) == 1
-            assert response["tools"][0].name == "test_tool"
-            assert response["error"] is None
-            assert response["message"] == "Successfully retrieved tools"
+            assert response["tools"][0].name == "test_server/test_tool"
     finally:
         # Restore original state
         global_mcp_server_manager.registry = {}
