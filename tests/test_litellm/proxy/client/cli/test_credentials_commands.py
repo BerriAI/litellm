@@ -13,7 +13,10 @@ def mock_credentials_client():
     with patch(
         "litellm.proxy.client.cli.commands.credentials.CredentialsManagementClient"
     ) as mock:
-        yield mock
+        # Create a mock instance
+        mock_instance = MagicMock()
+        mock.return_value = mock_instance
+        yield mock_instance
 
 
 @pytest.fixture
@@ -35,8 +38,7 @@ def test_list_credentials_table_format(cli_runner, mock_credentials_client):
             },
         ]
     }
-    mock_instance = mock_credentials_client.return_value
-    mock_instance.list.return_value = mock_response
+    mock_credentials_client.list.return_value = mock_response
 
     # Run command
     result = cli_runner.invoke(cli, ["credentials", "list"])
@@ -59,8 +61,7 @@ def test_list_credentials_json_format(cli_runner, mock_credentials_client):
             }
         ]
     }
-    mock_instance = mock_credentials_client.return_value
-    mock_instance.list.return_value = mock_response
+    mock_credentials_client.list.return_value = mock_response
 
     # Run command
     result = cli_runner.invoke(cli, ["credentials", "list", "--format", "json"])
@@ -74,8 +75,7 @@ def test_list_credentials_json_format(cli_runner, mock_credentials_client):
 def test_create_credential_success(cli_runner, mock_credentials_client):
     # Mock response data
     mock_response = {"status": "success", "credential_name": "test-cred"}
-    mock_instance = mock_credentials_client.return_value
-    mock_instance.create.return_value = mock_response
+    mock_credentials_client.create.return_value = mock_response
 
     # Run command
     result = cli_runner.invoke(
@@ -95,7 +95,7 @@ def test_create_credential_success(cli_runner, mock_credentials_client):
     assert result.exit_code == 0
     output_data = json.loads(result.output)
     assert output_data == mock_response
-    mock_instance.create.assert_called_once_with(
+    mock_credentials_client.create.assert_called_once_with(
         "test-cred",
         {"custom_llm_provider": "azure"},
         {"api_key": "test-key"},
@@ -120,17 +120,15 @@ def test_create_credential_invalid_json(cli_runner, mock_credentials_client):
     # Verify
     assert result.exit_code == 2
     assert "Invalid JSON" in result.output
-    mock_instance = mock_credentials_client.return_value
-    mock_instance.create.assert_not_called()
+    mock_credentials_client.create.assert_not_called()
 
 
 def test_create_credential_http_error(cli_runner, mock_credentials_client):
     # Mock HTTP error
-    mock_instance = mock_credentials_client.return_value
     mock_error_response = MagicMock()
     mock_error_response.status_code = 400
     mock_error_response.json.return_value = {"error": "Invalid request"}
-    mock_instance.create.side_effect = requests.exceptions.HTTPError(
+    mock_credentials_client.create.side_effect = requests.exceptions.HTTPError(
         response=mock_error_response
     )
 
@@ -157,8 +155,7 @@ def test_create_credential_http_error(cli_runner, mock_credentials_client):
 def test_delete_credential_success(cli_runner, mock_credentials_client):
     # Mock response data
     mock_response = {"status": "success", "message": "Credential deleted"}
-    mock_instance = mock_credentials_client.return_value
-    mock_instance.delete.return_value = mock_response
+    mock_credentials_client.delete.return_value = mock_response
 
     # Run command
     result = cli_runner.invoke(cli, ["credentials", "delete", "test-cred"])
@@ -167,16 +164,15 @@ def test_delete_credential_success(cli_runner, mock_credentials_client):
     assert result.exit_code == 0
     output_data = json.loads(result.output)
     assert output_data == mock_response
-    mock_instance.delete.assert_called_once_with("test-cred")
+    mock_credentials_client.delete.assert_called_once_with("test-cred")
 
 
 def test_delete_credential_http_error(cli_runner, mock_credentials_client):
     # Mock HTTP error
-    mock_instance = mock_credentials_client.return_value
     mock_error_response = MagicMock()
     mock_error_response.status_code = 404
     mock_error_response.json.return_value = {"error": "Credential not found"}
-    mock_instance.delete.side_effect = requests.exceptions.HTTPError(
+    mock_credentials_client.delete.side_effect = requests.exceptions.HTTPError(
         response=mock_error_response
     )
 
@@ -195,8 +191,7 @@ def test_get_credential_success(cli_runner, mock_credentials_client):
         "credential_name": "test-cred",
         "credential_info": {"custom_llm_provider": "azure"},
     }
-    mock_instance = mock_credentials_client.return_value
-    mock_instance.get.return_value = mock_response
+    mock_credentials_client.get.return_value = mock_response
 
     # Run command
     result = cli_runner.invoke(cli, ["credentials", "get", "test-cred"])
@@ -205,4 +200,4 @@ def test_get_credential_success(cli_runner, mock_credentials_client):
     assert result.exit_code == 0
     output_data = json.loads(result.output)
     assert output_data == mock_response
-    mock_instance.get.assert_called_once_with("test-cred")
+    mock_credentials_client.get.assert_called_once_with("test-cred")
