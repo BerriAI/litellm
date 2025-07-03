@@ -429,6 +429,8 @@ class OpenTelemetry(CustomLogger):
         """
         from opentelemetry import trace
 
+        from litellm.integrations.arize.arize import ArizeLogger
+
         standard_callback_dynamic_params: Optional[
             StandardCallbackDynamicParams
         ] = kwargs.get("standard_callback_dynamic_params")
@@ -439,14 +441,7 @@ class OpenTelemetry(CustomLogger):
         dynamic_headers = {}
 
         # Handle Arize headers
-        if standard_callback_dynamic_params.get("arize_space_key"):
-            dynamic_headers["space_key"] = standard_callback_dynamic_params.get(
-                "arize_space_key"
-            )
-        if standard_callback_dynamic_params.get("arize_api_key"):
-            dynamic_headers["api_key"] = standard_callback_dynamic_params.get(
-                "arize_api_key"
-            )
+        dynamic_headers = ArizeLogger.construct_dynamic_arize_headers(standard_callback_dynamic_params=standard_callback_dynamic_params)
 
         # Only create a span processor if we have headers to use
         if len(dynamic_headers) > 0:
@@ -579,7 +574,9 @@ class OpenTelemetry(CustomLogger):
                 )
                 return
             elif self.callback_name == "langfuse_otel":
-                from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
+                from litellm.integrations.langfuse.langfuse_otel import (
+                    LangfuseOtelLogger,
+                )
 
                 LangfuseOtelLogger.set_langfuse_otel_attributes(
                     span, kwargs, response_obj
