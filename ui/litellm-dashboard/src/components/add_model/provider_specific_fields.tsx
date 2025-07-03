@@ -351,10 +351,10 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     type: "password",
     required: true
   }],
-  [Providers.DigitalOcean]: [
+  [Providers.GradientAI]: [
     {
       key: "endpoint",
-      label: "DigitalOcean Endpoint",
+      label: "GradientAI Endpoint",
       placeholder: "https://...",
       required: true
     },
@@ -362,11 +362,11 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     {
       key: "base_model",
       label: "Base Model",
-      placeholder: "digitalocean/mistral-nemo"
+      placeholder: "gradient_ai/mistral-nemo"
     },
     {
       key: "api_key",
-      label: "DigitalOcean API Key",
+      label: "GradientAI API Key",
       type: "password",
       required: true
     }
@@ -420,7 +420,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
     onChange(info: any) {
       console.log("Upload onChange triggered in ProviderSpecificFields");
       console.log("Current form values:", form.getFieldsValue());
-      
+
       if (info.file.status !== "uploading") {
         console.log(info.file, info.fileList);
       }
@@ -450,14 +450,14 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
                 ))}
               </Select>
             ) : field.type === "upload" ? (
-              <Upload 
+              <Upload
                 {...handleUpload}
                 onChange={(info) => {
                   // First call the original onChange
                   if (uploadProps?.onChange) {
                     uploadProps.onChange(info);
                   }
-                  
+
                   // Check the field value after a short delay
                   setTimeout(() => {
                     const value = form.getFieldValue(field.key);

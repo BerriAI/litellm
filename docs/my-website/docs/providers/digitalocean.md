@@ -1,12 +1,12 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# DigitalOcean GenAI
+# GradientAI GradientAI
 https://digitalocean.com/products/genai
 
 
-LiteLLM provides native support for DigitalOcean GenAI models.
-To use a DigitalOcean model, specify it as `digitalocean/<model-name>` in your LiteLLM requests.
+LiteLLM provides native support for GradientAI GenAI models.
+To use a GradientAI model, specify it as `gradient_ai/<model-name>` in your LiteLLM requests.
 
 
 ## API Key & Endpoint
@@ -15,8 +15,8 @@ Set your credentials and endpoint as environment variables:
 
 ```python
 import os
-os.environ['DIGITALOCEAN_API_KEY'] = "your-api-key"
-os.environ['DIGITALOCEAN_AGENT_ENDPOINT'] = "https://api.digitalocean.com/api/v1/chat"  # default endpoint
+os.environ['GRADIENT_AI_API_KEY'] = "your-api-key"
+os.environ['GRADIENT_AI_AGENT_ENDPOINT'] = "https://api.gradient_ai.com/api/v1/chat"  # default endpoint
 ```
 
 ## Sample Usage
@@ -25,9 +25,9 @@ os.environ['DIGITALOCEAN_AGENT_ENDPOINT'] = "https://api.digitalocean.com/api/v1
 from litellm import completion
 import os
 
-os.environ['DIGITALOCEAN_API_KEY'] = "your-api-key"
+os.environ['GRADIENT_AI_API_KEY'] = "your-api-key"
 response = completion(
-    model="digitalocean/model-name",
+    model="gradient_ai/model-name",
     messages=[
         {"role": "user", "content": "Hello, how are you?"}
     ],
@@ -41,9 +41,9 @@ print(response.choices[0].message.content)
 from litellm import completion
 import os
 
-os.environ['DIGITALOCEAN_API_KEY'] = "your-api-key"
+os.environ['GRADIENT_AI_API_KEY'] = "your-api-key"
 response = completion(
-    model="digitalocean/model-name",
+    model="gradient_ai/model-name",
     messages=[
         {"role": "user", "content": "Write a story about a robot learning to love"}
     ],

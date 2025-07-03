@@ -10,9 +10,8 @@ from litellm.types.llms.openai import (
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
 
-class DigitalOceanConfig(OpenAILikeChatConfig):
+class GradientAIConfig(OpenAILikeChatConfig):
 
-    # DigitalOcean-specific parameters:
     stream_options: Optional[Dict] = None
     kb_filters: Optional[List[Dict]] = None
     filter_kb_content_by_query_metadata: Optional[bool] = None
@@ -66,9 +65,9 @@ class DigitalOceanConfig(OpenAILikeChatConfig):
                              litellm_params: dict,
                              api_key: Optional[str] = None,
                              api_base: Optional[str] = None):
-        api_key = api_key or get_secret_str("DIGITALOCEAN_API_KEY")
+        api_key = api_key or get_secret_str("GRADIENT_AI_API_KEY")
         if api_key is None:
-            raise ValueError("DigitalOcean API key not found")
+            raise ValueError("GradientAI API key not found")
         if headers is None:
             headers = {}
         headers["Authorization"] = f"Bearer {api_key}"
@@ -94,10 +93,9 @@ class DigitalOceanConfig(OpenAILikeChatConfig):
     ) -> Tuple[Optional[str], Optional[str]]:
         api_base = (
             api_base
-            or get_secret_str("DIGITALOCEAN_AGENT_ENDPOINT")
-            or get_secret_str("DO_AGENT_ENDPOINT")
+            or get_secret_str("GRADIENT_AI_AGENT_ENDPOINT")
         )  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("DO_API_KEY") or get_secret_str("DIGITALOCEAN_API_KEY")
+        dynamic_api_key = api_key or get_secret_str("GRADIENT_AI_API_KEY")
         return api_base, dynamic_api_key
 
 

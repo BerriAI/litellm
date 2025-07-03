@@ -255,7 +255,7 @@ LITELLM_CHAT_PROVIDERS = [
     "llamafile",
     "lm_studio",
     "galadriel",
-    "digitalocean",
+    "gradient_ai",
     "novita",
     "meta_llama",
     "featherless_ai",

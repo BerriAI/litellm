@@ -3193,7 +3193,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     additional_args={"headers": headers},
                 )
                 raise e
-        elif custom_llm_provider == "digitalocean":
+        elif custom_llm_provider == "gradient_ai":
 
             api_base = litellm.api_base or api_base
             response = base_llm_http_handler.completion(
@@ -3205,7 +3205,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 model_response=model_response,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                custom_llm_provider="digitalocean",
+                custom_llm_provider="gradient_ai",
                 timeout=timeout,
                 headers=headers,
                 encoding=encoding,

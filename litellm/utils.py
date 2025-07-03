@@ -3770,8 +3770,8 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
-    elif custom_llm_provider == "digitalocean":
-        optional_params = litellm.DigitalOceanConfig().map_openai_params(
+    elif custom_llm_provider == "gradient_ai":
+        optional_params = litellm.GradientAIConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -6795,8 +6795,8 @@ class ProviderConfigManager:
             return litellm.LiteLLMProxyChatConfig()
         elif litellm.LlmProviders.OPENAI == provider:
             return litellm.OpenAIGPTConfig()
-        elif litellm.LlmProviders.DIGITALOCEAN == provider:
-            return litellm.DigitalOceanConfig()
+        elif litellm.LlmProviders.GRADIENT_AI == provider:
+            return litellm.GradientAIConfig()
         elif litellm.LlmProviders.NSCALE == provider:
             return litellm.NscaleConfig()
         return None
