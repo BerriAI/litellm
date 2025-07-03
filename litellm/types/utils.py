@@ -915,13 +915,18 @@ class Usage(CompletionUsage):
 
     server_tool_use: Optional[ServerToolUse] = None
 
+    prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+    """Breakdown of tokens used in the prompt."""
+
     def __init__(
         self,
         prompt_tokens: Optional[int] = None,
         completion_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
         reasoning_tokens: Optional[int] = None,
-        prompt_tokens_details: Optional[Union[PromptTokensDetailsWrapper, dict]] = None,
+        prompt_tokens_details: Optional[
+            Union[PromptTokensDetailsWrapper, PromptTokensDetails, dict]
+        ] = None,
         completion_tokens_details: Optional[
             Union[CompletionTokensDetailsWrapper, dict]
         ] = None,
@@ -949,12 +954,17 @@ class Usage(CompletionUsage):
 
         # handle prompt_tokens_details
         _prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+
         if prompt_tokens_details:
             if isinstance(prompt_tokens_details, dict):
                 _prompt_tokens_details = PromptTokensDetailsWrapper(
                     **prompt_tokens_details
                 )
             elif isinstance(prompt_tokens_details, PromptTokensDetails):
+                _prompt_tokens_details = PromptTokensDetailsWrapper(
+                    **prompt_tokens_details.model_dump()
+                )
+            elif isinstance(prompt_tokens_details, PromptTokensDetailsWrapper):
                 _prompt_tokens_details = prompt_tokens_details
 
         ## DEEPSEEK MAPPING ##
