@@ -17,6 +17,7 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     PromptTokensDetails,
+    PromptTokensDetailsWrapper,
     Usage,
 )
 from litellm.utils import print_verbose, token_counter
@@ -256,7 +257,7 @@ class ChunkProcessor:
         cache_creation_input_tokens: Optional[int] = None
         cache_read_input_tokens: Optional[int] = None
         completion_tokens_details: Optional[CompletionTokensDetails] = None
-        prompt_tokens_details: Optional[PromptTokensDetails] = None
+        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
 
         if "prompt_tokens" in usage_chunk:
             prompt_tokens = usage_chunk.get("prompt_tokens", 0) or 0
@@ -277,10 +278,12 @@ class ChunkProcessor:
                 completion_tokens_details = usage_chunk.completion_tokens_details
         if hasattr(usage_chunk, "prompt_tokens_details"):
             if isinstance(usage_chunk.prompt_tokens_details, dict):
-                prompt_tokens_details = PromptTokensDetails(
+                prompt_tokens_details = PromptTokensDetailsWrapper(
                     **usage_chunk.prompt_tokens_details
                 )
-            elif isinstance(usage_chunk.prompt_tokens_details, PromptTokensDetails):
+            elif isinstance(
+                usage_chunk.prompt_tokens_details, PromptTokensDetailsWrapper
+            ):
                 prompt_tokens_details = usage_chunk.prompt_tokens_details
 
         return {
@@ -324,8 +327,10 @@ class ChunkProcessor:
         ## anthropic prompt caching information ##
         cache_creation_input_tokens: Optional[int] = None
         cache_read_input_tokens: Optional[int] = None
+
+        web_search_requests: Optional[int] = None
         completion_tokens_details: Optional[CompletionTokensDetails] = None
-        prompt_tokens_details: Optional[PromptTokensDetails] = None
+        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         for chunk in chunks:
             usage_chunk: Optional[Usage] = None
             if "usage" in chunk:
@@ -366,6 +371,20 @@ class ChunkProcessor:
                     completion_tokens_details = usage_chunk_dict[
                         "completion_tokens_details"
                     ]
+                if (
+                    usage_chunk_dict["prompt_tokens_details"] is not None
+                    and getattr(
+                        usage_chunk_dict["prompt_tokens_details"],
+                        "web_search_requests",
+                        None,
+                    )
+                    is not None
+                ):
+                    web_search_requests = getattr(
+                        usage_chunk_dict["prompt_tokens_details"],
+                        "web_search_requests",
+                    )
+
                 prompt_tokens_details = usage_chunk_dict["prompt_tokens_details"]
         try:
             returned_usage.prompt_tokens = prompt_tokens or token_counter(
@@ -415,8 +434,20 @@ class ChunkProcessor:
         if prompt_tokens_details is not None:
             returned_usage.prompt_tokens_details = prompt_tokens_details
 
+        if web_search_requests is not None:
+            if returned_usage.prompt_tokens_details is None:
+                returned_usage.prompt_tokens_details = PromptTokensDetailsWrapper(
+                    web_search_requests=web_search_requests
+                )
+            else:
+                returned_usage.prompt_tokens_details.web_search_requests = (
+                    web_search_requests
+                )
+
         # Return a new usage object with the new values
+
         returned_usage = Usage(**returned_usage.model_dump())
+
         return returned_usage
 
 
