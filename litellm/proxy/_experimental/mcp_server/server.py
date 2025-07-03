@@ -21,10 +21,6 @@ from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.utils import StandardLoggingMCPToolCall
 from litellm.utils import client
 
-from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
-    MCPAuthenticatedUser,
-)
-
 LITELLM_MCP_SERVER_NAME = "litellm-mcp-server"
 LITELLM_MCP_SERVER_VERSION = "1.0.0"
 LITELLM_MCP_SERVER_DESCRIPTION = "MCP Server for LiteLLM"
@@ -59,6 +55,9 @@ if MCP_AVAILABLE:
     from mcp.types import TextContent as MCPTextContent
     from mcp.types import Tool as MCPTool
 
+    from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
+        MCPAuthenticatedUser,
+    )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
@@ -329,7 +328,7 @@ if MCP_AVAILABLE:
             mcp_auth_header=mcp_auth_header,
         )
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
-        return call_tool_result.content
+        return call_tool_result.content  # type: ignore[return-value]
 
     async def _handle_local_mcp_tool(
         name: str, arguments: Dict[str, Any]
