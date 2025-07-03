@@ -5,9 +5,14 @@ from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from litellm.proxy._types import UserAPIKeyAuth
 
 
-class LiteLLMAuthenticatedUser(AuthenticatedUser):
+class MCPAuthenticatedUser(AuthenticatedUser):
     """
-    Wrapper class to make UserAPIKeyAuth compatible with MCP's AuthenticatedUser
+    Wrapper class to make LiteLLM's authentication and configuration compatible with MCP's AuthenticatedUser.
+    
+    This class handles:
+    1. User API key authentication information
+    2. MCP authentication header
+    3. MCP server configuration
     """
 
     def __init__(self, user_api_key_auth: UserAPIKeyAuth, mcp_auth_header: Optional[str] = None, mcp_servers: Optional[List[str]] = None):

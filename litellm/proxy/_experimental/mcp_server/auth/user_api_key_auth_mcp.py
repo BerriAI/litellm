@@ -10,11 +10,14 @@ from litellm.proxy._types import LiteLLM_TeamTable, SpecialHeaders, UserAPIKeyAu
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 
-class UserAPIKeyAuthMCP:
+class MCPRequestHandler:
     """
-    Class to handle Authentication for MCP requests
+    Class to handle MCP request processing, including:
+    1. Authentication via LiteLLM API keys
+    2. MCP server configuration and routing
+    3. Header extraction and validation
 
-    Utilizes the main `user_api_key_auth` function to validate the request
+    Utilizes the main `user_api_key_auth` function to validate authentication
     """
 
     LITELLM_API_KEY_HEADER_NAME_PRIMARY = SpecialHeaders.custom_litellm_api_key.value
@@ -26,9 +29,13 @@ class UserAPIKeyAuthMCP:
     LITELLM_MCP_SERVERS_HEADER_NAME = SpecialHeaders.mcp_servers.value
 
     @staticmethod
-    async def user_api_key_auth_mcp(scope: Scope) -> Tuple[UserAPIKeyAuth, Optional[str], Optional[List[str]]]:
+    async def process_mcp_request(scope: Scope) -> Tuple[UserAPIKeyAuth, Optional[str], Optional[List[str]]]:
         """
-        Validate and extract headers from the ASGI scope for MCP requests.
+        Process and validate MCP request headers from the ASGI scope.
+        This includes:
+        1. Extracting and validating authentication headers
+        2. Processing MCP server configuration
+        3. Handling MCP-specific headers
 
         Args:
             scope: ASGI scope containing request information
@@ -41,12 +48,12 @@ class UserAPIKeyAuthMCP:
         Raises:
             HTTPException: If headers are invalid or missing required headers
         """
-        headers = UserAPIKeyAuthMCP._safe_get_headers_from_scope(scope)
+        headers = MCPRequestHandler._safe_get_headers_from_scope(scope)
         litellm_api_key = (
-            UserAPIKeyAuthMCP.get_litellm_api_key_from_headers(headers) or ""
+            MCPRequestHandler.get_litellm_api_key_from_headers(headers) or ""
         )
-        mcp_auth_header = headers.get(UserAPIKeyAuthMCP.LITELLM_MCP_AUTH_HEADER_NAME)
-        mcp_servers_header = headers.get(UserAPIKeyAuthMCP.LITELLM_MCP_SERVERS_HEADER_NAME)
+        mcp_auth_header = headers.get(MCPRequestHandler.LITELLM_MCP_AUTH_HEADER_NAME)
+        mcp_servers_header = headers.get(MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME)
         mcp_servers = None
         if mcp_servers_header:
             try:
@@ -84,12 +91,12 @@ class UserAPIKeyAuthMCP:
             headers: Starlette Headers object that handles case insensitivity
         """
         # Headers object handles case insensitivity automatically
-        api_key = headers.get(UserAPIKeyAuthMCP.LITELLM_API_KEY_HEADER_NAME_PRIMARY)
+        api_key = headers.get(MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_PRIMARY)
         if api_key:
             return api_key
 
         auth_header = headers.get(
-            UserAPIKeyAuthMCP.LITELLM_API_KEY_HEADER_NAME_SECONDARY
+            MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_SECONDARY
         )
         if auth_header:
             return auth_header
@@ -124,16 +131,16 @@ class UserAPIKeyAuthMCP:
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[str]:
         """
-        Apply least privilege
+        Get list of allowed MCP servers for the given user/key based on permissions
         """
         from typing import List
 
         allowed_mcp_servers: List[str] = []
         allowed_mcp_servers_for_key = (
-            await UserAPIKeyAuthMCP._get_allowed_mcp_servers_for_key(user_api_key_auth)
+            await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_auth)
         )
         allowed_mcp_servers_for_team = (
-            await UserAPIKeyAuthMCP._get_allowed_mcp_servers_for_team(user_api_key_auth)
+            await MCPRequestHandler._get_allowed_mcp_servers_for_team(user_api_key_auth)
         )
 
         #########################################################

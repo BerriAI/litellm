@@ -13,13 +13,13 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
-    UserAPIKeyAuthMCP,
+    MCPRequestHandler,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 
 
 @pytest.mark.asyncio
-class TestUserAPIKeyAuthMCP:
+class TestMCPRequestHandler:
 
     @pytest.mark.parametrize(
         "user_api_key_auth,object_permission_id,prisma_client_available,db_result,expected_result",
@@ -91,7 +91,7 @@ class TestUserAPIKeyAuthMCP:
 
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
             # Call the method
-            result = await UserAPIKeyAuthMCP._get_allowed_mcp_servers_for_key(
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
                 user_api_key_auth
             )
 
@@ -170,8 +170,8 @@ class TestUserAPIKeyAuthMCP:
             ),
         ],
     )
-    async def test_user_api_key_auth_mcp(self, headers, expected_api_key, expected_mcp_auth_header):
-        """Test user_api_key_auth_mcp method with various header scenarios"""
+    async def test_process_mcp_request(self, headers, expected_api_key, expected_mcp_auth_header):
+        """Test process_mcp_request method with various header scenarios"""
 
         # Create ASGI scope with headers
         scope = {
@@ -189,12 +189,12 @@ class TestUserAPIKeyAuthMCP:
         )
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth"
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.process_mcp_request"
         ) as mock_user_api_key_auth:
             mock_user_api_key_auth.return_value = mock_auth_result
 
             # Call the method
-            auth_result, mcp_auth_header = await UserAPIKeyAuthMCP.user_api_key_auth_mcp(scope)
+            auth_result, mcp_auth_header = await MCPRequestHandler.process_mcp_request(scope)
 
             # Assert the results
             assert auth_result == mock_auth_result
