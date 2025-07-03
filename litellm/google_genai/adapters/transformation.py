@@ -211,10 +211,12 @@ class GoogleGenAIAdapter:
         Returns:
             Dict[str, Any]
         """
+        allowed_fields = GenericLiteLLMParams.model_fields.keys()
         if litellm_params:
             litellm_dict = litellm_params.model_dump(exclude_none=True)
             for key, value in litellm_dict.items():
-                completion_request_dict[key] = value
+                if key in allowed_fields:
+                    completion_request_dict[key] = value
         return completion_request_dict
 
     def translate_completion_output_params_streaming(
