@@ -82,9 +82,45 @@ async def test_anthropic_bedrock_thinking_blocks_with_none_content():
         == "This is a test thinking block"
     )
 
+@pytest.mark.asyncio
+async def test_convert_to_bedrock_tool_call_invoke_with_no_args():
+    """Test formatting bedrock tool call invocation response"""
+    messages = [
+        {
+            "role": "assistant",
+            "content": "I will call a tool without args",
+            "tool_calls": [{
+                "id": "123",
+                "type": "function",
+                "function": {
+                    "name": "test_tool",
+                    "arguments": ""
+                }
+            }]
+        }, {
+            "role": "tool",
+            "content": "The tool worked",
+            "tool_call_id": "123",
+            "tool_name": "test_tool",
+            "tool_args": None,
+        },
+    ]
+
+    result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        llm_provider="bedrock",
+    )
+
+    print(f"result: {result}")
+    assert len(result) == 2
+    assert (
+            result[1]["content"][0]["toolResult"]["content"][0]["text"]
+            == "The tool worked"
+    )
 
 def test_convert_to_azure_openai_messages():
-    """Test coverting image_url to azure_openai spec"""
+    """Test converting image_url to azure_openai spec"""
 
     from typing import List
     from litellm.types.llms.openai import AllMessageValues
