@@ -78,7 +78,7 @@ def perform_redaction(model_call_details: dict, result):
                     elif isinstance(choice, litellm.utils.StreamingChoices):
                         choice.delta.content = "redacted-by-litellm"
             return _result
-        elif hasattr(result, "output"):
+        elif isinstance(result, litellm.ResponsesAPIResponse) and hasattr(result, "output"):
             # Handle ResponsesAPIResponse format
             _result = copy.deepcopy(result)
             for output_item in _result.output:
