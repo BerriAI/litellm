@@ -4068,6 +4068,17 @@
         "source": "https://azure.microsoft.com/en-us/pricing/details/phi-3/",
         "supports_tool_choice": true
     },
+    "azure_ai/cohere-rerank-v3.5": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "max_output_tokens": 4096,
+        "max_query_tokens": 2048,
+        "input_cost_per_token": 0.0,
+        "input_cost_per_query": 0.002,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "azure_ai",
+        "mode": "rerank"
+    },
     "azure_ai/cohere-rerank-v3-multilingual": {
         "max_tokens": 4096,
         "max_input_tokens": 4096,
