@@ -31,6 +31,7 @@ from typing import (
     Literal,
     Mapping,
     Optional,
+    Tuple,
     Type,
     Union,
     cast,
@@ -822,6 +823,34 @@ def mock_completion(
         raise Exception("Mock completion response failed - {}".format(e))
 
 
+def responses_api_bridge_check(
+    model: str,
+    custom_llm_provider: str,
+) -> Tuple[dict, str]:
+    model_info: Dict[str, Any] = {}
+    try:
+        model_info = cast(
+            dict,
+            _get_model_info_helper(
+                model=model, custom_llm_provider=custom_llm_provider
+            ),
+        )
+        if model_info.get("mode") is None and model.startswith("responses/"):
+            model = model.replace("responses/", "")
+            mode = "responses"
+            model_info["mode"] = mode
+    except Exception as e:
+        verbose_logger.debug("Error getting model info: {}".format(e))
+
+        if model.startswith(
+            "responses/"
+        ):  # handle azure models - `azure/responses/<deployment-name>`
+            model = model.replace("responses/", "")
+            mode = "responses"
+            model_info["mode"] = mode
+    return model_info, model
+
+
 @tracer.wrap()
 @client
 def completion(  # type: ignore # noqa: PLR0915
@@ -1290,13 +1319,9 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
         ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
-        try:
-            model_info = _get_model_info_helper(
-                model=model, custom_llm_provider=custom_llm_provider
-            )
-        except Exception as e:
-            verbose_logger.debug("Error getting model info: {}".format(e))
-            model_info = {}
+        model_info, model = responses_api_bridge_check(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
 
         if model_info.get("mode") == "responses":
             from litellm.completion_extras import responses_api_bridge
@@ -1816,7 +1841,6 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "sambanova"
             or custom_llm_provider == "volcengine"
             or custom_llm_provider == "anyscale"
-            or custom_llm_provider == "mistral"
             or custom_llm_provider == "openai"
             or custom_llm_provider == "together_ai"
             or custom_llm_provider == "nebius"
@@ -1905,6 +1929,33 @@ def completion(  # type: ignore # noqa: PLR0915
                     additional_args={"headers": headers},
                 )
 
+        elif custom_llm_provider == "mistral":
+            api_key = api_key or litellm.api_key or get_secret("MISTRAL_API_KEY")
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("MISTRAL_API_BASE")
+                or "https://api.mistral.ai/v1"
+            )
+            
+            response = base_llm_http_handler.completion(
+                model=model,
+                messages=messages,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                model_response=model_response,
+                encoding=encoding,
+                logging_obj=logging,
+                optional_params=optional_params,
+                timeout=timeout,
+                litellm_params=litellm_params,
+                acompletion=acompletion,
+                stream=stream,
+                api_key=api_key,
+                headers=headers,
+                client=client,
+                provider_config=provider_config,
+            )
         elif (
             "replicate" in model
             or custom_llm_provider == "replicate"
@@ -3215,6 +3266,7 @@ def completion(  # type: ignore # noqa: PLR0915
             prompt = " ".join([message["content"] for message in messages])  # type: ignore
             resp = litellm.module_level_client.post(
                 url,
+                headers=headers,
                 json={
                     "model": model,
                     "params": {
@@ -3224,6 +3276,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         "top_p": top_p,
                         "top_k": kwargs.get("top_k"),
                     },
+                    **kwargs.get("extra_body", {}),
                 },
             )
             response_json = resp.json()
@@ -4931,7 +4984,10 @@ def transcription(
             provider_config=provider_config,
             litellm_params=litellm_params_dict,
         )
-    elif custom_llm_provider == "deepgram":
+    elif custom_llm_provider in [
+        LlmProviders.DEEPGRAM.value,
+        LlmProviders.ELEVENLABS.value,
+    ]:
         response = base_llm_http_handler.audio_transcriptions(
             model=model,
             audio_file=file,
@@ -4953,7 +5009,7 @@ def transcription(
             logging_obj=litellm_logging_obj,
             api_base=api_base,
             api_key=api_key,
-            custom_llm_provider="deepgram",
+            custom_llm_provider=custom_llm_provider,
             headers={},
             provider_config=provider_config,
         )

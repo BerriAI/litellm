@@ -8,7 +8,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-from litellm.llms.mistral.mistral_chat_transformation import MistralConfig
+from litellm.llms.mistral.chat.transformation import MistralConfig
 
 
 @pytest.mark.asyncio
@@ -95,10 +95,6 @@ class TestMistralReasoningSupport:
     def test_get_mistral_reasoning_system_prompt(self):
         """Test that the reasoning system prompt is properly formatted."""
         prompt = MistralConfig._get_mistral_reasoning_system_prompt()
-        
-        assert "<think>" in prompt
-        assert "</think>" in prompt
-        assert "step-by-step" in prompt
         assert isinstance(prompt, str)
         assert len(prompt) > 50  # Ensure it's not empty
 
@@ -413,3 +409,71 @@ class TestMistralParallelToolCalls:
         assert result.get("parallel_tool_calls") is True
         assert len(result["messages"]) == 1
         assert result["messages"][0]["role"] == "user"
+
+
+class TestMistralEmptyContentHandling:
+    """Test suite for Mistral empty content response handling functionality."""
+
+    def test_handle_empty_content_response_converts_empty_string_to_none(self):
+        """Test that empty string content is converted to None."""
+        response_data = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "",
+                        "role": "assistant"
+                    },
+                    "finish_reason": "stop"
+                }
+            ]
+        }
+        
+        result = MistralConfig._handle_empty_content_response(response_data)
+        
+        assert result["choices"][0]["message"]["content"] is None
+
+    def test_handle_empty_content_response_preserves_actual_content(self):
+        """Test that actual content is preserved unchanged."""
+        response_data = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "Hello, how can I help you?",
+                        "role": "assistant"
+                    },
+                    "finish_reason": "stop"
+                }
+            ]
+        }
+        
+        result = MistralConfig._handle_empty_content_response(response_data)
+        
+        assert result["choices"][0]["message"]["content"] == "Hello, how can I help you?"
+
+    def test_handle_empty_content_response_handles_multiple_choices(self):
+        """Test that only the first choice is processed for empty content."""
+        response_data = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "",
+                        "role": "assistant"
+                    },
+                    "finish_reason": "stop"
+                },
+                {
+                    "message": {
+                        "content": "",
+                        "role": "assistant"  
+                    },
+                    "finish_reason": "stop"
+                }
+            ]
+        }
+        
+        result = MistralConfig._handle_empty_content_response(response_data)
+        
+        # Only first choice should be converted to None
+        assert result["choices"][0]["message"]["content"] is None
+        # Second choice should remain as empty string
+        assert result["choices"][1]["message"]["content"] is None

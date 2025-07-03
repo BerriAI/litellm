@@ -59,6 +59,15 @@ class PerplexityChatConfig(OpenAIGPTConfig):
                 base_openai_params.append("reasoning_effort")
         except Exception as e:
             verbose_logger.debug(f"Error checking if model supports reasoning: {e}")
+        
+        try:
+            if litellm.supports_web_search(
+                model=model, custom_llm_provider=self.custom_llm_provider
+            ):
+                base_openai_params.append("web_search_options")
+        except Exception as e:
+            verbose_logger.debug(f"Error checking if model supports web search: {e}")
+        
         return base_openai_params
 
     def transform_response(

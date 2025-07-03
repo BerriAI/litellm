@@ -30,6 +30,9 @@ class SupportedGuardrailIntegrations(Enum):
     AIM = "aim"
     PANGEA = "pangea"
     LASSO = "lasso"
+    PANW_PRISMA_AIRS = "panw_prisma_airs"
+    AZURE_PROMPT_SHIELD = "azure/prompt_shield"
+    AZURE_TEXT_MODERATIONS = "azure/text_moderations"
 
 
 class Role(Enum):

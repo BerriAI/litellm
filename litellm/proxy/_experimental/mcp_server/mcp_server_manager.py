@@ -18,7 +18,7 @@ from mcp.types import Tool as MCPTool
 from litellm._logging import verbose_logger
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
-    UserAPIKeyAuthMCP,
+    MCPRequestHandler,
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -143,7 +143,7 @@ class MCPServerManager:
         """
         Get the allowed MCP Servers for the user
         """
-        allowed_mcp_servers = await UserAPIKeyAuthMCP.get_allowed_mcp_servers(
+        allowed_mcp_servers = await MCPRequestHandler.get_allowed_mcp_servers(
             user_api_key_auth
         )
         verbose_logger.debug(
@@ -227,19 +227,43 @@ class MCPServerManager:
         verbose_logger.debug(f"Connecting to url: {server.url}")
         verbose_logger.info("_get_tools_from_server...")
 
-        client = self._create_mcp_client(
-            server=server,
-            mcp_auth_header=mcp_auth_header,
-        )
-        async with client:
-            tools = await client.list_tools()
-            verbose_logger.debug(f"Tools from {server.name}: {tools}")
+        client = None
+        try:
+            client = self._create_mcp_client(
+                server=server,
+                mcp_auth_header=mcp_auth_header,
+            )
+            
+            # Create a task for the client operations to ensure proper cancellation handling
+            async def _list_tools_task():
+                async with client:
+                    tools = await client.list_tools()
+                    verbose_logger.debug(f"Tools from {server.name}: {tools}")
+                    return tools
 
-            # Update tool to server mapping
-            for tool in tools:
-                self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
+            try:
+                tools = await _list_tools_task()
+                
+                # Update tool to server mapping
+                for tool in tools:
+                    self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
 
-            return tools
+                return tools
+            except asyncio.CancelledError:
+                verbose_logger.warning(f"Task cancelled while listing tools from {server.name}")
+                raise  # Re-raise the cancellation
+            except Exception as e:
+                verbose_logger.exception(f"Error listing tools from {server.name}: {str(e)}")
+                raise
+        except Exception as e:
+            verbose_logger.exception(f"Failed to get tools from server {server.name}: {str(e)}")
+            return []  # Return empty list on failure
+        finally:
+            if client:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
     
     async def call_tool(
         self, 
