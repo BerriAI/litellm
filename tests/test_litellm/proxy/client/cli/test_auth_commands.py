@@ -1,9 +1,15 @@
 import json
 import os
+import sys
 import tempfile
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, mock_open, patch
+
+sys.path.insert(
+    0, os.path.abspath("../../..")
+)  # Adds the parent directory to the system path
+
 
 import pytest
 from click.testing import CliRunner

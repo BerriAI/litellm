@@ -1,6 +1,13 @@
+import os
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+sys.path.insert(
+    0, os.path.abspath("../../..")
+)  # Adds the parent directory to the system path
+
 
 from litellm.proxy.client.users import (
     NotFoundError,
