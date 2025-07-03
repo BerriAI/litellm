@@ -59,7 +59,8 @@ class MCPRequestHandler:
                 mcp_servers = json.loads(mcp_servers_header)
                 if not isinstance(mcp_servers, list):
                     mcp_servers = None
-            except:
+            except (json.JSONDecodeError, TypeError, ValueError) as e:
+                verbose_logger.debug(f"Error parsing mcp_servers header: {e}")
                 mcp_servers = None
 
         # Create a proper Request object with mock body method to avoid ASGI receive channel issues
