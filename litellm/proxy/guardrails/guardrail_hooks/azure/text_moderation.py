@@ -16,6 +16,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy._types import UserAPIKeyAuth
 
 from .base import AzureGuardrailBase
 
@@ -255,3 +256,19 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
             )
             self.check_severity_threshold(response=azure_text_moderation_response)
         return response
+
+    async def async_post_call_streaming_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, response: str
+    ) -> Any:
+        try:
+            if response is not None and len(response) > 0:
+                azure_text_moderation_response = await self.async_make_request(
+                    text=response,
+                )
+                self.check_severity_threshold(response=azure_text_moderation_response)
+            return response
+        except HTTPException as e:
+            import json
+
+            error_returned = json.dumps({"error": e.detail})
+            return f"data: {error_returned}\n\n"
