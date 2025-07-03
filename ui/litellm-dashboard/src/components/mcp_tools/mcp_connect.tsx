@@ -8,6 +8,10 @@ import {
   Alert,
   Button,
   message,
+  Switch,
+  Input,
+  Form,
+  Collapse,
 } from "antd";
 import {
   TabPanel,
@@ -33,10 +37,157 @@ import {
 import { getProxyBaseUrl } from "../networking";
 
 const { Title, Text } = Typography;
+const { Panel } = Collapse;
+
+interface AdvancedSettingsProps {
+  onServerHeaderChange: (servers: string[]) => void;
+  defaultServers?: string[];
+}
+
+const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({ onServerHeaderChange, defaultServers = [] }) => {
+  const [enableServerHeader, setEnableServerHeader] = useState(false);
+  const [serverList, setServerList] = useState<string>(defaultServers.join(','));
+
+  const handleEnableChange = (checked: boolean) => {
+    setEnableServerHeader(checked);
+    if (!checked) {
+      onServerHeaderChange([]);
+    } else {
+      onServerHeaderChange(serverList.split(',').map(s => s.trim()).filter(Boolean));
+    }
+  };
+
+  const handleServerListChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newValue = e.target.value;
+    setServerList(newValue);
+    if (enableServerHeader) {
+      onServerHeaderChange(newValue.split(',').map(s => s.trim()).filter(Boolean));
+    }
+  };
+
+  return (
+    <Collapse className="mt-4">
+      <Panel header="Advanced Settings" key="1">
+        <Form layout="vertical">
+          <Form.Item
+            label={
+              <div className="flex items-center gap-2">
+                <span>Enable Server Header</span>
+                <Switch
+                  size="small"
+                  checked={enableServerHeader}
+                  onChange={handleEnableChange}
+                />
+              </div>
+            }
+            help="Restrict tool access to specific MCP servers"
+          >
+            <Input
+              placeholder="Enter server names (comma-separated)"
+              value={serverList}
+              onChange={handleServerListChange}
+              disabled={!enableServerHeader}
+            />
+          </Form.Item>
+        </Form>
+      </Panel>
+    </Collapse>
+  );
+};
+
+interface CodeBlockProps {
+  code: string;
+  title?: string;
+  copyKey: string;
+  className?: string;
+}
+
+interface FeatureCardProps {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+  children: React.ReactNode;
+  serverName?: string;
+}
+
+const FeatureCard: React.FC<FeatureCardProps> = ({
+  icon,
+  title,
+  description,
+  children,
+  serverName,
+}) => {
+  const [useServerHeader, setUseServerHeader] = useState(false);
+
+  const getHeadersConfig = () => {
+    const headers: Record<string, any> = {
+      "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
+    };
+    
+    if (useServerHeader && serverName) {
+      // Replace spaces with underscores in server name
+      const formattedServerName = serverName.replace(/\s+/g, '_');
+      headers["x-mcp-servers"] = `["${formattedServerName}"]`;
+    }
+    
+    return headers;
+  };
+
+  return (
+    <Card className="border border-gray-200">
+      <div className="flex items-center gap-3 mb-3">
+        <span className="p-2 rounded-lg bg-gray-50">{icon}</span>
+        <div>
+          <Title level={5} className="mb-0">
+            {title}
+          </Title>
+          <Text className="text-gray-600">{description}</Text>
+        </div>
+      </div>
+      {serverName && (title === "Implementation Example" || title === "Configuration") && (
+        <Form.Item
+          className="mb-4"
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <Switch
+              size="small"
+              checked={useServerHeader}
+              onChange={setUseServerHeader}
+            />
+            <Text className="text-sm">Segregate tools to just use {serverName} tools</Text>
+          </div>
+        </Form.Item>
+      )}
+      {React.Children.map(children, child => {
+        if (React.isValidElement<CodeBlockProps>(child) && 
+            child.props.hasOwnProperty('code') && 
+            child.props.hasOwnProperty('copyKey')) {
+          const code = child.props.code;
+          if (code && code.includes('"headers":')) {
+            return React.cloneElement(child, {
+              code: code.replace(
+                /"headers":\s*{[^}]*}/,
+                `"headers": ${JSON.stringify(getHeadersConfig(), null, 8)}`
+              )
+            });
+          }
+        }
+        return child;
+      })}
+    </Card>
+  );
+};
 
 const MCPConnect: React.FC = () => {
   const proxyBaseUrl = getProxyBaseUrl();
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
+  const [serverHeaders, setServerHeaders] = useState<Record<string, string[]>>({
+    openai: [],
+    litellm: [],
+    cursor: [],
+    http: []
+  });
+  const [currentServer] = useState("Zapier Gmail"); // This should match the current server being viewed
 
   const copyToClipboard = async (text: string, key: string) => {
     try {
@@ -49,6 +200,18 @@ const MCPConnect: React.FC = () => {
     } catch (err) {
       message.error('Failed to copy to clipboard');
     }
+  };
+
+  const getHeadersConfig = (type: string) => {
+    const headers: Record<string, any> = {
+      "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
+    };
+    
+    if (serverHeaders[type]?.length > 0) {
+      headers["x-mcp-servers"] = JSON.stringify(serverHeaders[type]);
+    }
+    
+    return headers;
   };
 
   const CodeBlock: React.FC<{ 
@@ -81,26 +244,6 @@ const MCPConnect: React.FC = () => {
         </pre>
       </Card>
     </div>
-  );
-
-  const FeatureCard: React.FC<{
-    icon: React.ReactNode;
-    title: string;
-    description: string;
-    children: React.ReactNode;
-  }> = ({ icon, title, description, children }) => (
-    <Card className="border border-gray-200 shadow-sm hover:shadow-md transition-shadow duration-200">
-      <div className="flex items-start gap-3 mb-4">
-        <div className="flex-shrink-0 w-8 h-8 bg-blue-50 rounded-lg flex items-center justify-center">
-          {icon}
-        </div>
-        <div className="flex-1">
-          <Title level={5} className="mb-1 text-gray-800">{title}</Title>
-          <Text className="text-gray-600">{description}</Text>
-        </div>
-      </div>
-      {children}
-    </Card>
   );
 
   const StepCard: React.FC<{
@@ -167,6 +310,7 @@ const MCPConnect: React.FC = () => {
           icon={<Code className="text-emerald-600" size={16} />}
           title="Implementation Example"
           description="Complete cURL example for using the LiteLLM Proxy Responses API"
+          serverName={currentServer}
         >
           <CodeBlock
             code={`curl --location '${proxyBaseUrl}/v1/responses' \\
@@ -192,6 +336,9 @@ const MCPConnect: React.FC = () => {
             className="text-xs"
           />
         </FeatureCard>
+        <AdvancedSettings 
+          onServerHeaderChange={(servers) => setServerHeaders(prev => ({ ...prev, litellm: servers }))}
+        />
       </Space>
     </Space>
   );
@@ -252,6 +399,7 @@ const MCPConnect: React.FC = () => {
           icon={<Code className="text-blue-600" size={16} />}
           title="Implementation Example"
           description="Complete cURL example for using the Responses API"
+          serverName="Zapier Gmail"
         >
           <CodeBlock
             code={`curl --location 'https://api.openai.com/v1/responses' \\
@@ -277,6 +425,9 @@ const MCPConnect: React.FC = () => {
             className="text-xs"
           />
         </FeatureCard>
+        <AdvancedSettings 
+          onServerHeaderChange={(servers) => setServerHeaders(prev => ({ ...prev, openai: servers }))}
+        />
       </Space>
     </Space>
   );
@@ -315,22 +466,32 @@ const MCPConnect: React.FC = () => {
             title="Add Configuration"
           >
             <Text className="text-gray-600 mb-3">Copy the JSON configuration below and paste it into Cursor, then save with <code className="bg-gray-100 px-2 py-1 rounded">Cmd+S</code> or <code className="bg-gray-100 px-2 py-1 rounded">Ctrl+S</code></Text>
-            <CodeBlock
-              code={`{
+            <FeatureCard
+              icon={<Code className="text-purple-600" size={16} />}
+              title="Configuration"
+              description="Cursor MCP configuration"
+              serverName="Zapier Gmail"
+            >
+              <CodeBlock
+                code={`{
   "mcpServers": {
     "LiteLLM": {
       "url": "${proxyBaseUrl}/mcp",
       "headers": {
-        "x-litellm-api-key": "Bearer $LITELLM_API_KEY"
+        "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
       }
     }
   }
 }`}
-copyKey="cursor-config"
-            />
+                copyKey="cursor-config"
+              />
+            </FeatureCard>
           </StepCard>
         </Space>
       </Card>
+      <AdvancedSettings 
+        onServerHeaderChange={(servers) => setServerHeaders(prev => ({ ...prev, cursor: servers }))}
+      />
     </Space>
   );
 
@@ -360,6 +521,13 @@ copyKey="cursor-config"
             code={`${proxyBaseUrl}/mcp`}
             copyKey="http-server-url"
           />
+          <CodeBlock
+            title="Headers Configuration"
+            code={JSON.stringify({
+              "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
+            }, null, 2)}
+            copyKey="http-headers"
+          />
           <div className="mt-4">
             <Button 
               type="link" 
@@ -372,6 +540,9 @@ copyKey="cursor-config"
           </div>
         </Space>
       </FeatureCard>
+      <AdvancedSettings 
+        onServerHeaderChange={(servers) => setServerHeaders(prev => ({ ...prev, http: servers }))}
+      />
     </Space>
   );
 
