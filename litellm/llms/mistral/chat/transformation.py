@@ -174,7 +174,7 @@ class MistralConfig(OpenAIGPTConfig):
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
+    ) -> Tuple[str, Optional[str]]:
         # mistral is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.mistral.ai
         api_base = (
             api_base
