@@ -115,6 +115,38 @@ curl --location 'https://api.openai.com/v1/responses' \
 }'
 ```
 
+#### Segregating MCP Server Access
+
+If you have multiple MCP servers configured and want to restrict a request to use tools from specific servers only, you can use the `x-mcp-servers` header. This is useful when you want to limit tool access for specific use cases or environments.
+
+```bash title="cURL Example with Server Segregation" showLineNumbers
+curl --location 'https://api.openai.com/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $OPENAI_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "<your-litellm-proxy-base-url>/mcp",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+                "x-mcp-servers": "[\"Zapier_Gmail\"]"
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
+```
+
+In this example, the request will only have access to tools from the "Zapier_Gmail" MCP server. Note that:
+- Server names with spaces should be replaced with underscores
+- Multiple servers can be specified as a JSON array: `["Server1", "Server2", "Server3"]`
+- If the header is not provided, tools from all available MCP servers will be accessible
+
 </TabItem>
 
 <TabItem value="litellm" label="LiteLLM Proxy">
@@ -145,6 +177,35 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
 }'
 ```
 
+#### Segregating MCP Server Access
+
+To restrict tool access to specific MCP servers, use the `x-mcp-servers` header:
+
+```bash title="cURL Example with Server Segregation" showLineNumbers
+curl --location '<your-litellm-proxy-base-url>/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $LITELLM_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "<your-litellm-proxy-base-url>/mcp",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+                "x-mcp-servers": "[\"Zapier_Gmail\"]"
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
+```
+
+This will limit the request to only use tools from the specified MCP server(s). Multiple servers can be specified as a JSON array: `["Server1", "Server2", "Server3"]`.
+
 </TabItem>
 
 <TabItem value="cursor" label="Cursor IDE">
@@ -159,7 +220,7 @@ Use tools directly from Cursor IDE with LiteLLM MCP:
 2. **Navigate to MCP Tools**: Go to the "MCP Tools" tab and click "New MCP Server"
 3. **Add Configuration**: Copy and paste the JSON configuration below, then save with `Cmd+S` or `Ctrl+S`
 
-```json title="Cursor MCP Configuration" showLineNumbers
+```json title="Basic Cursor MCP Configuration" showLineNumbers
 {
   "mcpServers": {
     "LiteLLM": {
@@ -171,6 +232,26 @@ Use tools directly from Cursor IDE with LiteLLM MCP:
   }
 }
 ```
+
+#### Segregating MCP Server Access
+
+To restrict tool access to specific MCP servers, add the `x-mcp-servers` header to your configuration:
+
+```json title="Cursor MCP Configuration with Server Segregation" showLineNumbers
+{
+  "mcpServers": {
+    "LiteLLM": {
+      "url": "<your-litellm-proxy-base-url>/mcp",
+      "headers": {
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
+        "x-mcp-servers": "[\"Zapier_Gmail\"]"
+      }
+    }
+  }
+}
+```
+
+This configuration will limit tool access to only the specified MCP server. You can specify multiple servers using a JSON array: `["Server1", "Server2", "Server3"]`.
 
 </TabItem>
 
