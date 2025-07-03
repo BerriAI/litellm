@@ -1,4 +1,14 @@
-from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union, cast
+from typing import (
+    Any,
+    AsyncIterator,
+    Coroutine,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Union,
+    cast,
+)
 
 import litellm
 from litellm.types.router import GenericLiteLLMParams
@@ -66,10 +76,11 @@ class GenerateContentToCompletionHandler:
             if stream:
                 # Transform streaming completion response to generate_content format
                 transformed_stream = GOOGLE_GENAI_ADAPTER.translate_completion_output_params_streaming(
-                    completion_response
+                    completion_stream=completion_response,
+                    is_async=True,
                 )
                 if transformed_stream is not None:
-                    return transformed_stream
+                    return cast(AsyncIterator[bytes], transformed_stream)
                 raise ValueError("Failed to transform streaming response")
             else:
                 # Transform completion response back to generate_content format
@@ -92,10 +103,10 @@ class GenerateContentToCompletionHandler:
         stream: bool = False,
         _is_async: bool = False,
         **kwargs,
-    ) -> Union[Dict[str, Any], AsyncIterator[bytes], Coroutine[Any, Any, Union[Dict[str, Any], AsyncIterator[bytes]]]]:
+    ) -> Union[Dict[str, Any], AsyncIterator[bytes], Iterator[bytes], Coroutine[Any, Any, Union[Dict[str, Any], AsyncIterator[bytes], Iterator[bytes]]]]:
         """Handle generate_content call using completion adapter"""
         
-        if _is_async:
+        if _is_async is True:
             return GenerateContentToCompletionHandler.async_generate_content_handler(
                 model=model,
                 contents=contents,
@@ -120,7 +131,8 @@ class GenerateContentToCompletionHandler:
             if stream:
                 # Transform streaming completion response to generate_content format
                 transformed_stream = GOOGLE_GENAI_ADAPTER.translate_completion_output_params_streaming(
-                    completion_response
+                    completion_stream=completion_response,
+                    is_async=False,
                 )
                 if transformed_stream is not None:
                     return transformed_stream
