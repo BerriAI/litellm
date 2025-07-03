@@ -7120,7 +7120,22 @@ class ProviderConfigManager:
             from litellm.llms.vertex_ai.google_genai.transformation import (
                 VertexAIGoogleGenAIConfig,
             )
+            from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+                VertexAIPartnerModels,
+            )
 
+            #########################################################
+            # If Vertex Partner models like Anthropic, Mistral, etc. are used,
+            # return None as we want this to go through the litellm.completion() adapter
+            # and not the Google Gen AI adapter
+            #########################################################
+            if VertexAIPartnerModels.is_vertex_partner_model(model):
+                return None
+            
+            #########################################################
+            # If the model is not a Vertex Partner model, return the Vertex AI Google Gen AI Config
+            # This is for Vertex `gemini` models
+            #########################################################
             return VertexAIGoogleGenAIConfig()
         return None
 

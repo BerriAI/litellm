@@ -31,6 +31,25 @@ class VertexAIError(Exception):
 class VertexAIPartnerModels(VertexBase):
     def __init__(self) -> None:
         pass
+    
+    @staticmethod
+    def is_vertex_partner_model(model: str):
+        """
+        Check if the model string is a Vertex AI Partner Model
+        Only use this once you have confirmed that custom_llm_provider is vertex_ai
+
+        Returns:
+            bool: True if the model string is a Vertex AI Partner Model, False otherwise
+        """
+        if (
+            model.startswith("meta/")
+            or model.startswith("mistral")
+            or model.startswith("codestral")
+            or model.startswith("jamba")
+            or model.startswith("claude")
+        ):
+            return True
+        return False
 
     def completion(
         self,
