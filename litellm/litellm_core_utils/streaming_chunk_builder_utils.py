@@ -16,7 +16,6 @@ from litellm.types.utils import (
     FunctionCall,
     ModelResponse,
     ModelResponseStream,
-    PromptTokensDetails,
     PromptTokensDetailsWrapper,
     Usage,
 )
@@ -309,7 +308,7 @@ class ChunkProcessor:
 
         return reasoning_tokens
 
-    def calculate_usage(
+    def calculate_usage( # noqa: PLR0915
         self,
         chunks: List[Union[Dict[str, Any], ModelResponse]],
         model: str,
