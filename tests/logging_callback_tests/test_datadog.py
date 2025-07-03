@@ -577,4 +577,3 @@ def test_get_datadog_tags():
     standard_logging_obj["request_tags"] = None
     tags_none_request = DataDogLogger._get_datadog_tags(standard_logging_obj)
     assert "request_tag:" not in tags_none_request
-
