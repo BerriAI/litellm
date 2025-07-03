@@ -915,6 +915,9 @@ class Usage(CompletionUsage):
 
     server_tool_use: Optional[ServerToolUse] = None
 
+    prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+    """Breakdown of tokens used in the prompt."""
+
     def __init__(
         self,
         prompt_tokens: Optional[int] = None,
@@ -949,6 +952,7 @@ class Usage(CompletionUsage):
 
         # handle prompt_tokens_details
         _prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+
         if prompt_tokens_details:
             if isinstance(prompt_tokens_details, dict):
                 _prompt_tokens_details = PromptTokensDetailsWrapper(
@@ -2077,6 +2081,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     # Arize dynamic params
     arize_api_key: Optional[str]
     arize_space_key: Optional[str]
+    arize_space_id: Optional[str]
 
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
