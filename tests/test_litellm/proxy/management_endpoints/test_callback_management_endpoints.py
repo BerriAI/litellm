@@ -19,25 +19,7 @@ import litellm
 from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
 from litellm.proxy.management_endpoints.callback_management_endpoints import router
-from litellm.proxy.proxy_server import (
-    _description,
-    _get_docs_url,
-    _get_redoc_url,
-    _title,
-    proxy_startup_event,
-    server_root_path,
-    version,
-)
-
-app = FastAPI(
-    docs_url=_get_docs_url(),
-    redoc_url=_get_redoc_url(),
-    title=_title,
-    description=_description,
-    version=version,
-    root_path=server_root_path,  # check if user passed root path, FastAPI defaults this value to ""
-    lifespan=proxy_startup_event,
-)
+from litellm.proxy.proxy_server import app
 
 
 @pytest.fixture(autouse=True, scope="session")
