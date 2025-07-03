@@ -577,3 +577,43 @@ def test_get_datadog_tags():
     standard_logging_obj["request_tags"] = None
     tags_none_request = DataDogLogger._get_datadog_tags(standard_logging_obj)
     assert "request_tag:" not in tags_none_request
+
+
+@pytest.mark.asyncio
+async def test_datadog_standard_logging_object():
+    """Test handling of standard_logging_object in kwargs"""
+    dd_logger = DataDogLogger()
+    
+    # Create a standard logging object
+    standard_logging_obj = create_standard_logging_payload()  # Use the existing helper function
+    
+    # Create kwargs with standard_logging_object - use the same message as in create_standard_logging_payload
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello, world!"}],  # Match the helper function
+        "temperature": 0.7,
+        "standard_logging_object": standard_logging_obj
+    }
+    
+    response_obj = {"choices": [{"message": {"content": "Hi there!"}}]}
+    start_time = datetime.now()
+    end_time = start_time + timedelta(seconds=1)
+    
+    # Test payload creation with standard_logging_object
+    dd_payload = dd_logger.create_datadog_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    
+    # Verify payload structure
+    assert dd_payload["ddsource"] == os.getenv("DD_SOURCE", "litellm")
+    assert dd_payload["service"] == "litellm-server"
+    assert dd_payload["status"] == DataDogStatus.INFO
+    
+    # Verify the message field contains expected data
+    dict_payload = json.loads(dd_payload["message"])
+    assert dict_payload["model"] == "gpt-3.5-turbo"
+    assert dict_payload["messages"] == [{"role": "user", "content": "Hello, world!"}]  # Match the helper function
+    assert dict_payload["response"] == response_obj
