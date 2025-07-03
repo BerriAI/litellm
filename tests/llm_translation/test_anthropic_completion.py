@@ -1276,16 +1276,16 @@ def test_anthropic_mcp_server_tool_use(spec: str):
         tools = [
             {
                 "type": "url",
-                "url": "https://mcp.deepwiki.com/mcp",
-                "name": "deepwiki-mcp",
+                "url": "https://gitmcp.io/openai/tiktoken",
+                "name": "gitmcp",
             }
         ]
     elif spec == "openai":
         tools = [
             {
                 "type": "mcp",
-                "server_label": "deepwiki",
-                "server_url": "https://mcp.deepwiki.com/mcp",
+                "server_label": "gitmcp",
+                "server_url": "https://gitmcp.io/openai/tiktoken",
                 "require_approval": "never",
             },
         ]
@@ -1313,15 +1313,15 @@ def test_anthropic_mcp_server_responses_api(model: str):
     tools = [
         {
             "type": "mcp",
-            "server_label": "deepwiki",
-            "server_url": "https://mcp.deepwiki.com/mcp",
+            "server_label": "gitmcp",
+            "server_url": "https://gitmcp.io/openai/tiktoken",
             "require_approval": "never",
         },
     ]
 
     response = litellm.responses(
         model=model,
-        input="Who won the World Cup in 2022?",
+        input="how does tiktoken work?",
         max_output_tokens=100,
         tools=tools,
     )
