@@ -214,6 +214,7 @@ use_litellm_proxy: bool = (
 )
 use_client: bool = False
 ssl_verify: Union[str, bool] = True
+ssl_security_level: Optional[str] = None
 ssl_certificate: Optional[str] = None
 disable_streaming_logging: bool = False
 disable_token_counter: bool = False

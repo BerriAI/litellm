@@ -15,34 +15,35 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_ssl_configuration
 
 
 @pytest.mark.asyncio
 async def test_ssl_security_level(monkeypatch):
-    # Set environment variable for SSL security level
-    monkeypatch.setenv("SSL_SECURITY_LEVEL", "DEFAULT@SECLEVEL=1")
+    with patch.dict(os.environ, clear=True):
+        # Set environment variable for SSL security level
+        monkeypatch.setenv("SSL_SECURITY_LEVEL", "DEFAULT@SECLEVEL=1")
 
-    # Create async client with SSL verification disabled to isolate SSL context testing
-    client = AsyncHTTPHandler(ssl_verify=False)
+        # Create async client with SSL verification disabled to isolate SSL context testing
+        client = AsyncHTTPHandler()
 
-    # Get the transport (should be LiteLLMAiohttpTransport)
-    transport = client.client._transport
+        # Get the transport (should be LiteLLMAiohttpTransport)
+        transport = client.client._transport
 
-    # Get the aiohttp ClientSession
-    client_session = transport._get_valid_client_session()
+        # Get the aiohttp ClientSession
+        client_session = transport._get_valid_client_session()
 
-    # Get the connector from the session
-    connector = client_session.connector
+        # Get the connector from the session
+        connector = client_session.connector
 
-    # Get the SSL context from the connector
-    ssl_context = connector._ssl
-    print("ssl_context", ssl_context)
+        # Get the SSL context from the connector
+        ssl_context = connector._ssl
+        print("ssl_context", ssl_context)
 
-    # Verify that the SSL context exists and has the correct cipher string
-    assert isinstance(ssl_context, ssl.SSLContext)
-    # Optionally, check the ciphers string if needed
-    # assert "DEFAULT@SECLEVEL=1" in ssl_context.get_ciphers()
+        # Verify that the SSL context exists and has the correct cipher string
+        assert isinstance(ssl_context, ssl.SSLContext)
+        # Optionally, check the ciphers string if needed
+        # assert "DEFAULT@SECLEVEL=1" in ssl_context.get_ciphers()
 
 
 @pytest.mark.asyncio
@@ -151,28 +152,30 @@ async def test_aiohttp_transport_trust_env_setting(monkeypatch):
     assert client_session_with_false_env._trust_env == default_trust_env
 
 
-def test_get_ssl_context():
-    """Test that _get_ssl_context() returns a proper SSL context with certifi CA bundle"""
-    with patch('ssl.create_default_context') as mock_create_context:
-        # Mock the return value
-        mock_ssl_context = MagicMock(spec=ssl.SSLContext)
-        mock_create_context.return_value = mock_ssl_context
-        
-        # Call the static method
-        result = AsyncHTTPHandler._get_ssl_context()
-        
-        # Verify ssl.create_default_context was called with certifi's CA file
-        expected_ca_file = certifi.where()
-        mock_create_context.assert_called_once_with(cafile=expected_ca_file)
-        
-        # Verify it returns the mocked SSL context
-        assert result == mock_ssl_context
+def test_get_ssl_configuration():
+    """Test that get_ssl_configuration() returns a proper SSL context with certifi CA bundle
+    when no environment variables are set."""
+    with patch.dict(os.environ, clear=True):
+        with patch('ssl.create_default_context') as mock_create_context:
+            # Mock the return value
+            mock_ssl_context = MagicMock(spec=ssl.SSLContext)
+            mock_create_context.return_value = mock_ssl_context
+            
+            # Call the static method
+            result = get_ssl_configuration()
+            
+            # Verify ssl.create_default_context was called with certifi's CA file
+            expected_ca_file = certifi.where()
+            mock_create_context.assert_called_once_with(cafile=expected_ca_file)
+            
+            # Verify it returns the mocked SSL context
+            assert result == mock_ssl_context
 
 
-def test_get_ssl_context_integration():
+def test_get_ssl_configuration_integration():
     """Integration test that _get_ssl_context() returns a working SSL context"""
     # Call the static method without mocking
-    ssl_context = AsyncHTTPHandler._get_ssl_context()
+    ssl_context = get_ssl_configuration()
     
     # Verify it returns an SSLContext instance
     assert isinstance(ssl_context, ssl.SSLContext)
