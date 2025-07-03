@@ -594,6 +594,7 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_management_logger: Optional[CustomLogger] = None,
         tools: Optional[List[Dict]] = None,
         prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         custom_logger = (
             prompt_management_logger
@@ -617,6 +618,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 litellm_logging_obj=self,
                 tools=tools,
                 prompt_label=prompt_label,
+                prompt_version=prompt_version,
             )
         self.messages = messages
         return model, messages, non_default_params

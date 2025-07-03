@@ -89,6 +89,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         litellm_logging_obj: LiteLLMLoggingObj,
         tools: Optional[List[Dict]] = None,
         prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Returns:

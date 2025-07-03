@@ -437,6 +437,7 @@ async def acompletion(
             prompt_variables=kwargs.get("prompt_variables", None),
             tools=tools,
             prompt_label=kwargs.get("prompt_label", None),
+            prompt_version=kwargs.get("prompt_version", None),
         )
         #########################################################
         # if the chat completion logging hook removed all tools,
@@ -1049,6 +1050,7 @@ def completion(  # type: ignore # noqa: PLR0915
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
             prompt_label=kwargs.get("prompt_label", None),
+            prompt_version=kwargs.get("prompt_version", None),
         )
 
     try:
