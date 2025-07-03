@@ -1276,16 +1276,20 @@ def test_anthropic_mcp_server_tool_use(spec: str):
         tools = [
             {
                 "type": "url",
-                "url": "https://gitmcp.io/openai/tiktoken",
-                "name": "gitmcp",
+                "url": "https://mcp.zapier.com/api/mcp/mcp",
+                "name": "zapier-mcp",
+                "authorization_token": os.getenv('ZAPIER_CI_CD_MCP_TOKEN')
             }
         ]
     elif spec == "openai":
         tools = [
             {
                 "type": "mcp",
-                "server_label": "gitmcp",
-                "server_url": "https://gitmcp.io/openai/tiktoken",
+                "server_label": "zapier",
+                "server_url": "https://mcp.zapier.com/api/mcp/mcp",
+                "headers": {
+                    "Authorization": f"Bearer {os.getenv('ZAPIER_CI_CD_MCP_TOKEN')}"
+                },
                 "require_approval": "never",
             },
         ]
@@ -1309,19 +1313,22 @@ def test_anthropic_mcp_server_tool_use(spec: str):
 )
 def test_anthropic_mcp_server_responses_api(model: str):
     from litellm import responses
-
+    litellm._turn_on_debug()
     tools = [
         {
             "type": "mcp",
-            "server_label": "gitmcp",
-            "server_url": "https://gitmcp.io/openai/tiktoken",
+            "server_label": "zapier",
+            "server_url": "https://mcp.zapier.com/api/mcp/mcp",
             "require_approval": "never",
+            "headers": {
+                "Authorization": f"Bearer {os.getenv('ZAPIER_CI_CD_MCP_TOKEN')}"
+            }
         },
     ]
 
     response = litellm.responses(
         model=model,
-        input="how does tiktoken work?",
+        input="Who won the World Cup in 2022?",
         max_output_tokens=100,
         tools=tools,
     )
