@@ -25,7 +25,6 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
     from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_text_moderation import (
         AzureTextModerationGuardrailResponse,
-        AzureTextModerationGuardrailResponseCategoriesAnalysis,
     )
     from litellm.types.utils import EmbeddingResponse, ImageResponse, ModelResponse
 
