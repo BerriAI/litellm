@@ -28,23 +28,22 @@ class ExceptionCheckers:
     """
     Helper class for checking various error conditions in exception strings.
     """
-    
+
     @staticmethod
     def is_error_str_rate_limit(error_str: str) -> bool:
         """
         Check if an error string indicates a rate limit error.
-        
+
         Args:
             error_str: The error string to check
-            
+
         Returns:
             True if the error indicates a rate limit, False otherwise
         """
         if not isinstance(error_str, str):
             return False
-            
+
         return "429" in error_str or "rate limit" in error_str.lower()
-    
 
     @staticmethod
     def is_error_str_context_window_exceeded(error_str: str) -> bool:
@@ -289,6 +288,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 or custom_llm_provider == "text-completion-openai"
                 or custom_llm_provider == "custom_openai"
                 or custom_llm_provider in litellm.openai_compatible_providers
+                or custom_llm_provider == "mistral"
             ):
                 # custom_llm_provider is openai, make it OpenAI
                 message = get_error_message(error_obj=original_exception)

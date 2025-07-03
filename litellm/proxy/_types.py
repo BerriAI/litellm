@@ -2695,6 +2695,7 @@ class SpecialHeaders(enum.Enum):
     azure_apim_authorization = "Ocp-Apim-Subscription-Key"
     custom_litellm_api_key = "x-litellm-api-key"
     mcp_auth = "x-mcp-auth"
+    mcp_servers = "x-mcp-servers"
 
 
 class LitellmDataForBackendLLMCall(TypedDict, total=False):
