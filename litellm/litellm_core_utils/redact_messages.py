@@ -69,31 +69,27 @@ def perform_redaction(model_call_details: dict, result):
 
     # Redact result
     if result is not None:
-        if isinstance(result, litellm.ModelResponse):
-            _result = copy.deepcopy(result)
+        _result = copy.deepcopy(result)
+        if isinstance(_result, litellm.ModelResponse):
             if hasattr(_result, "choices") and _result.choices is not None:
                 for choice in _result.choices:
                     if isinstance(choice, litellm.Choices):
                         choice.message.content = "redacted-by-litellm"
                     elif isinstance(choice, litellm.utils.StreamingChoices):
                         choice.delta.content = "redacted-by-litellm"
-            return _result
-        elif isinstance(result, litellm.ResponsesAPIResponse) and hasattr(result, "output"):
-            # Handle ResponsesAPIResponse format
-            _result = copy.deepcopy(result)
-            for output_item in _result.output:
-                if hasattr(output_item, "content") and isinstance(output_item.content, list):
-                    for content_part in output_item.content:
-                        if hasattr(content_part, "text"):
-                            content_part.text = "redacted-by-litellm"
-            return _result
-        elif isinstance(result, litellm.EmbeddingResponse):
-            _result = copy.deepcopy(result)
+        elif isinstance(_result, litellm.ResponsesAPIResponse):
+            if hasattr(_result, "output"):
+                for output_item in _result.output:
+                    if hasattr(output_item, "content") and isinstance(output_item.content, list):
+                        for content_part in output_item.content:
+                            if hasattr(content_part, "text"):
+                                content_part.text = "redacted-by-litellm"
+        elif isinstance(_result, litellm.EmbeddingResponse):
             if hasattr(_result, "data") and _result.data is not None:
                 _result.data = []
-            return _result
         else:
             return {"text": "redacted-by-litellm"}
+        return _result
 
 
 def should_redact_message_logging(model_call_details: dict) -> bool:
