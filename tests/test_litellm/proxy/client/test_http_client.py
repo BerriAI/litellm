@@ -1,10 +1,17 @@
 """Tests for the HTTP client."""
 
 import json
+import os
+import sys
 
 import pytest
 import requests
 import responses
+
+sys.path.insert(
+    0, os.path.abspath("../../..")
+)  # Adds the parent directory to the system path
+
 
 from litellm.proxy.client.http_client import HTTPClient
 
