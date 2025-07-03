@@ -139,6 +139,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({ value = [], onChange 
           icon={PlusIcon}
           size="sm"
           className="hover:border-blue-400 hover:text-blue-500"
+          type="button"
         >
           Add Integration
         </Button>
@@ -174,6 +175,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({ value = [], onChange 
                   size="xs"
                   color="red"
                   className="hover:bg-red-50"
+                  type="button"
                 >
                   Remove
                 </Button>
