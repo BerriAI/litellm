@@ -16,14 +16,16 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
+from litellm.proxy._experimental.mcp_server.utils import (
+    LITELLM_MCP_SERVER_NAME,
+    LITELLM_MCP_SERVER_VERSION,
+    LITELLM_MCP_SERVER_DESCRIPTION,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.utils import StandardLoggingMCPToolCall
 from litellm.utils import client
 
-LITELLM_MCP_SERVER_NAME = "litellm-mcp-server"
-LITELLM_MCP_SERVER_VERSION = "1.0.0"
-LITELLM_MCP_SERVER_DESCRIPTION = "MCP Server for LiteLLM"
 
 # Check if MCP is available
 # "mcp" requires python 3.10 or higher, but several litellm users use python 3.8
@@ -65,6 +67,7 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.tool_registry import (
         global_mcp_tool_registry,
     )
+    from litellm.proxy._experimental.mcp_server.utils import get_server_name_prefix_tool_mcp
 
     ######################################################
     ############ MCP Tools List REST API Response Object #
@@ -249,23 +252,27 @@ if MCP_AVAILABLE:
 
     @client
     async def call_mcp_tool(
-        name: str, 
-        arguments: Optional[Dict[str, Any]] = None, 
-        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-        mcp_auth_header: Optional[str] = None, 
-        **kwargs: Any
+            name: str,
+            arguments: Optional[Dict[str, Any]] = None,
+            user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+            mcp_auth_header: Optional[str] = None,
+            **kwargs: Any
     ) -> List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]:
         """
-        Call a specific tool with the provided arguments
+        Call a specific tool with the provided arguments (handles prefixed tool names)
         """
         if arguments is None:
             raise HTTPException(
                 status_code=400, detail="Request arguments are required"
             )
 
+        # Remove prefix from tool name for logging and processing
+        original_tool_name, server_name_from_prefix = get_server_name_prefix_tool_mcp(
+            name)
+
         standard_logging_mcp_tool_call: StandardLoggingMCPToolCall = (
             _get_standard_logging_mcp_tool_call(
-                name=name,
+                name=original_tool_name,  # Use original name for logging
                 arguments=arguments,
             )
         )
@@ -283,17 +290,17 @@ if MCP_AVAILABLE:
                 standard_logging_mcp_tool_call.get("mcp_server_name")
             )
 
-        # Try managed server tool first
+        # Try managed server tool first (pass the full prefixed name)
         if name in global_mcp_server_manager.tool_name_to_mcp_server_name_mapping:
             return await _handle_managed_mcp_tool(
-                name=name,
+                name=name,  # Pass the full name (potentially prefixed)
                 arguments=arguments,
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
             )
 
-        # Fall back to local tool registry
-        return await _handle_local_mcp_tool(name, arguments)
+        # Fall back to local tool registry (use original name)
+        return await _handle_local_mcp_tool(original_tool_name, arguments)
 
     def _get_standard_logging_mcp_tool_call(
         name: str,
@@ -331,9 +338,12 @@ if MCP_AVAILABLE:
         return call_tool_result.content  # type: ignore[return-value]
 
     async def _handle_local_mcp_tool(
-        name: str, arguments: Dict[str, Any]
+            name: str, arguments: Dict[str, Any]
     ) -> List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]:
-        """Handle tool execution for local registry tools"""
+        """
+        Handle tool execution for local registry tools
+        Note: Local tools don't use prefixes, so we use the original name
+        """
         tool = global_mcp_tool_registry.get_tool(name)
         if not tool:
             raise HTTPException(status_code=404, detail=f"Tool '{name}' not found")
@@ -343,6 +353,7 @@ if MCP_AVAILABLE:
             return [MCPTextContent(text=str(result), type="text")]
         except Exception as e:
             return [MCPTextContent(text=f"Error: {str(e)}", type="text")]
+
 
     async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
