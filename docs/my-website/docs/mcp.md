@@ -176,10 +176,9 @@ Use tools directly from Cursor IDE with LiteLLM MCP:
 
 ## Segregating MCP Server Access
 
-You can restrict tool access to specific MCP servers using the `x-mcp-servers` header. This header allows you to:
+You can choose to access specific MCP servers and only list their tools using the `x-mcp-servers` header. This header allows you to:
 - Limit tool access to one or more specific MCP servers
 - Control which tools are available in different environments or use cases
-- Manage tool access at a granular level
 
 The header accepts a JSON array of server names, where:
 - Server names with spaces should be replaced with underscores
