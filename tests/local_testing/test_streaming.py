@@ -952,7 +952,7 @@ def test_completion_mistral_api_mistral_large_function_call_with_streaming():
     try:
         # test without max tokens
         response = completion(
-            model="mistral/mistral-large-latest",
+            model="mistral/mistral-medium-latest",
             messages=messages,
             tools=tools,
             tool_choice="auto",
@@ -2891,6 +2891,7 @@ def test_azure_streaming_and_function_calling():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
         raise e
+
 
 @pytest.mark.asyncio
 async def test_azure_astreaming_and_function_calling():

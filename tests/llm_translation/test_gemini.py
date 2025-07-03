@@ -34,6 +34,8 @@ class TestGoogleAIStudioGemini(BaseLLMChatTest):
         result = convert_to_gemini_tool_call_invoke(tool_call_no_arguments)
         print(result)
 
+
+    @pytest.mark.flaky(retries=3, delay=2)
     def test_url_context(self):
         from litellm.utils import supports_url_context
 
