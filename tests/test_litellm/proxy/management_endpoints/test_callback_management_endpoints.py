@@ -61,10 +61,14 @@ class TestCallbackManagementEndpoints:
         assert "failure" in response_data
         assert "success_and_failure" in response_data
         
-        # All lists should be empty
-        assert response_data["success"] == []
-        assert response_data["failure"] == []
-        assert response_data["success_and_failure"] == []
+        # All lists should be empty (excluding system callbacks that start with _PROXY_)
+        non_system_success = [cb for cb in response_data["success"] if not cb.startswith("_PROXY_")]
+        non_system_failure = [cb for cb in response_data["failure"] if not cb.startswith("_PROXY_")]
+        non_system_success_and_failure = [cb for cb in response_data["success_and_failure"] if not cb.startswith("_PROXY_")]
+        
+        assert non_system_success == []
+        assert non_system_failure == []
+        assert non_system_success_and_failure == []
 
     @patch.dict(os.environ, {
         "LANGFUSE_PUBLIC_KEY": "test_public_key",
@@ -100,8 +104,11 @@ class TestCallbackManagementEndpoints:
             
             # Verify langfuse appears in success callbacks
             assert "langfuse" in response_data["success"]
-            assert response_data["failure"] == []
-            assert response_data["success_and_failure"] == []
+            # Filter out system callbacks for failure and success_and_failure checks
+            non_system_failure = [cb for cb in response_data["failure"] if not cb.startswith("_PROXY_")]
+            non_system_success_and_failure = [cb for cb in response_data["success_and_failure"] if not cb.startswith("_PROXY_")]
+            assert non_system_failure == []
+            assert non_system_success_and_failure == []
             
             # Verify the response structure is correct
             assert isinstance(response_data["success"], list)
@@ -135,9 +142,14 @@ class TestCallbackManagementEndpoints:
         assert "datadog" in response_data["success_and_failure"]
         
         # The categorization logic should deduplicate properly
-        assert len([cb for cb in response_data["success"] if cb == "datadog"]) <= 1
-        assert len([cb for cb in response_data["failure"] if cb == "datadog"]) <= 1
-        assert len([cb for cb in response_data["success_and_failure"] if cb == "datadog"]) <= 1
+        # Filter out system callbacks for duplicate checks
+        non_system_success = [cb for cb in response_data["success"] if not cb.startswith("_PROXY_")]
+        non_system_failure = [cb for cb in response_data["failure"] if not cb.startswith("_PROXY_")]
+        non_system_success_and_failure = [cb for cb in response_data["success_and_failure"] if not cb.startswith("_PROXY_")]
+        
+        assert len([cb for cb in non_system_success if cb == "datadog"]) <= 1
+        assert len([cb for cb in non_system_failure if cb == "datadog"]) <= 1
+        assert len([cb for cb in non_system_success_and_failure if cb == "datadog"]) <= 1
         
         # Verify the response structure is correct
         assert isinstance(response_data["success"], list)
@@ -166,17 +178,20 @@ class TestCallbackManagementEndpoints:
         response_data = response.json()
         
         # Verify callbacks are properly categorized
+        # Note: _PROXY_VirtualKeyModelMaxBudgetLimiter is a system callback that's always present
         assert "prometheus" in response_data["success_and_failure"]  # callbacks list items go to success_and_failure
         assert "langfuse" in response_data["success"]
         assert "datadog" in response_data["failure"]
         
-        # Verify no duplicates
+        # Verify no duplicates (excluding system callbacks)
         all_callbacks = (
             response_data["success"] + 
             response_data["failure"] + 
             response_data["success_and_failure"]
         )
-        assert len(set(all_callbacks)) == len(all_callbacks)
+        # Filter out system callbacks for duplicate check
+        non_system_callbacks = [cb for cb in all_callbacks if not cb.startswith("_PROXY_")]
+        assert len(set(non_system_callbacks)) == len(non_system_callbacks)
 
 
     def test_list_callbacks_empty_response_structure(self):
