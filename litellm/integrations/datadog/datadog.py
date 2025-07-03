@@ -233,69 +233,20 @@ class DataDogLogger(
         pass
 
     async def _log_async_event(self, kwargs, response_obj, start_time, end_time):
-        try:
-            dd_payload = self.create_datadog_logging_payload(
-                kwargs=kwargs,
-                response_obj=response_obj,
-                start_time=start_time,
-                end_time=end_time,
-            )
+        dd_payload = self.create_datadog_logging_payload(
+            kwargs=kwargs,
+            response_obj=response_obj,
+            start_time=start_time,
+            end_time=end_time,
+        )
 
-            self.log_queue.append(dd_payload)
-            verbose_logger.debug(
-                f"Datadog, event added to queue. Will flush in {self.flush_interval} seconds..."
-            )
+        self.log_queue.append(dd_payload)
+        verbose_logger.debug(
+            f"Datadog, event added to queue. Will flush in {self.flush_interval} seconds..."
+        )
 
-            if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
-        except ValueError as ve:
-            if "standard_logging_object not found in kwargs" in str(ve):
-                # If standard_logging_object is missing, try to create it
-                from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
-                from litellm._logging import Logging
-                
-                # Create a temporary logging object
-                logging_obj = Logging(
-                    model=kwargs.get("model", ""),
-                    messages=kwargs.get("messages", []),
-                    stream=kwargs.get("stream", False),
-                    call_type=kwargs.get("call_type", ""),
-                    start_time=start_time,
-                    litellm_call_id=kwargs.get("litellm_call_id", ""),
-                    function_id=kwargs.get("function_id", ""),
-                    litellm_trace_id=kwargs.get("litellm_trace_id", None),
-                    kwargs=kwargs,
-                )
-                
-                # Create standard logging object
-                standard_logging_obj = get_standard_logging_object_payload(
-                    kwargs=kwargs,
-                    init_response_obj=response_obj,
-                    start_time=start_time,
-                    end_time=end_time,
-                    logging_obj=logging_obj,
-                    status="success",
-                )
-                
-                if standard_logging_obj:
-                    kwargs["standard_logging_object"] = standard_logging_obj
-                    # Try creating the payload again with the standard logging object
-                    dd_payload = self.create_datadog_logging_payload(
-                        kwargs=kwargs,
-                        response_obj=response_obj,
-                        start_time=start_time,
-                        end_time=end_time,
-                    )
-                    
-                    self.log_queue.append(dd_payload)
-                    verbose_logger.debug(
-                        f"Datadog, event added to queue. Will flush in {self.flush_interval} seconds..."
-                    )
-
-                    if len(self.log_queue) >= self.batch_size:
-                        await self.async_send_batch()
-            else:
-                raise ve
+        if len(self.log_queue) >= self.batch_size:
+            await self.async_send_batch()
 
     def _create_datadog_logging_payload_helper(
         self,
@@ -626,3 +577,44 @@ class DataDogLogger(
         end_time_utc: Optional[datetimeObj],
     ) -> Optional[dict]:
         pass
+
+    def _create_fallback_standard_logging_object(
+        self,
+        kwargs: dict,
+        response_obj: Any,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime
+    ) -> Optional[StandardLoggingPayload]:
+        """Helper method to create standard_logging_object when missing"""
+        try:
+            from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+            from litellm._logging import Logging
+            
+            logging_obj = Logging(
+                model=kwargs.get("model", ""),
+                messages=kwargs.get("messages", []),
+                stream=kwargs.get("stream", False),
+                call_type=kwargs.get("call_type", ""),
+                start_time=start_time,
+                litellm_call_id=kwargs.get("litellm_call_id", ""),
+                function_id=kwargs.get("function_id", ""),
+                litellm_trace_id=kwargs.get("litellm_trace_id", None),
+                kwargs=kwargs,
+            )
+            
+            standard_logging_obj = get_standard_logging_object_payload(
+                kwargs=kwargs,
+                init_response_obj=response_obj,
+                start_time=start_time,
+                end_time=end_time,
+                logging_obj=logging_obj,
+                status="success",
+            )
+            
+            verbose_logger.debug("Created fallback standard_logging_object")
+            return standard_logging_obj
+        except Exception as e:
+            verbose_logger.exception(f"Failed to create fallback standard_logging_object: {str(e)}")
+            return None
+
+    
