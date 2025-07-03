@@ -211,21 +211,28 @@ class GoogleGenAIAdapter:
         Returns:
             Dict[str, Any]
         """
+        allowed_fields = GenericLiteLLMParams.model_fields.keys()
         if litellm_params:
             litellm_dict = litellm_params.model_dump(exclude_none=True)
             for key, value in litellm_dict.items():
-                completion_request_dict[key] = value
+                if key in allowed_fields:
+                    completion_request_dict[key] = value
         return completion_request_dict
 
     def translate_completion_output_params_streaming(
-        self, completion_stream: Any
-    ) -> Union[AsyncIterator[bytes], None]:
+        self, 
+        completion_stream: Any,
+        is_async: bool,
+    ) -> Union[AsyncIterator[bytes], Iterator[bytes], None]:
         """Transform streaming completion output to Google GenAI format"""
         google_genai_wrapper = GoogleGenAIStreamWrapper(
             completion_stream=completion_stream
         )
         # Return the SSE-wrapped version for proper event formatting
-        return google_genai_wrapper.async_google_genai_sse_wrapper()
+        if is_async:
+            return google_genai_wrapper.async_google_genai_sse_wrapper()
+        else:
+            return google_genai_wrapper.google_genai_sse_wrapper()
 
     def _transform_google_genai_tools_to_openai(
         self, tools: List[Dict[str, Any]]
