@@ -36,34 +36,47 @@ class TestCallbackManagementEndpoints:
 
     def test_list_callbacks_no_active_callbacks(self):
         """Test /callbacks/list endpoint with no active callbacks"""
-        # Setup test client
+        from unittest.mock import patch
         client = TestClient(app)
         
-        # Reset callbacks after TestClient creation to clear any system callbacks
-        litellm.logging_callback_manager._reset_all_callbacks()
-        
-        # Make request to list callbacks endpoint
-        response = client.get(
-            "/callbacks/list",
-            headers={"Authorization": "Bearer sk-1234"}
-        )
-        
-        # Verify response
-        assert response.status_code == 200
-        
-        response_data = response.json()
-        assert "success" in response_data
-        assert "failure" in response_data
-        assert "success_and_failure" in response_data
-        
-        # All lists should be empty (excluding system callbacks that start with _PROXY_)
-        non_system_success = [cb for cb in response_data["success"] if not cb.startswith("_PROXY_")]
-        non_system_failure = [cb for cb in response_data["failure"] if not cb.startswith("_PROXY_")]
-        non_system_success_and_failure = [cb for cb in response_data["success_and_failure"] if not cb.startswith("_PROXY_")]
-        
-        assert non_system_success == []
-        assert non_system_failure == []
-        assert non_system_success_and_failure == []
+        # Create fresh callback lists for this test
+        test_success_callback = []
+        test_failure_callback = []
+        test_callbacks = []
+        test_async_success_callback = []
+        test_async_failure_callback = []
+
+        with patch("litellm.success_callback", test_success_callback), \
+             patch("litellm.failure_callback", test_failure_callback), \
+             patch("litellm.callbacks", test_callbacks), \
+             patch("litellm._async_success_callback", test_async_success_callback), \
+             patch("litellm._async_failure_callback", test_async_failure_callback), \
+             patch("litellm.logging_callback_manager._get_all_callbacks") as mock_get_all:
+            
+            # Mock the callback manager to return our test lists
+            def mock_get_all_callbacks():
+                return test_callbacks + test_success_callback + test_failure_callback + test_async_success_callback + test_async_failure_callback
+            
+            mock_get_all.side_effect = mock_get_all_callbacks
+            
+            response = client.get(
+                "/callbacks/list",
+                headers={"Authorization": "Bearer sk-1234"}
+            )
+            assert response.status_code == 200
+            response_data = response.json()
+            assert "success" in response_data
+            assert "failure" in response_data
+            assert "success_and_failure" in response_data
+            
+            # All lists should be empty (excluding system callbacks that start with _PROXY_)
+            non_system_success = [cb for cb in response_data["success"] if not cb.startswith("_PROXY_")]
+            non_system_failure = [cb for cb in response_data["failure"] if not cb.startswith("_PROXY_")]
+            non_system_success_and_failure = [cb for cb in response_data["success_and_failure"] if not cb.startswith("_PROXY_")]
+            
+            assert non_system_success == []
+            assert non_system_failure == []
+            assert non_system_success_and_failure == []
 
     @patch.dict(os.environ, {
         "LANGFUSE_PUBLIC_KEY": "test_public_key",
@@ -72,158 +85,207 @@ class TestCallbackManagementEndpoints:
     })
     def test_list_callbacks_with_langfuse_logger(self):
         """Test /callbacks/list endpoint with real Langfuse logger initialized"""
-        # Setup test client
+        from unittest.mock import patch
         client = TestClient(app)
-        
-        # Reset callbacks after TestClient creation to clear any system callbacks
-        litellm.logging_callback_manager._reset_all_callbacks()
-        
-        # Initialize Langfuse logger and add to callbacks
-        with patch('litellm.integrations.langfuse.langfuse.Langfuse') as mock_langfuse:
-            # Mock the Langfuse client initialization
-            mock_langfuse_client = MagicMock()
-            mock_langfuse.return_value = mock_langfuse_client
-            
 
-            # Add string representation to callback lists (this is how the system typically works)
-            litellm.success_callback.append("langfuse")
-            litellm._async_success_callback.append("langfuse")
+        # Create fresh callback lists for this test
+        test_success_callback = []
+        test_failure_callback = []
+        test_callbacks = []
+        test_async_success_callback = []
+        test_async_failure_callback = []
+
+        with patch("litellm.success_callback", test_success_callback), \
+             patch("litellm.failure_callback", test_failure_callback), \
+             patch("litellm.callbacks", test_callbacks), \
+             patch("litellm._async_success_callback", test_async_success_callback), \
+             patch("litellm._async_failure_callback", test_async_failure_callback), \
+             patch("litellm.logging_callback_manager._get_all_callbacks") as mock_get_all:
             
-            # Make request to list callbacks endpoint
+            # Mock the callback manager to return our test lists
+            def mock_get_all_callbacks():
+                return test_callbacks + test_success_callback + test_failure_callback + test_async_success_callback + test_async_failure_callback
+            
+            mock_get_all.side_effect = mock_get_all_callbacks
+            
+            # Initialize Langfuse logger and add to callbacks
+            with patch('litellm.integrations.langfuse.langfuse.Langfuse') as mock_langfuse:
+                # Mock the Langfuse client initialization
+                mock_langfuse_client = MagicMock()
+                mock_langfuse.return_value = mock_langfuse_client
+                
+                # Add string representation to callback lists (this is how the system typically works)
+                test_success_callback.append("langfuse")
+                test_async_success_callback.append("langfuse")
+                
+                response = client.get(
+                    "/callbacks/list",
+                    headers={"Authorization": "Bearer sk-1234"}
+                )
+                assert response.status_code == 200
+                response_data = response.json()
+                
+                # Verify langfuse appears in success callbacks
+                assert "langfuse" in response_data["success"]
+                # Filter out system callbacks for failure and success_and_failure checks
+                non_system_failure = [cb for cb in response_data["failure"] if not cb.startswith("_PROXY_")]
+                non_system_success_and_failure = [cb for cb in response_data["success_and_failure"] if not cb.startswith("_PROXY_")]
+                assert non_system_failure == []
+                assert non_system_success_and_failure == []
+                
+                # Verify the response structure is correct
+                assert isinstance(response_data["success"], list)
+                assert isinstance(response_data["failure"], list)
+                assert isinstance(response_data["success_and_failure"], list)
+
+    def test_list_callbacks_with_datadog_logger(self):
+        """Test /callbacks/list endpoint with DataDog logger configuration"""
+        from unittest.mock import patch
+        client = TestClient(app)
+
+        # Create fresh callback lists for this test
+        test_success_callback = []
+        test_failure_callback = []
+        test_callbacks = []
+        test_async_success_callback = []
+        test_async_failure_callback = []
+
+        with patch("litellm.success_callback", test_success_callback), \
+             patch("litellm.failure_callback", test_failure_callback), \
+             patch("litellm.callbacks", test_callbacks), \
+             patch("litellm._async_success_callback", test_async_success_callback), \
+             patch("litellm._async_failure_callback", test_async_failure_callback), \
+             patch("litellm.logging_callback_manager._get_all_callbacks") as mock_get_all:
+            
+            # Mock the callback manager to return our test lists
+            def mock_get_all_callbacks():
+                return test_callbacks + test_success_callback + test_failure_callback + test_async_success_callback + test_async_failure_callback
+            
+            mock_get_all.side_effect = mock_get_all_callbacks
+            
+            # Test with datadog callbacks added directly (without initializing the logger to avoid async issues)
+            # Add string representations to different callback types to test comprehensive categorization
+            test_success_callback.append("datadog")
+            test_failure_callback.append("datadog")
+            test_callbacks.append("datadog")
+
             response = client.get(
                 "/callbacks/list",
                 headers={"Authorization": "Bearer sk-1234"}
             )
-            
-            # Verify response
             assert response.status_code == 200
-            
             response_data = response.json()
+
+            # Verify datadog appears in the correct categorization
+            # Since datadog is in both success and failure, it should appear in success_and_failure
+            assert "datadog" in response_data["success_and_failure"]
             
-            # Verify langfuse appears in success callbacks
-            assert "langfuse" in response_data["success"]
-            # Filter out system callbacks for failure and success_and_failure checks
+            # The categorization logic should deduplicate properly
+            # Filter out system callbacks for duplicate checks
+            non_system_success = [cb for cb in response_data["success"] if not cb.startswith("_PROXY_")]
             non_system_failure = [cb for cb in response_data["failure"] if not cb.startswith("_PROXY_")]
             non_system_success_and_failure = [cb for cb in response_data["success_and_failure"] if not cb.startswith("_PROXY_")]
-            assert non_system_failure == []
-            assert non_system_success_and_failure == []
+            
+            assert len([cb for cb in non_system_success if cb == "datadog"]) <= 1
+            assert len([cb for cb in non_system_failure if cb == "datadog"]) <= 1
+            assert len([cb for cb in non_system_success_and_failure if cb == "datadog"]) <= 1
             
             # Verify the response structure is correct
             assert isinstance(response_data["success"], list)
             assert isinstance(response_data["failure"], list)
             assert isinstance(response_data["success_and_failure"], list)
 
-    def test_list_callbacks_with_datadog_logger(self):
-        """Test /callbacks/list endpoint with DataDog logger configuration"""
-        # Setup test client
-        client = TestClient(app)
-        
-        # Reset callbacks after TestClient creation to clear any system callbacks
-        litellm.logging_callback_manager._reset_all_callbacks()
-        
-        # Test with datadog callbacks added directly (without initializing the logger to avoid async issues)
-        # Add string representations to different callback types to test comprehensive categorization
-        litellm.success_callback.append("datadog")
-        litellm.failure_callback.append("datadog")
-        litellm.callbacks.append("datadog")
-        
-        # Make request to list callbacks endpoint
-        response = client.get(
-            "/callbacks/list",
-            headers={"Authorization": "Bearer sk-1234"}
-        )
-        
-        # Verify response
-        assert response.status_code == 200
-        
-        response_data = response.json()
-        
-        # Verify datadog appears in the correct categorization
-        # Since datadog is in both success and failure, it should appear in success_and_failure
-        assert "datadog" in response_data["success_and_failure"]
-        
-        # The categorization logic should deduplicate properly
-        # Filter out system callbacks for duplicate checks
-        non_system_success = [cb for cb in response_data["success"] if not cb.startswith("_PROXY_")]
-        non_system_failure = [cb for cb in response_data["failure"] if not cb.startswith("_PROXY_")]
-        non_system_success_and_failure = [cb for cb in response_data["success_and_failure"] if not cb.startswith("_PROXY_")]
-        
-        assert len([cb for cb in non_system_success if cb == "datadog"]) <= 1
-        assert len([cb for cb in non_system_failure if cb == "datadog"]) <= 1
-        assert len([cb for cb in non_system_success_and_failure if cb == "datadog"]) <= 1
-        
-        # Verify the response structure is correct
-        assert isinstance(response_data["success"], list)
-        assert isinstance(response_data["failure"], list)
-        assert isinstance(response_data["success_and_failure"], list)
-
     def test_list_callbacks_mixed_callback_types(self):
         """Test /callbacks/list endpoint with mixed callback types (string and logger instances)"""
-        # Setup test client  
+        from unittest.mock import patch
         client = TestClient(app)
-        
-        # Reset callbacks after TestClient creation to clear any system callbacks
-        litellm.logging_callback_manager._reset_all_callbacks()
-        
-        # Setup mixed callbacks
-        litellm.success_callback.append("langfuse")
-        litellm.failure_callback.append("datadog")
-        litellm.callbacks.append("prometheus")
-        
-        # Make request to list callbacks endpoint
-        response = client.get(
-            "/callbacks/list",
-            headers={"Authorization": "Bearer sk-1234"}
-        )
-        
-        # Verify response
-        assert response.status_code == 200
-        
-        response_data = response.json()
-        
-        # Verify callbacks are properly categorized
-        # Note: _PROXY_VirtualKeyModelMaxBudgetLimiter is a system callback that's always present
-        # Filter out system callbacks to check for our test callbacks
-        non_system_success_and_failure = [cb for cb in response_data["success_and_failure"] if not cb.startswith("_PROXY_")]
-        non_system_success = [cb for cb in response_data["success"] if not cb.startswith("_PROXY_")]
-        non_system_failure = [cb for cb in response_data["failure"] if not cb.startswith("_PROXY_")]
-        
-        assert "prometheus" in non_system_success_and_failure  # callbacks list items go to success_and_failure
-        assert "langfuse" in non_system_success
-        assert "datadog" in non_system_failure
-        
-        # Verify no duplicates (excluding system callbacks)
-        all_callbacks = (
-            response_data["success"] + 
-            response_data["failure"] + 
-            response_data["success_and_failure"]
-        )
-        # Filter out system callbacks for duplicate check
-        non_system_callbacks = [cb for cb in all_callbacks if not cb.startswith("_PROXY_")]
-        assert len(set(non_system_callbacks)) == len(non_system_callbacks)
+
+        # Create fresh callback lists for this test
+        test_success_callback = []
+        test_failure_callback = []
+        test_callbacks = []
+        test_async_success_callback = []
+        test_async_failure_callback = []
+
+        with patch("litellm.success_callback", test_success_callback), \
+             patch("litellm.failure_callback", test_failure_callback), \
+             patch("litellm.callbacks", test_callbacks), \
+             patch("litellm._async_success_callback", test_async_success_callback), \
+             patch("litellm._async_failure_callback", test_async_failure_callback), \
+             patch("litellm.logging_callback_manager._get_all_callbacks") as mock_get_all:
+            
+            # Mock the callback manager to return our test lists
+            def mock_get_all_callbacks():
+                return test_callbacks + test_success_callback + test_failure_callback + test_async_success_callback + test_async_failure_callback
+            
+            mock_get_all.side_effect = mock_get_all_callbacks
+            
+            # Add callbacks directly to our test lists
+            test_success_callback.append("langfuse")
+            test_failure_callback.append("datadog")
+            test_callbacks.append("prometheus")
+
+            response = client.get(
+                "/callbacks/list",
+                headers={"Authorization": "Bearer sk-1234"}
+            )
+            assert response.status_code == 200
+            response_data = response.json()
+            
+            # Verify callbacks are properly categorized
+            non_system_success_and_failure = [cb for cb in response_data["success_and_failure"] if not cb.startswith("_PROXY_")]
+            non_system_success = [cb for cb in response_data["success"] if not cb.startswith("_PROXY_")]
+            non_system_failure = [cb for cb in response_data["failure"] if not cb.startswith("_PROXY_")]
+            
+            assert "prometheus" in non_system_success_and_failure  # callbacks list items go to success_and_failure
+            assert "langfuse" in non_system_success
+            assert "datadog" in non_system_failure
+            
+            # Verify no duplicates (excluding system callbacks)
+            all_callbacks = (
+                response_data["success"] + 
+                response_data["failure"] + 
+                response_data["success_and_failure"]
+            )
+            non_system_callbacks = [cb for cb in all_callbacks if not cb.startswith("_PROXY_")]
+            assert len(set(non_system_callbacks)) == len(non_system_callbacks)
 
 
     def test_list_callbacks_empty_response_structure(self):
         """Test that response always has correct structure even with no callbacks"""
-        # Setup test client
+        from unittest.mock import patch
         client = TestClient(app)
         
-        # Reset callbacks after TestClient creation to clear any system callbacks
-        litellm.logging_callback_manager._reset_all_callbacks()
-        
-        # Make request to list callbacks endpoint
-        response = client.get(
-            "/callbacks/list",
-            headers={"Authorization": "Bearer sk-1234"}
-        )
-        
-        # Verify response structure
-        assert response.status_code == 200
-        response_data = response.json()
-        
-        # Verify all required keys are present
-        required_keys = ["success", "failure", "success_and_failure"]
-        for key in required_keys:
-            assert key in response_data
-            assert isinstance(response_data[key], list)
+        # Create fresh callback lists for this test
+        test_success_callback = []
+        test_failure_callback = []
+        test_callbacks = []
+        test_async_success_callback = []
+        test_async_failure_callback = []
+
+        with patch("litellm.success_callback", test_success_callback), \
+             patch("litellm.failure_callback", test_failure_callback), \
+             patch("litellm.callbacks", test_callbacks), \
+             patch("litellm._async_success_callback", test_async_success_callback), \
+             patch("litellm._async_failure_callback", test_async_failure_callback), \
+             patch("litellm.logging_callback_manager._get_all_callbacks") as mock_get_all:
+            
+            # Mock the callback manager to return our test lists
+            def mock_get_all_callbacks():
+                return test_callbacks + test_success_callback + test_failure_callback + test_async_success_callback + test_async_failure_callback
+            
+            mock_get_all.side_effect = mock_get_all_callbacks
+            
+            response = client.get(
+                "/callbacks/list",
+                headers={"Authorization": "Bearer sk-1234"}
+            )
+            assert response.status_code == 200
+            response_data = response.json()
+            
+            # Verify all required keys are present
+            required_keys = ["success", "failure", "success_and_failure"]
+            for key in required_keys:
+                assert key in response_data
+                assert isinstance(response_data[key], list)
 
