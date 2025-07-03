@@ -1,6 +1,6 @@
 import base64
 import time
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 from litellm.types.llms.openai import (
     ChatCompletionAssistantContentValue,
@@ -20,6 +20,11 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.utils import print_verbose, token_counter
+
+if TYPE_CHECKING:
+    from litellm.types.litellm_core_utils.streaming_chunk_builder_utils import (
+        UsagePerChunk,
+    )
 
 
 class ChunkProcessor:
@@ -308,18 +313,14 @@ class ChunkProcessor:
 
         return reasoning_tokens
 
-    def calculate_usage( # noqa: PLR0915
+    def _calculate_usage_per_chunk(
         self,
         chunks: List[Union[Dict[str, Any], ModelResponse]],
-        model: str,
-        completion_output: str,
-        messages: Optional[List] = None,
-        reasoning_tokens: Optional[int] = None,
-    ) -> Usage:
-        """
-        Calculate usage for the given chunks.
-        """
-        returned_usage = Usage()
+    ) -> "UsagePerChunk":
+        from litellm.types.litellm_core_utils.streaming_chunk_builder_utils import (
+            UsagePerChunk,
+        )
+
         # # Update usage information if needed
         prompt_tokens = 0
         completion_tokens = 0
@@ -385,6 +386,52 @@ class ChunkProcessor:
                     )
 
                 prompt_tokens_details = usage_chunk_dict["prompt_tokens_details"]
+
+        return UsagePerChunk(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cache_creation_input_tokens=cache_creation_input_tokens,
+            cache_read_input_tokens=cache_read_input_tokens,
+            web_search_requests=web_search_requests,
+            completion_tokens_details=completion_tokens_details,
+            prompt_tokens_details=prompt_tokens_details,
+        )
+
+    def calculate_usage(
+        self,
+        chunks: List[Union[Dict[str, Any], ModelResponse]],
+        model: str,
+        completion_output: str,
+        messages: Optional[List] = None,
+        reasoning_tokens: Optional[int] = None,
+    ) -> Usage:
+        """
+        Calculate usage for the given chunks.
+        """
+        returned_usage = Usage()
+        # # Update usage information if needed
+
+        calculated_usage_per_chunk = self._calculate_usage_per_chunk(chunks=chunks)
+        prompt_tokens = calculated_usage_per_chunk["prompt_tokens"]
+        completion_tokens = calculated_usage_per_chunk["completion_tokens"]
+        ## anthropic prompt caching information ##
+        cache_creation_input_tokens: Optional[int] = calculated_usage_per_chunk[
+            "cache_creation_input_tokens"
+        ]
+        cache_read_input_tokens: Optional[int] = calculated_usage_per_chunk[
+            "cache_read_input_tokens"
+        ]
+
+        web_search_requests: Optional[int] = calculated_usage_per_chunk[
+            "web_search_requests"
+        ]
+        completion_tokens_details: Optional[CompletionTokensDetails] = (
+            calculated_usage_per_chunk["completion_tokens_details"]
+        )
+        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = (
+            calculated_usage_per_chunk["prompt_tokens_details"]
+        )
+
         try:
             returned_usage.prompt_tokens = prompt_tokens or token_counter(
                 model=model, messages=messages
