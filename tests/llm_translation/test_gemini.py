@@ -252,6 +252,7 @@ def test_gemini_with_grounding():
     )
     chunks = []
     for chunk in response:
+        print(f"received chunk: {chunk}")
         chunks.append(chunk)
     print(f"chunks before stream_chunk_builder: {chunks}")
     assert len(chunks) > 0
