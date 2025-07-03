@@ -116,7 +116,6 @@ from ..integrations.argilla import ArgillaLogger
 from ..integrations.arize.arize_phoenix import ArizePhoenixLogger
 from ..integrations.athina import AthinaLogger
 from ..integrations.azure_storage.azure_storage import AzureBlobStorageLogger
-from ..integrations.braintrust_logging import BraintrustLogger
 from ..integrations.custom_prompt_management import CustomPromptManagement
 from ..integrations.datadog.datadog import DataDogLogger
 from ..integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
@@ -144,7 +143,6 @@ from ..integrations.s3 import S3Logger
 from ..integrations.s3_v2 import S3Logger as S3V2Logger
 from ..integrations.supabase import Supabase
 from ..integrations.traceloop import TraceloopLogger
-from ..integrations.weights_biases import WeightsBiasesLogger
 from .exception_mapping_utils import _get_response_headers
 from .initialize_dynamic_callback_params import (
     initialize_standard_callback_dynamic_params as _initialize_standard_callback_dynamic_params,
@@ -3022,6 +3020,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
             elif callback == "s3":
                 s3Logger = S3Logger()
             elif callback == "wandb":
+                from litellm.integrations.weights_biases import WeightsBiasesLogger
                 weightsBiasesLogger = WeightsBiasesLogger()
             elif callback == "logfire":
                 logfireLogger = LogfireLogger()
@@ -3075,6 +3074,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _in_memory_loggers.append(_openmeter_logger)
             return _openmeter_logger  # type: ignore
         elif logging_integration == "braintrust":
+            from litellm.integrations.braintrust_logging import BraintrustLogger
             for callback in _in_memory_loggers:
                 if isinstance(callback, BraintrustLogger):
                     return callback  # type: ignore
@@ -3432,6 +3432,7 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
                 if isinstance(callback, OpenMeterLogger):
                     return callback
         elif logging_integration == "braintrust":
+            from litellm.integrations.braintrust_logging import BraintrustLogger
             for callback in _in_memory_loggers:
                 if isinstance(callback, BraintrustLogger):
                     return callback
@@ -4024,6 +4025,27 @@ class StandardLoggingPayloadSetup:
         return user_agent_tags
 
     @staticmethod
+    def _get_extra_header_tags(proxy_server_request: dict) -> Optional[List[str]]:
+        """
+        Extract additional header tags for spend tracking based on config.
+        """
+        extra_headers: List[str] = litellm.extra_spend_tag_headers or []
+        if not extra_headers:
+            return None
+
+        headers = proxy_server_request.get("headers", {})
+        if not isinstance(headers, dict):
+            return None
+
+        header_tags = []
+        for header_name in extra_headers:
+            header_value = headers.get(header_name)
+            if header_value:
+                header_tags.append(f"{header_name}: {header_value}")
+
+        return header_tags if header_tags else None
+
+    @staticmethod
     def _get_request_tags(metadata: dict, proxy_server_request: dict) -> List[str]:
         request_tags = (
             metadata.get("tags", [])
@@ -4033,8 +4055,13 @@ class StandardLoggingPayloadSetup:
         user_agent_tags = StandardLoggingPayloadSetup._get_user_agent_tags(
             proxy_server_request
         )
+        additional_header_tags = StandardLoggingPayloadSetup._get_extra_header_tags(
+            proxy_server_request
+        )
         if user_agent_tags is not None:
             request_tags.extend(user_agent_tags)
+        if additional_header_tags is not None:
+            request_tags.extend(additional_header_tags)
         return request_tags
 
 

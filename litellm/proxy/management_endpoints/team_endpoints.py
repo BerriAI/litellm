@@ -947,6 +947,7 @@ def team_member_add_duplication_check(
     This check is done BEFORE we create/fetch the user, so it only prevents
     obvious duplicates where both user_id and user_email match exactly.
     """
+
     def _check_member_duplication(member: Member):
         # Check by user_id if provided
         if member.user_id is not None:
@@ -958,7 +959,7 @@ def team_member_add_duplication_check(
                         param="user_id",
                         code="400",
                     )
-        
+
         # Check by user_email if provided
         if member.user_email is not None:
             for existing_member in existing_team_row.members_with_roles:
@@ -1014,13 +1015,13 @@ async def _process_team_members(
     """Process and add new team members."""
     updated_users: List[LiteLLM_UserTable] = []
     updated_team_memberships: List[LiteLLM_TeamMembership] = []
-    
+
     default_team_budget_id = (
         complete_team_data.metadata.get("team_member_budget_id")
         if complete_team_data.metadata is not None
         else None
     )
-    
+
     if isinstance(data.member, Member):
         try:
             updated_user, updated_tm = await add_new_member(
@@ -1068,7 +1069,7 @@ async def _process_team_members(
             updated_users.append(updated_user)
             if updated_tm is not None:
                 updated_team_memberships.append(updated_tm)
-    
+
     return updated_users, updated_team_memberships
 
 
@@ -1080,7 +1081,7 @@ async def _update_team_members_list(
     """Update the team's members_with_roles list."""
     if isinstance(data.member, Member):
         new_member = data.member.model_copy()
-        
+
         # get user id
         if new_member.user_id is None and new_member.user_email is not None:
             for user in updated_users:
@@ -1089,33 +1090,42 @@ async def _update_team_members_list(
                     and user.user_email == new_member.user_email
                 ):
                     new_member.user_id = user.user_id
-        
+
         # Check if member already exists in team before adding
         member_already_exists = False
         for existing_member in complete_team_data.members_with_roles:
-            if (new_member.user_id is not None and existing_member.user_id == new_member.user_id) or \
-               (new_member.user_email is not None and existing_member.user_email == new_member.user_email):
+            if (
+                new_member.user_id is not None
+                and existing_member.user_id == new_member.user_id
+            ) or (
+                new_member.user_email is not None
+                and existing_member.user_email == new_member.user_email
+            ):
                 member_already_exists = True
                 break
-        
+
         if not member_already_exists:
             complete_team_data.members_with_roles.append(new_member)
-    
+
     elif isinstance(data.member, List):
         for nm in data.member:
             if nm.user_id is None and nm.user_email is not None:
                 for user in updated_users:
                     if user.user_email is not None and user.user_email == nm.user_email:
                         nm.user_id = user.user_id
-            
+
             # Check if member already exists in team before adding
             member_already_exists = False
             for existing_member in complete_team_data.members_with_roles:
-                if (nm.user_id is not None and existing_member.user_id == nm.user_id) or \
-                   (nm.user_email is not None and existing_member.user_email == nm.user_email):
+                if (
+                    nm.user_id is not None and existing_member.user_id == nm.user_id
+                ) or (
+                    nm.user_email is not None
+                    and existing_member.user_email == nm.user_email
+                ):
                     member_already_exists = True
                     break
-            
+
             if not member_already_exists:
                 complete_team_data.members_with_roles.append(nm)
 
@@ -2174,30 +2184,15 @@ async def list_team(
     filtered_response = []
     if user_id:
         # Get user object to access their teams array
-        try:
-            user_object = await prisma_client.db.litellm_usertable.find_unique(
-                where={"user_id": user_id}
-            )
-            if user_object and user_object.teams:
-                # Filter teams based on user's teams array
-                for team in response:
-                    if team.team_id in user_object.teams:
+        for team in response:
+            if team.members_with_roles:
+                for member in team.members_with_roles:
+                    if (
+                        "user_id" in member
+                        and member["user_id"] is not None
+                        and member["user_id"] == user_id
+                    ):
                         filtered_response.append(team)
-        except Exception as e:
-            verbose_proxy_logger.debug(
-                f"Error fetching user for team filtering: {str(e)}"
-            )
-            # Fall back to checking members_with_roles if user lookup fails
-            for team in response:
-                if team.members_with_roles:
-                    for member in team.members_with_roles:
-                        if (
-                            "user_id" in member
-                            and member["user_id"] is not None
-                            and member["user_id"] == user_id
-                        ):
-                            filtered_response.append(team)
-
     else:
         filtered_response = response
 
@@ -2396,7 +2391,7 @@ def add_new_models_to_team(
     ):  # implies all model access
         current_models = [SpecialModelNames.all_proxy_models.value]
     else:
-        current_models = []
+        current_models = team_obj.models
     updated_models = list(set(current_models + new_models))
     return updated_models
 

@@ -3643,7 +3643,10 @@ class Router:
             litellm.ContentPolicyViolationError: when `mock_testing_content_policy_fallbacks=True` passed in request params
         """
         mock_testing_params = MockRouterTestingParams.from_kwargs(kwargs)
-        if mock_testing_params.mock_testing_fallbacks is not None and mock_testing_params.mock_testing_fallbacks is True:
+        if (
+            mock_testing_params.mock_testing_fallbacks is not None
+            and mock_testing_params.mock_testing_fallbacks is True
+        ):
             raise litellm.InternalServerError(
                 model=model_group,
                 llm_provider="",
@@ -5584,8 +5587,27 @@ class Router:
                 return model["model_name"]
         return None
 
+    def should_include_deployment(
+        self, model_name: str, model: dict, team_id: Optional[str] = None
+    ) -> bool:
+        """
+        Get the team-specific model name if team_id matches the deployment.
+        """
+        if (
+            team_id is not None
+            and model["model_info"].get("team_id") == team_id
+            and model_name == model["model_info"].get("team_public_model_name")
+        ):
+            return True
+        elif model_name is not None and model["model_name"] == model_name:
+            return True
+        return False
+
     def _get_all_deployments(
-        self, model_name: str, model_alias: Optional[str] = None
+        self,
+        model_name: str,
+        model_alias: Optional[str] = None,
+        team_id: Optional[str] = None,
     ) -> List[DeploymentTypedDict]:
         """
         Return all deployments of a model name
@@ -5594,7 +5616,9 @@ class Router:
         """
         returned_models: List[DeploymentTypedDict] = []
         for model in self.model_list:
-            if model_name is not None and model["model_name"] == model_name:
+            if self.should_include_deployment(
+                model_name=model_name, model=model, team_id=team_id
+            ):
                 if model_alias is not None:
                     alias_model = copy.deepcopy(model)
                     alias_model["model_name"] = model_alias
@@ -5692,16 +5716,20 @@ class Router:
         return returned_models
 
     def get_model_list(
-        self, model_name: Optional[str] = None
+        self, model_name: Optional[str] = None, team_id: Optional[str] = None
     ) -> Optional[List[DeploymentTypedDict]]:
         """
         Includes router model_group_alias'es as well
+
+        if team_id specified, returns matching team-specific models
         """
         if hasattr(self, "model_list"):
             returned_models: List[DeploymentTypedDict] = []
 
             if model_name is not None:
-                returned_models.extend(self._get_all_deployments(model_name=model_name))
+                returned_models.extend(
+                    self._get_all_deployments(model_name=model_name, team_id=team_id)
+                )
 
             if hasattr(self, "model_group_alias"):
                 returned_models.extend(

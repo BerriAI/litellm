@@ -8,9 +8,6 @@ sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from unittest.mock import MagicMock, patch
 
-from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
-    AnthropicStreamWrapper,
-)
 from litellm.types.utils import Delta, ModelResponse, StreamingChoices
 
 
@@ -34,6 +31,32 @@ def test_anthropic_experimental_pass_through_messages_handler():
             print(f"Error: {e}")
         mock_completion.assert_called_once()
         mock_completion.call_args.kwargs["api_key"] == "test-api-key"
+
+
+def test_anthropic_experimental_pass_through_messages_handler_dynamic_api_key_and_api_base_and_custom_values():
+    """
+    Test that api key is passed to litellm.completion
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    with patch("litellm.completion", return_value="test-response") as mock_completion:
+        try:
+            anthropic_messages_handler(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                model="azure/o1",
+                api_key="test-api-key",
+                api_base="test-api-base",
+                custom_key="custom_value",
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+        mock_completion.assert_called_once()
+        mock_completion.call_args.kwargs["api_key"] == "test-api-key"
+        mock_completion.call_args.kwargs["api_base"] == "test-api-base"
+        mock_completion.call_args.kwargs["custom_key"] == "custom_value"
 
 
 def test_anthropic_experimental_pass_through_messages_handler_custom_llm_provider():
