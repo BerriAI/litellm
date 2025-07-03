@@ -169,6 +169,15 @@ class TestCallbackManagementEndpoints:
         
         response_data = response.json()
         
+        # Filter out any proxy-specific callbacks that might be present from parallel test runs
+        # These are internal callbacks that can persist when tests run in parallel
+        proxy_internal_callbacks = ["_PROXY_VirtualKeyModelMaxBudgetLimiter"]
+        
+        response_data["success_and_failure"] = [
+            cb for cb in response_data["success_and_failure"] 
+            if cb not in proxy_internal_callbacks
+        ]
+        
         # Verify callbacks are properly categorized
         assert "prometheus" in response_data["success_and_failure"]  # callbacks list items go to success_and_failure
         assert "langfuse" in response_data["success"]
