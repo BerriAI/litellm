@@ -362,57 +362,39 @@ async def agenerate_content_stream(
     """
     local_vars = locals()
     try:
-        kwargs["agenerate_content_stream"] = True
+        loop = asyncio.get_event_loop()
+        kwargs["is_async"] = True
 
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=model, api_base=local_vars.get("base_url", None)
-            )
-
-        # Setup the call
-        setup_result = GenerateContentHelper.setup_generate_content_call(
-            **{
-                "model": model,
-                "contents": contents,
-                "config": config,
-                "custom_llm_provider": custom_llm_provider,
-                "stream": True,
-                **kwargs,
-            }
-        )
-
-        # Check if we should use the adapter (when provider config is None)
-        if setup_result.generate_content_provider_config is None:
-            # Use the adapter to convert to completion format
-            return await GenerateContentToCompletionHandler.async_generate_content_handler(
                 model=model,
-                contents=contents,  # type: ignore
-                config=setup_result.generate_content_config_dict,
-                litellm_params=setup_result.litellm_params,
-                stream=True,
-                **kwargs
+                custom_llm_provider=custom_llm_provider,
             )
 
-        # Call the handler with async enabled and streaming
-        # Return the coroutine directly for the router to handle
-        return await base_llm_http_handler.generate_content_handler(
-            model=setup_result.model,
+        func = partial(
+            generate_content_stream,
+            model=model,
             contents=contents,
-            generate_content_provider_config=setup_result.generate_content_provider_config,
-            generate_content_config_dict=setup_result.generate_content_config_dict,
-            custom_llm_provider=setup_result.custom_llm_provider,
-            litellm_params=setup_result.litellm_params,
-            logging_obj=setup_result.litellm_logging_obj,
+            config=config,
             extra_headers=extra_headers,
+            extra_query=extra_query,
             extra_body=extra_body,
-            timeout=timeout or request_timeout,
-            _is_async=True,
-            client=kwargs.get("client"),
-            stream=True,
-            litellm_metadata=kwargs.get("litellm_metadata", {}),
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
         )
 
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+        init_response = await loop.run_in_executor(None, func_with_context)
+
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+
+        return response
     except Exception as e:
         raise litellm.exception_type(
             model=model,
@@ -444,7 +426,7 @@ def generate_content_stream(
     local_vars = locals()
     try:
         # Remove any async-related flags since this is the sync function
-        _is_async = kwargs.pop("agenerate_content_stream", False)
+        _is_async = kwargs.pop("is_async", False)
 
         # Setup the call
         setup_result = GenerateContentHelper.setup_generate_content_call(
