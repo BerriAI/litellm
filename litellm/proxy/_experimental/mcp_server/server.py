@@ -351,7 +351,9 @@ if MCP_AVAILABLE:
         """Handle MCP requests through StreamableHTTP."""
         try:
             # Validate headers and log request info
-            user_api_key_auth, mcp_auth_header = await MCPRequestHandler.process_mcp_request(scope)
+            user_api_key_auth, mcp_auth_header, mcp_servers = (
+                await MCPRequestHandler.process_mcp_request(scope)
+            )
             # Set the auth context variable for easy access in MCP functions
             set_auth_context(
                 user_api_key_auth=user_api_key_auth,
@@ -373,7 +375,9 @@ if MCP_AVAILABLE:
         """Handle MCP requests through SSE."""
         try:
             # Validate headers and log request info
-            user_api_key_auth, mcp_auth_header = await MCPRequestHandler.process_mcp_request(scope)
+            user_api_key_auth, mcp_auth_header, mcp_servers = (
+                await MCPRequestHandler.process_mcp_request(scope)
+            )
             # Set the auth context variable for easy access in MCP functions
             set_auth_context(
                 user_api_key_auth=user_api_key_auth,
