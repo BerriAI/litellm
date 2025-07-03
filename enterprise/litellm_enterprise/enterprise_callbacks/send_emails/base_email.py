@@ -111,6 +111,12 @@ class BaseEmailLogger(CustomLogger):
         """
         Get common email parameters used across different email sending methods
 
+        Args:
+            email_event: Type of email event
+            user_id: Optional user ID to look up email
+            user_email: Optional direct email address
+            event_message: Optional message to include in email subject
+
         Returns:
             EmailParams object containing logo_url, support_contact, base_url, recipient_email, subject, and signature
         """
