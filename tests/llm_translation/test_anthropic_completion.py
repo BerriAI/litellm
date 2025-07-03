@@ -1298,6 +1298,7 @@ def test_anthropic_mcp_server_tool_use(spec: str):
 
     try:
         response = litellm.completion(**params)
+        assert response is not None
     except litellm.InternalServerError as e:
         print(e)
     except Exception as e:
@@ -1305,8 +1306,6 @@ def test_anthropic_mcp_server_tool_use(spec: str):
             pass
         else:
             raise e
-
-    assert response is not None
 
 
 @pytest.mark.parametrize(
