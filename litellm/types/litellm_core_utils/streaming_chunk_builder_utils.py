@@ -1,7 +1,6 @@
 from typing import TYPE_CHECKING, Optional, TypedDict
 
-if TYPE_CHECKING:
-    from litellm.types.utils import CompletionTokensDetails, PromptTokensDetailsWrapper
+from ..utils import CompletionTokensDetails, PromptTokensDetailsWrapper
 
 
 class UsagePerChunk(TypedDict):
