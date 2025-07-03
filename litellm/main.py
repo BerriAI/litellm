@@ -2603,11 +2603,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             new_params = deepcopy(optional_params)
             if (
-                model.startswith("meta/")
-                or model.startswith("mistral")
-                or model.startswith("codestral")
-                or model.startswith("jamba")
-                or model.startswith("claude")
+                vertex_partner_models_chat_completion.is_vertex_partner_model(model)
             ):
                 model_response = vertex_partner_models_chat_completion.completion(
                     model=model,
