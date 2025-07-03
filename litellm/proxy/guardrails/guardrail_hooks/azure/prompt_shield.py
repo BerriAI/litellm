@@ -105,7 +105,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         verbose_proxy_logger.debug(
             "Azure Prompt Shield guard response: %s", response.json()
         )
-        return AzurePromptShieldGuardrailResponse(**response.json())
+        return AzurePromptShieldGuardrailResponse(**response.json())  # type: ignore
 
     @log_guardrail_information
     async def async_pre_call_hook(

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Union
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -24,7 +24,10 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         raise ValueError("Azure Content Safety: guardrail_name is required")
 
     if azure_guardrail == "prompt_shield":
-        azure_content_safety_guardrail = AzureContentSafetyPromptShieldGuardrail(
+        azure_content_safety_guardrail: Union[
+            AzureContentSafetyPromptShieldGuardrail,
+            AzureContentSafetyTextModerationGuardrail,
+        ] = AzureContentSafetyPromptShieldGuardrail(
             guardrail_name=guardrail_name,
             api_key=litellm_params.api_key,
             api_base=litellm_params.api_base,
