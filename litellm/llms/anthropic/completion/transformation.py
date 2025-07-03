@@ -31,6 +31,8 @@ from litellm.types.utils import (
     Usage,
 )
 
+from litellm.llms.anthropic.chat.transformation import _valid_user_id
+
 
 class AnthropicTextError(BaseLLMException):
     def __init__(self, status_code, message):
@@ -174,7 +176,12 @@ class AnthropicTextConfig(BaseConfig):
                 optional_params["temperature"] = value
             if param == "top_p":
                 optional_params["top_p"] = value
-            if param == "user":
+            if (
+                param == "user"
+                and value is not None
+                and isinstance(value, str)
+                and _valid_user_id(value)  # anthropic fails on emails
+            ):
                 optional_params["metadata"] = {"user_id": value}
 
         return optional_params
