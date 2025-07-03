@@ -68,7 +68,7 @@ function formatUserRole(userRole: string) {
     case "internal_user":
       return "Internal User";
     case "internal_user_viewer":
-    case "internal_viewer":
+    case "internal_viewer": // TODO:remove if deprecated
       return "Internal Viewer";
     case "app_user":
       return "App User";
