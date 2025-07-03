@@ -1,3 +1,5 @@
+/* eslint-disable @next/next/no-img-element */
+/* eslint-disable react/no-unescaped-entities */
 import React, { useState } from 'react';
 import { Form, Select, Space, Tooltip, Divider } from 'antd';
 import { InfoCircleOutlined } from '@ant-design/icons';
