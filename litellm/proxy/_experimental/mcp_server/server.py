@@ -67,7 +67,7 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.tool_registry import (
         global_mcp_tool_registry,
     )
-    from litellm.proxy._experimental.mcp_server.utils import remove_server_prefix_from_tool_name
+    from litellm.proxy._experimental.mcp_server.utils import get_server_name_prefix_tool_mcp
 
     ######################################################
     ############ MCP Tools List REST API Response Object #
@@ -267,7 +267,7 @@ if MCP_AVAILABLE:
             )
 
         # Remove prefix from tool name for logging and processing
-        original_tool_name, server_name_from_prefix = remove_server_prefix_from_tool_name(
+        original_tool_name, server_name_from_prefix = get_server_name_prefix_tool_mcp(
             name)
 
         standard_logging_mcp_tool_call: StandardLoggingMCPToolCall = (

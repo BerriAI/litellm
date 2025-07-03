@@ -30,7 +30,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
-from litellm.proxy._experimental.mcp_server.utils import add_server_prefix_to_tool_name, normalize_server_name, remove_server_prefix_from_tool_name, is_tool_name_prefixed
+from litellm.proxy._experimental.mcp_server.utils import add_server_prefix_to_tool_name, normalize_server_name, get_server_name_prefix_tool_mcp, is_tool_name_prefixed
 
 
 class MCPServerManager:
@@ -301,7 +301,7 @@ class MCPServerManager:
             CallToolResult from the MCP server
         """
         # Remove prefix if present to get the original tool name
-        original_tool_name, server_name_from_prefix = remove_server_prefix_from_tool_name(name)
+        original_tool_name, server_name_from_prefix = get_server_name_prefix_tool_mcp(name)
 
         # Get the MCP server
         mcp_server = self._get_mcp_server_from_tool_name(name)
@@ -354,7 +354,7 @@ class MCPServerManager:
             for tool in tools:
                 # The tool.name here is already prefixed from _get_tools_from_server
                 # Extract original name for mapping
-                original_name, _ = remove_server_prefix_from_tool_name(tool.name)
+                original_name, _ = get_server_name_prefix_tool_mcp(tool.name)
                 self.tool_name_to_mcp_server_name_mapping[original_name] = server.name
                 self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
 
@@ -377,7 +377,7 @@ class MCPServerManager:
 
         # If not found and tool name is prefixed, try extracting server name from prefix
         if is_tool_name_prefixed(tool_name):
-            _, server_name_from_prefix = remove_server_prefix_from_tool_name(tool_name)
+            _, server_name_from_prefix = get_server_name_prefix_tool_mcp(tool_name)
             for server in self.get_registry().values():
                 if normalize_server_name(server.name) == normalize_server_name(server_name_from_prefix):
                     return server

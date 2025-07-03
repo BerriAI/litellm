@@ -47,7 +47,7 @@ def add_server_prefix_to_tool_name(tool_name: str, server_name: str) -> str:
         tool_name=tool_name
     )
 
-def remove_server_prefix_from_tool_name(prefixed_tool_name: str) -> Tuple[str, str]:
+def get_server_name_prefix_tool_mcp(prefixed_tool_name: str) -> Tuple[str, str]:
     """
     Remove server name prefix from tool name
 
