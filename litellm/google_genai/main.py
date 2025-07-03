@@ -48,8 +48,9 @@ class GenerateContentSetupResult(BaseModel):
     litellm_logging_obj: LiteLLMLoggingObj
     litellm_call_id: Optional[str]
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = {
+        "arbitrary_types_allowed": True,
+    }
 
 
 class GenerateContentHelper:
@@ -101,20 +102,14 @@ class GenerateContentHelper:
         Returns:
             GenerateContentSetupResult containing all setup information
         """
-        litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get(
-            "litellm_logging_obj"
-        )
+        litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
 
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
 
         ## MOCK RESPONSE LOGIC (only for non-streaming)
-        if (
-            not stream
-            and litellm_params.mock_response
-            and isinstance(litellm_params.mock_response, str)
-        ):
+        if not stream and litellm_params.mock_response and isinstance(litellm_params.mock_response, str):
             raise ValueError("Mock response should be handled by caller")
 
         (
@@ -130,11 +125,11 @@ class GenerateContentHelper:
         )
 
         # get provider config
-        generate_content_provider_config: Optional[
-            BaseGoogleGenAIGenerateContentConfig
-        ] = ProviderConfigManager.get_provider_google_genai_generate_content_config(
-            model=model,
-            provider=litellm.LlmProviders(custom_llm_provider),
+        generate_content_provider_config: Optional[BaseGoogleGenAIGenerateContentConfig] = (
+            ProviderConfigManager.get_provider_google_genai_generate_content_config(
+                model=model,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if generate_content_provider_config is None:
@@ -157,18 +152,14 @@ class GenerateContentHelper:
         # Construct request body
         #########################################################################################
         # Create Google Optional Params Config
-        generate_content_config_dict = (
-            generate_content_provider_config.map_generate_content_optional_params(
-                generate_content_config_dict=config or {},
-                model=model,
-            )
+        generate_content_config_dict = generate_content_provider_config.map_generate_content_optional_params(
+            generate_content_config_dict=config or {},
+            model=model,
         )
-        request_body = (
-            generate_content_provider_config.transform_generate_content_request(
-                model=model,
-                contents=contents,
-                generate_content_config_dict=generate_content_config_dict,
-            )
+        request_body = generate_content_provider_config.transform_generate_content_request(
+            model=model,
+            contents=contents,
+            generate_content_config_dict=generate_content_config_dict,
         )
 
         # Pre Call logging
@@ -283,12 +274,8 @@ def generate_content(
 
         # Check for mock response first
         litellm_params = GenericLiteLLMParams(**kwargs)
-        if litellm_params.mock_response and isinstance(
-            litellm_params.mock_response, str
-        ):
-            return GenerateContentHelper.mock_generate_content_response(
-                mock_response=litellm_params.mock_response
-            )
+        if litellm_params.mock_response and isinstance(litellm_params.mock_response, str):
+            return GenerateContentHelper.mock_generate_content_response(mock_response=litellm_params.mock_response)
 
         # Setup the call
         setup_result = GenerateContentHelper.setup_generate_content_call(
@@ -385,15 +372,13 @@ async def agenerate_content_stream(
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
             # Use the adapter to convert to completion format
-            return (
-                await GenerateContentToCompletionHandler.async_generate_content_handler(
-                    model=setup_result.model,
-                    contents=contents,  # type: ignore
-                    config=setup_result.generate_content_config_dict,
-                    litellm_params=setup_result.litellm_params,
-                    stream=True,
-                    **kwargs,
-                )
+            return await GenerateContentToCompletionHandler.async_generate_content_handler(
+                model=setup_result.model,
+                contents=contents,  # type: ignore
+                config=setup_result.generate_content_config_dict,
+                litellm_params=setup_result.litellm_params,
+                stream=True,
+                **kwargs,
             )
 
         # Call the handler with async enabled and streaming
