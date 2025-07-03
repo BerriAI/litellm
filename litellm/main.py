@@ -1937,7 +1937,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 or get_secret("MISTRAL_API_BASE")
                 or "https://api.mistral.ai/v1"
             )
-            
+
             response = base_llm_http_handler.completion(
                 model=model,
                 messages=messages,
@@ -2602,9 +2602,7 @@ def completion(  # type: ignore # noqa: PLR0915
             api_base = api_base or litellm.api_base or get_secret("VERTEXAI_API_BASE")
 
             new_params = deepcopy(optional_params)
-            if (
-                vertex_partner_models_chat_completion.is_vertex_partner_model(model)
-            ):
+            if vertex_partner_models_chat_completion.is_vertex_partner_model(model):
                 model_response = vertex_partner_models_chat_completion.completion(
                     model=model,
                     messages=messages,
