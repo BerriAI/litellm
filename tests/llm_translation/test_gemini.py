@@ -284,6 +284,8 @@ def test_gemini_with_empty_function_call_arguments():
 
 @pytest.mark.asyncio
 async def test_claude_tool_use_with_gemini():
+    import json
+
     response = await litellm.anthropic.messages.acreate(
         messages=[
             {"role": "user", "content": "Hello, can you tell me the weather in Boston?"}
