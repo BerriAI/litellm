@@ -20,6 +20,10 @@ from litellm.proxy.management_endpoints.callback_management_endpoints import rou
 from litellm.proxy.proxy_server import app
 
 
+@pytest.fixture(autouse=True, scope="session")
+def clear_existing_callbacks():
+    litellm.logging_callback_manager._reset_all_callbacks()
+
 class TestCallbackManagementEndpoints:
     """Test suite for callback management endpoints"""
     
