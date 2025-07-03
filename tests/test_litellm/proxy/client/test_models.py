@@ -1,5 +1,14 @@
+import os
+import sys
+
 import pytest
 import requests
+
+sys.path.insert(
+    0, os.path.abspath("../../..")
+)  # Adds the parent directory to the system path
+
+
 
 from litellm.proxy.client import Client, ModelsManagementClient
 from litellm.proxy.client.exceptions import NotFoundError, UnauthorizedError
