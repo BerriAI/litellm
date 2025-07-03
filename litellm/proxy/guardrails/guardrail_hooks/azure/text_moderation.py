@@ -126,7 +126,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         verbose_proxy_logger.debug(
             "Azure Text Moderation guard response: %s", response.json()
         )
-        return AzureTextModerationGuardrailResponse(**response.json())
+        return AzureTextModerationGuardrailResponse(**response.json())  # type: ignore
 
     def check_severity_threshold(
         self, response: "AzureTextModerationGuardrailResponse"
