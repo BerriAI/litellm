@@ -210,7 +210,7 @@ def test_gemini_url_context():
     {url}
     """
     response = completion(
-        model="gemini/gemini-2.0-flash",
+        model="gemini/gemini-2.5-flash",
         messages=[{"role": "user", "content": prompt}],
         tools=[{"urlContext": {}}],
     )
@@ -219,6 +219,7 @@ def test_gemini_url_context():
     assert message is not None
     url_context_metadata = response.model_extra["vertex_ai_url_context_metadata"]
     assert url_context_metadata is not None
+    print(f"url_context_metadata: {url_context_metadata}")
     urlMetadata = url_context_metadata[0]["urlMetadata"][0]
     assert urlMetadata["retrievedUrl"] == url
     assert urlMetadata["urlRetrievalStatus"] == "URL_RETRIEVAL_STATUS_SUCCESS"
