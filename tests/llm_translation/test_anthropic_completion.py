@@ -1300,6 +1300,11 @@ def test_anthropic_mcp_server_tool_use(spec: str):
         response = litellm.completion(**params)
     except litellm.InternalServerError as e:
         print(e)
+    except Exception as e:
+        if "Connection to MCP server" in str(e):
+            pass
+        else:
+            raise e
 
     assert response is not None
 
