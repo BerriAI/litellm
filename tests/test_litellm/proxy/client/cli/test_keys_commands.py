@@ -1,6 +1,13 @@
 import json
 import os
+import sys
 from unittest.mock import patch
+
+sys.path.insert(
+    0, os.path.abspath("../../..")
+)  # Adds the parent directory to the system path
+
+
 
 import pytest
 from click.testing import CliRunner
@@ -132,7 +139,7 @@ def test_keys_delete_error_handling(mock_keys_client, cli_runner):
     assert any(keyword in error_str for keyword in ["connection", "connect", "refused", "error"])
 
 
-def test_keys_delete_http_error_handling(mock_keys_client, cli_runner):
+def test_async_keys_delete_http_error_handling(mock_keys_client, cli_runner):
     from unittest.mock import Mock
 
     import requests
