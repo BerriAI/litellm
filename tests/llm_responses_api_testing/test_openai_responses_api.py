@@ -1117,9 +1117,11 @@ def test_mcp_tools_with_responses_api():
     MCP_TOOLS = [
         {
             "type": "mcp",
-            "server_label": "gitmcp",
-            "server_url": "https://gitmcp.io/openai/tiktoken",
-            "allowed_tools": ["search_tiktoken_documentation", "fetch_tiktoken_documentation"],
+            "server_label": "zapier",
+            "server_url": "https://mcp.zapier.com/api/mcp/mcp",
+            "headers": {
+                "Authorization": f"Bearer {os.getenv('ZAPIER_CI_CD_MCP_TOKEN')}"
+            }
         }
     ]
     MODEL = "openai/gpt-4.1"
