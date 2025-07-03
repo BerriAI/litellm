@@ -101,7 +101,7 @@ class UserAPIKeyAuthMCP:
                 for name, value in raw_headers
             }
             return Headers(headers_dict)
-        except Exception as e:
+        except (UnicodeDecodeError, AttributeError, TypeError) as e:
             verbose_logger.exception(f"Error getting headers from scope: {e}")
             # Return empty Headers object with empty dict
             return Headers({})
