@@ -2,14 +2,15 @@ from typing import TYPE_CHECKING
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
-from .prompt_shield import AzureContentSafetyPromptShieldGuardrail
-
 if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
+
+    from .prompt_shield import AzureContentSafetyPromptShieldGuardrail
+    from .text_moderation import AzureContentSafetyTextModerationGuardrail
 
     if not litellm_params.api_key:
         raise ValueError("Azure Content Safety: api_key is required")
@@ -30,7 +31,14 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
             default_on=litellm_params.default_on,
             event_hook=litellm_params.mode,
         )
-
+    elif azure_guardrail == "text_moderations":
+        azure_content_safety_guardrail = AzureContentSafetyTextModerationGuardrail(
+            guardrail_name=guardrail_name,
+            api_key=litellm_params.api_key,
+            api_base=litellm_params.api_base,
+            default_on=litellm_params.default_on,
+            event_hook=litellm_params.mode,
+        )
     else:
         raise ValueError(
             f"Azure Content Safety: {azure_guardrail} is not a valid guardrail"
