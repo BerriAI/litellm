@@ -1,4 +1,5 @@
 from typing import List, Optional, Tuple
+import json
 
 from starlette.datastructures import Headers
 from starlette.requests import Request
@@ -22,8 +23,10 @@ class UserAPIKeyAuthMCP:
     # This is the header to use if you want LiteLLM to use this header for authenticating to the MCP server
     LITELLM_MCP_AUTH_HEADER_NAME = SpecialHeaders.mcp_auth.value
 
+    LITELLM_MCP_SERVERS_HEADER_NAME = SpecialHeaders.mcp_servers.value
+
     @staticmethod
-    async def user_api_key_auth_mcp(scope: Scope) -> Tuple[UserAPIKeyAuth, Optional[str]]:
+    async def user_api_key_auth_mcp(scope: Scope) -> Tuple[UserAPIKeyAuth, Optional[str], Optional[List[str]]]:
         """
         Validate and extract headers from the ASGI scope for MCP requests.
 
@@ -33,6 +36,7 @@ class UserAPIKeyAuthMCP:
         Returns:
             UserAPIKeyAuth containing validated authentication information
             mcp_auth_header: Optional[str] MCP auth header to be passed to the MCP server
+            mcp_servers: Optional[List[str]] List of MCP servers to use
 
         Raises:
             HTTPException: If headers are invalid or missing required headers
@@ -42,6 +46,15 @@ class UserAPIKeyAuthMCP:
             UserAPIKeyAuthMCP.get_litellm_api_key_from_headers(headers) or ""
         )
         mcp_auth_header = headers.get(UserAPIKeyAuthMCP.LITELLM_MCP_AUTH_HEADER_NAME)
+        mcp_servers_header = headers.get(UserAPIKeyAuthMCP.LITELLM_MCP_SERVERS_HEADER_NAME)
+        mcp_servers = None
+        if mcp_servers_header:
+            try:
+                mcp_servers = json.loads(mcp_servers_header)
+                if not isinstance(mcp_servers, list):
+                    mcp_servers = None
+            except:
+                mcp_servers = None
 
         # Create a proper Request object with mock body method to avoid ASGI receive channel issues
         request = Request(scope=scope)
@@ -57,7 +70,7 @@ class UserAPIKeyAuthMCP:
             api_key=litellm_api_key, request=request
         )
 
-        return validated_user_api_key_auth, mcp_auth_header
+        return validated_user_api_key_auth, mcp_auth_header, mcp_servers
 
     @staticmethod
     def get_litellm_api_key_from_headers(headers: Headers) -> Optional[str]:
