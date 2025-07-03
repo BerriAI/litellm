@@ -18,7 +18,7 @@ from mcp.types import Tool as MCPTool
 from litellm._logging import verbose_logger
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
-    UserAPIKeyAuthMCP,
+    MCPRequestHandler,
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -143,7 +143,7 @@ class MCPServerManager:
         """
         Get the allowed MCP Servers for the user
         """
-        allowed_mcp_servers = await UserAPIKeyAuthMCP.get_allowed_mcp_servers(
+        allowed_mcp_servers = await MCPRequestHandler.get_allowed_mcp_servers(
             user_api_key_auth
         )
         verbose_logger.debug(

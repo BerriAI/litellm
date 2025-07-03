@@ -14,12 +14,16 @@ from litellm._logging import verbose_logger
 from litellm.constants import MCP_TOOL_NAME_PREFIX
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
-    UserAPIKeyAuthMCP,
+    MCPRequestHandler,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.utils import StandardLoggingMCPToolCall
 from litellm.utils import client
+
+from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
+    MCPAuthenticatedUser,
+)
 
 LITELLM_MCP_SERVER_NAME = "litellm-mcp-server"
 LITELLM_MCP_SERVER_VERSION = "1.0.0"
@@ -55,9 +59,6 @@ if MCP_AVAILABLE:
     from mcp.types import TextContent as MCPTextContent
     from mcp.types import Tool as MCPTool
 
-    from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
-        LiteLLMAuthenticatedUser,
-    )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
@@ -350,8 +351,8 @@ if MCP_AVAILABLE:
         """Handle MCP requests through StreamableHTTP."""
         try:
             # Validate headers and log request info
-            user_api_key_auth, mcp_auth_header = (
-                await UserAPIKeyAuthMCP.user_api_key_auth_mcp(scope)
+            user_api_key_auth, mcp_auth_header, mcp_servers = (
+                await MCPRequestHandler.process_mcp_request(scope)
             )
             # Set the auth context variable for easy access in MCP functions
             set_auth_context(
@@ -374,8 +375,8 @@ if MCP_AVAILABLE:
         """Handle MCP requests through SSE."""
         try:
             # Validate headers and log request info
-            user_api_key_auth, mcp_auth_header = (
-                await UserAPIKeyAuthMCP.user_api_key_auth_mcp(scope)
+            user_api_key_auth, mcp_auth_header, mcp_servers = (
+                await MCPRequestHandler.process_mcp_request(scope)
             )
             # Set the auth context variable for easy access in MCP functions
             set_auth_context(
@@ -429,7 +430,7 @@ if MCP_AVAILABLE:
             user_api_key_auth: UserAPIKeyAuth object
             mcp_auth_header: MCP auth header to be passed to the MCP server
         """
-        auth_user = LiteLLMAuthenticatedUser(
+        auth_user = MCPAuthenticatedUser(
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
         )
@@ -443,7 +444,7 @@ if MCP_AVAILABLE:
             Tuple[Optional[UserAPIKeyAuth], Optional[str]]: UserAPIKeyAuth object and MCP auth header
         """
         auth_user = auth_context_var.get()
-        if auth_user and isinstance(auth_user, LiteLLMAuthenticatedUser):
+        if auth_user and isinstance(auth_user, MCPAuthenticatedUser):
             return auth_user.user_api_key_auth, auth_user.mcp_auth_header
         return None, None
 
