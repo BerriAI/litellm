@@ -28,7 +28,7 @@ def mock_env():
 @pytest.fixture
 def mock_keys_client():
     with patch(
-        "litellm.proxy.client.cli.commands.keys.KeysManagementClient"
+        "litellm.proxy.client.keys.KeysManagementClient"
     ) as MockClient:
         yield MockClient
 
@@ -136,7 +136,7 @@ def test_keys_delete_error_handling(mock_keys_client, cli_runner):
 
 
 def test_keys_delete_http_error_handling(mock_keys_client, cli_runner):
-    from unittest.mock import Mock
+    from unittest.mock import Mock, patch
 
     import requests
 
@@ -148,9 +148,14 @@ def test_keys_delete_http_error_handling(mock_keys_client, cli_runner):
     # Mock an HTTPError which should be caught by the delete command
     http_error = requests.exceptions.HTTPError("HTTP Error")
     http_error.response = mock_response
-    mock_keys_client.return_value.delete.side_effect = http_error
     
-    result = cli_runner.invoke(cli, ["keys", "delete", "--keys", "abc123"])
-    assert result.exit_code != 0
-    # HTTPError should be caught and converted to click.Abort
-    assert isinstance(result.exception, SystemExit)  # click.Abort raises SystemExit
+    # Mock the requests.Session to raise the HTTPError
+    with patch('requests.Session') as mock_session:
+        mock_session_instance = Mock()
+        mock_session_instance.send.side_effect = http_error
+        mock_session.return_value = mock_session_instance
+        
+        result = cli_runner.invoke(cli, ["keys", "delete", "--keys", "abc123"])
+        assert result.exit_code != 0
+        # HTTPError should be caught and converted to click.Abort
+        assert isinstance(result.exception, SystemExit)  # click.Abort raises SystemExit
