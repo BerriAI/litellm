@@ -66,6 +66,7 @@ function formatUserRole(userRole: string) {
       return "Org Admin";
     case "internal_user":
       return "Internal User";
+    case "internal_user_viewer":
     case "internal_viewer":
       return "Internal Viewer";
     case "app_user":
