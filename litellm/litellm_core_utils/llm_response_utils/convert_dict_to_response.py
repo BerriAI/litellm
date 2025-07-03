@@ -4,7 +4,7 @@ import re
 import time
 import traceback
 import uuid
-from typing import Dict, Iterable, List, Literal, Optional, Tuple, Union
+from typing import Dict, Iterable, List, Literal, Optional, Tuple, Union, Sequence
 
 import litellm
 from litellm._logging import verbose_logger
@@ -144,7 +144,7 @@ async def convert_to_streaming_response_async(response_object: Optional[dict] = 
         )
         choice_list.append(choice)
 
-    model_response_object.choices = choice_list
+    model_response_object.choices = choice_list  # type: ignore
 
     if "usage" in response_object and response_object["usage"] is not None:
         setattr(
@@ -600,7 +600,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
                     provider_specific_fields=provider_specific_fields,
                 )
                 choice_list.append(choice)
-            model_response_object.choices = choice_list
+            model_response_object.choices = choice_list  # type: ignore
 
             if "usage" in response_object and response_object["usage"] is not None:
                 usage_object = litellm.Usage(**response_object["usage"])
