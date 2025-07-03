@@ -3975,7 +3975,7 @@ def test_text_completion_stream():
     try:
         for _ in range(2):  # check if closed client used
             response = text_completion(
-                model="huggingface/deepseek-ai/DeepSeek-R1",
+                model="huggingface/sarvamai/sarvam-m",
                 prompt="good morning",
                 stream=True,
                 max_tokens=10,
