@@ -42,26 +42,76 @@ async def test_mcp_server_manager():
 
 @pytest.mark.asyncio
 async def test_mcp_server_manager_https_server():
-    mcp_server_manager.load_servers_from_config(
-        {
-            "zapier_mcp_server": {
-                "url": os.environ.get("ZAPIER_MCP_HTTPS_SERVER_URL"),
-                "transport": MCPTransport.http,
+    # Create mock tools and results
+    mock_tools = [
+        MCPTool(
+            name="gmail_send_email",
+            description="Send an email via Gmail",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "body": {"type": "string"},
+                    "message": {"type": "string"},
+                    "instructions": {"type": "string"}
+                },
+                "required": ["body"]
             }
-        }
+        )
+    ]
+    
+    mock_result = CallToolResult(
+        content=[TextContent(type="text", text="Email sent successfully")],
+        isError=False
     )
-    tools = await mcp_server_manager.list_tools()
-    print("TOOLS FROM MCP SERVER MANAGER== ", tools)
-
-    result = await mcp_server_manager.call_tool(
-        name="gmail_send_email",
-        arguments={
-            "body": "Test",
-            "message": "Test",
-            "instructions": "Test",
-        },
-    )
-    print("RESULT FROM CALLING TOOL FROM MCP SERVER MANAGER== ", result)
+    
+    # Create a mock MCPClient
+    mock_client = AsyncMock()
+    mock_client.list_tools = AsyncMock(return_value=mock_tools)
+    mock_client.call_tool = AsyncMock(return_value=mock_result)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    
+    # Mock the MCPClient constructor
+    def mock_client_constructor(*args, **kwargs):
+        return mock_client
+    
+    with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient', mock_client_constructor):
+        mcp_server_manager.load_servers_from_config(
+            {
+                "zapier_mcp_server": {
+                    "url": "https://test-mcp-server.com/mcp",
+                    "transport": MCPTransport.http,
+                }
+            }
+        )
+        
+        tools = await mcp_server_manager.list_tools()
+        print("TOOLS FROM MCP SERVER MANAGER== ", tools)
+        
+        # Verify tools were returned and properly prefixed
+        assert len(tools) == 1
+        assert tools[0].name == "zapier_mcp_server/gmail_send_email"
+        
+        result = await mcp_server_manager.call_tool(
+            name="zapier_mcp_server/gmail_send_email",
+            arguments={
+                "body": "Test",
+                "message": "Test",
+                "instructions": "Test",
+            },
+        )
+        print("RESULT FROM CALLING TOOL FROM MCP SERVER MANAGER== ", result)
+        
+        # Verify result
+        assert result.isError is False
+        assert len(result.content) == 1
+        assert isinstance(result.content[0], TextContent)
+        assert result.content[0].text == "Email sent successfully"
+        
+        # Verify client methods were called
+        mock_client.__aenter__.assert_called()
+        mock_client.list_tools.assert_called_once()
+        mock_client.call_tool.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -127,16 +177,16 @@ async def test_mcp_http_transport_list_tools_mock():
         
         # Assertions
         assert len(tools) == 2
-        assert tools[0].name == "gmail_send_email"
-        assert tools[1].name == "calendar_create_event"
+        assert tools[0].name == "test_http_server/gmail_send_email"
+        assert tools[1].name == "test_http_server/calendar_create_event"
         
         # Verify client methods were called
         mock_client.__aenter__.assert_called()
         mock_client.list_tools.assert_called_once()
         
         # Verify tool mapping was updated
-        assert test_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] == "test_http_server"
-        assert test_manager.tool_name_to_mcp_server_name_mapping["calendar_create_event"] == "test_http_server"
+        assert test_manager.tool_name_to_mcp_server_name_mapping["test_http_server/gmail_send_email"] == "test_http_server"
+        assert test_manager.tool_name_to_mcp_server_name_mapping["test_http_server/calendar_create_event"] == "test_http_server"
 
 
 @pytest.mark.asyncio
@@ -510,5 +560,91 @@ def test_generate_stable_server_id():
     assert len(zapier_sse_hash) == 32
     assert len(github_http_hash) == 32
     assert zapier_sse_hash != github_http_hash
+
+
+@pytest.mark.asyncio
+async def test_list_tools_rest_api_server_not_found():
+    """Test the list_tools REST API when server is not found"""
+    from litellm.proxy._experimental.mcp_server.rest_endpoints import list_tool_rest_api
+    from fastapi import Query
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    # Mock UserAPIKeyAuth
+    mock_user_auth = UserAPIKeyAuth(api_key="test", user_id="test")
+
+    # Test with non-existent server ID
+    response = await list_tool_rest_api(
+        server_id="non_existent_server_id",
+        user_api_key_dict=mock_user_auth
+    )
+    
+    assert isinstance(response, dict)
+    assert response["tools"] == []
+    assert response["error"] == "server_not_found"
+    assert "Server with id non_existent_server_id not found" in response["message"]
+
+@pytest.mark.asyncio
+async def test_list_tools_rest_api_success():
+    """Test the list_tools REST API successful case"""
+    from litellm.proxy._experimental.mcp_server.rest_endpoints import list_tool_rest_api, global_mcp_server_manager
+    from fastapi import Query
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    # Store original registry to restore after test
+    original_registry = global_mcp_server_manager.get_registry().copy()
+    original_tool_mapping = global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.copy()
+    try:
+        # Clear existing registry
+        global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.clear()
+        global_mcp_server_manager.registry.clear()
+        global_mcp_server_manager.config_mcp_servers.clear()
+        
+        # Mock successful tools
+        mock_tools = [
+            MCPTool(
+                name="test_tool",
+                description="A test tool",
+                inputSchema={"type": "object"}
+            )
+        ]
+        
+        # Create mock client
+        mock_client = AsyncMock()
+        mock_client.list_tools = AsyncMock(return_value=mock_tools)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        
+        def mock_client_constructor(*args, **kwargs):
+            return mock_client
+        
+        with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient', mock_client_constructor):
+            # Load server config into global manager
+            global_mcp_server_manager.load_servers_from_config({
+                "test_server": {
+                    "url": "https://test-server.com/mcp",
+                    "transport": MCPTransport.http,
+                }
+            })
+            
+            # Mock UserAPIKeyAuth
+            mock_user_auth = UserAPIKeyAuth(api_key="test", user_id="test")
+            
+            # Get the server ID
+            server_id = list(global_mcp_server_manager.get_registry().keys())[0]
+            
+            # Test successful case
+            response = await list_tool_rest_api(
+                server_id=server_id,
+                user_api_key_dict=mock_user_auth
+            )
+
+            assert isinstance(response, dict)
+            assert len(response["tools"]) == 1
+            assert response["tools"][0].name == "test_server/test_tool"
+    finally:
+        # Restore original state
+        global_mcp_server_manager.registry = {}
+        global_mcp_server_manager.config_mcp_servers = original_registry
+        global_mcp_server_manager.tool_name_to_mcp_server_name_mapping = original_tool_mapping
 
 
