@@ -49,8 +49,6 @@ function formatUserRole(userRole: string) {
   if (!userRole) {
     return "Undefined Role";
   }
-  console.log(`Received user role: ${userRole.toLowerCase()}`);
-  console.log(`Received user role length: ${userRole.toLowerCase().length}`);
   switch (userRole.toLowerCase()) {
     case "app_owner":
       return "App Owner";
@@ -151,7 +149,6 @@ export default function CreateKeyPage() {
   useEffect(() => {
     const token = getCookie("token");
     getUiConfig().then((data) => { // get the information for constructing the proxy base url, and then set the token and auth loading
-      console.log("ui config in page.tsx:", data);
       setToken(token);
       setAuthLoading(false);
     });
@@ -171,10 +168,6 @@ export default function CreateKeyPage() {
  
     const decoded = jwtDecode(token) as { [key: string]: any };
     if (decoded) {
-      // cast decoded to dictionary
-      console.log("Decoded token:", decoded);
-
-      console.log("Decoded key:", decoded.key);
       // set accessToken
       setAccessToken(decoded.key);
 
@@ -185,27 +178,20 @@ export default function CreateKeyPage() {
       // check if userRole is defined
       if (decoded.user_role) {
         const formattedUserRole = formatUserRole(decoded.user_role);
-        console.log("Decoded user_role:", formattedUserRole);
         setUserRole(formattedUserRole);
         if (formattedUserRole == "Admin Viewer") {
           setPage("usage");
         }
-      } else {
-        console.log("User role not defined");
       }
 
       if (decoded.user_email) {
         setUserEmail(decoded.user_email);
-      } else {
-        console.log(`User Email is not set ${decoded}`);
       }
 
       if (decoded.login_method) {
         setShowSSOBanner(
           decoded.login_method == "username_password" ? true : false,
         );
-      } else {
-        console.log(`User Email is not set ${decoded}`);
       }
 
       if (decoded.premium_user) {
