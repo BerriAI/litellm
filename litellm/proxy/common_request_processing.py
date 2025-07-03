@@ -301,13 +301,6 @@ class ProxyBaseLLMRequestProcessing:
             self.data["temperature"] = user_temperature
         if user_request_timeout:
             self.data["request_timeout"] = user_request_timeout
-        elif (
-            user_request_timeout is None
-            and hasattr(litellm, "request_timeout")
-            and litellm.request_timeout is not None
-        ):
-            # If no explicit request_timeout is passed but litellm.request_timeout is set (e.g., from config file)
-            self.data["request_timeout"] = litellm.request_timeout
         if user_max_tokens:
             self.data["max_tokens"] = user_max_tokens
         if user_api_base:
