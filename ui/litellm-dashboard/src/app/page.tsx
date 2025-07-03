@@ -25,7 +25,11 @@ import ChatUI from "@/components/chat_ui";
 import Sidebar from "@/components/leftnav";
 import Usage from "@/components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
-import { getUiConfig, proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
+import {
+  getUiConfig,
+  proxyBaseUrl,
+  setGlobalLitellmHeaderName,
+} from "@/components/networking";
 import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
 import TransformRequestPanel from "@/components/transform_request";
@@ -35,7 +39,7 @@ import { MCPServers } from "@/components/mcp_tools";
 import TagManagement from "@/components/tag_management";
 import VectorStoreManagement from "@/components/vector_store_management";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import { cx } from '@/lib/cva.config';
+import { cx } from "@/lib/cva.config";
 
 function getCookie(name: string) {
   const cookieValue = document.cookie
@@ -86,7 +90,7 @@ function LoadingScreen() {
       <div className="text-lg font-medium py-2 pr-4 border-r border-r-gray-200">
         🚅 LiteLLM
       </div>
-      
+
       <div className="flex items-center justify-center gap-2">
         <UiLoadingSpinner className="size-4" />
         <span className="text-gray-600 text-sm">Loading...</span>
@@ -140,14 +144,16 @@ export default function CreateKeyPage() {
   const [accessToken, setAccessToken] = useState<string | null>(null);
 
   const addKey = (data: any) => {
-    setKeys((prevData) => (prevData ? [...prevData, data] : [data]))
+    setKeys((prevData) => (prevData ? [...prevData, data] : [data]));
     setCreateClicked(() => !createClicked);
-  } 
-  const redirectToLogin = authLoading === false && token === null && invitation_id === null;
+  };
+  const redirectToLogin =
+    authLoading === false && token === null && invitation_id === null;
 
   useEffect(() => {
     const token = getCookie("token");
-    getUiConfig().then((data) => { // get the information for constructing the proxy base url, and then set the token and auth loading
+    getUiConfig().then((data) => {
+      // get the information for constructing the proxy base url, and then set the token and auth loading
       setToken(token);
       setAuthLoading(false);
     });
@@ -155,23 +161,22 @@ export default function CreateKeyPage() {
 
   useEffect(() => {
     if (redirectToLogin) {
-      window.location.href = (proxyBaseUrl || "") + "/sso/key/generate"
+      window.location.href = (proxyBaseUrl || "") + "/sso/key/generate";
     }
-  }, [redirectToLogin])
+  }, [redirectToLogin]);
 
   useEffect(() => {
     if (!token) {
       return;
     }
 
- 
     const decoded = jwtDecode(token) as { [key: string]: any };
     if (decoded) {
       // set accessToken
       setAccessToken(decoded.key);
 
       setDisabledPersonalKeyCreation(
-        decoded.disabled_non_admin_personal_key_creation,
+        decoded.disabled_non_admin_personal_key_creation
       );
 
       // check if userRole is defined
@@ -189,7 +194,7 @@ export default function CreateKeyPage() {
 
       if (decoded.login_method) {
         setShowSSOBanner(
-          decoded.login_method == "username_password" ? true : false,
+          decoded.login_method == "username_password" ? true : false
         );
       }
 
@@ -204,13 +209,9 @@ export default function CreateKeyPage() {
       if (decoded.user_id) {
         setUserID(decoded.user_id);
       }
-
     }
-
-    
   }, [token]);
 
-  
   useEffect(() => {
     if (accessToken && userID && userRole) {
       fetchUserModels(userID, userRole, accessToken, setUserModels);
@@ -224,7 +225,7 @@ export default function CreateKeyPage() {
   }, [accessToken, userID, userRole]);
 
   if (authLoading || redirectToLogin) {
-    return <LoadingScreen />
+    return <LoadingScreen />;
   }
 
   return (
@@ -355,8 +356,11 @@ export default function CreateKeyPage() {
               ) : page == "budgets" ? (
                 <BudgetPanel accessToken={accessToken} />
               ) : page == "guardrails" ? (
-                <GuardrailsPanel accessToken={accessToken} userRole={userRole} />
-              ): page == "transform-request" ? (
+                <GuardrailsPanel
+                  accessToken={accessToken}
+                  userRole={userRole}
+                />
+              ) : page == "transform-request" ? (
                 <TransformRequestPanel accessToken={accessToken} />
               ) : page == "general-settings" ? (
                 <GeneralSettings
@@ -392,7 +396,7 @@ export default function CreateKeyPage() {
                   userRole={userRole}
                   token={token}
                   accessToken={accessToken}
-                  allTeams={teams as Team[] ?? []}
+                  allTeams={(teams as Team[]) ?? []}
                   premiumUser={premiumUser}
                 />
               ) : page == "mcp-servers" ? (
