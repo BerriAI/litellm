@@ -68,7 +68,7 @@ export SSL_VERIFY="False"
 
 ## 3. Lower security settings
 
-The `ssl_certificate` settings allows setting a client side certificate to authenticate the client to the server.
+The `ssl_security_level` allows setting a lower security level for SSL connections.
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -82,7 +82,7 @@ litellm.ssl_security_level = "DEFAULT@SECLEVEL=1"
 
 ```yaml
 litellm_settings:
-  ssl_security_level: DEFAULT@SECLEVEL=1
+  ssl_security_level: "DEFAULT@SECLEVEL=1"
 ```
 </TabItem>
 <TabItem value="env_var" label="Environment Variables">
