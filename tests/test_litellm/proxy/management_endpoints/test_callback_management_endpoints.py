@@ -26,26 +26,21 @@ class TestCallbackManagementEndpoints:
     @pytest.fixture(autouse=True)
     def setup_and_teardown(self):
         """Setup and teardown for each test"""
-        # Reset callbacks before each test
-        litellm.success_callback = []
-        litellm.failure_callback = []
-        litellm._async_success_callback = []
-        litellm._async_failure_callback = []
-        litellm.callbacks = []
+        # Reset callbacks before each test using the callback manager
+        litellm.logging_callback_manager._reset_all_callbacks()
         
         yield
         
         # Clean up after each test
-        litellm.success_callback = []
-        litellm.failure_callback = []
-        litellm._async_success_callback = []
-        litellm._async_failure_callback = []
-        litellm.callbacks = []
+        litellm.logging_callback_manager._reset_all_callbacks()
 
     def test_list_callbacks_no_active_callbacks(self):
         """Test /callbacks/list endpoint with no active callbacks"""
         # Setup test client
         client = TestClient(app)
+        
+        # Reset callbacks after TestClient creation to clear any system callbacks
+        litellm.logging_callback_manager._reset_all_callbacks()
         
         # Make request to list callbacks endpoint
         response = client.get(
@@ -79,6 +74,9 @@ class TestCallbackManagementEndpoints:
         """Test /callbacks/list endpoint with real Langfuse logger initialized"""
         # Setup test client
         client = TestClient(app)
+        
+        # Reset callbacks after TestClient creation to clear any system callbacks
+        litellm.logging_callback_manager._reset_all_callbacks()
         
         # Initialize Langfuse logger and add to callbacks
         with patch('litellm.integrations.langfuse.langfuse.Langfuse') as mock_langfuse:
@@ -119,6 +117,9 @@ class TestCallbackManagementEndpoints:
         """Test /callbacks/list endpoint with DataDog logger configuration"""
         # Setup test client
         client = TestClient(app)
+        
+        # Reset callbacks after TestClient creation to clear any system callbacks
+        litellm.logging_callback_manager._reset_all_callbacks()
         
         # Test with datadog callbacks added directly (without initializing the logger to avoid async issues)
         # Add string representations to different callback types to test comprehensive categorization
@@ -161,6 +162,9 @@ class TestCallbackManagementEndpoints:
         # Setup test client  
         client = TestClient(app)
         
+        # Reset callbacks after TestClient creation to clear any system callbacks
+        litellm.logging_callback_manager._reset_all_callbacks()
+        
         # Setup mixed callbacks
         litellm.success_callback.append("langfuse")
         litellm.failure_callback.append("datadog")
@@ -179,9 +183,14 @@ class TestCallbackManagementEndpoints:
         
         # Verify callbacks are properly categorized
         # Note: _PROXY_VirtualKeyModelMaxBudgetLimiter is a system callback that's always present
-        assert "prometheus" in response_data["success_and_failure"]  # callbacks list items go to success_and_failure
-        assert "langfuse" in response_data["success"]
-        assert "datadog" in response_data["failure"]
+        # Filter out system callbacks to check for our test callbacks
+        non_system_success_and_failure = [cb for cb in response_data["success_and_failure"] if not cb.startswith("_PROXY_")]
+        non_system_success = [cb for cb in response_data["success"] if not cb.startswith("_PROXY_")]
+        non_system_failure = [cb for cb in response_data["failure"] if not cb.startswith("_PROXY_")]
+        
+        assert "prometheus" in non_system_success_and_failure  # callbacks list items go to success_and_failure
+        assert "langfuse" in non_system_success
+        assert "datadog" in non_system_failure
         
         # Verify no duplicates (excluding system callbacks)
         all_callbacks = (
@@ -198,6 +207,9 @@ class TestCallbackManagementEndpoints:
         """Test that response always has correct structure even with no callbacks"""
         # Setup test client
         client = TestClient(app)
+        
+        # Reset callbacks after TestClient creation to clear any system callbacks
+        litellm.logging_callback_manager._reset_all_callbacks()
         
         # Make request to list callbacks endpoint
         response = client.get(
