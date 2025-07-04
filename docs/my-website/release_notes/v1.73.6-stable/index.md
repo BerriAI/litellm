@@ -22,8 +22,6 @@ import TabItem from '@theme/TabItem';
 
 ## Deploy this version
 
-This release is not out yet. The pre-release will be live on Sunday and the stable release will be live on Wednesday.
-
 <Tabs>
 <TabItem value="docker" label="Docker">
 
