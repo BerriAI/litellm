@@ -62,6 +62,7 @@ import PremiumVectorStoreSelector from "./common_components/PremiumVectorStoreSe
 import PremiumMCPSelector from "./common_components/PremiumMCPSelector";
 import LoggingSettings from "./team/LoggingSettings";
 import type { KeyResponse, Team } from "./key_team_helpers/key_list";
+import { formatNumberWithCommas } from "../utils/dataUtils";
 
 interface TeamProps {
   teams: Team[] | null;
@@ -725,7 +726,7 @@ const Teams: React.FC<TeamProps> = ({
                             overflow: "hidden",
                           }}
                         >
-                          {Number(team["spend"]).toFixed(4)}
+                          {formatNumberWithCommas(team["spend"], 4)}
                         </TableCell>
                         <TableCell
                           style={{

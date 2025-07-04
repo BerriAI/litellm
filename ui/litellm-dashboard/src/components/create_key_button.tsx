@@ -44,6 +44,7 @@ import Createuser from "./create_user_button";
 import debounce from 'lodash/debounce';
 import { rolesWithWriteAccess } from '../utils/roles';
 import BudgetDurationDropdown from "./common_components/budget_duration_dropdown";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 
 
@@ -589,7 +590,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                           value > team.max_budget
                         ) {
                           throw new Error(
-                            `Budget cannot exceed team max budget: $${team.max_budget}`
+                            `Budget cannot exceed team max budget: $${formatNumberWithCommas(team.max_budget, 4)}`
                           );
                         }
                       },

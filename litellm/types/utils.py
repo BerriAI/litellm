@@ -2072,6 +2072,9 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langfuse_secret_key: Optional[str]
     langfuse_host: Optional[str]
 
+    # Langfuse prompt version
+    langfuse_prompt_version: Optional[int]
+
     # GCS dynamic params
     gcs_bucket_name: Optional[str]
     gcs_path_service_account: Optional[str]
@@ -2112,6 +2115,7 @@ all_litellm_params = [
     "prompt_id",
     "provider_specific_header",
     "prompt_variables",
+    "prompt_version",
     "api_base",
     "force_timeout",
     "logger_fn",
