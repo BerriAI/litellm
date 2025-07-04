@@ -210,6 +210,7 @@ These are the params you can pass to the `litellm.completion` function in SDK an
 ```
 prompt_id: str # required
 prompt_variables: Optional[dict] # optional
+prompt_version: Optional[int] # optional
 langfuse_public_key: Optional[str] # optional
 langfuse_secret: Optional[str] # optional
 langfuse_secret_key: Optional[str] # optional
