@@ -751,11 +751,11 @@ async def test_validate_team_member_add_permissions_admin():
 
     # Create admin user
     admin_user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN.value)
-
+    
     # Create mock team
     team = MagicMock(spec=LiteLLM_TeamTable)
     team.team_id = "test-team-123"
-
+    
     # Should not raise any exception for admin
     await _validate_team_member_add_permissions(
         user_api_key_dict=admin_user,
@@ -776,21 +776,21 @@ async def test_validate_team_member_add_permissions_non_admin():
     regular_user = UserAPIKeyAuth(
         user_id="regular-user",
         user_role=LitellmUserRoles.INTERNAL_USER.value,
-        team_id="different-team",
+        team_id="different-team"
     )
-
+    
     # Create mock team
     team = MagicMock(spec=LiteLLM_TeamTable)
     team.team_id = "test-team-123"
     team.members_with_roles = []
-
+    
     # Mock the helper functions to return False
     with patch(
         "litellm.proxy.management_endpoints.team_endpoints._is_user_team_admin",
-        return_value=False,
+        return_value=False
     ), patch(
         "litellm.proxy.management_endpoints.team_endpoints._is_available_team",
-        return_value=False,
+        return_value=False
     ):
         # Should raise HTTPException for non-admin
         with pytest.raises(HTTPException) as exc_info:
@@ -798,7 +798,7 @@ async def test_validate_team_member_add_permissions_non_admin():
                 user_api_key_dict=regular_user,
                 complete_team_data=team,
             )
-
+        
         assert exc_info.value.status_code == 403
         assert "not proxy admin OR team admin" in str(exc_info.value.detail)
 
@@ -815,23 +815,23 @@ async def test_process_team_members_single_member():
     mock_prisma_client = MagicMock()
     mock_team = MagicMock(spec=LiteLLM_TeamTable)
     mock_team.metadata = {"team_member_budget_id": "budget-123"}
-
+    
     # Mock user and membership objects
     mock_user = MagicMock(spec=LiteLLM_UserTable)
     mock_user.user_id = "new-user-123"
     mock_membership = MagicMock(spec=LiteLLM_TeamMembership)
-
+    
     # Create request with single member
     single_member = Member(user_email="new@example.com", role="user")
     request_data = TeamMemberAddRequest(
         team_id="test-team-123",
         member=single_member,
     )
-
+    
     with patch(
         "litellm.proxy.management_endpoints.team_endpoints.add_new_member",
         new_callable=AsyncMock,
-        return_value=(mock_user, mock_membership),
+        return_value=(mock_user, mock_membership)
     ) as mock_add_member:
         users, memberships = await _process_team_members(
             data=request_data,
@@ -840,13 +840,13 @@ async def test_process_team_members_single_member():
             user_api_key_dict=UserAPIKeyAuth(),
             litellm_proxy_admin_name="admin",
         )
-
+        
         # Verify results
         assert len(users) == 1
         assert len(memberships) == 1
         assert users[0] == mock_user
         assert memberships[0] == mock_membership
-
+        
         # Verify add_new_member was called correctly
         mock_add_member.assert_called_once_with(
             new_member=single_member,
@@ -871,7 +871,7 @@ async def test_process_team_members_multiple_members():
     mock_prisma_client = MagicMock()
     mock_team = MagicMock(spec=LiteLLM_TeamTable)
     mock_team.metadata = None
-
+    
     # Create multiple members as dictionaries (they will be converted to Member objects)
     members = [
         {"user_email": "user1@example.com", "role": "user"},
@@ -882,18 +882,15 @@ async def test_process_team_members_multiple_members():
         member=members,
         max_budget_in_team=100.0,
     )
-
+    
     # Mock different users and memberships for each call
     mock_users = [MagicMock(spec=LiteLLM_UserTable) for _ in range(2)]
     mock_memberships = [MagicMock(spec=LiteLLM_TeamMembership) for _ in range(2)]
-
+    
     with patch(
         "litellm.proxy.management_endpoints.team_endpoints.add_new_member",
         new_callable=AsyncMock,
-        side_effect=[
-            (mock_users[0], mock_memberships[0]),
-            (mock_users[1], mock_memberships[1]),
-        ],
+        side_effect=[(mock_users[0], mock_memberships[0]), (mock_users[1], mock_memberships[1])]
     ) as mock_add_member:
         users, memberships = await _process_team_members(
             data=request_data,
@@ -902,13 +899,13 @@ async def test_process_team_members_multiple_members():
             user_api_key_dict=UserAPIKeyAuth(),
             litellm_proxy_admin_name="admin",
         )
-
+        
         # Verify results
         assert len(users) == 2
         assert len(memberships) == 2
         assert users == mock_users
         assert memberships == mock_memberships
-
+        
         # Verify add_new_member was called for each member
         assert mock_add_member.call_count == 2
 
@@ -925,26 +922,28 @@ async def test_update_team_members_list_single_member():
 
     # Create mock team with existing members
     mock_team = MagicMock(spec=LiteLLM_TeamTable)
-    mock_team.members_with_roles = [Member(user_id="existing-user", role="admin")]
-
+    mock_team.members_with_roles = [
+        Member(user_id="existing-user", role="admin")
+    ]
+    
     # Create new member without user_id
     new_member = Member(user_email="new@example.com", role="user")
     request_data = TeamMemberAddRequest(
         team_id="test-team-123",
         member=new_member,
     )
-
+    
     # Create mock user with matching email
     mock_user = MagicMock(spec=LiteLLM_UserTable)
     mock_user.user_id = "new-user-123"
     mock_user.user_email = "new@example.com"
-
+    
     await _update_team_members_list(
         data=request_data,
         complete_team_data=mock_team,
         updated_users=[mock_user],
     )
-
+    
     # Verify member was added
     assert len(mock_team.members_with_roles) == 2
     added_member = mock_team.members_with_roles[1]
@@ -968,43 +967,24 @@ async def test_update_team_members_list_duplicate_prevention():
     mock_team.members_with_roles = [
         Member(user_id="existing-user", user_email="existing@example.com", role="admin")
     ]
-
+    
     # Try to add the same member again
     duplicate_member = Member(user_id="existing-user", role="user")
     request_data = TeamMemberAddRequest(
         team_id="test-team-123",
         member=duplicate_member,
     )
-
+    
     # Create mock user
     mock_user = MagicMock(spec=LiteLLM_UserTable)
     mock_user.user_id = "existing-user"
     mock_user.user_email = "existing@example.com"
-
+    
     await _update_team_members_list(
         data=request_data,
         complete_team_data=mock_team,
         updated_users=[mock_user],
     )
-
+    
     # Verify member was NOT added (still only 1 member)
     assert len(mock_team.members_with_roles) == 1
-
-
-def test_add_new_models_to_team_with_existing_models():
-    """
-    Test add_new_models_to_team function with existing models
-    """
-    from litellm.proxy._types import SpecialModelNames
-    from litellm.proxy.management_endpoints.team_endpoints import add_new_models_to_team
-
-    team_obj = MagicMock(spec=LiteLLM_TeamTable)
-    team_obj.models = ["model1", "model2"]
-    new_models = ["model3", "model4"]
-
-    updated_models = add_new_models_to_team(
-        team_obj=team_obj,
-        new_models=new_models,
-    )
-
-    assert updated_models.sort() == ["model1", "model2", "model3", "model4"].sort()

@@ -1,14 +1,5 @@
-import os
-import sys
-
 import pytest
 import requests
-import responses
-
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
-
 
 from litellm.proxy.client.credentials import CredentialsManagementClient
 from litellm.proxy.client.exceptions import UnauthorizedError
@@ -62,8 +53,7 @@ def test_list_request(client, base_url, api_key):
     assert request.headers["Authorization"] == f"Bearer {api_key}"
 
 
-@responses.activate
-def test_list_mock_response(client):
+def test_list_mock_response(client, requests_mock):
     """Test list with a mocked successful response"""
     mock_response = {
         "credentials": [
@@ -80,24 +70,17 @@ def test_list_mock_response(client):
         ]
     }
 
-    responses.add(
-        responses.GET,
-        f"{client._base_url}/credentials",
-        json=mock_response,
-        status=200,
-    )
+    requests_mock.get(f"{client._base_url}/credentials", json=mock_response)
 
     response = client.list()
     assert response == mock_response
 
 
-@responses.activate
-def test_list_unauthorized_error(client):
+def test_list_unauthorized_error(client, requests_mock):
     """Test that list raises UnauthorizedError for 401 responses"""
-    responses.add(
-        responses.GET,
+    requests_mock.get(
         f"{client._base_url}/credentials",
-        status=401,
+        status_code=401,
         json={"error": "Unauthorized"},
     )
 
@@ -131,8 +114,7 @@ def test_create_request(client, base_url, api_key):
     }
 
 
-@responses.activate
-def test_create_mock_response(client):
+def test_create_mock_response(client, requests_mock):
     """Test create with a mocked successful response"""
     mock_response = {
         "credential_name": "azure1",
@@ -140,12 +122,7 @@ def test_create_mock_response(client):
         "status": "success",
     }
 
-    responses.add(
-        responses.POST,
-        f"{client._base_url}/credentials",
-        json=mock_response,
-        status=200,
-    )
+    requests_mock.post(f"{client._base_url}/credentials", json=mock_response)
 
     response = client.create(
         credential_name="azure1",
@@ -158,13 +135,11 @@ def test_create_mock_response(client):
     assert response == mock_response
 
 
-@responses.activate
-def test_create_unauthorized_error(client):
+def test_create_unauthorized_error(client, requests_mock):
     """Test that create raises UnauthorizedError for 401 responses"""
-    responses.add(
-        responses.POST,
+    requests_mock.post(
         f"{client._base_url}/credentials",
-        status=401,
+        status_code=401,
         json={"error": "Unauthorized"},
     )
 
@@ -186,29 +161,21 @@ def test_delete_request(client, base_url, api_key):
     assert request.headers["Authorization"] == f"Bearer {api_key}"
 
 
-@responses.activate
-def test_delete_mock_response(client):
+def test_delete_mock_response(client, requests_mock):
     """Test delete with a mocked successful response"""
     mock_response = {"credential_name": "azure1", "status": "deleted"}
 
-    responses.add(
-        responses.DELETE,
-        f"{client._base_url}/credentials/azure1",
-        json=mock_response,
-        status=200,
-    )
+    requests_mock.delete(f"{client._base_url}/credentials/azure1", json=mock_response)
 
     response = client.delete(credential_name="azure1")
     assert response == mock_response
 
 
-@responses.activate
-def test_delete_unauthorized_error(client):
+def test_delete_unauthorized_error(client, requests_mock):
     """Test that delete raises UnauthorizedError for 401 responses"""
-    responses.add(
-        responses.DELETE,
+    requests_mock.delete(
         f"{client._base_url}/credentials/azure1",
-        status=401,
+        status_code=401,
         json={"error": "Unauthorized"},
     )
 
@@ -226,8 +193,7 @@ def test_get_request(client, base_url, api_key):
     assert request.headers["Authorization"] == f"Bearer {api_key}"
 
 
-@responses.activate
-def test_get_mock_response(client):
+def test_get_mock_response(client, requests_mock):
     """Test get with a mocked successful response"""
     mock_response = {
         "credential_name": "azure1",
@@ -239,24 +205,19 @@ def test_get_mock_response(client):
         "status": "active",
     }
 
-    responses.add(
-        responses.GET,
-        f"{client._base_url}/credentials/by_name/azure1",
-        json=mock_response,
-        status=200,
+    requests_mock.get(
+        f"{client._base_url}/credentials/by_name/azure1", json=mock_response
     )
 
     response = client.get(credential_name="azure1")
     assert response == mock_response
 
 
-@responses.activate
-def test_get_unauthorized_error(client):
+def test_get_unauthorized_error(client, requests_mock):
     """Test that get raises UnauthorizedError for 401 responses"""
-    responses.add(
-        responses.GET,
+    requests_mock.get(
         f"{client._base_url}/credentials/by_name/azure1",
-        status=401,
+        status_code=401,
         json={"error": "Unauthorized"},
     )
 

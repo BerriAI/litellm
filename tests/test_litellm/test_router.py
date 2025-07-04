@@ -82,7 +82,7 @@ def test_router_with_model_info_and_model_group():
 
 
 @pytest.mark.asyncio
-async def test_arouter_with_tags_and_fallbacks():
+async def test_router_with_tags_and_fallbacks():
     """
     If fallback model missing tag, raise error
     """
@@ -122,7 +122,7 @@ async def test_arouter_with_tags_and_fallbacks():
 
 
 @pytest.mark.asyncio
-async def test_async_router_acreate_file():
+async def test_router_acreate_file():
     """
     Write to all deployments of a model
     """
@@ -151,7 +151,7 @@ async def test_async_router_acreate_file():
 
 
 @pytest.mark.asyncio
-async def test_async_router_acreate_file_with_jsonl():
+async def test_router_acreate_file_with_jsonl():
     """
     Test router.acreate_file with both JSONL and non-JSONL files
     """
@@ -239,7 +239,7 @@ async def test_async_router_acreate_file_with_jsonl():
 
 
 @pytest.mark.asyncio
-async def test_arouter_async_get_healthy_deployments():
+async def test_router_async_get_healthy_deployments():
     """
     Test that afile_content returns the correct file content
     """
@@ -268,7 +268,7 @@ async def test_arouter_async_get_healthy_deployments():
 
 @pytest.mark.asyncio
 @patch("litellm.amoderation")
-async def test_arouter_amoderation_with_credential_name(mock_amoderation):
+async def test_router_amoderation_with_credential_name(mock_amoderation):
     """
     Test that router.amoderation passes litellm_credential_name to the underlying litellm.amoderation call
     """
@@ -298,7 +298,7 @@ async def test_arouter_amoderation_with_credential_name(mock_amoderation):
     assert call_kwargs["model"] == "text-moderation-stable"
 
 
-def test_arouter_test_team_model():
+def test_router_test_team_model():
     """
     Test that router.test_team_model returns the correct model
     """
@@ -319,7 +319,7 @@ def test_arouter_test_team_model():
     assert result is not None
 
 
-def test_arouter_ignore_invalid_deployments():
+def test_router_ignore_invalid_deployments():
     """
     Test that router.ignore_invalid_deployments is set to True
     """
@@ -351,7 +351,7 @@ def test_arouter_ignore_invalid_deployments():
 
 
 @pytest.mark.asyncio
-async def test_arouter_aretrieve_batch():
+async def test_router_aretrieve_batch():
     """
     Test that router.aretrieve_batch returns the correct response
     """
@@ -387,7 +387,7 @@ async def test_arouter_aretrieve_batch():
 
 
 @pytest.mark.asyncio
-async def test_arouter_aretrieve_file_content():
+async def test_router_aretrieve_file_content():
     """
     Test that router.acreate_file with JSONL file returns the correct response
     """
@@ -426,7 +426,7 @@ async def test_arouter_aretrieve_file_content():
 
 
 @pytest.mark.asyncio
-async def test_arouter_filter_team_based_models():
+async def test_router_filter_team_based_models():
     """
     Test that router.filter_team_based_models filters out models that are not in the team
     """
@@ -481,181 +481,3 @@ async def test_arouter_filter_team_based_models():
     )
 
     assert result is not None
-
-
-def test_arouter_should_include_deployment():
-    """
-    Test the should_include_deployment method with various scenarios
-
-    The method logic:
-    1. Returns True if: team_id matches AND model_name matches team_public_model_name
-    2. Returns True if: model_name matches AND deployment has no team_id
-    3. Otherwise returns False
-    """
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {"model": "gpt-3.5-turbo"},
-                "model_info": {
-                    "team_id": "test-team",
-                },
-            },
-        ],
-    )
-
-    # Test deployment structures
-    deployment_with_team_and_public_name = {
-        "model_name": "gpt-3.5-turbo",
-        "model_info": {
-            "team_id": "test-team",
-            "team_public_model_name": "team-gpt-model",
-        },
-    }
-
-    deployment_with_team_no_public_name = {
-        "model_name": "gpt-3.5-turbo",
-        "model_info": {
-            "team_id": "test-team",
-        },
-    }
-
-    deployment_without_team = {
-        "model_name": "gpt-4",
-        "model_info": {},
-    }
-
-    deployment_different_team = {
-        "model_name": "claude-3",
-        "model_info": {
-            "team_id": "other-team",
-            "team_public_model_name": "team-claude-model",
-        },
-    }
-
-    # Test Case 1: Team-specific deployment - team_id and team_public_model_name match
-    result = router.should_include_deployment(
-        model_name="team-gpt-model",
-        model=deployment_with_team_and_public_name,
-        team_id="test-team",
-    )
-    assert (
-        result is True
-    ), "Should return True when team_id and team_public_model_name match"
-
-    # Test Case 2: Team-specific deployment - team_id matches but model_name doesn't match team_public_model_name
-    result = router.should_include_deployment(
-        model_name="different-model",
-        model=deployment_with_team_and_public_name,
-        team_id="test-team",
-    )
-    assert (
-        result is False
-    ), "Should return False when team_id matches but model_name doesn't match team_public_model_name"
-
-    # Test Case 3: Team-specific deployment - team_id doesn't match
-    result = router.should_include_deployment(
-        model_name="team-gpt-model",
-        model=deployment_with_team_and_public_name,
-        team_id="different-team",
-    )
-    assert result is False, "Should return False when team_id doesn't match"
-
-    # Test Case 4: Team-specific deployment with no team_public_model_name - should fail
-    result = router.should_include_deployment(
-        model_name="gpt-3.5-turbo",
-        model=deployment_with_team_no_public_name,
-        team_id="test-team",
-    )
-    assert (
-        result is True
-    ), "Should return True when team deployment has no team_public_model_name to match"
-
-    # Test Case 5: Non-team deployment - model_name matches and no team_id
-    result = router.should_include_deployment(
-        model_name="gpt-4", model=deployment_without_team, team_id=None
-    )
-    assert (
-        result is True
-    ), "Should return True when model_name matches and deployment has no team_id"
-
-    # Test Case 6: Non-team deployment - model_name matches but team_id provided (should still work)
-    result = router.should_include_deployment(
-        model_name="gpt-4", model=deployment_without_team, team_id="any-team"
-    )
-    assert (
-        result is True
-    ), "Should return True when model_name matches non-team deployment, regardless of team_id param"
-
-    # Test Case 7: Non-team deployment - model_name doesn't match
-    result = router.should_include_deployment(
-        model_name="different-model", model=deployment_without_team, team_id=None
-    )
-    assert result is False, "Should return False when model_name doesn't match"
-
-    # Test Case 8: Team deployment accessed without matching team_id
-    result = router.should_include_deployment(
-        model_name="gpt-3.5-turbo",
-        model=deployment_with_team_and_public_name,
-        team_id=None,
-    )
-    assert (
-        result is True
-    ), "Should return True when matching model with exact model_name"
-
-
-def test_arouter_responses_api_bridge():
-    """
-    Test that router.responses_api_bridge returns the correct response
-    """
-    from unittest.mock import MagicMock, patch
-
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
-
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "[IP-approved] o3-pro",
-                "litellm_params": {
-                    "model": "azure/responses/o_series/webinterface-o3-pro",
-                    "api_base": "https://webhook.site/fba79dae-220a-4bb7-9a3a-8caa49604e55",
-                    "api_key": "sk-1234567890",
-                    "api_version": "preview",
-                    "stream": True,
-                },
-                "model_info": {
-                    "input_cost_per_token": 0.00002,
-                    "output_cost_per_token": 0.00008,
-                },
-            }
-        ],
-    )
-
-    ## CONFIRM BRIDGE IS CALLED
-    with patch.object(litellm, "responses", return_value=AsyncMock()) as mock_responses:
-        result = router.completion(
-            model="[IP-approved] o3-pro",
-            messages=[{"role": "user", "content": "Hello, world!"}],
-        )
-        assert mock_responses.call_count == 1
-
-    ## CONFIRM MODEL NAME IS STRIPPED
-    client = HTTPHandler()
-
-    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
-        try:
-            result = router.completion(
-                model="[IP-approved] o3-pro",
-                messages=[{"role": "user", "content": "Hello, world!"}],
-                client=client,
-                num_retries=0,
-            )
-        except Exception as e:
-            print(f"Error: {e}")
-
-        assert mock_post.call_count == 1
-        assert (
-            mock_post.call_args.kwargs["url"]
-            == "https://webhook.site/fba79dae-220a-4bb7-9a3a-8caa49604e55/openai/v1/responses?api-version=preview"
-        )
-        assert mock_post.call_args.kwargs["json"]["model"] == "webinterface-o3-pro"

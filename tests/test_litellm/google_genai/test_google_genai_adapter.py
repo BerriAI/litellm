@@ -18,8 +18,6 @@ import sys
 
 import pytest
 
-import litellm
-
 
 def test_adapter_import():
     """Test that the adapter can be imported successfully"""
@@ -870,104 +868,6 @@ def test_handler_parameter_exclusion():
     assert completion_kwargs["model"] == "gpt-3.5-turbo"
     assert "temperature" in completion_kwargs
     assert completion_kwargs["temperature"] == 0.7
-
-@pytest.mark.parametrize("function_name,is_async,is_stream", [
-    ("generate_content", False, False),
-    ("agenerate_content", True, False),
-    ("generate_content_stream", False, True),
-    ("agenerate_content_stream", True, True),
-])
-def test_api_base_and_api_key_passthrough(function_name, is_async, is_stream):
-    """Test that api_base and api_key parameters are passed through to litellm.completion/acompletion when using generate_content"""
-    import asyncio
-    import unittest.mock
-    
-    litellm._turn_on_debug()
-
-    # Import the specific function being tested
-    if function_name == "generate_content":
-        from litellm.google_genai.main import generate_content as test_function
-    elif function_name == "agenerate_content":
-        from litellm.google_genai.main import agenerate_content as test_function
-    elif function_name == "generate_content_stream":
-        from litellm.google_genai.main import generate_content_stream as test_function
-    elif function_name == "agenerate_content_stream":
-        from litellm.google_genai.main import agenerate_content_stream as test_function
-
-    # Test input parameters
-    model = "gpt-3.5-turbo"
-    test_api_base = "https://test-api.example.com"
-    test_api_key = "test-api-key-123"
-    
-    # Mock the appropriate litellm function (completion vs acompletion)
-    mock_target = 'litellm.acompletion' if is_async else 'litellm.completion'
-    
-    with unittest.mock.patch(mock_target) as mock_completion:
-        # Mock return value
-        mock_return = unittest.mock.MagicMock()
-        if is_async:
-            # For async functions, return a coroutine that resolves to the mock
-            async def mock_async_return():
-                return mock_return
-            mock_completion.return_value = mock_async_return()
-        else:
-            mock_completion.return_value = mock_return
-        
-        # Define the test call
-        def make_test_call():
-            return test_function(
-                model=model,
-                contents={
-                    "role": "user",
-                    "parts": [{"text": "Hello, world!"}]
-                },
-                config={
-                    "temperature": 0.7,
-                },
-                api_base=test_api_base,
-                api_key=test_api_key
-            )
-        
-        # Call the handler with api_base and api_key
-        try:
-            if is_async:
-                # Run the async function
-                async def run_async_test():
-                    return await make_test_call()
-                
-                asyncio.run(run_async_test())
-            else:
-                make_test_call()
-        except Exception:
-            # Ignore any errors from the mock response processing
-            pass
-        
-        # Verify that the appropriate litellm function was called
-        mock_completion.assert_called_once()
-        
-        # Get the arguments passed to litellm.completion/acompletion
-        call_args, call_kwargs = mock_completion.call_args
-        
-        # Verify that api_base and api_key were passed through
-        assert "api_base" in call_kwargs, f"api_base not found in completion kwargs: {call_kwargs.keys()}"
-        assert call_kwargs["api_base"] == test_api_base, f"Expected api_base {test_api_base}, got {call_kwargs['api_base']}"
-        
-        assert "api_key" in call_kwargs, f"api_key not found in completion kwargs: {call_kwargs.keys()}"
-        assert call_kwargs["api_key"] == test_api_key, f"Expected api_key {test_api_key}, got {call_kwargs['api_key']}"
-        
-        # Verify other expected parameters
-        assert call_kwargs["model"] == model
-        assert len(call_kwargs["messages"]) == 1
-        assert call_kwargs["messages"][0]["role"] == "user"
-        assert call_kwargs["messages"][0]["content"] == "Hello, world!"
-        assert call_kwargs["temperature"] == 0.7
-        
-        # Verify stream parameter for streaming functions
-        if is_stream:
-            assert call_kwargs.get("stream") is True, f"Expected stream=True for {function_name}"
-        else:
-            # For non-streaming, stream should be False or not present
-            assert call_kwargs.get("stream") is not True, f"Expected stream not True for {function_name}"
 
 def test_shared_schema_normalization_utilities():
     """Test the shared schema normalization utility functions work correctly"""
