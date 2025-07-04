@@ -138,7 +138,7 @@ def test_request_invalid_json(client):
     )
 
     # Check that request raises exception
-    with pytest.raises(json.JSONDecodeError) as exc_info:
+    with pytest.raises(requests.exceptions.JSONDecodeError) as exc_info:
         client.request("GET", "/models")
 
 
