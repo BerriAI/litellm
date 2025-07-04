@@ -36,9 +36,9 @@ async def test_global_redaction_on():
     litellm.turn_off_message_logging = True
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
-    response = await litellm.aresponses(
+    response = await litellm.acompletion(
         model="gpt-3.5-turbo",
-        input="hi",
+        messages=[{"role": "user", "content": "hi"}],
         mock_response="hello",
     )
 
