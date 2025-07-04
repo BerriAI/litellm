@@ -426,6 +426,7 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
         llm_provider,
         response: Optional[httpx.Response] = None,
         litellm_debug_info: Optional[str] = None,
+        provider_specific_fields: Optional[dict] = None,
     ):
         self.status_code = 400
         self.message = "litellm.ContentPolicyViolationError: {}".format(message)
@@ -434,6 +435,8 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         request = httpx.Request(method="POST", url="https://api.openai.com/v1")
         self.response = httpx.Response(status_code=400, request=request)
+        self.provider_specific_fields = provider_specific_fields
+        
         super().__init__(
             message=self.message,
             model=self.model,  # type: ignore
@@ -441,16 +444,18 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
             response=self.response,
             litellm_debug_info=self.litellm_debug_info,
         )  # Call the base class constructor with the parameters it needs
+    
 
     def __str__(self):
-        _message = self.message
-        if self.num_retries:
-            _message += f" LiteLLM Retried: {self.num_retries} times"
-        if self.max_retries:
-            _message += f", LiteLLM Max Retries: {self.max_retries}"
-        return _message
+        return self._transform_error_to_string()
 
     def __repr__(self):
+        return self._transform_error_to_string()
+
+    def _transform_error_to_string(self) -> str:
+        """
+        Transform the error to a string
+        """
         _message = self.message
         if self.num_retries:
             _message += f" LiteLLM Retried: {self.num_retries} times"
