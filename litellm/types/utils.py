@@ -1635,7 +1635,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
 
     usage: Optional[ImageUsage] = None  # type: ignore
     """
-    Users might use litellm with older python versions, we don't want this to break for them. 
+    Users might use litellm with older python versions, we don't want this to break for them.
     Happens when their OpenAIImageResponse has the old OpenAI usage class.
     """
 
@@ -2311,6 +2311,7 @@ class LlmProviders(str, Enum):
     TOPAZ = "topaz"
     ASSEMBLYAI = "assemblyai"
     SNOWFLAKE = "snowflake"
+    GRADIENT_AI = "gradient_ai"
     LLAMA = "meta_llama"
     NSCALE = "nscale"
 
