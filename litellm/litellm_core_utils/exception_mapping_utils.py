@@ -42,8 +42,17 @@ class ExceptionCheckers:
         """
         if not isinstance(error_str, str):
             return False
-
-        return "429" in error_str or "rate limit" in error_str.lower()
+        
+        if "429" in error_str or "rate limit" in error_str.lower():
+            return True
+        
+        #######################################
+        # Mistral API returns this error string
+        #########################################
+        if "service tier capacity exceeded" in error_str.lower():
+            return True
+        
+        return False
 
     @staticmethod
     def is_error_str_context_window_exceeded(error_str: str) -> bool:

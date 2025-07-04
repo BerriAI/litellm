@@ -920,7 +920,7 @@ async def test_completion_gemini_stream_accumulated_json(sync_mode):
         #     return
         pytest.fail(f"Error occurred: {e}")
 
-
+@pytest.mark.flaky(retries=3, delay=1)
 def test_completion_mistral_api_mistral_large_function_call_with_streaming():
     litellm.set_verbose = True
     tools = [

@@ -12,6 +12,8 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.types.guardrails import (
     PII_ENTITY_CATEGORIES_MAP,
+    AzureContentSafetyPromptShieldConfigModel,
+    AzureContentSafetyTextModerationConfigModel,
     BedrockGuardrailConfigModel,
     Guardrail,
     GuardrailEventHooks,
@@ -767,12 +769,20 @@ async def get_provider_specific_params():
     bedrock_fields = _get_fields_from_model(BedrockGuardrailConfigModel)
     presidio_fields = _get_fields_from_model(PresidioPresidioConfigModelUserInterface)
     lakera_v2_fields = _get_fields_from_model(LakeraV2GuardrailConfigModel)
+    azure_content_safety_prompt_shield_fields = _get_fields_from_model(
+        AzureContentSafetyPromptShieldConfigModel
+    )
+    azure_content_safety_text_moderation_fields = _get_fields_from_model(
+        AzureContentSafetyTextModerationConfigModel
+    )
 
     # Return the provider-specific parameters
     provider_params = {
         SupportedGuardrailIntegrations.BEDROCK.value: bedrock_fields,
         SupportedGuardrailIntegrations.PRESIDIO.value: presidio_fields,
         SupportedGuardrailIntegrations.LAKERA_V2.value: lakera_v2_fields,
+        SupportedGuardrailIntegrations.AZURE_PROMPT_SHIELD.value: azure_content_safety_prompt_shield_fields,
+        SupportedGuardrailIntegrations.AZURE_TEXT_MODERATIONS.value: azure_content_safety_text_moderation_fields,
     }
 
     return provider_params

@@ -106,6 +106,7 @@ from litellm.utils import (
     mock_completion_streaming_obj,
     pre_process_non_default_params,
     read_config_args,
+    should_run_mock_completion,
     supports_httpx_timeout,
     token_counter,
     validate_and_fix_openai_messages,
@@ -437,6 +438,7 @@ async def acompletion(
             prompt_variables=kwargs.get("prompt_variables", None),
             tools=tools,
             prompt_label=kwargs.get("prompt_label", None),
+            prompt_version=kwargs.get("prompt_version", None),
         )
         #########################################################
         # if the chat completion logging hook removed all tools,
@@ -451,6 +453,7 @@ async def acompletion(
     #########################################################
     #########################################################
 
+    
     # Adjusted to use explicit arguments instead of *args and **kwargs
     completion_kwargs = {
         "model": model,
@@ -506,6 +509,15 @@ async def acompletion(
                 "No response from fallbacks. Got none. Turn on `litellm.set_verbose=True` to see more details."
             )
         return response
+
+    ### APPLY MOCK DELAY ### 
+
+    mock_delay = kwargs.get("mock_delay")
+    mock_response = kwargs.get("mock_response")
+    mock_tool_calls = kwargs.get("mock_tool_calls")
+    mock_timeout = kwargs.get("mock_timeout")
+    if mock_delay and should_run_mock_completion(mock_response=mock_response, mock_tool_calls=mock_tool_calls, mock_timeout=mock_timeout):
+        await asyncio.sleep(mock_delay)
 
     try:
         # Use a partial function to pass your keyword arguments
@@ -673,6 +685,7 @@ async def _sleep_for_timeout_async(timeout: Union[float, str, httpx.Timeout]):
         await asyncio.sleep(timeout.connect)
 
 
+
 def mock_completion(
     model: str,
     messages: List,
@@ -710,6 +723,7 @@ def mock_completion(
         - If 'stream' is True, it returns a response that mimics the behavior of a streaming completion.
     """
     try:
+        is_acompletion = kwargs.get("acompletion") or False
         if mock_response is None:
             mock_response = "This is a mock request"
 
@@ -741,7 +755,7 @@ def mock_completion(
                 status_code=529,
             )
         time_delay = kwargs.get("mock_delay", None)
-        if time_delay is not None:
+        if time_delay is not None and not is_acompletion:
             time.sleep(time_delay)
 
         if isinstance(mock_response, dict):
@@ -1049,6 +1063,7 @@ def completion(  # type: ignore # noqa: PLR0915
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
             prompt_label=kwargs.get("prompt_label", None),
+            prompt_version=kwargs.get("prompt_version", None),
         )
 
     try:
@@ -1937,7 +1952,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 or get_secret("MISTRAL_API_BASE")
                 or "https://api.mistral.ai/v1"
             )
-            
+
             response = base_llm_http_handler.completion(
                 model=model,
                 messages=messages,
@@ -2602,9 +2617,7 @@ def completion(  # type: ignore # noqa: PLR0915
             api_base = api_base or litellm.api_base or get_secret("VERTEXAI_API_BASE")
 
             new_params = deepcopy(optional_params)
-            if (
-                vertex_partner_models_chat_completion.is_vertex_partner_model(model)
-            ):
+            if vertex_partner_models_chat_completion.is_vertex_partner_model(model):
                 model_response = vertex_partner_models_chat_completion.completion(
                     model=model,
                     messages=messages,
