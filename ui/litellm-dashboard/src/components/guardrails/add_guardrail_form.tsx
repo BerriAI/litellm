@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Card, Form, Typography, Select, Input, Switch, Tooltip, Modal, message, Divider, Space, Tag, Image, Steps } from 'antd';
 import { Button, TextInput } from '@tremor/react';
 import type { FormInstance } from 'antd';
-import { GuardrailProviders, guardrail_provider_map, shouldRenderPIIConfigSettings, shouldRenderAzureTextModerationConfigSettings, guardrailLogoMap } from './guardrail_info_helpers';
+import { GuardrailProviders, guardrail_provider_map, shouldRenderPIIConfigSettings, guardrailLogoMap } from './guardrail_info_helpers';
 import { createGuardrailCall, getGuardrailUISettings, getGuardrailProviderSpecificParams } from '../networking';
 import PiiConfiguration from './pii_configuration';
 import GuardrailProviderFields from './guardrail_provider_fields';
@@ -184,10 +184,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
           message.error('Please select at least one PII entity to continue');
           return;
         }
-        if (shouldRenderAzureTextModerationConfigSettings(selectedProvider) && selectedCategories.length === 0) {
-          message.error('Please select at least one content category to continue');
-          return;
-        }
       }
       
       setCurrentStep(currentStep + 1);
@@ -263,16 +259,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
         }
         if (values.presidio_anonymizer_api_base) {
           guardrailData.litellm_params.presidio_anonymizer_api_base = values.presidio_anonymizer_api_base;
-        }
-      }
-      // For Azure Text Moderation, add the category and threshold configurations
-      else if (shouldRenderAzureTextModerationConfigSettings(values.provider) && selectedCategories.length > 0) {
-        guardrailData.litellm_params.categories = selectedCategories;
-        guardrailData.litellm_params.severity_threshold = globalSeverityThreshold;
-        
-        // Only add category-specific thresholds if they exist
-        if (Object.keys(categorySpecificThresholds).length > 0) {
-          guardrailData.litellm_params.severity_threshold_by_category = categorySpecificThresholds;
         }
       }
       // Add config values to the guardrail_info if provided

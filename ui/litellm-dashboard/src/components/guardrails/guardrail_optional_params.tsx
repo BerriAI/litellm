@@ -51,10 +51,6 @@ const DictField: React.FC<DictFieldProps> = ({ field, fieldKey, fullFieldKey }) 
 
   return (
     <div className="space-y-3">
-      <div className="text-sm text-gray-600 mb-3">
-        {field.description}
-      </div>
-      
       {/* Existing entries */}
       {selectedEntries.map((entry) => (
         <div key={entry.id} className="flex items-center space-x-3 p-3 border rounded-lg">
@@ -125,8 +121,9 @@ const GuardrailOptionalParams: React.FC<GuardrailOptionalParamsProps> = ({
     // Handle dict fields separately since they manage their own Form.Items
     if (field.type === "dict" && field.dict_key_options) {
       return (
-        <div key={fullFieldKey} className="mb-6">
-          <div className="mb-2 font-medium">{fieldKey}</div>
+        <div key={fullFieldKey} className="mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
+          <div className="mb-4 font-medium text-gray-900 text-base">{fieldKey}</div>
+          <p className="text-sm text-gray-600 mb-4">{field.description}</p>
           <DictField
             field={field}
             fieldKey={fieldKey}
@@ -137,14 +134,18 @@ const GuardrailOptionalParams: React.FC<GuardrailOptionalParamsProps> = ({
     }
     
     return (
-      <Form.Item
-        key={fullFieldKey}
-        name={fullFieldKey}
-        label={fieldKey}
-        tooltip={field.description}
-        rules={field.required ? [{ required: true, message: `${fieldKey} is required` }] : undefined}
-        className="mb-6"
-      >
+      <div key={fullFieldKey} className="mb-8 p-6 bg-white rounded-lg border border-gray-200 shadow-sm">
+        <Form.Item
+          name={fullFieldKey}
+          label={
+            <div className="mb-2">
+              <div className="font-medium text-gray-900 text-base">{fieldKey}</div>
+              <p className="text-sm text-gray-600 mt-1">{field.description}</p>
+            </div>
+          }
+          rules={field.required ? [{ required: true, message: `${fieldKey} is required` }] : undefined}
+          className="mb-0"
+        >
         {field.type === "select" && field.options ? (
           <Select 
             placeholder={field.description} 
@@ -193,7 +194,8 @@ const GuardrailOptionalParams: React.FC<GuardrailOptionalParamsProps> = ({
             type="text"
           />
         )}
-      </Form.Item>
+        </Form.Item>
+      </div>
     );
   };
 
@@ -203,13 +205,16 @@ const GuardrailOptionalParams: React.FC<GuardrailOptionalParamsProps> = ({
 
   return (
     <div className="guardrail-optional-params">
-      <div className="mb-6">
-        <Title level={4} className="mb-0 font-semibold text-gray-800">
-          {optionalParams.description || 'Optional Parameters'}
+      <div className="mb-8 pb-4 border-b border-gray-100">
+        <Title level={3} className="mb-2 font-semibold text-gray-900">
+          Optional Parameters
         </Title>
+        <p className="text-gray-600 text-sm">
+          {optionalParams.description || 'Configure additional settings for this guardrail provider'}
+        </p>
       </div>
       
-      <div className="space-y-4">
+      <div className="space-y-8">
         {Object.entries(optionalParams.fields).map(([fieldKey, field]) =>
           renderField(fieldKey, field)
         )}
