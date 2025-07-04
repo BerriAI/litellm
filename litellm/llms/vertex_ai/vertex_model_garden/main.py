@@ -13,7 +13,7 @@ response = litellm.completion(
 Sent to this route when `model` is in the format `vertex_ai/openai/{MODEL_ID}`
 
 
-Vertex Documentation for using the OpenAI /chat/completions endpoint: https://github.com/GoogleCloudPlatform/vertex-ai-samples/blob/main/notebooks/community/model_garden/model_garden_pytorch_llama3_deployment.ipynb
+Vertex Documentation for using the OpenAI /chat/completions endpoint: https://github.com/GoogleCloudPlatform/generative-ai/blob/main/open-models/get_started_with_model_garden_sdk.ipynb
 """
 
 from typing import Callable, Optional, Union
