@@ -53,11 +53,14 @@ class MCPRequestHandler:
         )
         mcp_auth_header = headers.get(MCPRequestHandler.LITELLM_MCP_AUTH_HEADER_NAME)
         mcp_servers_header = headers.get(MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME)
+        verbose_logger.debug(f"Raw MCP servers header: {mcp_servers_header}")
         mcp_servers = None
         if mcp_servers_header:
             try:
                 mcp_servers = json.loads(mcp_servers_header)
+                verbose_logger.debug(f"Parsed MCP servers: {mcp_servers}")
                 if not isinstance(mcp_servers, list):
+                    verbose_logger.debug("MCP servers header is not a list, setting to None")
                     mcp_servers = None
             except (json.JSONDecodeError, TypeError, ValueError) as e:
                 verbose_logger.debug(f"Error parsing mcp_servers header: {e}")
