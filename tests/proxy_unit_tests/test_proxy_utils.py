@@ -2007,7 +2007,8 @@ async def test_post_call_failure_hook_auth_error_llm_api_route():
         user_api_key_dict = UserAPIKeyAuth(
             api_key="test_key",
             user_id="test_user",
-            token="test_token"
+            token="test_token",
+            request_route="/v1/chat/completions"
         )
         
         # Call post_call_failure_hook with auth error from /v1/chat/completions route
