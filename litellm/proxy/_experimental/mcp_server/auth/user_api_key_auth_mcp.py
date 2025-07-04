@@ -57,14 +57,8 @@ class MCPRequestHandler:
         mcp_servers = None
         if mcp_servers_header is not None:  # Changed from 'if mcp_servers_header:' to handle empty strings
             try:
-                # First try to parse as JSON array for backward compatibility
-                try:
-                    mcp_servers = json.loads(mcp_servers_header)
-                    if not isinstance(mcp_servers, list):
-                        mcp_servers = None
-                except (json.JSONDecodeError, TypeError, ValueError):
-                    # If JSON parsing fails, treat as comma-separated list
-                    mcp_servers = [s.strip() for s in mcp_servers_header.split(",") if s.strip()]
+                # Parse as comma-separated list
+                mcp_servers = [s.strip() for s in mcp_servers_header.split(",") if s.strip()]
                 verbose_logger.debug(f"Parsed MCP servers: {mcp_servers}")
             except Exception as e:
                 verbose_logger.debug(f"Error parsing mcp_servers header: {e}")

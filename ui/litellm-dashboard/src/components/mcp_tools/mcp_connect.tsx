@@ -110,7 +110,7 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
               message="MCP Server Header Format"
               description={
                 <div>
-                  <p>Use a comma-separated list to specify one or more MCP servers:</p>
+                  <p>Specify one or more MCP servers using a comma-separated list:</p>
                   <ul>
                     <li><strong>Single server:</strong> "Server1"</li>
                     <li><strong>Multiple servers:</strong> "Server1,Server2,Server3"</li>

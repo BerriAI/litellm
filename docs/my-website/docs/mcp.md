@@ -182,7 +182,6 @@ You can choose to access specific MCP servers and only list their tools using th
 
 The header accepts either:
 1. A comma-separated list of server names: `"Zapier_Gmail,Server2,Server3"`
-2. A JSON array of server names (legacy format): `["Zapier_Gmail", "Server2", "Server3"]`
 
 Notes:
 - Server names with spaces should be replaced with underscores
@@ -234,7 +233,7 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
-                "x-mcp-servers": "[\"Zapier_Gmail\"]"
+                "x-mcp-servers": "Zapier_Gmail,Server2"
             }
         }
     ],
@@ -243,7 +242,7 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
 }'
 ```
 
-This configuration restricts the request to only use tools from the specified MCP server.
+This configuration restricts the request to only use tools from the specified MCP servers.
 
 </TabItem>
 
@@ -256,7 +255,7 @@ This configuration restricts the request to only use tools from the specified MC
       "url": "<your-litellm-proxy-base-url>/mcp",
       "headers": {
         "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
-        "x-mcp-servers": "[\"Zapier_Gmail\"]"
+        "x-mcp-servers": "Zapier_Gmail,Server2"
       }
     }
   }
