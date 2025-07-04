@@ -38,6 +38,8 @@ import VectorStoreSelector from "../vector_store_management/VectorStoreSelector"
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import PremiumVectorStoreSelector from "../common_components/PremiumVectorStoreSelector";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import EditLoggingSettings from "./EditLoggingSettings";
+import LoggingSettingsView from "../logging_settings_view";
 
 export interface TeamMembership {
   user_id: string;
@@ -252,7 +254,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         budget_duration: values.budget_duration,
         metadata: {
           ...parsedMetadata,
-          guardrails: values.guardrails || []
+          guardrails: values.guardrails || [],
+          logging: values.logging_settings || []
         },
         organization_id: values.organization_id,
       };
@@ -366,6 +369,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 variant="card"
                 accessToken={accessToken}
               />
+
+              <LoggingSettingsView 
+                loggingConfigs={info.metadata?.logging || []}
+                variant="card"
+              />
             </Grid>
           </TabPanel>
 
@@ -419,7 +427,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     max_budget: info.max_budget,
                     budget_duration: info.budget_duration,
                     guardrails: info.metadata?.guardrails || [],
-                    metadata: info.metadata ? JSON.stringify(info.metadata, null, 2) : "",
+                    metadata: info.metadata
+                      ? JSON.stringify((({ logging, ...rest }) => rest)(info.metadata), null, 2)
+                      : "",
+                    logging_settings: info.metadata?.logging || [],
                     organization_id: info.organization_id,
                     vector_stores: info.object_permission?.vector_stores || [],
                     mcp_servers: info.object_permission?.mcp_servers || []
@@ -525,10 +536,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       placeholder="Select MCP servers"
                     />
                   </Form.Item>
-                  
                   <Form.Item label="Organization ID" name="organization_id">
                     <Input type=""/>
                   </Form.Item>
+
+                  <Form.Item label="Logging Settings" name="logging_settings">
+                    <EditLoggingSettings
+                      value={form.getFieldValue('logging_settings')}
+                      onChange={(values) => form.setFieldValue('logging_settings', values)}
+                    />
+                  </Form.Item>
+                  
 
                   <Form.Item label="Metadata" name="metadata">
                     <Input.TextArea rows={10} />
@@ -605,6 +623,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     variant="inline"
                     className="pt-4 border-t border-gray-200"
                     accessToken={accessToken}
+                  />
+
+                  <LoggingSettingsView 
+                    loggingConfigs={info.metadata?.logging || []}
+                    variant="inline"
+                    className="pt-4 border-t border-gray-200"
                   />
                 </div>
               )}
