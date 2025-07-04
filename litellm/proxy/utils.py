@@ -847,7 +847,7 @@ class ProxyLogging:
         if self._is_proxy_only_llm_api_error(
             original_exception=original_exception,
             error_type=error_type,
-            route=route,
+            route=user_api_key_dict.request_route,
         ):
             await self._handle_logging_proxy_only_error(
                 request_data=request_data,
