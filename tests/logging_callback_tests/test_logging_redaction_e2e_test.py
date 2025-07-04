@@ -36,9 +36,9 @@ async def test_global_redaction_on():
     litellm.turn_off_message_logging = True
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
-    response = await litellm.acompletion(
+    response = await litellm.aresponses(
         model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": "hi"}],
+        input="hi",
         mock_response="hello",
     )
 
@@ -59,9 +59,9 @@ async def test_global_redaction_with_dynamic_params(turn_off_message_logging):
     litellm.turn_off_message_logging = True
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
-    response = await litellm.acompletion(
+    response = await litellm.aresponses(
         model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": "hi"}],
+        input="hi",
         turn_off_message_logging=turn_off_message_logging,
         mock_response="hello",
     )
@@ -93,9 +93,9 @@ async def test_global_redaction_off_with_dynamic_params(turn_off_message_logging
     litellm.turn_off_message_logging = False
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
-    response = await litellm.acompletion(
+    response = await litellm.aresponses(
         model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": "hi"}],
+        input="hi",
         turn_off_message_logging=turn_off_message_logging,
         mock_response="hello",
     )
@@ -129,14 +129,14 @@ async def test_redaction_responses_api():
     
     # Mock a ResponsesAPIResponse-style response
     mock_response = {
-        "output": "This is a test response",
+        "output": [{"text": "This is a test response"}],
         "model": "gpt-3.5-turbo",
-        "usage": {"total_tokens": 10}
+        "usage": {"input_tokens": 5, "output_tokens": 5, "total_tokens": 10}
     }
     
-    response = await litellm.acompletion(
+    response = await litellm.aresponses(
         model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": "hi"}],
+        input="hi",
         mock_response=mock_response,
     )
 
