@@ -28,9 +28,9 @@ GitHub Copilot uses OAuth device flow for authentication. On first use, you'll b
 
 ## Usage - LiteLLM Python SDK
 
-### Text Generation
+### Chat Completion
 
-```python showLineNumbers title="GitHub Copilot Text Generation"
+```python showLineNumbers title="GitHub Copilot Chat Completion"
 from litellm import completion
 
 response = completion(
@@ -44,7 +44,7 @@ response = completion(
 print(response)
 ```
 
-```python showLineNumbers title="GitHub Copilot Text Generation - Streaming"
+```python showLineNumbers title="GitHub Copilot Chat Completion - Streaming"
 from litellm import completion
 
 stream = completion(
