@@ -339,6 +339,59 @@ class LassoGuardrailConfigModel(BaseModel):
     )
 
 
+class AzureContentSafetyConfigModel(BaseModel):
+    """Configuration parameters for the Azure Content Safety Prompt Shield guardrail"""
+
+    api_key: Optional[str] = Field(
+        default=None,
+        description="API key for the Azure Content Safety Prompt Shield guardrail",
+    )
+
+    api_base: Optional[str] = Field(
+        default=None,
+        description="Base URL for the Azure Content Safety Prompt Shield guardrail",
+    )
+    api_version: Optional[str] = Field(
+        default=None,
+        description="API version for the Azure Content Safety Prompt Shield guardrail",
+    )
+
+
+class AzureContentSafetyPromptShieldConfigModel(AzureContentSafetyConfigModel):
+    """Configuration parameters for the Azure Content Safety Prompt Shield guardrail"""
+
+    pass
+
+
+class AzureContentSafetyTextModerationConfigModel(AzureContentSafetyConfigModel):
+
+    severity_threshold: Optional[int] = Field(
+        default=None,
+        description="Severity threshold for the Azure Content Safety Text Moderation guardrail across all categories",
+    )
+    severity_threshold_by_category: Optional[Dict[str, int]] = Field(
+        default=None,
+        description="Severity threshold by category for the Azure Content Safety Text Moderation guardrail. See list of categories - https://learn.microsoft.com/en-us/azure/ai-services/content-safety/concepts/harm-categories?tabs=warning",
+    )
+
+    categories: Optional[List[str]] = Field(
+        default=None,
+        description="Categories to scan for the Azure Content Safety Text Moderation guardrail. See list of categories - https://learn.microsoft.com/en-us/azure/ai-services/content-safety/concepts/harm-categories?tabs=warning",
+    )
+    blocklistNames: Optional[List[str]] = Field(
+        default=None,
+        description="Blocklist names to scan for the Azure Content Safety Text Moderation guardrail. Learn more - https://learn.microsoft.com/en-us/azure/ai-services/content-safety/quickstart-text",
+    )
+    haltOnBlocklistHit: Optional[bool] = Field(
+        default=None,
+        description="Whether to halt the request if a blocklist hit is detected",
+    )
+    outputType: Optional[Literal["FourSeverityLevels", "EightSeverityLevels"]] = Field(
+        default=None,
+        description="Output type for the Azure Content Safety Text Moderation guardrail. Learn more - https://learn.microsoft.com/en-us/azure/ai-services/content-safety/quickstart-text",
+    )
+
+
 class LitellmParams(
     PresidioConfigModel,
     BedrockGuardrailConfigModel,
