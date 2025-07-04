@@ -314,6 +314,9 @@ class OpenTelemetry(CustomLogger):
             # End Parent OTEL Sspan
             parent_otel_span.end(end_time=self._to_ns(datetime.now()))
     
+    #########################################################
+    # Team/Key Based Logging Control Flow
+    #########################################################
     def _get_dynamic_headers_from_kwargs(self, kwargs) -> Optional[dict]:
         """Extract dynamic headers from kwargs if available."""
         from litellm.integrations.arize.arize import ArizeLogger
@@ -325,8 +328,7 @@ class OpenTelemetry(CustomLogger):
         if not standard_callback_dynamic_params:
             return None
 
-        # Handle Arize headers
-        dynamic_headers = ArizeLogger.construct_dynamic_arize_headers(
+        dynamic_headers = self.construct_dynamic_otel_headers(
             standard_callback_dynamic_params=standard_callback_dynamic_params
         )
         
@@ -342,6 +344,21 @@ class OpenTelemetry(CustomLogger):
         temp_provider.add_span_processor(self._get_span_processor(dynamic_headers=dynamic_headers))
         
         return temp_provider.get_tracer(LITELLM_TRACER_NAME)
+
+    def construct_dynamic_otel_headers(self, standard_callback_dynamic_params: StandardCallbackDynamicParams) -> Optional[dict]:
+        """
+        Construct dynamic headers from standard callback dynamic params
+
+        Note: You just need to override this method in Arize, Langfuse Otel if you want to allow team/key based logging.
+
+        Returns:
+            dict: A dictionary of dynamic headers
+        """
+        return None
+    
+    #########################################################
+    # End of Team/Key Based Logging Control Flow
+    #########################################################
 
     def _handle_sucess(self, kwargs, response_obj, start_time, end_time):
         from opentelemetry import trace

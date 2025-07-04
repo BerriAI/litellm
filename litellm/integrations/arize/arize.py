@@ -105,12 +105,14 @@ class ArizeLogger(OpenTelemetry):
         pass
     
 
-    @staticmethod
-    def construct_dynamic_arize_headers(
+    def construct_dynamic_otel_headers(
+        self, 
         standard_callback_dynamic_params: StandardCallbackDynamicParams
-    ):
+    ) -> Optional[dict]:
         """
         Construct dynamic Arize headers from standard callback dynamic params
+
+        This is used for team/key based logging.
 
         Returns:
             dict: A dictionary of dynamic Arize headers
