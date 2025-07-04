@@ -55,16 +55,24 @@ class MCPRequestHandler:
         mcp_servers_header = headers.get(MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME)
         verbose_logger.debug(f"Raw MCP servers header: {mcp_servers_header}")
         mcp_servers = None
-        if mcp_servers_header:
+        if mcp_servers_header is not None:  # Changed from 'if mcp_servers_header:' to handle empty strings
             try:
-                mcp_servers = json.loads(mcp_servers_header)
+                # First try to parse as JSON array for backward compatibility
+                try:
+                    mcp_servers = json.loads(mcp_servers_header)
+                    if not isinstance(mcp_servers, list):
+                        mcp_servers = None
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    # If JSON parsing fails, treat as comma-separated list
+                    mcp_servers = [s.strip() for s in mcp_servers_header.split(",") if s.strip()]
                 verbose_logger.debug(f"Parsed MCP servers: {mcp_servers}")
-                if not isinstance(mcp_servers, list):
-                    verbose_logger.debug("MCP servers header is not a list, setting to None")
-                    mcp_servers = None
-            except (json.JSONDecodeError, TypeError, ValueError) as e:
+            except Exception as e:
                 verbose_logger.debug(f"Error parsing mcp_servers header: {e}")
                 mcp_servers = None
+
+            # If we got an empty string or parsing resulted in no servers, return empty list
+            if mcp_servers_header == "" or (mcp_servers is not None and len(mcp_servers) == 0):
+                mcp_servers = []
 
         # Create a proper Request object with mock body method to avoid ASGI receive channel issues
         request = Request(scope=scope)
