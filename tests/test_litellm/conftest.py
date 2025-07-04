@@ -35,6 +35,8 @@ def setup_and_teardown():
     except Exception as e:
         print(f"Error reloading litellm.proxy.proxy_server: {e}")
 
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
     import asyncio
 
     loop = asyncio.get_event_loop_policy().new_event_loop()
