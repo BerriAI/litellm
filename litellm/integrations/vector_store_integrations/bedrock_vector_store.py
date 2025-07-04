@@ -77,6 +77,7 @@ class BedrockVectorStore(BaseVectorStore, BaseAWSLLM):
         litellm_logging_obj: LiteLLMLoggingObj,
         tools: Optional[List[Dict]] = None,
         prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Retrieves the context from the Bedrock Knowledge Base and appends it to the messages.
@@ -129,9 +130,9 @@ class BedrockVectorStore(BaseVectorStore, BaseAWSLLM):
                     )
                 )
 
-            litellm_logging_obj.model_call_details[
-                "vector_store_request_metadata"
-            ] = vector_store_request_metadata
+            litellm_logging_obj.model_call_details["vector_store_request_metadata"] = (
+                vector_store_request_metadata
+            )
 
         return model, messages, non_default_params
 
@@ -143,9 +144,9 @@ class BedrockVectorStore(BaseVectorStore, BaseAWSLLM):
         """
         Transform a BedrockKBResponse to a VectorStoreSearchResponse
         """
-        retrieval_results: Optional[
-            List[BedrockKBRetrievalResult]
-        ] = bedrock_kb_response.get("retrievalResults", None)
+        retrieval_results: Optional[List[BedrockKBRetrievalResult]] = (
+            bedrock_kb_response.get("retrievalResults", None)
+        )
         vector_store_search_response: VectorStoreSearchResponse = (
             VectorStoreSearchResponse(search_query=query, data=[])
         )
