@@ -536,6 +536,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       placeholder="Select MCP servers"
                     />
                   </Form.Item>
+                  <Form.Item label="Organization ID" name="organization_id">
+                    <Input type=""/>
+                  </Form.Item>
 
                   <Form.Item label="Logging Settings" name="logging_settings">
                     <EditLoggingSettings
@@ -544,9 +547,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     />
                   </Form.Item>
                   
-                  <Form.Item label="Organization ID" name="organization_id">
-                    <Input type=""/>
-                  </Form.Item>
 
                   <Form.Item label="Metadata" name="metadata">
                     <Input.TextArea rows={10} />
