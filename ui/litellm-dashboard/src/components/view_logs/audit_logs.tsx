@@ -6,6 +6,7 @@ import { uiAuditLogsCall, keyListCall } from "../networking";
 import { AuditLogEntry, auditLogColumns } from "./columns";
 import { Text } from "@tremor/react";
 import { Team } from "../key_team_helpers/key_list";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 interface AuditLogsProps {
   accessToken: string | null;
@@ -308,8 +309,8 @@ export default function AuditLogs({
             return (
               <div>
                 {changedKeys.includes('token') && <p><strong>Token:</strong> {value.token || 'N/A'}</p>}
-                {changedKeys.includes('spend') && <p><strong>Spend:</strong> {value.spend !== undefined ? `$${Number(value.spend).toFixed(6)}` : 'N/A'}</p>}
-                {changedKeys.includes('max_budget') && <p><strong>Max Budget:</strong> {value.max_budget !== undefined ? `$${Number(value.max_budget).toFixed(6)}` : 'N/A'}</p>}
+                {changedKeys.includes('spend') && <p><strong>Spend:</strong> {value.spend !== undefined ? `$${formatNumberWithCommas(value.spend, 6)}` : 'N/A'}</p>}
+                {changedKeys.includes('max_budget') && <p><strong>Max Budget:</strong> {value.max_budget !== undefined ? `$${formatNumberWithCommas(value.max_budget, 6)}` : 'N/A'}</p>}
               </div>
             );
           } else {

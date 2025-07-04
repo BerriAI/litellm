@@ -23,6 +23,7 @@ import {
 } from "@tremor/react";
 import { Statistic } from "antd"
 import { spendUsersCall, modelAvailableCall }  from "./networking";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 // Define the props type
 interface UserSpendData {
@@ -134,7 +135,7 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessT
 
     const displayMaxBudget = maxBudget !== null ? `$${maxBudget} limit` : "No limit";
 
-    const roundedSpend = spend !== undefined ? spend.toFixed(4) : null;
+    const roundedSpend = spend !== undefined ? formatNumberWithCommas(spend, 4) : null;
 
     console.log(`spend in view user spend: ${spend}`)
     return (
