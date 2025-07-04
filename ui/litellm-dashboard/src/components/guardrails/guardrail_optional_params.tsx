@@ -25,7 +25,7 @@ interface GuardrailOptionalParamsProps {
 interface DictFieldProps {
   field: ProviderParam;
   fieldKey: string;
-  fullFieldKey: string;
+  fullFieldKey: string | string[];
 }
 
 const DictField: React.FC<DictFieldProps> = ({ field, fieldKey, fullFieldKey }) => {
@@ -57,7 +57,7 @@ const DictField: React.FC<DictFieldProps> = ({ field, fieldKey, fullFieldKey }) 
           <div className="w-24 font-medium text-sm">{entry.key}</div>
           <div className="flex-1">
             <Form.Item
-              name={[fullFieldKey, entry.key]}
+              name={Array.isArray(fullFieldKey) ? [...fullFieldKey, entry.key] : [fullFieldKey, entry.key]}
               style={{ marginBottom: 0 }}
             >
               {field.dict_value_type === "number" ? (
@@ -127,7 +127,7 @@ const GuardrailOptionalParams: React.FC<GuardrailOptionalParamsProps> = ({
           <DictField
             field={field}
             fieldKey={fieldKey}
-            fullFieldKey={fullFieldKey}
+            fullFieldKey={[parentFieldKey, fieldKey]}
           />
         </div>
       );
@@ -136,7 +136,7 @@ const GuardrailOptionalParams: React.FC<GuardrailOptionalParamsProps> = ({
     return (
       <div key={fullFieldKey} className="mb-8 p-6 bg-white rounded-lg border border-gray-200 shadow-sm">
         <Form.Item
-          name={fullFieldKey}
+          name={[parentFieldKey, fieldKey]}
           label={
             <div className="mb-2">
               <div className="font-medium text-gray-900 text-base">{fieldKey}</div>
