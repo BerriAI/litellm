@@ -39,61 +39,6 @@ import { getProxyBaseUrl } from "../networking";
 const { Title, Text } = Typography;
 const { Panel } = Collapse;
 
-interface AdvancedSettingsProps {
-  onServerHeaderChange: (servers: string[]) => void;
-  defaultServers?: string[];
-}
-
-const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({ onServerHeaderChange, defaultServers = [] }) => {
-  const [enableServerHeader, setEnableServerHeader] = useState(false);
-  const [serverList, setServerList] = useState<string>(defaultServers.join(','));
-
-  const handleEnableChange = (checked: boolean) => {
-    setEnableServerHeader(checked);
-    if (!checked) {
-      onServerHeaderChange([]);
-    } else {
-      onServerHeaderChange(serverList.split(',').map(s => s.trim()).filter(Boolean));
-    }
-  };
-
-  const handleServerListChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newValue = e.target.value;
-    setServerList(newValue);
-    if (enableServerHeader) {
-      onServerHeaderChange(newValue.split(',').map(s => s.trim()).filter(Boolean));
-    }
-  };
-
-  return (
-    <Collapse className="mt-4">
-      <Panel header="Advanced Settings" key="1">
-        <Form layout="vertical">
-          <Form.Item
-            label={
-              <div className="flex items-center gap-2">
-                <span>Enable Server Header</span>
-                <Switch
-                  size="small"
-                  checked={enableServerHeader}
-                  onChange={handleEnableChange}
-                />
-              </div>
-            }
-            help="Restrict tool access to specific MCP servers"
-          >
-            <Input
-              placeholder="Enter server names (comma-separated)"
-              value={serverList}
-              onChange={handleServerListChange}
-              disabled={!enableServerHeader}
-            />
-          </Form.Item>
-        </Form>
-      </Panel>
-    </Collapse>
-  );
-};
 
 interface CodeBlockProps {
   code: string;
@@ -336,9 +281,6 @@ const MCPConnect: React.FC = () => {
             className="text-xs"
           />
         </FeatureCard>
-        <AdvancedSettings 
-          onServerHeaderChange={(servers) => setServerHeaders(prev => ({ ...prev, litellm: servers }))}
-        />
       </Space>
     </Space>
   );
@@ -425,9 +367,6 @@ const MCPConnect: React.FC = () => {
             className="text-xs"
           />
         </FeatureCard>
-        <AdvancedSettings 
-          onServerHeaderChange={(servers) => setServerHeaders(prev => ({ ...prev, openai: servers }))}
-        />
       </Space>
     </Space>
   );
@@ -489,9 +428,6 @@ const MCPConnect: React.FC = () => {
           </StepCard>
         </Space>
       </Card>
-      <AdvancedSettings 
-        onServerHeaderChange={(servers) => setServerHeaders(prev => ({ ...prev, cursor: servers }))}
-      />
     </Space>
   );
 
@@ -540,9 +476,6 @@ const MCPConnect: React.FC = () => {
           </div>
         </Space>
       </FeatureCard>
-      <AdvancedSettings 
-        onServerHeaderChange={(servers) => setServerHeaders(prev => ({ ...prev, http: servers }))}
-      />
     </Space>
   );
 
