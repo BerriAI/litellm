@@ -117,7 +117,7 @@ class ArizeLogger(OpenTelemetry):
         """
         dynamic_headers = {}
         if standard_callback_dynamic_params.get("arize_space_key"):
-            dynamic_headers["space_key"] = standard_callback_dynamic_params.get(
+            dynamic_headers["arize-space-id"] = standard_callback_dynamic_params.get(
                 "arize_space_key"
             )
         if standard_callback_dynamic_params.get("arize_api_key"):
