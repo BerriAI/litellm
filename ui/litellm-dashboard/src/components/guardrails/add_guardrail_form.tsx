@@ -7,6 +7,7 @@ import { createGuardrailCall, getGuardrailUISettings, getGuardrailProviderSpecif
 import PiiConfiguration from './pii_configuration';
 import GuardrailProviderFields from './guardrail_provider_fields';
 import AzureTextModerationConfiguration from './azure_text_moderation_configuration';
+import GuardrailOptionalParams from './guardrail_optional_params';
 
 const { Title, Text, Link } = Typography;
 const { Option } = Select;
@@ -52,10 +53,13 @@ interface ProviderParam {
   default_value?: string;
   options?: string[];
   type?: string;
+  fields?: { [key: string]: ProviderParam };
+  dict_key_options?: string[];
+  dict_value_type?: string;
 }
 
 interface ProviderParamsResponse {
-  [provider: string]: ProviderParam[];
+  [provider: string]: { [key: string]: ProviderParam };
 }
 
 const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ 
@@ -296,10 +300,10 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
       // Use pre-fetched provider params to copy recognised params
       if (providerParams && selectedProvider) {
         const providerKey = guardrail_provider_map[selectedProvider]?.toLowerCase();
-        const providerSpecificParams = providerParams[providerKey] || [];
+        const providerSpecificParams = providerParams[providerKey] || {};
 
         const allowedParams = new Set<string>(
-          providerSpecificParams.map((p) => p.param)
+          Object.values(providerSpecificParams).map((p) => p.param)
         );
 
         allowedParams.forEach((paramName) => {
@@ -492,17 +496,20 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
       />
     );
   };
-  const renderAzureTextModerationConfiguration = () => {
-    if (!guardrailSettings || !shouldRenderAzureTextModerationConfigSettings(selectedProvider)) return null;
+
+
+  const renderOptionalParams = () => {
+    if (!selectedProvider || !providerParams) return null;
+    
+    const providerKey = guardrail_provider_map[selectedProvider]?.toLowerCase();
+    const providerFields = providerParams && providerParams[providerKey];
+    
+    if (!providerFields || !providerFields.optional_params) return null;
     
     return (
-      <AzureTextModerationConfiguration
-        selectedCategories={selectedCategories}
-        globalSeverityThreshold={globalSeverityThreshold}
-        categorySpecificThresholds={categorySpecificThresholds}
-        onCategorySelect={handleCategorySelect}
-        onGlobalSeverityChange={handleGlobalSeverityChange}
-        onCategorySeverityChange={handleCategorySeverityChange}
+      <GuardrailOptionalParams
+        optionalParams={providerFields.optional_params}
+        parentFieldKey="optional_params"
       />
     );
   };
@@ -514,9 +521,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
       case 1:
         if (shouldRenderPIIConfigSettings(selectedProvider)) {
           return renderPiiConfiguration();
-        } else if (shouldRenderAzureTextModerationConfigSettings(selectedProvider)) {
-          return renderAzureTextModerationConfiguration();
-        }
+        } 
+        return renderOptionalParams();
       default:
         return null;
     }
@@ -533,14 +539,14 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
             Previous
           </Button>
         )}
-        {currentStep < 1 && (
+        {currentStep < 2 && (
           <Button 
             onClick={nextStep}
           >
             Next
           </Button>
         )}
-        {currentStep === 1 && (
+        {currentStep === 2 && (
           <Button 
             onClick={handleSubmit}
             loading={loading}
@@ -578,7 +584,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
           <Step title="Basic Info" />
           <Step title={
             shouldRenderPIIConfigSettings(selectedProvider) ? "PII Configuration" :
-            shouldRenderAzureTextModerationConfigSettings(selectedProvider) ? "Text Moderation Configuration" :
             "Provider Configuration"
           } />
         </Steps>
