@@ -17,10 +17,16 @@ from litellm.proxy.client.cli.main import cli
 
 @pytest.fixture
 def mock_credentials_client():
+    """Patch the CredentialsManagementClient used by the CLI commands."""
     with patch(
-        "litellm.proxy.client.cli.commands.credentials.CredentialsManagementClient"
-    ) as mock:
-        yield mock
+        "litellm.proxy.client.credentials.CredentialsManagementClient"
+    ) as root_patch:
+        # Ensure the reference used inside the CLI module also points to the mock
+        with patch(
+            "litellm.proxy.client.cli.commands.credentials.CredentialsManagementClient",
+            root_patch,
+        ) as cli_patch:
+            yield cli_patch
 
 
 @pytest.fixture
