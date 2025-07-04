@@ -313,6 +313,35 @@ class OpenTelemetry(CustomLogger):
 
             # End Parent OTEL Sspan
             parent_otel_span.end(end_time=self._to_ns(datetime.now()))
+    
+    def _get_dynamic_headers_from_kwargs(self, kwargs) -> Optional[dict]:
+        """Extract dynamic headers from kwargs if available."""
+        from litellm.integrations.arize.arize import ArizeLogger
+
+        standard_callback_dynamic_params: Optional[
+            StandardCallbackDynamicParams
+        ] = kwargs.get("standard_callback_dynamic_params")
+        
+        if not standard_callback_dynamic_params:
+            return None
+
+        # Handle Arize headers
+        dynamic_headers = ArizeLogger.construct_dynamic_arize_headers(
+            standard_callback_dynamic_params=standard_callback_dynamic_params
+        )
+        
+        return dynamic_headers if dynamic_headers else None
+
+    def _get_tracer_with_dynamic_headers(self, dynamic_headers: dict):
+        """Create a temporary tracer with dynamic headers for this request only."""
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+
+        # Create a temporary tracer provider with dynamic headers
+        temp_provider = TracerProvider(resource=Resource(attributes=LITELLM_RESOURCE))
+        temp_provider.add_span_processor(self._get_span_processor(dynamic_headers=dynamic_headers))
+        
+        return temp_provider.get_tracer(LITELLM_TRACER_NAME)
 
     def _handle_sucess(self, kwargs, response_obj, start_time, end_time):
         from opentelemetry import trace
@@ -323,12 +352,21 @@ class OpenTelemetry(CustomLogger):
             kwargs,
             self.config,
         )
+        
         _parent_context, parent_otel_span = self._get_span_context(kwargs)
 
-        self._add_dynamic_span_processor_if_needed(kwargs)
+        # Check if we need to use dynamic headers for this request
+        dynamic_headers = self._get_dynamic_headers_from_kwargs(kwargs)
+        
+        if dynamic_headers:
+            # Create spans using a temporary tracer with dynamic headers
+            tracer_to_use = self._get_tracer_with_dynamic_headers(dynamic_headers)
+            verbose_logger.debug("Using dynamic headers for this request: %s", dynamic_headers)
+        else:
+            tracer_to_use = self.tracer
 
-        # Span 1: Requst sent to litellm SDK
-        span = self.tracer.start_span(
+        # Span 1: Request sent to litellm SDK
+        span = tracer_to_use.start_span(
             name=self._get_span_name(kwargs),
             start_time=self._to_ns(start_time),
             context=_parent_context,
@@ -342,7 +380,7 @@ class OpenTelemetry(CustomLogger):
             pass
         else:
             # Span 2: Raw Request / Response to LLM
-            raw_request_span = self.tracer.start_span(
+            raw_request_span = tracer_to_use.start_span(
                 name=RAW_REQUEST_SPAN_NAME,
                 start_time=self._to_ns(start_time),
                 context=trace.set_span_in_context(span),
@@ -420,39 +458,6 @@ class OpenTelemetry(CustomLogger):
 
         guardrail_span.end(end_time=self._to_ns(end_time_datetime))
 
-    def _add_dynamic_span_processor_if_needed(self, kwargs):
-        """
-        Helper method to add a span processor with dynamic headers if needed.
-
-        This allows for per-request configuration of telemetry exporters by
-        extracting headers from standard_callback_dynamic_params.
-        """
-        from opentelemetry import trace
-
-        from litellm.integrations.arize.arize import ArizeLogger
-
-        standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = kwargs.get("standard_callback_dynamic_params")
-        if not standard_callback_dynamic_params:
-            return
-
-        # Extract headers from dynamic params
-        dynamic_headers = {}
-
-        # Handle Arize headers
-        dynamic_headers = ArizeLogger.construct_dynamic_arize_headers(standard_callback_dynamic_params=standard_callback_dynamic_params)
-
-        # Only create a span processor if we have headers to use
-        if len(dynamic_headers) > 0:
-            from opentelemetry.sdk.trace import TracerProvider
-
-            provider = trace.get_tracer_provider()
-            if isinstance(provider, TracerProvider):
-                span_processor = self._get_span_processor(
-                    dynamic_headers=dynamic_headers
-                )
-                provider.add_span_processor(span_processor)
 
     def _handle_failure(self, kwargs, response_obj, start_time, end_time):
         from opentelemetry.trace import Status, StatusCode
