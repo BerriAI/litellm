@@ -395,6 +395,8 @@ class LitellmParams(
         default=None, description="Recipe for output (LLM response)"
     )
 
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
+
 
 class Guardrail(TypedDict, total=False):
     guardrail_id: Optional[str]

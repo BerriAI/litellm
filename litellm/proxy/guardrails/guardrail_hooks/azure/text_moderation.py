@@ -92,7 +92,9 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
             "outputType": kwargs.get("outputType") or "FourSeverityLevels",
         }
 
-        self.severity_threshold = severity_threshold
+        self.severity_threshold = (
+            int(severity_threshold) if severity_threshold else None
+        )
         self.severity_threshold_by_category = severity_threshold_by_category
 
         verbose_proxy_logger.info(
