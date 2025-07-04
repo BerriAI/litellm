@@ -59,9 +59,9 @@ async def test_global_redaction_with_dynamic_params(turn_off_message_logging):
     litellm.turn_off_message_logging = True
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
-    response = await litellm.aresponses(
+    response = await litellm.acompletion(
         model="gpt-3.5-turbo",
-        input="hi",
+        messages=[{"role": "user", "content": "hi"}],
         turn_off_message_logging=turn_off_message_logging,
         mock_response="hello",
     )
@@ -93,9 +93,9 @@ async def test_global_redaction_off_with_dynamic_params(turn_off_message_logging
     litellm.turn_off_message_logging = False
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
-    response = await litellm.aresponses(
+    response = await litellm.acompletion(
         model="gpt-3.5-turbo",
-        input="hi",
+        messages=[{"role": "user", "content": "hi"}],
         turn_off_message_logging=turn_off_message_logging,
         mock_response="hello",
     )
@@ -149,5 +149,54 @@ async def test_redaction_responses_api():
     assert standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
     print(
         "logged standard logging payload for ResponsesAPIResponse",
+        json.dumps(standard_logging_payload, indent=2),
+    )
+
+
+@pytest.mark.asyncio
+async def test_redaction_responses_api_stream():
+    """Test redaction with ResponsesAPIResponse format"""
+    litellm.turn_off_message_logging = True
+    test_custom_logger = TestCustomLogger()
+    litellm.callbacks = [test_custom_logger]
+    
+    # Mock a ResponsesAPIResponse-style response with streaming chunks
+    mock_response = [
+        {
+            "output": [{"text": "This"}],
+            "model": "gpt-3.5-turbo",
+        },
+        {
+            "output": [{"text": " is"}],
+            "model": "gpt-3.5-turbo",
+        },
+        {
+            "output": [{"text": " a test response"}],
+            "model": "gpt-3.5-turbo",
+            "usage": {"input_tokens": 5, "output_tokens": 5, "total_tokens": 10}
+        }
+    ]
+    
+    response = await litellm.aresponses(
+        model="gpt-3.5-turbo",
+        input="hi",
+        mock_response=mock_response,
+        stream=True,
+    )
+
+    # Consume the stream
+    chunks = []
+    async for chunk in response:
+        chunks.append(chunk)
+    
+    await asyncio.sleep(1)
+    standard_logging_payload = test_custom_logger.logged_standard_logging_payload
+    assert standard_logging_payload is not None
+    
+    # Verify redaction in ResponsesAPIResponse format
+    assert standard_logging_payload["response"] == {"text": "redacted-by-litellm"}
+    assert standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
+    print(
+        "logged standard logging payload for ResponsesAPIResponse stream",
         json.dumps(standard_logging_payload, indent=2),
     )
