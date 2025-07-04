@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 import requests
@@ -16,17 +16,18 @@ from litellm.proxy.client.cli.main import cli
 
 
 @pytest.fixture
-def mock_credentials_client():
+def mock_credentials_client(monkeypatch):
     """Patch the CredentialsManagementClient used by the CLI commands."""
-    with patch(
-        "litellm.proxy.client.credentials.CredentialsManagementClient"
-    ) as root_patch:
-        # Ensure the reference used inside the CLI module also points to the mock
-        with patch(
-            "litellm.proxy.client.cli.commands.credentials.CredentialsManagementClient",
-            root_patch,
-        ) as cli_patch:
-            yield cli_patch
+    mock_client = MagicMock()
+    monkeypatch.setattr(
+        "litellm.proxy.client.credentials.CredentialsManagementClient",
+        mock_client,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.client.cli.commands.credentials.CredentialsManagementClient",
+        mock_client,
+    )
+    return mock_client
 
 
 @pytest.fixture
