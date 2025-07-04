@@ -4,7 +4,6 @@ import sys
 
 import pytest
 from fastapi import HTTPException
-from fastapi.testclient import TestClient
 
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import ProxyErrorTypes
