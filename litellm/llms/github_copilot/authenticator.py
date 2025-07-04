@@ -9,7 +9,7 @@ import httpx
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
-from .constants import (
+from .common_utils import (
     APIKeyExpiredError,
     GetAccessTokenError,
     GetAPIKeyError,
@@ -75,7 +75,10 @@ class Authenticator:
                 verbose_logger.warning(f"Failed attempt {attempt + 1}: {str(e)}")
                 continue
 
-        raise GetAccessTokenError("Failed to get access token after 3 attempts")
+        raise GetAccessTokenError(
+            message="Failed to get access token after 3 attempts",
+            status_code=401,
+        )
 
     def get_api_key(self) -> str:
         """
@@ -94,7 +97,10 @@ class Authenticator:
                     return api_key_info.get("token")
                 else:
                     verbose_logger.warning("API key expired, refreshing")
-                    raise APIKeyExpiredError("API key expired")
+                    raise APIKeyExpiredError(
+                        message="API key expired",
+                        status_code=401,
+                    )
         except IOError:
             verbose_logger.warning("No API key file found or error opening file")
         except (json.JSONDecodeError, KeyError) as e:
@@ -110,12 +116,21 @@ class Authenticator:
             if token:
                 return token
             else:
-                raise GetAPIKeyError("API key response missing token")
+                raise GetAPIKeyError(
+                    message="API key response missing token",
+                    status_code=401,
+                )
         except IOError as e:
             verbose_logger.error(f"Error saving API key to file: {str(e)}")
-            raise GetAPIKeyError(f"Failed to save API key: {str(e)}")
+            raise GetAPIKeyError(
+                message=f"Failed to save API key: {str(e)}",
+                status_code=500,
+            )
         except RefreshAPIKeyError as e:
-            raise GetAPIKeyError(f"Failed to refresh API key: {str(e)}")
+            raise GetAPIKeyError(
+                message=f"Failed to refresh API key: {str(e)}",
+                status_code=401,
+            )
 
     def _refresh_api_key(self) -> Dict[str, Any]:
         """
@@ -152,7 +167,10 @@ class Authenticator:
             except Exception as e:
                 verbose_logger.error(f"Unexpected error refreshing API key: {str(e)}")
 
-        raise RefreshAPIKeyError("Failed to refresh API key after maximum retries")
+        raise RefreshAPIKeyError(
+            message="Failed to refresh API key after maximum retries",
+            status_code=401,
+        )
 
     def _ensure_token_dir(self) -> None:
         """Ensure the token directory exists."""
@@ -208,18 +226,30 @@ class Authenticator:
             required_fields = ["device_code", "user_code", "verification_uri"]
             if not all(field in resp_json for field in required_fields):
                 verbose_logger.error(f"Response missing required fields: {resp_json}")
-                raise GetDeviceCodeError("Response missing required fields")
+                raise GetDeviceCodeError(
+                    message="Response missing required fields",
+                    status_code=400,
+                )
 
             return resp_json
         except httpx.HTTPStatusError as e:
             verbose_logger.error(f"HTTP error getting device code: {str(e)}")
-            raise GetDeviceCodeError(f"Failed to get device code: {str(e)}")
+            raise GetDeviceCodeError(
+                message=f"Failed to get device code: {str(e)}",
+                status_code=400,
+            )
         except json.JSONDecodeError as e:
             verbose_logger.error(f"Error decoding JSON response: {str(e)}")
-            raise GetDeviceCodeError(f"Failed to decode device code response: {str(e)}")
+            raise GetDeviceCodeError(
+                message=f"Failed to decode device code response: {str(e)}",
+                status_code=400,
+            )
         except Exception as e:
             verbose_logger.error(f"Unexpected error getting device code: {str(e)}")
-            raise GetDeviceCodeError(f"Failed to get device code: {str(e)}")
+            raise GetDeviceCodeError(
+                message=f"Failed to get device code: {str(e)}",
+                status_code=400,
+            )
 
     def _poll_for_access_token(self, device_code: str) -> str:
         """
@@ -265,21 +295,31 @@ class Authenticator:
                     verbose_logger.warning(f"Unexpected response: {resp_json}")
             except httpx.HTTPStatusError as e:
                 verbose_logger.error(f"HTTP error polling for access token: {str(e)}")
-                raise GetAccessTokenError(f"Failed to get access token: {str(e)}")
+                raise GetAccessTokenError(
+                    message=f"Failed to get access token: {str(e)}",
+                    status_code=400,
+                )
             except json.JSONDecodeError as e:
                 verbose_logger.error(f"Error decoding JSON response: {str(e)}")
                 raise GetAccessTokenError(
-                    f"Failed to decode access token response: {str(e)}"
+                    message=f"Failed to decode access token response: {str(e)}",
+                    status_code=400,
                 )
             except Exception as e:
                 verbose_logger.error(
                     f"Unexpected error polling for access token: {str(e)}"
                 )
-                raise GetAccessTokenError(f"Failed to get access token: {str(e)}")
+                raise GetAccessTokenError(
+                    message=f"Failed to get access token: {str(e)}",
+                    status_code=400,
+                )
 
             time.sleep(5)
 
-        raise GetAccessTokenError("Timed out waiting for user to authorize the device")
+        raise GetAccessTokenError(
+            message="Timed out waiting for user to authorize the device",
+            status_code=400,
+        )
 
     def _login(self) -> str:
         """

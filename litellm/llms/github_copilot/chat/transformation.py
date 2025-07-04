@@ -1,14 +1,14 @@
 from typing import Optional, Tuple
 
-
+from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.openai import OpenAIConfig
 
 from ..authenticator import Authenticator
-from ..constants import GetAPIKeyError
-from litellm.exceptions import AuthenticationError
+from ..common_utils import GetAPIKeyError
 
 
 class GithubCopilotConfig(OpenAIConfig):
+    GITHUB_COPILOT_API_BASE = "https://api.github.com/copilot/v1"
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -25,7 +25,7 @@ class GithubCopilotConfig(OpenAIConfig):
         api_key: Optional[str],
         custom_llm_provider: str,
     ) -> Tuple[Optional[str], Optional[str], str]:
-        api_base = "https://api.githubcopilot.com"
+        api_base = self.GITHUB_COPILOT_API_BASE
         try:
             dynamic_api_key = self.authenticator.get_api_key()
         except GetAPIKeyError as e:
