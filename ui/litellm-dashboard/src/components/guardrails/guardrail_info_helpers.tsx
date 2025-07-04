@@ -1,13 +1,17 @@
 export enum GuardrailProviders {
     PresidioPII = "Presidio PII",
     Bedrock = "Bedrock Guardrail",
-    Lakera = "Lakera"
+    Lakera = "Lakera",
+    AzureContentSafetyPromptShield = "Azure Content Safety Prompt Shield",
+    AzureContentSafetyTextModeration = "Azure Content Safety Text Moderation"
 }
 
 export const guardrail_provider_map: Record<string, string> = {
     PresidioPII: "presidio",
     Bedrock: "bedrock",
-    Lakera: "lakera_v2"
+    Lakera: "lakera_v2",
+    AzureContentSafetyPromptShield: "azure/prompt_shield",
+    AzureContentSafetyTextModeration: "azure/text_moderations"
 };
 
 
@@ -27,7 +31,9 @@ const asset_logos_folder = '../ui/assets/logos/';
 export const guardrailLogoMap: Record<string, string> = {
     [GuardrailProviders.PresidioPII]: `${asset_logos_folder}presidio.png`,
     [GuardrailProviders.Bedrock]: `${asset_logos_folder}bedrock.svg`,
-    [GuardrailProviders.Lakera]: `${asset_logos_folder}lakeraai.jpeg`
+    [GuardrailProviders.Lakera]: `${asset_logos_folder}lakeraai.jpeg`,
+    [GuardrailProviders.AzureContentSafetyPromptShield]: `${asset_logos_folder}presidio.png`,
+    [GuardrailProviders.AzureContentSafetyTextModeration]: `${asset_logos_folder}presidio.png`,
 };
 
 export const getGuardrailLogoAndName = (guardrailValue: string): { logo: string, displayName: string } => {
