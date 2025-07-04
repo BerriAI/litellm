@@ -3,6 +3,7 @@ import { Form, Select, Spin } from "antd";
 import { TextInput } from "@tremor/react";
 import { GuardrailProviders, guardrail_provider_map } from './guardrail_info_helpers';
 import { getGuardrailProviderSpecificParams } from "../networking";
+import NumericalInput from "../shared/numerical_input";
 
 interface GuardrailProviderFieldsProps {
   selectedProvider: string | null;
@@ -138,9 +139,10 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
               <Select.Option value="false">False</Select.Option>
             </Select>
           ) : field.type === "number" ? (
-            <TextInput
+            <NumericalInput
+              step={1}
+              width={400}
               placeholder={field.description}
-              type="text"
             />
           ) : fieldKey.includes("password") || fieldKey.includes("secret") || fieldKey.includes("key") ? (
             <TextInput
