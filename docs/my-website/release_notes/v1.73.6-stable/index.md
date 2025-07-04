@@ -1,5 +1,5 @@
 ---
-title: "[PRE-RELEASE] v1.73.6-stable"
+title: "v1.73.6-stable"
 slug: "v1-73-6-stable"
 date: 2025-06-28T10:00:00
 authors:
@@ -21,8 +21,6 @@ import TabItem from '@theme/TabItem';
 
 
 ## Deploy this version
-
-This release is not out yet. The pre-release will be live on Sunday and the stable release will be live on Wednesday.
 
 <Tabs>
 <TabItem value="docker" label="Docker">
