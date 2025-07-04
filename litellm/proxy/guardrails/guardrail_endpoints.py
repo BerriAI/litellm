@@ -973,6 +973,7 @@ async def get_provider_specific_params():
 
     for guardrail_name, guardrail_class in guardrail_class_registry.items():
         guardrail_config_model = guardrail_class.get_config_model()
+
         if guardrail_config_model:
             fields = _get_fields_from_model(guardrail_config_model)
             provider_params[guardrail_name] = fields
