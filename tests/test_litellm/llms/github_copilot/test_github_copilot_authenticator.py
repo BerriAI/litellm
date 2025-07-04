@@ -1,17 +1,18 @@
-import os
 import json
+import os
 import time
 from datetime import datetime, timedelta
+from unittest.mock import MagicMock, mock_open, patch
+
 import pytest
-from unittest.mock import patch, mock_open, MagicMock
 
 from litellm.llms.github_copilot.authenticator import Authenticator
-from litellm.llms.github_copilot.constants import (
+from litellm.llms.github_copilot.common_utils import (
+    APIKeyExpiredError,
     GetAccessTokenError,
+    GetAPIKeyError,
     GetDeviceCodeError,
     RefreshAPIKeyError,
-    GetAPIKeyError,
-    APIKeyExpiredError,
 )
 
 
@@ -79,7 +80,7 @@ class TestGitHubCopilotAuthenticator:
 
     def test_get_access_token_failure(self, authenticator):
         """Test that an exception is raised after multiple login failures."""
-        with patch.object(authenticator, "_login", side_effect=GetDeviceCodeError("Test error")), \
+        with patch.object(authenticator, "_login", side_effect=GetDeviceCodeError(message="Test error", status_code=400)), \
              patch("builtins.open", side_effect=IOError):
             with pytest.raises(GetAccessTokenError):
                 authenticator.get_access_token()
