@@ -169,13 +169,11 @@ if MCP_AVAILABLE:
         List all available tools
         """
         # Get user authentication from context variable
-        user_api_key_auth, mcp_auth_header = get_auth_context()
+        user_api_key_auth, mcp_auth_header, mcp_servers = get_auth_context()
         verbose_logger.debug(
             f"MCP list_tools - User API Key Auth from context: {user_api_key_auth}"
         )
         # Get mcp_servers from context variable
-        auth_user = auth_context_var.get()
-        mcp_servers = getattr(auth_user, "mcp_servers", None)
         return await _list_mcp_tools(
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
@@ -200,7 +198,7 @@ if MCP_AVAILABLE:
             HTTPException: If tool not found or arguments missing
         """
         # Validate arguments
-        user_api_key_auth, mcp_auth_header = get_auth_context()
+        user_api_key_auth, mcp_auth_header, _ = get_auth_context()
         verbose_logger.debug(
             f"MCP mcp_server_tool_call - User API Key Auth from context: {user_api_key_auth}"
         )
@@ -219,6 +217,41 @@ if MCP_AVAILABLE:
     ########################################################
     ############ Helper Functions ##########################
     ########################################################
+
+    async def _get_tools_from_mcp_servers(
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        mcp_auth_header: Optional[str],
+        mcp_servers: Optional[List[str]]
+    ) -> List[MCPTool]:
+        """
+        Helper method to fetch tools from MCP servers based on server filtering criteria.
+
+        Args:
+            user_api_key_auth: User authentication info for access control
+            mcp_auth_header: Optional auth header for MCP server
+            mcp_servers: Optional list of server names to filter by
+
+        Returns:
+            List[MCPTool]: List of tools from the specified or all allowed MCP servers
+        """
+        if mcp_servers:
+            # If mcp_servers header is present, only get tools from specified servers
+            tools = []
+            for server_id in await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth):
+                server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+                if server and any(normalize_server_name(server.name) == normalize_server_name(s) for s in mcp_servers):
+                    server_tools = await global_mcp_server_manager._get_tools_from_server(
+                        server=server,
+                        mcp_auth_header=mcp_auth_header,
+                    )
+                    tools.extend(server_tools)
+            return tools
+        else:
+            # If no mcp_servers header, get tools from all allowed servers
+            return await global_mcp_server_manager.list_tools(
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+            )
 
     async def _list_mcp_tools(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
@@ -247,23 +280,11 @@ if MCP_AVAILABLE:
         )
 
         # Get tools from MCP servers
-        tools_from_mcp_servers: List[MCPTool] = []
-        if mcp_servers:
-            # If mcp_servers header is present, only get tools from specified servers
-            for server_id in await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth):
-                server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-                if server and any(normalize_server_name(server.name) == normalize_server_name(s) for s in mcp_servers):
-                    server_tools = await global_mcp_server_manager._get_tools_from_server(
-                        server=server,
-                        mcp_auth_header=mcp_auth_header,
-                    )
-                    tools_from_mcp_servers.extend(server_tools)
-        else:
-            # If no mcp_servers header, get tools from all allowed servers
-            tools_from_mcp_servers = await global_mcp_server_manager.list_tools(
-                user_api_key_auth=user_api_key_auth,
-                mcp_auth_header=mcp_auth_header,
-            )
+        tools_from_mcp_servers = await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
+            mcp_servers=mcp_servers
+        )
 
         verbose_logger.debug("TOOLS FROM MCP SERVERS: %s", tools_from_mcp_servers)
         if tools_from_mcp_servers is not None:
@@ -475,7 +496,7 @@ if MCP_AVAILABLE:
         )
         auth_context_var.set(auth_user)
 
-    def get_auth_context() -> Tuple[Optional[UserAPIKeyAuth], Optional[str]]:
+    def get_auth_context() -> Tuple[Optional[UserAPIKeyAuth], Optional[str], Optional[List[str]]]:
         """
         Get the UserAPIKeyAuth from the auth context variable.
 
@@ -484,8 +505,8 @@ if MCP_AVAILABLE:
         """
         auth_user = auth_context_var.get()
         if auth_user and isinstance(auth_user, MCPAuthenticatedUser):
-            return auth_user.user_api_key_auth, auth_user.mcp_auth_header
-        return None, None
+            return auth_user.user_api_key_auth, auth_user.mcp_auth_header, auth_user.mcp_servers
+        return None, None, None
 
     ########################################################
     ############ End of Auth Context Functions #############
