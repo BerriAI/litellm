@@ -46,6 +46,10 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     def __init__(self, message_logging: bool = True, **kwargs) -> None:
         self.message_logging = message_logging
         pass
+    
+    @property
+    def callback_name(self) -> str:
+        return "custom_logger"
 
     def log_pre_api_call(self, model, messages, kwargs):
         pass
