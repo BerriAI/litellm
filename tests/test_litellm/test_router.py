@@ -82,7 +82,7 @@ def test_router_with_model_info_and_model_group():
 
 
 @pytest.mark.asyncio
-async def test_router_with_tags_and_fallbacks():
+async def test_arouter_with_tags_and_fallbacks():
     """
     If fallback model missing tag, raise error
     """
@@ -239,7 +239,7 @@ async def test_async_router_acreate_file_with_jsonl():
 
 
 @pytest.mark.asyncio
-async def test_router_async_get_healthy_deployments():
+async def test_arouter_async_get_healthy_deployments():
     """
     Test that afile_content returns the correct file content
     """
@@ -268,7 +268,7 @@ async def test_router_async_get_healthy_deployments():
 
 @pytest.mark.asyncio
 @patch("litellm.amoderation")
-async def test_router_amoderation_with_credential_name(mock_amoderation):
+async def test_arouter_amoderation_with_credential_name(mock_amoderation):
     """
     Test that router.amoderation passes litellm_credential_name to the underlying litellm.amoderation call
     """
@@ -298,7 +298,7 @@ async def test_router_amoderation_with_credential_name(mock_amoderation):
     assert call_kwargs["model"] == "text-moderation-stable"
 
 
-def test_router_test_team_model():
+def test_arouter_test_team_model():
     """
     Test that router.test_team_model returns the correct model
     """
@@ -319,7 +319,7 @@ def test_router_test_team_model():
     assert result is not None
 
 
-def test_router_ignore_invalid_deployments():
+def test_arouter_ignore_invalid_deployments():
     """
     Test that router.ignore_invalid_deployments is set to True
     """
@@ -351,7 +351,7 @@ def test_router_ignore_invalid_deployments():
 
 
 @pytest.mark.asyncio
-async def test_router_aretrieve_batch():
+async def test_arouter_aretrieve_batch():
     """
     Test that router.aretrieve_batch returns the correct response
     """
@@ -387,7 +387,7 @@ async def test_router_aretrieve_batch():
 
 
 @pytest.mark.asyncio
-async def test_router_aretrieve_file_content():
+async def test_arouter_aretrieve_file_content():
     """
     Test that router.acreate_file with JSONL file returns the correct response
     """
@@ -426,7 +426,7 @@ async def test_router_aretrieve_file_content():
 
 
 @pytest.mark.asyncio
-async def test_router_filter_team_based_models():
+async def test_arouter_filter_team_based_models():
     """
     Test that router.filter_team_based_models filters out models that are not in the team
     """
@@ -483,7 +483,7 @@ async def test_router_filter_team_based_models():
     assert result is not None
 
 
-def test_router_should_include_deployment():
+def test_arouter_should_include_deployment():
     """
     Test the should_include_deployment method with various scenarios
 
@@ -604,7 +604,7 @@ def test_router_should_include_deployment():
     ), "Should return True when matching model with exact model_name"
 
 
-def test_router_responses_api_bridge():
+def test_arouter_responses_api_bridge():
     """
     Test that router.responses_api_bridge returns the correct response
     """
