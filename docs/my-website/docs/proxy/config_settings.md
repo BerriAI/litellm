@@ -647,6 +647,7 @@ router_settings:
 | SSL_CERTIFICATE | Path to the SSL certificate file
 | SSL_SECURITY_LEVEL | [BETA] Security level for SSL/TLS connections. E.g. `DEFAULT@SECLEVEL=1`
 | SSL_VERIFY | Flag to enable or disable SSL certificate verification
+| SSL_CERT_FILE | Path to the SSL certificate file for custom CA bundle
 | SUPABASE_KEY | API key for Supabase service
 | SUPABASE_URL | Base URL for Supabase instance
 | STORE_MODEL_IN_DB | If true, enables storing model + credential information in the DB. 
