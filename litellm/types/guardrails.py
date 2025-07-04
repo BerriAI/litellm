@@ -352,8 +352,8 @@ class AzureContentSafetyConfigModel(BaseModel):
         description="Base URL for the Azure Content Safety Prompt Shield guardrail",
     )
     api_version: Optional[str] = Field(
-        default=None,
-        description="API version for the Azure Content Safety Prompt Shield guardrail",
+        default="2024-09-01",
+        description="API version for the Azure Content Safety Prompt Shield guardrail.",
     )
 
 

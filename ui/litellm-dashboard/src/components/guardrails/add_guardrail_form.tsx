@@ -2,10 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { Card, Form, Typography, Select, Input, Switch, Tooltip, Modal, message, Divider, Space, Tag, Image, Steps } from 'antd';
 import { Button, TextInput } from '@tremor/react';
 import type { FormInstance } from 'antd';
-import { GuardrailProviders, guardrail_provider_map, shouldRenderPIIConfigSettings, guardrailLogoMap } from './guardrail_info_helpers';
+import { GuardrailProviders, guardrail_provider_map, shouldRenderPIIConfigSettings, shouldRenderAzureTextModerationConfigSettings, guardrailLogoMap } from './guardrail_info_helpers';
 import { createGuardrailCall, getGuardrailUISettings, getGuardrailProviderSpecificParams } from '../networking';
 import PiiConfiguration from './pii_configuration';
 import GuardrailProviderFields from './guardrail_provider_fields';
+import AzureTextModerationConfiguration from './azure_text_moderation_configuration';
 
 const { Title, Text, Link } = Typography;
 const { Option } = Select;
@@ -71,6 +72,11 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
   const [selectedActions, setSelectedActions] = useState<{[key: string]: string}>({});
   const [currentStep, setCurrentStep] = useState(0);
   const [providerParams, setProviderParams] = useState<ProviderParamsResponse | null>(null);
+  
+  // Azure Text Moderation state
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [globalSeverityThreshold, setGlobalSeverityThreshold] = useState<number>(2);
+  const [categorySpecificThresholds, setCategorySpecificThresholds] = useState<{[key: string]: number}>({});
 
   // Fetch guardrail UI settings + provider params on mount / accessToken change
   useEffect(() => {
@@ -107,6 +113,11 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
     // Reset PII selections when changing provider
     setSelectedEntities([]);
     setSelectedActions({});
+    
+    // Reset Azure Text Moderation selections when changing provider
+    setSelectedCategories([]);
+    setGlobalSeverityThreshold(2);
+    setCategorySpecificThresholds({});
   };
 
   const handleEntitySelect = (entity: string) => {
@@ -126,6 +137,26 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
     }));
   };
 
+  // Azure Text Moderation handlers
+  const handleCategorySelect = (category: string) => {
+    setSelectedCategories(prev => 
+      prev.includes(category) 
+        ? prev.filter(c => c !== category)
+        : [...prev, category]
+    );
+  };
+
+  const handleGlobalSeverityChange = (threshold: number) => {
+    setGlobalSeverityThreshold(threshold);
+  };
+
+  const handleCategorySeverityChange = (category: string, threshold: number) => {
+    setCategorySpecificThresholds(prev => ({
+      ...prev,
+      [category]: threshold
+    }));
+  };
+
   const nextStep = async () => {
     try {
       // Validate current step fields
@@ -142,6 +173,19 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
           await form.validateFields(fieldsToValidate);
         }
       }
+      
+      // Validate configuration steps
+      if (currentStep === 1) {
+        if (shouldRenderPIIConfigSettings(selectedProvider) && selectedEntities.length === 0) {
+          message.error('Please select at least one PII entity to continue');
+          return;
+        }
+        if (shouldRenderAzureTextModerationConfigSettings(selectedProvider) && selectedCategories.length === 0) {
+          message.error('Please select at least one content category to continue');
+          return;
+        }
+      }
+      
       setCurrentStep(currentStep + 1);
     } catch (error) {
       console.error("Form validation failed:", error);
@@ -157,6 +201,9 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
     setSelectedProvider(null);
     setSelectedEntities([]);
     setSelectedActions({});
+    setSelectedCategories([]);
+    setGlobalSeverityThreshold(2);
+    setCategorySpecificThresholds({});
     setCurrentStep(0);
   };
 
@@ -212,6 +259,16 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
         }
         if (values.presidio_anonymizer_api_base) {
           guardrailData.litellm_params.presidio_anonymizer_api_base = values.presidio_anonymizer_api_base;
+        }
+      }
+      // For Azure Text Moderation, add the category and threshold configurations
+      else if (shouldRenderAzureTextModerationConfigSettings(values.provider) && selectedCategories.length > 0) {
+        guardrailData.litellm_params.categories = selectedCategories;
+        guardrailData.litellm_params.severity_threshold = globalSeverityThreshold;
+        
+        // Only add category-specific thresholds if they exist
+        if (Object.keys(categorySpecificThresholds).length > 0) {
+          guardrailData.litellm_params.severity_threshold_by_category = categorySpecificThresholds;
         }
       }
       // Add config values to the guardrail_info if provided
@@ -435,6 +492,20 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
       />
     );
   };
+  const renderAzureTextModerationConfiguration = () => {
+    if (!guardrailSettings || !shouldRenderAzureTextModerationConfigSettings(selectedProvider)) return null;
+    
+    return (
+      <AzureTextModerationConfiguration
+        selectedCategories={selectedCategories}
+        globalSeverityThreshold={globalSeverityThreshold}
+        categorySpecificThresholds={categorySpecificThresholds}
+        onCategorySelect={handleCategorySelect}
+        onGlobalSeverityChange={handleGlobalSeverityChange}
+        onCategorySeverityChange={handleCategorySeverityChange}
+      />
+    );
+  };
 
   const renderStepContent = () => {
     switch (currentStep) {
@@ -443,6 +514,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
       case 1:
         if (shouldRenderPIIConfigSettings(selectedProvider)) {
           return renderPiiConfiguration();
+        } else if (shouldRenderAzureTextModerationConfigSettings(selectedProvider)) {
+          return renderAzureTextModerationConfiguration();
         }
       default:
         return null;
@@ -503,7 +576,11 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
       >
         <Steps current={currentStep} className="mb-6">
           <Step title="Basic Info" />
-          <Step title={selectedProvider === 'PresidioPII' ? "PII Configuration" : "Provider Configuration"} />
+          <Step title={
+            shouldRenderPIIConfigSettings(selectedProvider) ? "PII Configuration" :
+            shouldRenderAzureTextModerationConfigSettings(selectedProvider) ? "Text Moderation Configuration" :
+            "Provider Configuration"
+          } />
         </Steps>
         
         {renderStepContent()}
