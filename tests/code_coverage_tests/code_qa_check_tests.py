@@ -144,7 +144,11 @@ def main():
     """
     Main function to check for litellm module deletion patterns in test files.
     """
-    tests_dir = "../../tests/"
+    # local dir 
+    #tests_dir = "../../tests/"
+    
+    # ci/cd dir
+    tests_dir = "./tests/"
     
     problematic_files = check_for_litellm_module_deletion(tests_dir)
     
