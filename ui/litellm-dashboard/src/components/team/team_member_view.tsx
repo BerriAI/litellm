@@ -111,7 +111,7 @@ const TeamMembersComponent: React.FC<TeamMembersComponentProps> = ({
                   <Text className="font-mono">${formatNumberWithCommas(getUserSpend(member.user_id), 4)}</Text>
                 </TableCell>
                 <TableCell>
-                  <Text className="font-mono">{getUserBudget(member.user_id) ? `$${getUserBudget(member.user_id)}` : 'No Limit'}</Text>
+                  <Text className="font-mono">{getUserBudget(member.user_id) ? `$${formatNumberWithCommas(Number(getUserBudget(member.user_id)), 4)}` : 'No Limit'}</Text>
                 </TableCell>
                 <TableCell>
                   {canEditTeam && (

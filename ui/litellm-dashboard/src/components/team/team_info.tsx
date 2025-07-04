@@ -324,13 +324,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <Text>Budget Status</Text>
                 <div className="mt-2">
                   <Title>${formatNumberWithCommas(info.spend, 4)}</Title>
-                  <Text>of {info.max_budget === null ? "Unlimited" : `$${info.max_budget}`}</Text>
+                  <Text>of {info.max_budget === null ? "Unlimited" : `$${formatNumberWithCommas(info.max_budget, 4)}`}</Text>
                   {info.budget_duration && (
                     <Text className="text-gray-500">Reset: {info.budget_duration}</Text>
                   )}
                   <br/>
                   {info.team_member_budget_table && (
-                    <Text className="text-gray-500">Team Member Budget: ${info.team_member_budget_table.max_budget}</Text>
+                    <Text className="text-gray-500">Team Member Budget: ${formatNumberWithCommas(info.team_member_budget_table.max_budget, 4)}</Text>
                   )}
                 </div>
               </Card>
@@ -576,7 +576,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </div>
                   <div>
                     <Text className="font-medium">Team Budget</Text>
-                      <div>Max Budget: {info.max_budget !== null ? `$${info.max_budget}` : 'No Limit'}</div>
+                      <div>Max Budget: {info.max_budget !== null ? `$${formatNumberWithCommas(info.max_budget, 4)}` : 'No Limit'}</div>
                     <div>Budget Reset: {info.budget_duration || 'Never'}</div>
                   </div>
                   <div>
