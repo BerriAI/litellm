@@ -899,6 +899,9 @@ class ProxyLogging:
         #########################################################
         # Only log LLM API errors for proxy level hooks
         # eg. Authentication errors, rate limit errors, etc.
+        # Note: This fixes a security issue where we
+        #       would log temporary keys/auth info
+        #       from management endpoints
         #########################################################
         if route is None:
             return False
