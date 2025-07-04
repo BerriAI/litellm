@@ -1,19 +1,33 @@
 import json
-from unittest.mock import MagicMock, patch
+import os
+import sys
+from unittest.mock import MagicMock
 
 import pytest
 import requests
 from click.testing import CliRunner
 
+sys.path.insert(
+    0, os.path.abspath("../../../..")
+)  # Adds the parent directory to the system path
+
+
 from litellm.proxy.client.cli.main import cli
 
 
 @pytest.fixture
-def mock_credentials_client():
-    with patch(
-        "litellm.proxy.client.cli.commands.credentials.CredentialsManagementClient"
-    ) as mock:
-        yield mock
+def mock_credentials_client(monkeypatch):
+    """Patch the CredentialsManagementClient used by the CLI commands."""
+    mock_client = MagicMock()
+    monkeypatch.setattr(
+        "litellm.proxy.client.credentials.CredentialsManagementClient",
+        mock_client,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.client.cli.commands.credentials.CredentialsManagementClient",
+        mock_client,
+    )
+    return mock_client
 
 
 @pytest.fixture
@@ -21,7 +35,7 @@ def cli_runner():
     return CliRunner()
 
 
-def test_list_credentials_table_format(cli_runner, mock_credentials_client):
+def test_alist_credentials_table_format(cli_runner, mock_credentials_client):
     # Mock response data
     mock_response = {
         "credentials": [
@@ -49,7 +63,7 @@ def test_list_credentials_table_format(cli_runner, mock_credentials_client):
     assert "anthropic" in result.output
 
 
-def test_list_credentials_json_format(cli_runner, mock_credentials_client):
+def test_alist_credentials_json_format(cli_runner, mock_credentials_client):
     # Mock response data
     mock_response = {
         "credentials": [
@@ -71,7 +85,7 @@ def test_list_credentials_json_format(cli_runner, mock_credentials_client):
     assert output_data == mock_response
 
 
-def test_create_credential_success(cli_runner, mock_credentials_client):
+def test_acreate_credential_success(cli_runner, mock_credentials_client):
     # Mock response data
     mock_response = {"status": "success", "credential_name": "test-cred"}
     mock_instance = mock_credentials_client.return_value
@@ -102,7 +116,7 @@ def test_create_credential_success(cli_runner, mock_credentials_client):
     )
 
 
-def test_create_credential_invalid_json(cli_runner, mock_credentials_client):
+def test_acreate_credential_invalid_json(cli_runner, mock_credentials_client):
     # Run command with invalid JSON
     result = cli_runner.invoke(
         cli,
@@ -124,7 +138,7 @@ def test_create_credential_invalid_json(cli_runner, mock_credentials_client):
     mock_instance.create.assert_not_called()
 
 
-def test_create_credential_http_error(cli_runner, mock_credentials_client):
+def test_acreate_credential_http_error(cli_runner, mock_credentials_client):
     # Mock HTTP error
     mock_instance = mock_credentials_client.return_value
     mock_error_response = MagicMock()
@@ -154,7 +168,7 @@ def test_create_credential_http_error(cli_runner, mock_credentials_client):
     assert "Invalid request" in result.output
 
 
-def test_delete_credential_success(cli_runner, mock_credentials_client):
+def test_adelete_credential_success(cli_runner, mock_credentials_client):
     # Mock response data
     mock_response = {"status": "success", "message": "Credential deleted"}
     mock_instance = mock_credentials_client.return_value
@@ -170,7 +184,7 @@ def test_delete_credential_success(cli_runner, mock_credentials_client):
     mock_instance.delete.assert_called_once_with("test-cred")
 
 
-def test_delete_credential_http_error(cli_runner, mock_credentials_client):
+def test_adelete_credential_http_error(cli_runner, mock_credentials_client):
     # Mock HTTP error
     mock_instance = mock_credentials_client.return_value
     mock_error_response = MagicMock()
@@ -189,7 +203,7 @@ def test_delete_credential_http_error(cli_runner, mock_credentials_client):
     assert "Credential not found" in result.output
 
 
-def test_get_credential_success(cli_runner, mock_credentials_client):
+def test_aget_credential_success(cli_runner, mock_credentials_client):
     # Mock response data
     mock_response = {
         "credential_name": "test-cred",
