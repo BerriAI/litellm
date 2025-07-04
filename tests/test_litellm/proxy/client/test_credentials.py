@@ -3,6 +3,7 @@ import sys
 
 import pytest
 import requests
+import responses
 
 sys.path.insert(
     0, os.path.abspath("../../..")
