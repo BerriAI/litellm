@@ -220,7 +220,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
 
       // After validation, fetch *all* form values (including those from previous steps)
       const values = form.getFieldsValue(true);
-      
+
+
       // Get the guardrail provider value from the map
       const guardrailProvider = guardrail_provider_map[values.provider];
       
@@ -287,11 +288,25 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
       if (providerParams && selectedProvider) {
         const providerKey = guardrail_provider_map[selectedProvider]?.toLowerCase();
         const providerSpecificParams = providerParams[providerKey] || {};
-
-        const allowedParams = new Set<string>(
-          Object.values(providerSpecificParams).map((p) => p.param)
-        );
-
+        
+        const allowedParams = new Set<string>();
+        
+        // Add root-level parameters (like api_key, api_base, api_version)
+        Object.keys(providerSpecificParams).forEach(paramName => {
+          if (paramName !== 'optional_params') {
+            allowedParams.add(paramName);
+          }
+        });
+        
+        // Add nested parameters from optional_params.fields
+        if (providerSpecificParams.optional_params && 
+            providerSpecificParams.optional_params.fields) {
+          Object.keys(providerSpecificParams.optional_params.fields).forEach(paramName => {
+            allowedParams.add(paramName);
+          });
+        }
+        
+        console.log("allowedParams: ", allowedParams);
         allowedParams.forEach((paramName) => {
           const paramValue = values[paramName];
           if (paramValue !== undefined && paramValue !== null && paramValue !== '') {
