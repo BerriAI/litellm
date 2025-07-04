@@ -376,3 +376,82 @@ async def test_output_file_id_for_batch_retrieve():
     )
 
     assert not cast(LiteLLMBatch, response).output_file_id.startswith("file-")
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_success_hook_twice_assert_no_unique_violation():
+    import asyncio
+    from litellm.proxy.proxy_server import proxy_logging_obj
+    from litellm.proxy.utils import PrismaClient
+    from litellm.types.utils import LiteLLMBatch
+    from litellm.proxy._types import UserAPIKeyAuth
+    from openai.types.batch import BatchRequestCounts
+
+    prisma_client = PrismaClient(
+        database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
+    )
+    await prisma_client.connect()
+
+    batch = LiteLLMBatch(
+        id="bGl0ZWxsbV9wcm94eTttb2RlbF9pZDoxMjM0NTY3OTtsbG1fYmF0Y2hfaWQ6YmF0Y2hfNjg1YzVlNWQ2Mzk4ODE5MGI4NWJkYjIxNDdiYTEzMWQ",
+        completion_window="24h",
+        created_at=1750883933,
+        endpoint="/v1/chat/completions",
+        input_file_id="file-8ci8gux8s7oES7GydYvnMG",
+        object="batch",
+        status="completed",
+        metadata={"description": "nightly eval job"},
+        request_counts=BatchRequestCounts(completed=1, failed=0, total=1),
+        usage=None,
+    )
+
+    batch._hidden_params = {
+        "model_id": "12345679",
+        "response_cost": 0.0,
+        "litellm_model_name": "gpt-4o",
+        "unified_batch_id": "litellm_proxy;model_id:12345679;llm_batch_id:batch_685c5e5d63988190b85bdb2147ba131d",
+    }
+
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=prisma_client
+    )
+
+    # first retrieve batch
+    tasks = []
+    first_create_task = asyncio.create_task
+    with patch('asyncio.create_task') as mock_create_task:
+        mock_create_task.side_effect = lambda coro: tasks.append(first_create_task(coro)) or tasks[-1]
+
+        response = await proxy_managed_files.async_post_call_success_hook(
+            data={},
+            user_api_key_dict=UserAPIKeyAuth(user_id="default_id"),
+            response=batch.copy(),
+        )
+
+        if tasks:
+            # make sure asyncio(db create) is finished
+            await asyncio.sleep(0.02)
+            await asyncio.gather(*tasks, return_exceptions=True)
+            for task in tasks:
+                assert task.exception() is None, f"Error: {task.exception()}"
+
+            assert isinstance(response, LiteLLMBatch)
+            assert _is_base64_encoded_unified_file_id(response.id)
+
+    # second retrieve batch
+    tasks = []
+    second_create_task = asyncio.create_task
+    with patch('asyncio.create_task') as mock_create_task:
+        mock_create_task.side_effect = lambda coro: tasks.append(second_create_task(coro)) or tasks[-1]
+
+        await proxy_managed_files.async_post_call_success_hook(
+            data={},
+            user_api_key_dict=UserAPIKeyAuth(user_id="default_id"),
+            response=batch.copy(),
+        )
+
+        if tasks:
+            await asyncio.sleep(0.01)
+            await asyncio.gather(*tasks, return_exceptions=True)
+            for task in tasks:
+                assert task.exception() is None, f"Error: {task.exception()}"
