@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from opentelemetry.sdk.trace.export import SpanExporter as _SpanExporter
     from opentelemetry.trace import Context as _Context
     from opentelemetry.trace import Span as _Span
+    from opentelemetry.trace import Tracer as _Tracer
 
     from litellm.proxy._types import (
         ManagementEndpointLoggingPayload as _ManagementEndpointLoggingPayload,
@@ -26,12 +27,14 @@ if TYPE_CHECKING:
     from litellm.proxy.proxy_server import UserAPIKeyAuth as _UserAPIKeyAuth
 
     Span = Union[_Span, Any]
+    Tracer = Union[_Tracer, Any]
     Context = Union[_Context, Any]
     SpanExporter = Union[_SpanExporter, Any]
     UserAPIKeyAuth = Union[_UserAPIKeyAuth, Any]
     ManagementEndpointLoggingPayload = Union[_ManagementEndpointLoggingPayload, Any]
 else:
     Span = Any
+    Tracer = Any
     SpanExporter = Any
     UserAPIKeyAuth = Any
     ManagementEndpointLoggingPayload = Any
@@ -317,10 +320,29 @@ class OpenTelemetry(CustomLogger):
     #########################################################
     # Team/Key Based Logging Control Flow
     #########################################################
-    def _get_dynamic_headers_from_kwargs(self, kwargs) -> Optional[dict]:
-        """Extract dynamic headers from kwargs if available."""
-        from litellm.integrations.arize.arize import ArizeLogger
+    def get_tracer_to_use_for_request(self, kwargs: dict) -> Tracer:
+        """
+        Get the tracer to use for this request
 
+        If dynamic headers are present, a temporary tracer is created with the dynamic headers.
+        Otherwise, the default tracer is used.
+
+        Returns:
+            Tracer: The tracer to use for this request
+        """
+        dynamic_headers = self._get_dynamic_otel_headers_from_kwargs(kwargs)
+        
+        if dynamic_headers is not None:
+            # Create spans using a temporary tracer with dynamic headers
+            tracer_to_use = self._get_tracer_with_dynamic_headers(dynamic_headers)
+            verbose_logger.debug("Using dynamic headers for this request: %s", dynamic_headers)
+        else:
+            tracer_to_use = self.tracer
+        
+        return tracer_to_use
+    
+    def _get_dynamic_otel_headers_from_kwargs(self, kwargs) -> Optional[dict]:
+        """Extract dynamic headers from kwargs if available."""
         standard_callback_dynamic_params: Optional[
             StandardCallbackDynamicParams
         ] = kwargs.get("standard_callback_dynamic_params")
@@ -371,19 +393,9 @@ class OpenTelemetry(CustomLogger):
         )
         
         _parent_context, parent_otel_span = self._get_span_context(kwargs)
-
-        # Check if we need to use dynamic headers for this request
-        dynamic_headers = self._get_dynamic_headers_from_kwargs(kwargs)
-        
-        if dynamic_headers:
-            # Create spans using a temporary tracer with dynamic headers
-            tracer_to_use = self._get_tracer_with_dynamic_headers(dynamic_headers)
-            verbose_logger.debug("Using dynamic headers for this request: %s", dynamic_headers)
-        else:
-            tracer_to_use = self.tracer
-
         # Span 1: Request sent to litellm SDK
-        span = tracer_to_use.start_span(
+        otel_tracer: Tracer = self.get_tracer_to_use_for_request(kwargs)
+        span = otel_tracer.start_span(
             name=self._get_span_name(kwargs),
             start_time=self._to_ns(start_time),
             context=_parent_context,
@@ -397,7 +409,7 @@ class OpenTelemetry(CustomLogger):
             pass
         else:
             # Span 2: Raw Request / Response to LLM
-            raw_request_span = tracer_to_use.start_span(
+            raw_request_span = otel_tracer.start_span(
                 name=RAW_REQUEST_SPAN_NAME,
                 start_time=self._to_ns(start_time),
                 context=trace.set_span_in_context(span),
@@ -442,7 +454,8 @@ class OpenTelemetry(CustomLogger):
         if end_time_float is not None:
             end_time_datetime = datetime.fromtimestamp(end_time_float)
 
-        guardrail_span = self.tracer.start_span(
+        otel_tracer: Tracer = self.get_tracer_to_use_for_request(kwargs)
+        guardrail_span = otel_tracer.start_span(
             name="guardrail",
             start_time=self._to_ns(start_time_datetime),
             context=context,
@@ -487,7 +500,8 @@ class OpenTelemetry(CustomLogger):
         _parent_context, parent_otel_span = self._get_span_context(kwargs)
 
         # Span 1: Requst sent to litellm SDK
-        span = self.tracer.start_span(
+        otel_tracer: Tracer = self.get_tracer_to_use_for_request(kwargs)
+        span = otel_tracer.start_span(
             name=self._get_span_name(kwargs),
             start_time=self._to_ns(start_time),
             context=_parent_context,
