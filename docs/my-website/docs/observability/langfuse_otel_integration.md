@@ -1,6 +1,13 @@
-# Langfuse OpenTelemetry Integration
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+import Image from '@theme/IdealImage';
+
+# 🪢 Langfuse OpenTelemetry Integration
 
 The Langfuse OpenTelemetry integration allows you to send LiteLLM traces and observability data to Langfuse using the OpenTelemetry protocol. This provides a standardized way to collect and analyze your LLM usage data.
+
+<Image img={require('../../img/langfuse_otel.png')} />
 
 ## Features
 
@@ -108,15 +115,26 @@ litellm.callbacks = ["langfuse_otel"]
 
 Add the integration to your proxy configuration:
 
+1. Add the credentials to your environment variables
+
+```bash
+export LANGFUSE_PUBLIC_KEY="pk-lf-..."
+export LANGFUSE_SECRET_KEY="sk-lf-..."
+export LANGFUSE_HOST="https://us.cloud.langfuse.com"  # Default US region
+```
+
+2. Setup config.yaml
+
 ```yaml
 # config.yaml
 litellm_settings:
   callbacks: ["langfuse_otel"]
+```
 
-environment_variables:
-  LANGFUSE_PUBLIC_KEY: "pk-lf-..."
-  LANGFUSE_SECRET_KEY: "sk-lf-..."
-  LANGFUSE_HOST: "https://us.cloud.langfuse.com"  # Default US region
+3. Run the proxy
+
+```bash
+litellm --config /path/to/config.yaml
 ```
 
 ## Data Collected
@@ -163,10 +181,23 @@ This is automatically handled by the integration - you just need to provide the 
 
 Enable verbose logging to see detailed information:
 
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 ```python
 import litellm
-litellm.set_verbose = True
+litellm._turn_on_debug()
 ```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+export LITELLM_LOG="DEBUG"
+```
+
+</TabItem>
+</Tabs>
 
 This will show:
 - Endpoint resolution logic
