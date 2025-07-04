@@ -2,7 +2,7 @@
 CRUD ENDPOINTS FOR GUARDRAILS
 """
 
-from typing import Any, Dict, List, Optional, Type, cast
+from typing import Any, Dict, List, Literal, Optional, Type, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -12,8 +12,6 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.types.guardrails import (
     PII_ENTITY_CATEGORIES_MAP,
-    AzureContentSafetyPromptShieldConfigModel,
-    AzureContentSafetyTextModerationConfigModel,
     BedrockGuardrailConfigModel,
     Guardrail,
     GuardrailEventHooks,
@@ -689,32 +687,121 @@ async def get_guardrail_ui_settings():
     )
 
 
-def _get_fields_from_model(model_class: Type[BaseModel]) -> List[Dict[str, Any]]:
+def _get_field_type_from_annotation(field_annotation: Any) -> str:
     """
-    Get the fields from a Pydantic model
+    Convert a Python type annotation to a UI-friendly type string
     """
-    fields = []
-    for field_name, field in model_class.model_fields.items():
-        # Get field metadata
-        description = field.description or field_name
+    # Handle Union types (like Optional[T])
+    if hasattr(field_annotation, "__origin__") and field_annotation.__origin__ is Union:
+        # For Optional[T], get the non-None type
+        args = field_annotation.__args__
+        non_none_args = [arg for arg in args if arg is not type(None)]
+        if non_none_args:
+            field_annotation = non_none_args[0]
 
-        # Check if this field is in the required_fields class variable
-        required = field.is_required()
+    # Handle List types
+    if hasattr(field_annotation, "__origin__") and field_annotation.__origin__ is list:
+        return "array"
 
-        field_type: Optional[GuardrailParamUITypes] = None
-        field_json_schema_extra = getattr(field, "json_schema_extra", {})
-        if field_json_schema_extra and "ui_type" in field_json_schema_extra:
-            field_type = field_json_schema_extra["ui_type"]
+    # Handle Dict types
+    if hasattr(field_annotation, "__origin__") and field_annotation.__origin__ is dict:
+        return "object"
 
-        fields.append(
-            {
-                "param": field_name,
-                "description": description,
-                "required": required,
-                "type": field_type.value if field_type else None,
-            }
-        )
-    return fields
+    # Handle Literal types
+    if hasattr(field_annotation, "__origin__"):
+        # Check for Literal types (Python 3.8+)
+        origin = field_annotation.__origin__
+        if hasattr(origin, "__name__") and origin.__name__ == "Literal":
+            return "select"  # For dropdown/select inputs
+
+    # Handle basic types
+    if field_annotation is str:
+        return "string"
+    elif field_annotation is int:
+        return "number"
+    elif field_annotation is float:
+        return "number"
+    elif field_annotation is bool:
+        return "boolean"
+    elif field_annotation is dict:
+        return "object"
+    elif field_annotation is list:
+        return "array"
+
+    # Default to string for unknown types
+    return "string"
+
+
+def _get_fields_from_model(model_class: Type[BaseModel]) -> Dict[str, Any]:
+    """
+    Get the fields from a Pydantic model as a nested dictionary structure
+    """
+    import inspect
+
+    def _extract_fields_recursive(model: Type[BaseModel]) -> Dict[str, Any]:
+        fields = {}
+
+        for field_name, field in model.model_fields.items():
+            # Get field metadata
+            description = field.description or field_name
+
+            # Check if this field is required
+            required = field.is_required()
+
+            # Check if the field annotation is a BaseModel subclass
+            field_annotation = field.annotation
+
+            # Handle Optional types and get the actual type
+            if field_annotation is None:
+                continue
+
+            if (
+                hasattr(field_annotation, "__origin__")
+                and field_annotation.__origin__ is Union
+            ):
+                # For Optional[BaseModel], get the non-None type
+                args = field_annotation.__args__
+                non_none_args = [arg for arg in args if arg is not type(None)]
+                if non_none_args:
+                    field_annotation = non_none_args[0]
+
+            # Check if this is a BaseModel subclass
+            is_basemodel_subclass = (
+                inspect.isclass(field_annotation)
+                and issubclass(field_annotation, BaseModel)
+                and field_annotation is not BaseModel
+            )
+
+            if is_basemodel_subclass:
+                # Recursively get fields from the nested model
+                nested_fields = _extract_fields_recursive(
+                    cast(Type[BaseModel], field_annotation)
+                )
+                fields[field_name] = {
+                    "description": description,
+                    "required": required,
+                    "type": "nested",
+                    "fields": nested_fields,
+                }
+            else:
+                # Determine the field type from annotation
+                field_type = _get_field_type_from_annotation(field_annotation)
+
+                # Check for custom UI type override
+                field_json_schema_extra = getattr(field, "json_schema_extra", {})
+                if field_json_schema_extra and "ui_type" in field_json_schema_extra:
+                    field_type = field_json_schema_extra["ui_type"].value
+
+                # Add the field to the dictionary
+                fields[field_name] = {
+                    "description": description,
+                    "required": required,
+                    "type": field_type,
+                }
+
+        return fields
+
+    return _extract_fields_recursive(model_class)
 
 
 @router.get(
@@ -732,36 +819,42 @@ async def get_provider_specific_params():
     Example Response:
     ```json
     {
-        "bedrock": [
-            {
-                "param": "guardrailIdentifier",
+        "bedrock": {
+            "guardrailIdentifier": {
                 "description": "The ID of your guardrail on Bedrock",
-                "required": true
+                "required": true,
+                "type": null
             },
-            {
-                "param": "guardrailVersion",
+            "guardrailVersion": {
                 "description": "The version of your Bedrock guardrail (e.g., DRAFT or version number)",
-                "required": true
+                "required": true,
+                "type": null
             }
-        ],
-        "presidio": [
-            {
-                "param": "presidio_analyzer_api_base",
-                "description": "Base URL for the Presidio analyzer API",
-                "required": true
-            },
-            {
-                "param": "presidio_anonymizer_api_base",
-                "description": "Base URL for the Presidio anonymizer API",
-                "required": true
-            },
-            {
-                "param": "output_parse_pii",
-                "description": "Whether to parse PII in model outputs",
+        },
+        "azure_content_safety_text_moderation": {
+            "api_key": {
+                "description": "API key for the Azure Content Safety Text Moderation guardrail",
                 "required": false,
-                "type": "bool"
+                "type": null
+            },
+            "optional_params": {
+                "description": "Optional parameters for the Azure Content Safety Text Moderation guardrail",
+                "required": true,
+                "type": "nested",
+                "fields": {
+                    "severity_threshold": {
+                        "description": "Severity threshold for the Azure Content Safety Text Moderation guardrail across all categories",
+                        "required": false,
+                        "type": null
+                    },
+                    "categories": {
+                        "description": "Categories to scan for the Azure Content Safety Text Moderation guardrail",
+                        "required": false,
+                        "type": null
+                    }
+                }
             }
-        ]
+        }
     }
     ```
     """
@@ -769,20 +862,21 @@ async def get_provider_specific_params():
     bedrock_fields = _get_fields_from_model(BedrockGuardrailConfigModel)
     presidio_fields = _get_fields_from_model(PresidioPresidioConfigModelUserInterface)
     lakera_v2_fields = _get_fields_from_model(LakeraV2GuardrailConfigModel)
-    azure_content_safety_prompt_shield_fields = _get_fields_from_model(
-        AzureContentSafetyPromptShieldConfigModel
-    )
-    azure_content_safety_text_moderation_fields = _get_fields_from_model(
-        AzureContentSafetyTextModerationConfigModel
-    )
 
     # Return the provider-specific parameters
     provider_params = {
         SupportedGuardrailIntegrations.BEDROCK.value: bedrock_fields,
         SupportedGuardrailIntegrations.PRESIDIO.value: presidio_fields,
         SupportedGuardrailIntegrations.LAKERA_V2.value: lakera_v2_fields,
-        SupportedGuardrailIntegrations.AZURE_PROMPT_SHIELD.value: azure_content_safety_prompt_shield_fields,
-        SupportedGuardrailIntegrations.AZURE_TEXT_MODERATIONS.value: azure_content_safety_text_moderation_fields,
     }
+
+    ### get the config model for the guardrail - go through the registry and get the config model for the guardrail
+    from litellm.proxy.guardrails.guardrail_registry import guardrail_class_registry
+
+    for guardrail_name, guardrail_class in guardrail_class_registry.items():
+        guardrail_config_model = guardrail_class.get_config_model()
+        if guardrail_config_model:
+            fields = _get_fields_from_model(guardrail_config_model)
+            provider_params[guardrail_name] = fields
 
     return provider_params
