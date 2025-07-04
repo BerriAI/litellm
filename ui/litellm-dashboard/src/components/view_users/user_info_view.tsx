@@ -19,6 +19,7 @@ import { message } from "antd";
 import { rolesWithWriteAccess } from '../../utils/roles';
 import { UserEditView } from "../user_edit_view";
 import OnboardingModal, { InvitationLink } from "../onboarding_link";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 interface UserInfoViewProps {
   userId: string;
@@ -275,8 +276,8 @@ export default function UserInfoView({
               <Card>
                 <Text>Spend</Text>
                 <div className="mt-2">
-                  <Title>${Number(userData.user_info?.spend || 0).toFixed(4)}</Title>
-                  <Text>of {userData.user_info?.max_budget !== null ? `$${userData.user_info.max_budget}` : "Unlimited"}</Text>
+                  <Title>${formatNumberWithCommas(userData.user_info?.spend || 0, 4)}</Title>
+                  <Text>of {userData.user_info?.max_budget !== null ? `$${formatNumberWithCommas(userData.user_info.max_budget, 4)}` : "Unlimited"}</Text>
                 </div>
               </Card>
 
