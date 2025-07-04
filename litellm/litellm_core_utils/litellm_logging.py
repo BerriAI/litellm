@@ -2182,6 +2182,16 @@ class Logging(LiteLLMLoggingBaseClass):
                             end_time=end_time,
                         )
                 if isinstance(callback, CustomLogger):  # custom logger class
+                    #########################################################
+                    # check if any dynamic headers were passed in 
+                    #########################################################
+                    if len(self.standard_callback_dynamic_params) > 0:
+                        callback = self.get_dynamic_custom_logger_for_request(
+                            standard_callback_dynamic_params=self.standard_callback_dynamic_params,
+                            in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
+                            original_callback=callback,
+                        )
+                
                     if self.stream is True:
                         if (
                             "async_complete_streaming_response"
@@ -2353,6 +2363,25 @@ class Logging(LiteLLMLoggingBaseClass):
                     original_model_group=model_group,
                     kwargs=self.model_call_details,
                 )  # type: ignore
+    def get_dynamic_custom_logger_for_request(
+        self,
+        standard_callback_dynamic_params: StandardCallbackDynamicParams,
+        in_memory_dynamic_logger_cache: DynamicLoggingCache,
+        original_callback: CustomLogger,
+    ) -> CustomLogger:
+        """
+        """
+        if len(standard_callback_dynamic_params) == 0:
+            return original_callback
+        
+        if original_callback.callback_name == "arize":
+            from litellm.integrations.arize.arize import ArizeLogger
+            return ArizeLogger.get_dynamic_arize_logger(
+                standard_callback_dynamic_params=standard_callback_dynamic_params,
+                in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
+                original_callback=original_callback,
+            )
+        return original_callback
 
     def failure_handler(  # noqa: PLR0915
         self, exception, traceback_exception, start_time=None, end_time=None
@@ -3183,29 +3212,15 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                 OpenTelemetry,
                 OpenTelemetryConfig,
             )
-
-            arize_config = ArizeLogger.get_arize_config()
-            if arize_config.endpoint is None:
-                raise ValueError(
-                    "No valid endpoint found for Arize, please set 'ARIZE_ENDPOINT' to your GRPC endpoint or 'ARIZE_HTTP_ENDPOINT' to your HTTP endpoint"
-                )
-            otel_config = OpenTelemetryConfig(
-                exporter=arize_config.protocol,
-                endpoint=arize_config.endpoint,
-            )
-
-            os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = (
-                f"space_id={arize_config.space_key},api_key={arize_config.api_key}"
-            )
             for callback in _in_memory_loggers:
                 if (
                     isinstance(callback, ArizeLogger)
                     and callback.callback_name == "arize"
                 ):
                     return callback  # type: ignore
-            _arize_otel_logger = ArizeLogger(config=otel_config, callback_name="arize")
-            _in_memory_loggers.append(_arize_otel_logger)
-            return _arize_otel_logger  # type: ignore
+            arize_otel_logger = ArizeLogger()
+            _in_memory_loggers.append(arize_otel_logger)
+            return arize_otel_logger  # type: ignore
         elif logging_integration == "arize_phoenix":
             from litellm.integrations.opentelemetry import (
                 OpenTelemetry,
