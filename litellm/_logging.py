@@ -160,11 +160,6 @@ def _enable_debugging():
     verbose_proxy_logger.disabled = False
 
 
-# If JSON logging is enabled, properly initialize all loggers
-if json_logs:
-    _initialize_loggers_with_handler(handler)
-
-
 def print_verbose(print_statement):
     try:
         if set_verbose:
