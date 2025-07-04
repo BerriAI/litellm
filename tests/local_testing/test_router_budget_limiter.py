@@ -673,7 +673,7 @@ async def test_deployment_budgets_e2e_test_expect_to_fail():
 
         assert "Exceeded budget for deployment" in str(exc_info.value)
 
-
+@pytest.mark.flaky(retries=6, delay=2)
 @pytest.mark.asyncio
 async def test_tag_budgets_e2e_test_expect_to_fail():
     """

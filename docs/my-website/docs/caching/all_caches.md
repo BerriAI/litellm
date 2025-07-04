@@ -236,10 +236,10 @@ response2 = completion(
 
 ### Quick Start
 
-Install diskcache:
+Install the disk caching extra:
 
 ```shell
-pip install diskcache
+pip install "litellm[caching]"
 ```
 
 Then you can use the disk cache as follows.

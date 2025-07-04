@@ -1,11 +1,13 @@
 import asyncio
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import List, Literal, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
+    LiteLLM_BudgetTableFull,
+    LiteLLM_EndUserTable,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LiteLLM_VerificationToken,
@@ -42,6 +44,141 @@ class ResetBudgetJob:
 
             ## Reset Team Budget
             await self.reset_budget_for_litellm_teams()
+
+            ### RESET ENDUSER (Customer) BUDGET and corresponding Budget duration ###
+            await self.reset_budget_for_litellm_endusers()
+
+    async def reset_budget_for_litellm_endusers(self):
+        """
+        Resets the budget for all LiteLLM End-Users (Customers) if their budget has expired
+        The corresponding Budget duration is also updated.
+        """
+        now = datetime.now(timezone.utc)
+        start_time = time.time()
+        endusers_to_reset: Optional[List[LiteLLM_EndUserTable]] = None
+        budgets_to_reset: Optional[List[LiteLLM_BudgetTableFull]] = None
+        updated_endusers: List[LiteLLM_EndUserTable] = []
+        failed_endusers = []
+        try:
+            budgets_to_reset = await self.prisma_client.get_data(
+                table_name="budget", query_type="find_all", reset_at=now
+            )
+
+            if budgets_to_reset is not None and len(budgets_to_reset) > 0:
+                for budget in budgets_to_reset:
+                    budget = await ResetBudgetJob._reset_budget_reset_at_date(
+                        budget, now
+                    )
+                await self.prisma_client.update_data(
+                    query_type="update_many",
+                    data_list=budgets_to_reset,
+                    table_name="budget",
+                )
+
+                endusers_to_reset = await self.prisma_client.get_data(
+                    table_name="enduser",
+                    query_type="find_all",
+                    budget_id_list=[budget.budget_id for budget in budgets_to_reset],
+                )
+
+            if endusers_to_reset is not None and len(endusers_to_reset) > 0:
+                for enduser in endusers_to_reset:
+                    try:
+                        updated_enduser = (
+                            await ResetBudgetJob._reset_budget_for_enduser(
+                                enduser=enduser
+                            )
+                        )
+                        if updated_enduser is not None:
+                            updated_endusers.append(updated_enduser)
+                        else:
+                            failed_endusers.append(
+                                {
+                                    "enduser": enduser,
+                                    "error": "Returned None without exception",
+                                }
+                            )
+                    except Exception as e:
+                        failed_endusers.append({"enduser": enduser, "error": str(e)})
+                        verbose_proxy_logger.exception(
+                            "Failed to reset budget for enduser: %s", enduser
+                        )
+
+                verbose_proxy_logger.debug(
+                    "Updated users %s",
+                    json.dumps(updated_endusers, indent=4, default=str),
+                )
+
+                await self.prisma_client.update_data(
+                    query_type="update_many",
+                    data_list=updated_endusers,
+                    table_name="enduser",
+                )
+
+            end_time = time.time()
+            if len(failed_endusers) > 0:  # If any endusers failed to reset
+                raise Exception(
+                    f"Failed to reset {len(failed_endusers)} endusers: {json.dumps(failed_endusers, default=str)}"
+                )
+
+            asyncio.create_task(
+                self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
+                    service=ServiceTypes.RESET_BUDGET_JOB,
+                    duration=end_time - start_time,
+                    call_type="reset_budget_endusers",
+                    start_time=start_time,
+                    end_time=end_time,
+                    event_metadata={
+                        "num_budgets_found": len(budgets_to_reset)
+                        if budgets_to_reset
+                        else 0,
+                        "budgets_found": json.dumps(
+                            budgets_to_reset, indent=4, default=str
+                        ),
+                        "num_endusers_found": len(endusers_to_reset)
+                        if endusers_to_reset
+                        else 0,
+                        "endusers_found": json.dumps(
+                            endusers_to_reset, indent=4, default=str
+                        ),
+                        "num_endusers_updated": len(updated_endusers),
+                        "endusers_updated": json.dumps(
+                            updated_endusers, indent=4, default=str
+                        ),
+                        "num_endusers_failed": len(failed_endusers),
+                        "endusers_failed": json.dumps(
+                            failed_endusers, indent=4, default=str
+                        ),
+                    },
+                )
+            )
+        except Exception as e:
+            end_time = time.time()
+            asyncio.create_task(
+                self.proxy_logging_obj.service_logging_obj.async_service_failure_hook(
+                    service=ServiceTypes.RESET_BUDGET_JOB,
+                    duration=end_time - start_time,
+                    error=e,
+                    call_type="reset_budget_endusers",
+                    start_time=start_time,
+                    end_time=end_time,
+                    event_metadata={
+                        "num_budgets_found": len(budgets_to_reset)
+                        if budgets_to_reset
+                        else 0,
+                        "budgets_found": json.dumps(
+                            budgets_to_reset, indent=4, default=str
+                        ),
+                        "num_endusers_found": len(endusers_to_reset)
+                        if endusers_to_reset
+                        else 0,
+                        "endusers_found": json.dumps(
+                            endusers_to_reset, indent=4, default=str
+                        ),
+                    },
+                )
+            )
+            verbose_proxy_logger.exception("Failed to reset budget for endusers: %s", e)
 
     async def reset_budget_for_litellm_keys(self):
         """
@@ -356,6 +493,47 @@ class ResetBudgetJob:
             item=user, current_time=current_time, item_type="user"
         )
         return user
+
+    @staticmethod
+    async def _reset_budget_for_enduser(
+        enduser: LiteLLM_EndUserTable,
+    ) -> Optional[LiteLLM_EndUserTable]:
+        try:
+            enduser.spend = 0.0
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Error resetting budget for enduser: %s. Item: %s", e, enduser
+            )
+            raise e
+        return enduser
+
+    @staticmethod
+    async def _reset_budget_reset_at_date(
+        budget: LiteLLM_BudgetTableFull, current_time: datetime
+    ) -> Optional[LiteLLM_BudgetTableFull]:
+        try:
+            if budget.budget_duration is not None:
+                from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+                duration_s = duration_in_seconds(duration=budget.budget_duration)
+
+                # Fallback for existing budgets that do not have a budget_reset_at date set, ensuring the duration is taken into account
+                if (
+                    budget.budget_reset_at is None
+                    and budget.created_at + timedelta(seconds=duration_s) > current_time
+                ):
+                    budget.budget_reset_at = budget.created_at + timedelta(
+                        seconds=duration_s
+                    )
+                else:
+                    budget.budget_reset_at = current_time + timedelta(
+                        seconds=duration_s
+                    )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Error resetting budget_reset_at for budget: %s. Item: %s", e, budget
+            )
+            raise e
+        return budget
 
     @staticmethod
     async def _reset_budget_for_key(

@@ -86,17 +86,19 @@ def update_breakdown_metrics(
     # Update entity-specific metrics if entity_id_field is provided
     if entity_id_field:
         entity_value = getattr(record, entity_id_field, None)
-        if entity_value:
-            if entity_value not in breakdown.entities:
-                breakdown.entities[entity_value] = MetricWithMetadata(
-                    metrics=SpendMetrics(),
-                    metadata=entity_metadata_field.get(entity_value, {})
-                    if entity_metadata_field
-                    else {},
-                )
-            breakdown.entities[entity_value].metrics = update_metrics(
-                breakdown.entities[entity_value].metrics, record
+        entity_value = (
+            entity_value if entity_value else "Unassigned"
+        )  # allow for null entity_id_field
+        if entity_value not in breakdown.entities:
+            breakdown.entities[entity_value] = MetricWithMetadata(
+                metrics=SpendMetrics(),
+                metadata=entity_metadata_field.get(entity_value, {})
+                if entity_metadata_field
+                else {},
             )
+        breakdown.entities[entity_value].metrics = update_metrics(
+            breakdown.entities[entity_value].metrics, record
+        )
 
     return breakdown
 

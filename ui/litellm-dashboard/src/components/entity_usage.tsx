@@ -6,11 +6,13 @@ import {
   DonutChart,
   TabPanel, TabGroup, TabList, Tab, TabPanels
 } from "@tremor/react";
+import UsageDatePicker from "./shared/usage_date_picker";
 import { Select } from 'antd';
 import { ActivityMetrics, processActivityData } from './activity_metrics';
 import { DailyData, KeyMetricWithMetadata, EntityMetricWithMetadata } from './usage/types';
 import { tagDailyActivityCall, teamDailyActivityCall } from './networking';
 import TopKeyView from "./top_key_view";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 interface EntityMetrics {
   metrics: {
@@ -61,6 +63,7 @@ interface EntityUsageProps {
   userID: string | null;
   userRole: string | null;
   entityList: EntityList[] | null;
+  premiumUser: boolean;
 }
 
 const EntityUsage: React.FC<EntityUsageProps> = ({
@@ -69,7 +72,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   entityId,
   userID,
   userRole,
-  entityList
+  entityList,
+  premiumUser
 }) => {
   const [spendData, setSpendData] = useState<EntitySpendData>({ 
     results: [], 
@@ -92,8 +96,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
   const fetchSpendData = async () => {
     if (!accessToken || !dateValue.from || !dateValue.to) return;
-    const startTime = dateValue.from;
-    const endTime = dateValue.to;
+    // Create new Date objects to avoid mutating the original dates
+    const startTime = new Date(dateValue.from);
+    const endTime = new Date(dateValue.to);
     
     if (entityType === 'tag') {
       const data = await tagDailyActivityCall(
@@ -285,9 +290,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     <div style={{ width: "100%" }}>
       <Grid numItems={2} className="gap-2 w-full mb-4">
           <Col>
-            <Text>Select Time Range</Text>
-            <DateRangePicker
-              enableSelect={true}
+            <UsageDatePicker
               value={dateValue}
               onValueChange={setDateValue}
             />
@@ -325,7 +328,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                     <Card>
                       <Title>Total Spend</Title>
                       <Text className="text-2xl font-bold mt-2">
-                        ${spendData.metadata.total_spend.toFixed(2)}
+                        ${formatNumberWithCommas(spendData.metadata.total_spend, 2)}
                       </Text>
                     </Card>
                     <Card>
@@ -367,7 +370,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                           index="date"
                           categories={["metrics.spend"]}
                           colors={["cyan"]}
-                          valueFormatter={(value) => `$${value.toFixed(2)}`}
+                          valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
                           yAxisWidth={100}
                           showLegend={false}
                           customTooltip={({ payload, active }) => {
@@ -376,7 +379,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                             return (
                               <div className="bg-white p-4 shadow-lg rounded-lg border">
                                 <p className="font-bold">{data.date}</p>
-                                <p className="text-cyan-500">Total Spend: ${data.metrics.spend.toFixed(2)}</p>
+                                <p className="text-cyan-500">Total Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}</p>
                                 <p className="text-gray-600">Total Requests: {data.metrics.api_requests}</p>
                                 <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
                                 <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
@@ -387,7 +390,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                                     const metrics = entityData as EntityMetrics;
                                     return (
                                       <p key={entity} className="text-sm text-gray-600">
-                                        {metrics.metadata.team_alias || entity}: ${metrics.metrics.spend.toFixed(2)}
+                                        {metrics.metadata.team_alias || entity}: ${formatNumberWithCommas(metrics.metrics.spend, 2)}
                                       </p>
                                     );
                                   })}
@@ -407,7 +410,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                       <Title>Spend Per {entityType === 'tag' ? 'Tag' : 'Team'}</Title>
                       <div className="flex items-center text-sm text-gray-500">
                         <span>Get Started Tracking cost per {entityType} </span>
-                        <a href="https://docs.litellm.ai/docs/proxy/tags" className="text-blue-500 hover:text-blue-700 ml-1">
+                        <a href="https://docs.litellm.ai/docs/proxy/enterprise#spend-tracking" className="text-blue-500 hover:text-blue-700 ml-1">
                           here
                         </a>
                       </div>
@@ -420,7 +423,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                           index="metadata.alias"
                           categories={["metrics.spend"]}
                           colors={["cyan"]}
-                          valueFormatter={(value) => `$${value.toFixed(4)}`}
+                          valueFormatter={(value) => `$${formatNumberWithCommas(value, 4)}`}
                           layout="vertical"
                           showLegend={false}
                           yAxisWidth={100}
@@ -443,7 +446,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                               .map((entity) => (
                                 <TableRow key={entity.metadata.id}>
                                   <TableCell>{entity.metadata.alias}</TableCell>
-                                  <TableCell>${entity.metrics.spend.toFixed(4)}</TableCell>
+                                  <TableCell>${formatNumberWithCommas(entity.metrics.spend, 4)}</TableCell>
                                   <TableCell className="text-green-600">
                                     {entity.metrics.successful_requests.toLocaleString()}
                                   </TableCell>
@@ -472,6 +475,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                       userID={userID}
                       userRole={userRole}
                       teams={null}
+                      premiumUser={premiumUser}
                     />
                 </Card>
               </Col>
@@ -486,7 +490,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                     index="key"
                     categories={["spend"]}
                     colors={["cyan"]}
-                    valueFormatter={(value) => `$${value.toFixed(2)}`}
+                    valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
                     layout="vertical"
                     yAxisWidth={200}
                     showLegend={false}
@@ -508,7 +512,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                           data={getProviderSpend()}
                           index="provider"
                           category="spend"
-                          valueFormatter={(value) => `$${value.toFixed(2)}`}
+                          valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
                           colors={["cyan", "blue", "indigo", "violet", "purple"]}
                         />
                       </Col>
@@ -527,7 +531,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                             {getProviderSpend().map((provider) => (
                               <TableRow key={provider.provider}>
                                 <TableCell>{provider.provider}</TableCell>
-                                <TableCell>${provider.spend.toFixed(2)}</TableCell>
+                                <TableCell>${formatNumberWithCommas(provider.spend, 2)}</TableCell>
                                 <TableCell className="text-green-600">
                                   {provider.successful_requests.toLocaleString()}
                                 </TableCell>

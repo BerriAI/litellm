@@ -943,6 +943,12 @@ def _azure_tool_call_invoke_helper(
     return function_call_params
 
 
+def _azure_image_url_helper(content: ChatCompletionImageObject):
+    if isinstance(content["image_url"], str):
+        content["image_url"] = {"url": content["image_url"]}
+    return
+
+
 def convert_to_azure_openai_messages(
     messages: List[AllMessageValues],
 ) -> List[AllMessageValues]:
@@ -951,6 +957,11 @@ def convert_to_azure_openai_messages(
             function_call = m.get("function_call", None)
             if function_call is not None:
                 m["function_call"] = _azure_tool_call_invoke_helper(function_call)
+
+        if m["role"] == "user" and isinstance(m.get("content"), list):
+            for content in m.get("content", []):
+                if isinstance(content, dict) and content.get("type") == "image_url":
+                    _azure_image_url_helper(content)  # type: ignore
     return messages
 
 
@@ -989,7 +1000,14 @@ def _gemini_tool_call_invoke_helper(
 ) -> Optional[VertexFunctionCall]:
     name = function_call_params.get("name", "") or ""
     arguments = function_call_params.get("arguments", "")
-    arguments_dict = json.loads(arguments)
+    if (
+        isinstance(arguments, str) and len(arguments) == 0
+    ):  # pass empty dict, if arguments is empty string - prevents call from failing
+        arguments_dict = {
+            "type": "object",
+        }
+    else:
+        arguments_dict = json.loads(arguments)
     function_call = VertexFunctionCall(
         name=name,
         args=arguments_dict,
@@ -1385,6 +1403,107 @@ def _anthropic_content_element_factory(
     return _anthropic_content_element
 
 
+def select_anthropic_content_block_type_for_file(
+    format: str,
+) -> Literal["document", "image", "container_upload"]:
+    if format == "application/pdf" or format == "text/plain":
+        return "document"
+    elif format in ["image/jpeg", "image/png", "image/gif", "image/webp"]:
+        return "image"
+    else:
+        return "container_upload"
+
+
+def anthropic_infer_file_id_content_type(
+    file_id: str,
+) -> Literal["document_url", "container_upload"]:
+    """
+    Use when 'format' not provided.
+
+    - URL's - assume are document_url
+    - Else - assume is container_upload
+    """
+    if file_id.startswith("http") or file_id.startswith("https"):
+        return "document_url"
+    else:
+        return "container_upload"
+
+
+def anthropic_process_openai_file_message(
+    message: ChatCompletionFileObject,
+) -> Union[
+    AnthropicMessagesDocumentParam,
+    AnthropicMessagesImageParam,
+    AnthropicMessagesContainerUploadParam,
+]:
+    file_message = cast(ChatCompletionFileObject, message)
+    file_data = file_message["file"].get("file_data")
+    file_id = file_message["file"].get("file_id")
+    format = file_message["file"].get("format")
+    if file_data:
+        image_chunk = convert_to_anthropic_image_obj(
+            openai_image_url=file_data,
+            format=format,
+        )
+        anthropic_document_param = AnthropicMessagesDocumentParam(
+            type="document",
+            source=AnthropicContentParamSource(
+                type="base64",
+                media_type=image_chunk["media_type"],
+                data=image_chunk["data"],
+            ),
+        )
+        return anthropic_document_param
+    elif file_id:
+        content_block_type = (
+            select_anthropic_content_block_type_for_file(format)
+            if format
+            else anthropic_infer_file_id_content_type(file_id)
+        )
+        return_block_param: Optional[
+            Union[
+                AnthropicMessagesDocumentParam,
+                AnthropicMessagesImageParam,
+                AnthropicMessagesContainerUploadParam,
+            ]
+        ] = None
+        if content_block_type == "document":
+            return_block_param = AnthropicMessagesDocumentParam(
+                type="document",
+                source=AnthropicContentParamSourceFileId(
+                    type="file",
+                    file_id=file_id,
+                ),
+            )
+        elif content_block_type == "document_url":
+            return_block_param = AnthropicMessagesDocumentParam(
+                type="document",
+                source=AnthropicContentParamSourceUrl(
+                    type="url",
+                    url=file_id,
+                ),
+            )
+        elif content_block_type == "image":
+            return_block_param = AnthropicMessagesImageParam(
+                type="image",
+                source=AnthropicContentParamSourceFileId(
+                    type="file",
+                    file_id=file_id,
+                ),
+            )
+        elif content_block_type == "container_upload":
+            return_block_param = AnthropicMessagesContainerUploadParam(
+                type="container_upload", file_id=file_id
+            )
+
+        if return_block_param is None:
+            raise Exception(f"Unable to parse anthropic file message: {message}")
+        return return_block_param
+    raise Exception(
+        f"Either file_data or file_id must be present in the file message: {message}"
+    )
+
+
 def anthropic_messages_pt(  # noqa: PLR0915
     messages: List[AllMessageValues],
     model: str,
@@ -1489,24 +1608,11 @@ def anthropic_messages_pt(  # noqa: PLR0915
                         elif m.get("type", "") == "document":
                             user_content.append(cast(AnthropicMessagesDocumentParam, m))
                         elif m.get("type", "") == "file":
-                            file_message = cast(ChatCompletionFileObject, m)
-                            file_data = file_message["file"].get("file_data")
-                            if file_data:
-                                image_chunk = convert_to_anthropic_image_obj(
-                                    openai_image_url=file_data,
-                                    format=file_message["file"].get("format"),
+                            user_content.append(
+                                anthropic_process_openai_file_message(
+                                    cast(ChatCompletionFileObject, m)
                                 )
-                                anthropic_document_param = (
-                                    AnthropicMessagesDocumentParam(
-                                        type="document",
-                                        source=AnthropicContentParamSource(
-                                            type="base64",
-                                            media_type=image_chunk["media_type"],
-                                            data=image_chunk["data"],
-                                        ),
-                                    )
-                                )
-                                user_content.append(anthropic_document_param)
+                            )
                 elif isinstance(user_message_types_block["content"], str):
                     _anthropic_content_text_element: AnthropicMessagesTextParam = {
                         "type": "text",
@@ -2267,6 +2373,7 @@ from litellm.types.llms.bedrock import (
 )
 from litellm.types.llms.bedrock import ToolSpecBlock as BedrockToolSpecBlock
 from litellm.types.llms.bedrock import ToolUseBlock as BedrockToolUseBlock
+from litellm.types.llms.bedrock import VideoBlock as BedrockVideoBlock
 
 
 def _parse_content_type(content_type: str) -> str:
@@ -2337,8 +2444,10 @@ class BedrockImageProcessor:
 
         # Extract MIME type using regular expression
         mime_type_match = re.match(r"data:(.*?);base64", image_metadata)
+
         if mime_type_match:
             mime_type = mime_type_match.group(1)
+            mime_type = mime_type.split(";")[0]
             image_format = mime_type.split("/")[1]
         else:
             mime_type = "image/jpeg"
@@ -2356,9 +2465,16 @@ class BedrockImageProcessor:
         supported_doc_formats = (
             litellm.AmazonConverseConfig().get_supported_document_types()
         )
+        supported_video_formats = (
+            litellm.AmazonConverseConfig().get_supported_video_types()
+        )
 
         document_types = ["application", "text"]
         is_document = any(mime_type.startswith(doc_type) for doc_type in document_types)
+
+        supported_image_and_video_formats: List[str] = (
+            supported_video_formats + supported_image_formats
+        )
 
         if is_document:
             potential_extensions = mimetypes.guess_all_extensions(mime_type)
@@ -2376,9 +2492,12 @@ class BedrockImageProcessor:
             # Use first valid extension instead of provided image_format
             return valid_extensions[0]
         else:
-            if image_format not in supported_image_formats:
+            #########################################################
+            # Check if image_format is an image or video
+            #########################################################
+            if image_format not in supported_image_and_video_formats:
                 raise ValueError(
-                    f"Unsupported image format: {image_format}. Supported formats: {supported_image_formats}"
+                    f"Unsupported image format: {image_format}. Supported formats: {supported_image_and_video_formats}"
                 )
             return image_format
 
@@ -2392,6 +2511,14 @@ class BedrockImageProcessor:
         document_types = ["application", "text"]
         is_document = any(mime_type.startswith(doc_type) for doc_type in document_types)
 
+        supported_video_formats = (
+            litellm.AmazonConverseConfig().get_supported_video_types()
+        )
+        is_video = any(
+            image_format.startswith(video_type)
+            for video_type in supported_video_formats
+        )
+
         if is_document:
             return BedrockContentBlock(
                 document=BedrockDocumentBlock(
@@ -2399,6 +2526,10 @@ class BedrockImageProcessor:
                     format=image_format,
                     name=f"DocumentPDFmessages_{str(uuid.uuid4())}",
                 )
+            )
+        elif is_video:
+            return BedrockContentBlock(
+                video=BedrockVideoBlock(source=_blob, format=image_format)
             )
         else:
             return BedrockContentBlock(
@@ -2500,7 +2631,7 @@ def _convert_to_bedrock_tool_call_invoke(
                 id = tool["id"]
                 name = tool["function"].get("name", "")
                 arguments = tool["function"].get("arguments", "")
-                arguments_dict = json.loads(arguments)
+                arguments_dict = json.loads(arguments) if arguments else {}
                 bedrock_tool = BedrockToolUseBlock(
                     input=arguments_dict, name=name, toolUseId=id
                 )
@@ -3468,6 +3599,15 @@ def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
     return valid_string
 
 
+def add_cache_point_tool_block(tool: dict) -> Optional[BedrockToolBlock]:
+    cache_control = tool.get("cache_control", None)
+    if cache_control is not None:
+        cache_point = cache_control.get("type", "ephemeral")
+        if cache_point == "ephemeral":
+            return {"cachePoint": {"type": "default"}}
+    return None
+
+
 def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
     """
     OpenAI tools looks like:
@@ -3551,6 +3691,11 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
         )
         tool_block = BedrockToolBlock(toolSpec=tool_spec)
         tool_block_list.append(tool_block)
+
+        ## ADD CACHE POINT TOOL BLOCK ##
+        cache_point_tool_block = add_cache_point_tool_block(tool)
+        if cache_point_tool_block is not None:
+            tool_block_list.append(cache_point_tool_block)
 
     return tool_block_list
 

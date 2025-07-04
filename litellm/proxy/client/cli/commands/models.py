@@ -1,6 +1,10 @@
 # stdlib imports
-from typing import Optional, Literal, Any
 from datetime import datetime
+import re
+from typing import Optional, Literal, Any
+import yaml
+from dataclasses import dataclass
+from collections import defaultdict
 
 # third party imports
 import click
@@ -8,6 +12,38 @@ import rich
 
 # local imports
 from ... import Client
+
+
+@dataclass
+class ModelYamlInfo:
+    model_name: str
+    model_params: dict[str, Any]
+    model_info: dict[str, Any]
+    model_id: str
+    access_groups: list[str]
+    provider: str
+
+    @property
+    def access_groups_str(self) -> str:
+        return ", ".join(self.access_groups) if self.access_groups else ""
+
+
+def _get_model_info_obj_from_yaml(model: dict[str, Any]) -> ModelYamlInfo:
+    """Extract model info from a model dict and return as ModelYamlInfo dataclass."""
+    model_name: str = model["model_name"]
+    model_params: dict[str, Any] = model["litellm_params"]
+    model_info: dict[str, Any] = model.get("model_info", {})
+    model_id: str = model_params["model"]
+    access_groups = model_info.get("access_groups", [])
+    provider = model_id.split("/", 1)[0] if "/" in model_id else model_id
+    return ModelYamlInfo(
+        model_name=model_name,
+        model_params=model_params,
+        model_info=model_info,
+        model_id=model_id,
+        access_groups=access_groups,
+        provider=provider,
+    )
 
 
 def format_iso_datetime_str(iso_datetime_str: Optional[str]) -> str:
@@ -275,3 +311,126 @@ def update_model(ctx: click.Context, model_id: str, param: tuple[str, ...], info
         model_info=model_info,
     )
     rich.print_json(data=result)
+
+
+def _filter_model(model, model_regex, access_group_regex):
+    model_name = model.get("model_name")
+    model_params = model.get("litellm_params")
+    model_info = model.get("model_info", {})
+    if not model_name or not model_params:
+        return False
+    model_id = model_params.get("model")
+    if not model_id or not isinstance(model_id, str):
+        return False
+    if model_regex and not model_regex.search(model_id):
+        return False
+    access_groups = model_info.get("access_groups", [])
+    if access_group_regex:
+        if not isinstance(access_groups, list):
+            return False
+        if not any(isinstance(group, str) and access_group_regex.search(group) for group in access_groups):
+            return False
+    return True
+
+
+def _print_models_table(added_models: list[ModelYamlInfo], table_title: str):
+    if not added_models:
+        return
+    table = rich.table.Table(title=table_title)
+    table.add_column("Model Name", style="cyan")
+    table.add_column("Upstream Model", style="green")
+    table.add_column("Access Groups", style="magenta")
+    for m in added_models:
+        table.add_row(m.model_name, m.model_id, m.access_groups_str)
+    rich.print(table)
+
+
+def _print_summary_table(provider_counts):
+    summary_table = rich.table.Table(title="Model Import Summary")
+    summary_table.add_column("Provider", style="cyan")
+    summary_table.add_column("Count", style="green")
+
+    for provider, count in provider_counts.items():
+        summary_table.add_row(str(provider), str(count))
+
+    total = sum(provider_counts.values())
+    summary_table.add_row("[bold]Total[/bold]", f"[bold]{total}[/bold]")
+
+    rich.print(summary_table)
+
+
+def get_model_list_from_yaml_file(yaml_file: str) -> list[dict[str, Any]]:
+    """Load and validate the model list from a YAML file."""
+    with open(yaml_file, "r") as f:
+        data = yaml.safe_load(f)
+    if not data or "model_list" not in data:
+        raise click.ClickException("YAML file must contain a 'model_list' key with a list of models.")
+    model_list = data["model_list"]
+    if not isinstance(model_list, list):
+        raise click.ClickException("'model_list' must be a list of model definitions.")
+    return model_list
+
+
+def _get_filtered_model_list(model_list, only_models_matching_regex, only_access_groups_matching_regex):
+    """Return a list of models that pass the filter criteria."""
+    model_regex = re.compile(only_models_matching_regex) if only_models_matching_regex else None
+    access_group_regex = re.compile(only_access_groups_matching_regex) if only_access_groups_matching_regex else None
+    return [model for model in model_list if _filter_model(model, model_regex, access_group_regex)]
+
+
+def _import_models_get_table_title(dry_run: bool) -> str:
+    if dry_run:
+        return "Models that would be imported if [yellow]--dry-run[/yellow] was not provided"
+    else:
+        return "Models Imported"
+
+
+@models.command("import")
+@click.argument("yaml_file", type=click.Path(exists=True, dir_okay=False, readable=True))
+@click.option("--dry-run", is_flag=True, help="Show what would be imported without making any changes.")
+@click.option(
+    "--only-models-matching-regex",
+    default=None,
+    help="Only import models where litellm_params.model matches the given regex.",
+)
+@click.option(
+    "--only-access-groups-matching-regex",
+    default=None,
+    help="Only import models where at least one item in model_info.access_groups matches the given regex.",
+)
+@click.pass_context
+def import_models(
+    ctx: click.Context,
+    yaml_file: str,
+    dry_run: bool,
+    only_models_matching_regex: Optional[str],
+    only_access_groups_matching_regex: Optional[str],
+) -> None:
+    """Import models from a YAML file and add them to the proxy."""
+    provider_counts: dict[str, int] = defaultdict(int)
+    added_models: list[ModelYamlInfo] = []
+    model_list = get_model_list_from_yaml_file(yaml_file)
+    filtered_model_list = _get_filtered_model_list(
+        model_list, only_models_matching_regex, only_access_groups_matching_regex
+    )
+
+    if not dry_run:
+        client = create_client(ctx)
+
+    for model in filtered_model_list:
+        model_info_obj = _get_model_info_obj_from_yaml(model)
+        if not dry_run:
+            try:
+                client.models.new(
+                    model_name=model_info_obj.model_name,
+                    model_params=model_info_obj.model_params,
+                    model_info=model_info_obj.model_info,
+                )
+            except Exception:
+                pass  # For summary, ignore errors
+        added_models.append(model_info_obj)
+        provider_counts[model_info_obj.provider] += 1
+
+    table_title = _import_models_get_table_title(dry_run)
+    _print_models_table(added_models, table_title)
+    _print_summary_table(provider_counts)

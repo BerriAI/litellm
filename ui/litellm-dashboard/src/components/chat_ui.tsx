@@ -19,15 +19,17 @@ import {
   Text,
   SelectItem,
   TextInput,
-  Button,
+  Button as TremorButton,
   Divider,
 } from "@tremor/react";
 import { v4 as uuidv4 } from 'uuid';
 
-import { message, Select, Spin, Typography, Tooltip, Input } from "antd";
+import { message, Select, Spin, Typography, Tooltip, Input, Upload, Modal, Button } from "antd";
 import { makeOpenAIChatCompletionRequest } from "./chat_ui/llm_calls/chat_completion";
 import { makeOpenAIImageGenerationRequest } from "./chat_ui/llm_calls/image_generation";
+import { makeOpenAIImageEditsRequest } from "./chat_ui/llm_calls/image_edits";
 import { makeOpenAIResponsesRequest } from "./chat_ui/llm_calls/responses_api";
+import { makeAnthropicMessagesRequest } from "./chat_ui/llm_calls/anthropic_messages";
 import { fetchAvailableModels, ModelGroup  } from "./chat_ui/llm_calls/fetch_models";
 import { litellmModeMapping, ModelMode, EndpointType, getEndpointType } from "./chat_ui/mode_endpoint_mapping";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -35,7 +37,9 @@ import { coy } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import EndpointSelector from "./chat_ui/EndpointSelector";
 import TagSelector from "./tag_management/TagSelector";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
+import GuardrailSelector from "./guardrails/GuardrailSelector";
 import { determineEndpointType } from "./chat_ui/EndpointUtils";
+import { generateCodeSnippet } from "./chat_ui/CodeSnippets";
 import { MessageType } from "./chat_ui/types";
 import ReasoningContent from "./chat_ui/ReasoningContent";
 import ResponseMetrics, { TokenUsage } from "./chat_ui/ResponseMetrics";
@@ -50,10 +54,15 @@ import {
   LoadingOutlined,
   TagsOutlined,
   DatabaseOutlined,
-  InfoCircleOutlined
+  InfoCircleOutlined,
+  SafetyOutlined,
+  UploadOutlined,
+  PictureOutlined,
+  CodeOutlined
 } from "@ant-design/icons";
 
 const { TextArea } = Input;
+const { Dragger } = Upload;
 
 interface ChatUIProps {
   accessToken: string | null;
@@ -87,9 +96,34 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const abortControllerRef = useRef<AbortController | null>(null);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [selectedVectorStores, setSelectedVectorStores] = useState<string[]>([]);
+  const [selectedGuardrails, setSelectedGuardrails] = useState<string[]>([]);
   const [messageTraceId, setMessageTraceId] = useState<string | null>(null);
+  const [uploadedImage, setUploadedImage] = useState<File | null>(null);
+  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
+  const [isGetCodeModalVisible, setIsGetCodeModalVisible] = useState(false);
+  const [generatedCode, setGeneratedCode] = useState("");
+  const [selectedSdk, setSelectedSdk] = useState<'openai' | 'azure'>('openai');
 
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (isGetCodeModalVisible) {
+      const code = generateCodeSnippet({
+        apiKeySource,
+        accessToken,
+        apiKey,
+        inputMessage,
+        chatHistory,
+        selectedTags,
+        selectedVectorStores,
+        selectedGuardrails,
+        endpointType,
+        selectedModel,
+        selectedSdk,
+      });
+      setGeneratedCode(code);
+    }
+  }, [isGetCodeModalVisible, selectedSdk, apiKeySource, accessToken, apiKey, inputMessage, chatHistory, selectedTags, selectedVectorStores, selectedGuardrails, endpointType, selectedModel]);
 
   useEffect(() => {
     let userApiKey = apiKeySource === 'session' ? accessToken : apiKey;
@@ -114,12 +148,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
         if (uniqueModels.length > 0) {
           setModelInfo(uniqueModels);
           setSelectedModel(uniqueModels[0].model_group);
-          
-          // Auto-set endpoint based on the first model's mode
-          if (uniqueModels[0].mode) {
-            const initialEndpointType = determineEndpointType(uniqueModels[0].model_group, uniqueModels);
-            setEndpointType(initialEndpointType);
-          }
+        
         }
       } catch (error) {
         console.error("Error fetching model info:", error);
@@ -285,8 +314,29 @@ const ChatUI: React.FC<ChatUIProps> = ({
     }
   };
 
+  const handleImageUpload = (file: File) => {
+    setUploadedImage(file);
+    const previewUrl = URL.createObjectURL(file);
+    setImagePreviewUrl(previewUrl);
+    return false; // Prevent default upload behavior
+  };
+
+  const handleRemoveImage = () => {
+    if (imagePreviewUrl) {
+      URL.revokeObjectURL(imagePreviewUrl);
+    }
+    setUploadedImage(null);
+    setImagePreviewUrl(null);
+  };
+
   const handleSendMessage = async () => {
     if (inputMessage.trim() === "") return;
+
+    // For image edits, require both image and prompt
+    if (endpointType === EndpointType.IMAGE_EDITS && !uploadedImage) {
+      message.error("Please upload an image for editing");
+      return;
+    }
 
     if (!token || !userRole || !userID) {
       return;
@@ -333,7 +383,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
             updateTimingData,
             updateUsageData,
             traceId,
-            selectedVectorStores.length > 0 ? selectedVectorStores : undefined
+            selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
+            selectedGuardrails.length > 0 ? selectedGuardrails : undefined
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -345,6 +396,19 @@ const ChatUI: React.FC<ChatUIProps> = ({
             selectedTags,
             signal
           );
+        } else if (endpointType === EndpointType.IMAGE_EDITS) {
+          // For image edits
+          if (uploadedImage) {
+            await makeOpenAIImageEditsRequest(
+              uploadedImage,
+              inputMessage,
+              (imageUrl, model) => updateImageUI(imageUrl, model),
+              selectedModel,
+              effectiveApiKey,
+              selectedTags,
+              signal
+            );
+          }
         } else if (endpointType === EndpointType.RESPONSES) {
           // Create chat history for API call - strip out model field and isImage field
           const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
@@ -360,7 +424,25 @@ const ChatUI: React.FC<ChatUIProps> = ({
             updateTimingData,
             updateUsageData,
             traceId,
-            selectedVectorStores.length > 0 ? selectedVectorStores : undefined
+            selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
+            selectedGuardrails.length > 0 ? selectedGuardrails : undefined
+          );
+        } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
+          const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
+
+          await makeAnthropicMessagesRequest(
+            apiChatHistory,
+            (role, delta, model) => updateTextUI(role, delta, model),
+            selectedModel,
+            effectiveApiKey,
+            selectedTags,
+            signal,
+            updateReasoningContent,
+            updateTimingData,
+            updateUsageData,
+            traceId,
+            selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
+            selectedGuardrails.length > 0 ? selectedGuardrails : undefined
           );
         }
       }
@@ -369,11 +451,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
         console.log("Request was cancelled");
       } else {
         console.error("Error fetching response", error);
-        updateTextUI("assistant", "Error fetching response");
+        updateTextUI("assistant", "Error fetching response:" + error);
       }
     } finally {
       setIsLoading(false);
       abortControllerRef.current = null;
+      // Clear image after successful request for image edits
+      if (endpointType === EndpointType.IMAGE_EDITS) {
+        handleRemoveImage();
+      }
     }
 
     setInputMessage("");
@@ -382,6 +468,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const clearChatHistory = () => {
     setChatHistory([]);
     setMessageTraceId(null);
+    handleRemoveImage(); // Clear any uploaded images
     message.success("Chat history cleared.");
   };
 
@@ -399,28 +486,20 @@ const ChatUI: React.FC<ChatUIProps> = ({
     console.log(`selected ${value}`);
     setSelectedModel(value);
     
-    // Use the utility function to determine the endpoint type
-    if (value !== 'custom') {
-      const newEndpointType = determineEndpointType(value, modelInfo);
-      setEndpointType(newEndpointType);
-    }
     
     setShowCustomModelInput(value === 'custom');
   };
 
-  const handleEndpointChange = (value: string) => {
-    setEndpointType(value);
-  };
 
   const antIcon = <LoadingOutlined style={{ fontSize: 24 }} spin />;
 
   return (
     <div className="w-full h-screen p-4 bg-white">
     <Card className="w-full rounded-xl shadow-md overflow-hidden">
-      <div className="flex h-[80vh] w-full">
+      <div className="flex h-[80vh] w-full gap-4">
         {/* Left Sidebar with Controls */}
-        <div className="w-1/4 p-4 border-r border-gray-200 bg-gray-50">
-          <div className="mb-6">
+        <div className="w-1/4 p-4 bg-gray-50">
+          <Title className="text-xl font-semibold mb-6 mt-2">Configurations</Title>
             <div className="space-y-6">
               <div>
                 <Text className="font-medium block mb-2 text-gray-700 flex items-center">
@@ -493,7 +572,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 </Text>
                 <EndpointSelector 
                   endpointType={endpointType}
-                  onEndpointChange={handleEndpointChange}
+                  onEndpointChange={setEndpointType}
                   className="mb-4"
                 />  
               </div>
@@ -530,20 +609,52 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   accessToken={accessToken || ""}
                 />
               </div>
+
+              <div>
+                <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                  <SafetyOutlined className="mr-2" /> Guardrails
+                  <Tooltip 
+                    className="ml-1"
+                    title={
+                        <span>
+                          Select guardrail(s) to use for this LLM API call. You can set up your guardrails <a href="?page=guardrails" style={{ color: '#1890ff' }}>here</a>.
+                        </span>
+                      }>
+                      <InfoCircleOutlined />
+                    </Tooltip>
+                </Text>
+                <GuardrailSelector
+                  value={selectedGuardrails}
+                  onChange={setSelectedGuardrails}
+                  className="mb-4"
+                  accessToken={accessToken || ""}
+                />
+              </div>
               
-              <Button
-                onClick={clearChatHistory}
-                className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300 mt-4"
-                icon={ClearOutlined}
-              >
-                Clear Chat
-              </Button>
+              <div className="space-y-2 mt-6">
+                <TremorButton
+                  onClick={clearChatHistory}
+                  className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
+                  icon={ClearOutlined}
+                >
+                  Clear Chat
+                </TremorButton>
+              </div>
             </div>
-          </div>
         </div>
         
         {/* Main Chat Area */}
         <div className="w-3/4 flex flex-col bg-white">
+          <div className="p-4 border-b border-gray-200 flex justify-between items-center">
+            <Title className="text-xl font-semibold mb-0">Test Key</Title>
+            <TremorButton
+              onClick={() => setIsGetCodeModalVisible(true)}
+              className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
+              icon={CodeOutlined}
+            >
+              Get Code
+            </TremorButton>
+          </div>
           <div className="flex-1 overflow-auto p-4 pb-0">
             {chatHistory.length === 0 && (
               <div className="h-full flex flex-col items-center justify-center text-gray-400">
@@ -649,14 +760,54 @@ const ChatUI: React.FC<ChatUIProps> = ({
           </div>
           
           <div className="p-4 border-t border-gray-200 bg-white">
+            {/* Image Upload Section for Image Edits */}
+            {endpointType === EndpointType.IMAGE_EDITS && (
+              <div className="mb-4">
+                {!uploadedImage ? (
+                  <Dragger
+                    beforeUpload={handleImageUpload}
+                    accept="image/*"
+                    showUploadList={false}
+                    className="border-dashed border-2 border-gray-300 rounded-lg p-4"
+                  >
+                    <p className="ant-upload-drag-icon">
+                      <PictureOutlined style={{ fontSize: '24px', color: '#666' }} />
+                    </p>
+                    <p className="ant-upload-text text-sm">Click or drag image to upload</p>
+                    <p className="ant-upload-hint text-xs text-gray-500">
+                      Support for PNG, JPG, JPEG formats
+                    </p>
+                  </Dragger>
+                ) : (
+                  <div className="relative inline-block">
+                    <img 
+                      src={imagePreviewUrl || ''} 
+                      alt="Upload preview" 
+                      className="max-w-32 max-h-32 rounded-md border border-gray-200 object-cover"
+                    />
+                    <button
+                      className="absolute top-1 right-1 bg-white shadow-sm border border-gray-200 rounded px-1 py-1 text-red-500 hover:bg-red-50 text-xs"
+                      onClick={handleRemoveImage}
+                    >
+                      <DeleteOutlined />
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+            
             <div className="flex items-center">
               <TextArea
                 value={inputMessage}
                 onChange={(e) => setInputMessage(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder={
-                  endpointType === EndpointType.CHAT || endpointType === EndpointType.RESPONSES
-                    ? "Type your message... (Shift+Enter for new line)" 
+                  endpointType === EndpointType.CHAT ||
+                  endpointType === EndpointType.RESPONSES ||
+                  endpointType === EndpointType.ANTHROPIC_MESSAGES
+                    ? "Type your message... (Shift+Enter for new line)"
+                    : endpointType === EndpointType.IMAGE_EDITS
+                    ? "Describe how you want to edit the image..."
                     : "Describe the image you want to generate..."
                 }
                 disabled={isLoading}
@@ -665,27 +816,82 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 style={{ resize: 'none', paddingRight: '10px', paddingLeft: '10px' }}
               />
               {isLoading ? (
-                <Button
+                <TremorButton
                   onClick={handleCancelRequest}
                   className="ml-2 bg-red-50 hover:bg-red-100 text-red-600 border-red-200"
                   icon={DeleteOutlined}
                 >
                   Cancel
-                </Button>
+                </TremorButton>
               ) : (
-                <Button
+                <TremorButton
                   onClick={handleSendMessage}
                   className="ml-2 text-white"
-                  icon={endpointType === EndpointType.CHAT ? SendOutlined : RobotOutlined}
+                  icon={
+                    endpointType === EndpointType.CHAT ||
+                    endpointType === EndpointType.RESPONSES ||
+                    endpointType === EndpointType.ANTHROPIC_MESSAGES
+                      ? SendOutlined
+                      : RobotOutlined
+                  }
                 >
-                  {endpointType === EndpointType.CHAT ? "Send" : "Generate"}
-                </Button>
+                  {endpointType === EndpointType.CHAT ||
+                  endpointType === EndpointType.RESPONSES ||
+                  endpointType === EndpointType.ANTHROPIC_MESSAGES
+                    ? "Send"
+                    : endpointType === EndpointType.IMAGE_EDITS
+                    ? "Edit"
+                    : "Generate"}
+                </TremorButton>
               )}
             </div>
           </div>
         </div>
       </div>
     </Card>
+    <Modal
+      title="Generated Code"
+      visible={isGetCodeModalVisible}
+      onCancel={() => setIsGetCodeModalVisible(false)}
+      footer={null}
+      width={800}
+    >
+      <div className="flex justify-between items-end my-4">
+        <div>
+          <Text className="font-medium block mb-1 text-gray-700">SDK Type</Text>
+          <Select
+            value={selectedSdk}
+            onChange={(value) => setSelectedSdk(value as 'openai' | 'azure')}
+            style={{ width: 150 }}
+            options={[
+                { value: 'openai', label: 'OpenAI SDK' },
+                { value: 'azure', label: 'Azure SDK' },
+            ]}
+          />
+        </div>
+        <Button 
+          onClick={() => {
+            navigator.clipboard.writeText(generatedCode);
+            message.success("Copied to clipboard!");
+          }}
+        >
+          Copy to Clipboard
+        </Button>
+      </div>
+      <SyntaxHighlighter
+        language="python"
+        style={coy as any}
+        wrapLines={true}
+        wrapLongLines={true}
+        className="rounded-md"
+        customStyle={{
+          maxHeight: '60vh',
+          overflowY: 'auto',
+        }}
+      >
+        {generatedCode}
+      </SyntaxHighlighter>
+    </Modal>
     </div>
   );
 };

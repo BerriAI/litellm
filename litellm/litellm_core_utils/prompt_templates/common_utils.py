@@ -6,7 +6,17 @@ import io
 import mimetypes
 import re
 from os import PathLike
-from typing import Any, Dict, List, Literal, Mapping, Optional, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Union,
+    cast,
+)
 
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -25,6 +35,9 @@ from litellm.types.utils import (
     StreamingChoices,
 )
 
+if TYPE_CHECKING:  # newer pattern to avoid importing pydantic objects on __init__.py
+    from litellm.types.llms.openai import ChatCompletionImageObject
+
 DEFAULT_USER_CONTINUE_MESSAGE = ChatCompletionUserMessage(
     content="Please continue.", role="user"
 )
@@ -32,6 +45,9 @@ DEFAULT_USER_CONTINUE_MESSAGE = ChatCompletionUserMessage(
 DEFAULT_ASSISTANT_CONTINUE_MESSAGE = ChatCompletionAssistantMessage(
     content="Please continue.", role="assistant"
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LoggingClass
 
 
 def handle_any_messages_to_chat_completion_str_messages_conversion(
@@ -100,7 +116,7 @@ def strip_none_values_from_message(message: AllMessageValues) -> AllMessageValue
 
 
 def convert_content_list_to_str(
-    message: Union[AllMessageValues, ChatCompletionResponseMessage]
+    message: Union[AllMessageValues, ChatCompletionResponseMessage],
 ) -> str:
     """
     - handles scenario where content is list and not string
@@ -473,37 +489,99 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
     )
 
 
-def unpack_defs(schema, defs):
-    properties = schema.get("properties", None)
-    if properties is None:
-        return
+# ---------------------------------------------------------------------------
+# Generic, dependency-free implementation of `unpack_defs`
+# ---------------------------------------------------------------------------
 
-    for name, value in properties.items():
-        ref_key = value.get("$ref", None)
-        if ref_key is not None:
-            ref = defs[ref_key.split("defs/")[-1]]
-            unpack_defs(ref, defs)
-            properties[name] = ref
+
+def unpack_defs(schema: dict, defs: dict) -> None:
+    """Expand *all* ``$ref`` entries pointing into ``$defs`` / ``definitions``.
+
+    This utility walks the entire schema tree (dicts and lists) so it naturally
+    resolves references hidden under any keyword – ``items``, ``allOf``,
+    ``anyOf``, ``oneOf``, ``additionalProperties``, etc.
+
+    It mutates *schema* in-place and does **not** return anything.  The helper
+    keeps memory overhead low by resolving nodes as it encounters them rather
+    than materialising a fully dereferenced copy first.
+    """
+
+    import copy
+    from collections import deque
+
+    # Combine the defs handed down by the caller with defs/definitions found on
+    # the current node.  Local keys shadow parent keys to match JSON-schema
+    # scoping rules.
+    root_defs: dict = {
+        **defs,
+        **schema.get("$defs", {}),
+        **schema.get("definitions", {}),
+    }
+
+    # Use iterative approach with queue to avoid recursion
+    # Each item in queue is (node, parent_container, key/index, active_defs, seen_ids)
+    queue: deque[tuple[Any, Union[dict, list, None], Union[str, int, None], dict, set]] = deque([(schema, None, None, root_defs, set())])
+    
+    while queue:
+        node, parent, key, active_defs, seen = queue.popleft()
+        
+        # Avoid infinite loops on self-referential schemas
+        if id(node) in seen:
             continue
+        seen = seen.copy()  # Create new set for this branch
+        seen.add(id(node))
 
-        anyof = value.get("anyOf", None)
-        if anyof is not None:
-            for i, atype in enumerate(anyof):
-                ref_key = atype.get("$ref", None)
-                if ref_key is not None:
-                    ref = defs[ref_key.split("defs/")[-1]]
-                    unpack_defs(ref, defs)
-                    anyof[i] = ref
-            continue
+        # ----------------------------- dict -----------------------------
+        if isinstance(node, dict):
+            # --- Case 1: this node *is* a reference ---
+            if "$ref" in node:
+                ref_name = node["$ref"].split("/")[-1]
+                target_schema = active_defs.get(ref_name)
+                # Unknown reference – leave untouched
+                if target_schema is None:
+                    continue
 
-        items = value.get("items", None)
-        if items is not None:
-            ref_key = items.get("$ref", None)
-            if ref_key is not None:
-                ref = defs[ref_key.split("defs/")[-1]]
-                unpack_defs(ref, defs)
-                value["items"] = ref
+                # Merge defs from the target to capture nested definitions
+                child_defs = {
+                    **active_defs,
+                    **target_schema.get("$defs", {}),
+                    **target_schema.get("definitions", {}),
+                }
+
+                # Replace the reference with resolved copy
+                resolved = copy.deepcopy(target_schema)
+                if parent is not None and key is not None:
+                    if isinstance(parent, dict) and isinstance(key, str):
+                        parent[key] = resolved
+                    elif isinstance(parent, list) and isinstance(key, int):
+                        parent[key] = resolved
+                else:
+                    # This is the root schema itself
+                    schema.clear()
+                    schema.update(resolved)
+                    resolved = schema
+                
+                # Add resolved node to queue for further processing
+                queue.append((resolved, parent, key, child_defs, seen))
                 continue
+
+            # --- Case 2: regular dict – process its values ---
+            # Update defs with any nested $defs/definitions present *here*.
+            current_defs = {
+                **active_defs,
+                **node.get("$defs", {}),
+                **node.get("definitions", {}),
+            }
+
+            # Add all dict values to queue
+            for k, v in node.items():
+                queue.append((v, node, k, current_defs, seen))
+
+        # ---------------------------- list ------------------------------
+        elif isinstance(node, list):
+            # Add all list items to queue
+            for idx, item in enumerate(node):
+                queue.append((item, node, idx, active_defs, seen))
 
 
 def _get_image_mime_type_from_url(url: str) -> Optional[str]:
@@ -516,6 +594,7 @@ def _get_image_mime_type_from_url(url: str) -> Optional[str]:
     audio/mpeg
     audio/mp3
     audio/wav
+    audio/ogg
     image/png
     image/jpeg
     image/webp
@@ -549,6 +628,7 @@ def _get_image_mime_type_from_url(url: str) -> Optional[str]:
         (".mp3",): "audio/mp3",
         (".wav",): "audio/wav",
         (".mpeg",): "audio/mpeg",
+        (".ogg",): "audio/ogg",
         # Documents
         (".pdf",): "application/pdf",
         (".txt",): "text/plain",
@@ -573,3 +653,100 @@ def get_tool_call_names(tools: List[ChatCompletionToolParam]) -> List[str]:
             if tool_call_name:
                 tool_call_names.append(tool_call_name)
     return tool_call_names
+
+
+def is_function_call(optional_params: dict) -> bool:
+    """
+    Checks if the optional params contain the function call
+    """
+    if "functions" in optional_params and optional_params.get("functions"):
+        return True
+    return False
+
+
+def get_file_ids_from_messages(messages: List[AllMessageValues]) -> List[str]:
+    """
+    Gets file ids from messages
+    """
+    file_ids = []
+    for message in messages:
+        if message.get("role") == "user":
+            content = message.get("content")
+            if content:
+                if isinstance(content, str):
+                    continue
+                for c in content:
+                    if c["type"] == "file":
+                        file_object = cast(ChatCompletionFileObject, c)
+                        file_object_file_field = file_object["file"]
+                        file_id = file_object_file_field.get("file_id")
+                        if file_id:
+                            file_ids.append(file_id)
+    return file_ids
+
+
+def check_is_function_call(logging_obj: "LoggingClass") -> bool:
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        is_function_call,
+    )
+
+    if hasattr(logging_obj, "optional_params") and isinstance(
+        logging_obj.optional_params, dict
+    ):
+        if is_function_call(logging_obj.optional_params):
+            return True
+
+    return False
+
+
+def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:
+    """
+    Filters a value from a dictionary
+
+    Goes through the nested dict and removes the key if it exists
+    """
+    from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        return dictionary
+
+    # Create a copy of keys to avoid modifying dict during iteration
+    keys = list(dictionary.keys())
+    for k in keys:
+        v = dictionary[k]
+        if k == key:
+            del dictionary[k]
+        elif isinstance(v, dict):
+            filter_value_from_dict(v, key, depth + 1)
+        elif isinstance(v, list):
+            for item in v:
+                if isinstance(item, dict):
+                    filter_value_from_dict(item, key, depth + 1)
+    return dictionary
+
+
+def migrate_file_to_image_url(
+    message: "ChatCompletionFileObject",
+) -> "ChatCompletionImageObject":
+    """
+    Migrate file to image_url
+    """
+    from litellm.types.llms.openai import (
+        ChatCompletionImageObject,
+        ChatCompletionImageUrlObject,
+    )
+
+    file_id = message["file"].get("file_id")
+    file_data = message["file"].get("file_data")
+    format = message["file"].get("format")
+    if not file_id and not file_data:
+        raise ValueError("file_id and file_data are both None")
+    image_url_object = ChatCompletionImageObject(
+        type="image_url",
+        image_url=ChatCompletionImageUrlObject(
+            url=cast(str, file_id or file_data),
+        ),
+    )
+    if format and isinstance(image_url_object["image_url"], dict):
+        image_url_object["image_url"]["format"] = format
+    return image_url_object

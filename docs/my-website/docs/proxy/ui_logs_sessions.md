@@ -43,9 +43,7 @@ response1 = client.chat.completions.create(
         }
     ],
     extra_body={
-        "metadata": {
-            "litellm_session_id": session_id  # Pass the session ID
-        }
+        "litellm_session_id": session_id  # Pass the session ID
     }
 )
 ```
@@ -64,9 +62,7 @@ response2 = client.chat.completions.create(
         }
     ],
     extra_body={
-        "metadata": {
-            "litellm_session_id": session_id  # Reuse the same session ID
-        }
+        "litellm_session_id": session_id  # Reuse the same session ID
     }
 )
 ```
@@ -89,9 +85,7 @@ chat = ChatOpenAI(
     api_key="<your litellm api key>",
     model="gpt-4o",
     extra_body={
-        "metadata": {
-            "litellm_session_id": session_id  # Pass the session ID
-        }
+        "litellm_session_id": session_id  # Pass the session ID
     }
 )
 
@@ -132,9 +126,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
         "content": "Write a short story about a robot"
         }
     ],
-    "metadata": {
-        "litellm_session_id": "'$SESSION_ID'"
-    }
+    "litellm_session_id": "'$SESSION_ID'"
 }'
 ```
 
@@ -154,9 +146,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
         "content": "Now write a poem about that robot"
         }
     ],
-    "metadata": {
-        "litellm_session_id": "'$SESSION_ID'"
-    }
+    "litellm_session_id": "'$SESSION_ID'"
 }'
 ```
 

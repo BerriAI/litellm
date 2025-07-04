@@ -28,6 +28,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Apply cache control directives based on specified injection points.

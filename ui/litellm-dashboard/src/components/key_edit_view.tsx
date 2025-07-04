@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from "react";
-import { Form, Input, Select } from "antd";
-import { Button, TextInput } from "@tremor/react";
+import { Form, Input, Select, Button as AntdButton } from "antd";
+import { Button as TremorButton, TextInput } from "@tremor/react";
 import { KeyResponse } from "./key_team_helpers/key_list";
 import { fetchTeamModels } from "../components/create_key_button";
 import { modelAvailableCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
+import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
+import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
+
 interface KeyEditViewProps {
   keyData: KeyResponse;
   onCancel: () => void;
@@ -13,6 +16,7 @@ interface KeyEditViewProps {
   accessToken: string | null;
   userID: string | null;
   userRole: string | null;
+  premiumUser?: boolean;
 }
 
 // Add this helper function
@@ -41,7 +45,9 @@ export function KeyEditView({
     teams,
     accessToken,
     userID,
-    userRole }: KeyEditViewProps) {
+    userRole,
+    premiumUser = false
+}: KeyEditViewProps) {
   const [form] = Form.useForm();
   const [userModels, setUserModels] = useState<string[]>([]);
   const team = teams?.find(team => team.team_id === keyData.team_id);
@@ -92,7 +98,9 @@ export function KeyEditView({
     ...keyData,
     budget_duration: getBudgetDuration(keyData.budget_duration),
     metadata: keyData.metadata ? JSON.stringify(keyData.metadata, null, 2) : "",
-    guardrails: keyData.metadata?.guardrails || []
+    guardrails: keyData.metadata?.guardrails || [],
+    vector_stores: keyData.object_permission?.vector_stores || [],
+    mcp_servers: keyData.object_permission?.mcp_servers || []
   };
 
   return (
@@ -165,8 +173,40 @@ export function KeyEditView({
         />
       </Form.Item>
 
+      <Form.Item label="Vector Stores" name="vector_stores">
+        <VectorStoreSelector
+          onChange={(values) => form.setFieldValue('vector_stores', values)}
+          value={form.getFieldValue('vector_stores')}
+          accessToken={accessToken || ""}
+          placeholder="Select vector stores"
+        />
+      </Form.Item>
+
+      <Form.Item label="MCP Servers" name="mcp_servers">
+        <MCPServerSelector
+          onChange={(values) => form.setFieldValue('mcp_servers', values)}
+          value={form.getFieldValue('mcp_servers')}
+          accessToken={accessToken || ""}
+          placeholder="Select MCP servers"
+        />
+      </Form.Item>
+
       <Form.Item label="Metadata" name="metadata">
         <Input.TextArea rows={10} />
+      </Form.Item>
+
+      <Form.Item label="Team ID" name="team_id">
+        <Select
+          placeholder="Select team"
+          style={{ width: "100%" }}
+        >
+          {/* Only show All Team Models if team has models */}
+          {teams?.map(team => (
+            <Select.Option key={team.team_id} value={team.team_id}>
+              {`${team.team_alias} (${team.team_id})`}
+            </Select.Option>
+          ))}
+        </Select>
       </Form.Item>
 
       {/* Hidden form field for token */}
@@ -174,13 +214,15 @@ export function KeyEditView({
         <Input />
       </Form.Item>
 
-      <div className="flex justify-end gap-2 mt-6">
-        <Button variant="light" onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button>
-          Save Changes
-        </Button>
+      <div className="sticky z-10 bg-white p-4 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
+        <div className="flex justify-end items-center gap-2">
+          <AntdButton onClick={onCancel}>
+            Cancel
+          </AntdButton>
+          <TremorButton type="submit">
+            Save Changes
+          </TremorButton>
+        </div>
       </div>
     </Form>
   );

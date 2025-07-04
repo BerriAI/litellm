@@ -11,7 +11,7 @@ import TabItem from '@theme/TabItem';
 | Description | Vertex AI is a fully-managed AI development platform for building and using generative AI. |
 | Provider Route on LiteLLM | `vertex_ai/` |
 | Link to Provider Doc | [Vertex AI ↗](https://cloud.google.com/vertex-ai) |
-| Base URL | [https://{vertex_location}-aiplatform.googleapis.com/](https://{vertex_location}-aiplatform.googleapis.com/) |
+| Base URL | 1. Regional endpoints<br/>`https://{vertex_location}-aiplatform.googleapis.com/`<br/>2. Global endpoints (limited availability)<br/>`https://aiplatform.googleapis.com/`|
 | Supported Operations | [`/chat/completions`](#sample-usage), `/completions`, [`/embeddings`](#embedding-models), [`/audio/speech`](#text-to-speech-apis), [`/fine_tuning`](#fine-tuning-apis), [`/batches`](#batch-apis), [`/files`](#batch-apis), [`/images`](#image-generation-models) |
 
 
@@ -347,7 +347,9 @@ Return a `list[Recipe]`
 completion(model="vertex_ai/gemini-1.5-flash-preview-0514", messages=messages, response_format={ "type": "json_object" })
 ```
 
-### **Grounding - Web Search**
+### **Google Hosted Tools (Web Search, Code Execution, etc.)**
+
+#### **Web Search**
 
 Add Google Search Result grounding to vertex ai calls. 
 
@@ -422,6 +424,73 @@ curl http://localhost:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
+#### **Url Context**
+Using the URL context tool, you can provide Gemini with URLs as additional context for your prompt. The model can then retrieve content from the URLs and use that content to inform and shape its response.
+
+[**Relevant Docs**](https://ai.google.dev/gemini-api/docs/url-context)
+
+See the grounding metadata with `response_obj._hidden_params["vertex_ai_url_context_metadata"]`
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers
+from litellm import completion
+import os
+
+os.environ["GEMINI_API_KEY"] = ".."
+
+# 👇 ADD URL CONTEXT
+tools = [{"urlContext": {}}]
+
+response = completion(
+    model="gemini/gemini-2.0-flash",
+    messages=[{"role": "user", "content": "Summarize this document: https://ai.google.dev/gemini-api/docs/models"}],
+    tools=tools,
+)
+
+print(response)
+
+# Access URL context metadata
+url_context_metadata = response.model_extra['vertex_ai_url_context_metadata']
+urlMetadata = url_context_metadata[0]['urlMetadata'][0]
+print(f"Retrieved URL: {urlMetadata['retrievedUrl']}")
+print(f"Retrieval Status: {urlMetadata['urlRetrievalStatus']}")
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+```yaml
+model_list:
+  - model_name: gemini-2.0-flash
+    litellm_params:
+      model: gemini/gemini-2.0-flash
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start Proxy
+```bash
+$ litellm --config /path/to/config.yaml
+```
+
+3. Make Request!
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "gemini-2.0-flash",
+    "messages": [{"role": "user", "content": "Summarize this document: https://ai.google.dev/gemini-api/docs/models"}],
+    "tools": [{"urlContext": {}}]
+  }'
+```
+</TabItem>
+</Tabs>
+
+#### **Enterprise Web Search**
+
 You can also use the `enterpriseWebSearch` tool for an [enterprise compliant search](https://cloud.google.com/vertex-ai/generative-ai/docs/grounding/web-grounding-enterprise).
 
 <Tabs>
@@ -491,6 +560,53 @@ curl http://localhost:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
+#### **Code Execution**
+
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers
+from litellm import completion
+import os
+
+## SETUP ENVIRONMENT
+# !gcloud auth application-default login - run this to add vertex credentials to your env
+
+
+tools = [{"codeExecution": {}}] # 👈 ADD CODE EXECUTION
+
+response = completion(
+    model="vertex_ai/gemini-2.0-flash",
+    messages=[{"role": "user", "content": "What is the weather in San Francisco?"}],
+    tools=tools,
+)
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash showLineNumbers
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+  "model": "gemini-2.0-flash",
+  "messages": [{"role": "user", "content": "What is the weather in San Francisco?"}],
+  "tools": [{"codeExecution": {}}]
+}
+'
+```
+
+</TabItem>
+</Tabs>
+
+
+
+
 
 #### **Moving from Vertex AI SDK to LiteLLM (GROUNDING)**
 
@@ -546,10 +662,13 @@ print(resp)
 
 LiteLLM translates OpenAI's `reasoning_effort` to Gemini's `thinking` parameter. [Code](https://github.com/BerriAI/litellm/blob/620664921902d7a9bfb29897a7b27c1a7ef4ddfb/litellm/llms/vertex_ai/gemini/vertex_and_google_ai_studio_gemini.py#L362)
 
+Added an additional non-OpenAI standard "disable" value for non-reasoning Gemini requests.
+
 **Mapping**
 
 | reasoning_effort | thinking |
 | ---------------- | -------- |
+| "disable"        | "budget_tokens": 0    |
 | "low"            | "budget_tokens": 1024 |
 | "medium"         | "budget_tokens": 2048 |
 | "high"           | "budget_tokens": 4096 |
@@ -832,7 +951,7 @@ OR
 
 You can set:
 - `vertex_credentials` (str) - can be a json string or filepath to your vertex ai service account.json
-- `vertex_location` (str) - place where vertex model is deployed (us-central1, asia-southeast1, etc.)
+- `vertex_location` (str) - place where vertex model is deployed (us-central1, asia-southeast1, etc.). Some models support the global location, please see [Vertex AI documentation](https://cloud.google.com/vertex-ai/generative-ai/docs/learn/locations#supported_models)
 - `vertex_project` Optional[str] - use if vertex project different from the one in vertex_credentials
 
 as dynamic params for a `litellm.completion` call. 
@@ -1734,7 +1853,7 @@ All OpenAI compatible models from Vertex Model Garden are supported.
 | Property | Details |
 |----------|---------|
 | Provider Route | `vertex_ai/openai/{MODEL_ID}` |
-| Vertex Documentation | [Vertex Model Garden - OpenAI Chat Completions](https://github.com/GoogleCloudPlatform/vertex-ai-samples/blob/main/notebooks/community/model_garden/model_garden_gradio_streaming_chat_completions.ipynb), [Vertex Model Garden](https://cloud.google.com/model-garden?hl=en) |
+| Vertex Documentation | [SDK for Deploy & OpenAI Chat Completions](https://github.com/GoogleCloudPlatform/generative-ai/blob/main/open-models/get_started_with_model_garden_sdk.ipynb), [Vertex Model Garden](https://cloud.google.com/model-garden?hl=en) |
 | Supported Operations | `/chat/completions`, `/embeddings` |
 
 <Tabs>
@@ -2683,44 +2802,132 @@ print(response)
 </Tabs>
 
 
-## **Image Generation Models**
+## **Gemini TTS (Text-to-Speech) Audio Output**
 
-Usage 
+:::info
+
+LiteLLM supports Gemini TTS models on Vertex AI that can generate audio responses using the OpenAI-compatible `audio` parameter format.
+
+:::
+
+### Supported Models
+
+LiteLLM supports Gemini TTS models with audio capabilities on Vertex AI (e.g. `vertex_ai/gemini-2.5-flash-preview-tts` and `vertex_ai/gemini-2.5-pro-preview-tts`). For the complete list of available TTS models and voices, see the [official Gemini TTS documentation](https://ai.google.dev/gemini-api/docs/speech-generation).
+
+### Limitations
+
+:::warning
+
+**Important Limitations**:
+- Gemini TTS models only support the `pcm16` audio format
+- **Streaming support has not been added** to TTS models yet
+- The `modalities` parameter must be set to `['audio']` for TTS requests
+
+:::
+
+### Quick Start
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
 
 ```python
-response = await litellm.aimage_generation(
-    prompt="An olympic size swimming pool",
-    model="vertex_ai/imagegeneration@006",
-    vertex_ai_project="adroit-crow-413218",
-    vertex_ai_location="us-central1",
+from litellm import completion
+import json
+
+## GET CREDENTIALS
+file_path = 'path/to/vertex_ai_service_account.json'
+
+# Load the JSON file
+with open(file_path, 'r') as file:
+    vertex_credentials = json.load(file)
+
+# Convert to JSON string
+vertex_credentials_json = json.dumps(vertex_credentials)
+
+response = completion(
+    model="vertex_ai/gemini-2.5-flash-preview-tts",
+    messages=[{"role": "user", "content": "Say hello in a friendly voice"}],
+    modalities=["audio"],  # Required for TTS models
+    audio={
+        "voice": "Kore",
+        "format": "pcm16"  # Required: must be "pcm16"
+    },
+    vertex_credentials=vertex_credentials_json
+)
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: gemini-tts-flash
+    litellm_params:
+      model: vertex_ai/gemini-2.5-flash-preview-tts
+      vertex_project: "your-project-id"
+      vertex_location: "us-central1"
+      vertex_credentials: "/path/to/service_account.json"
+  - model_name: gemini-tts-pro
+    litellm_params:
+      model: vertex_ai/gemini-2.5-pro-preview-tts
+      vertex_project: "your-project-id"
+      vertex_location: "us-central1"
+      vertex_credentials: "/path/to/service_account.json"
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Make TTS request
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "gemini-tts-flash",
+    "messages": [{"role": "user", "content": "Say hello in a friendly voice"}],
+    "modalities": ["audio"],
+    "audio": {
+      "voice": "Kore",
+      "format": "pcm16"
+    }
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+### Advanced Usage
+
+You can combine TTS with other Gemini features:
+
+```python
+response = completion(
+    model="vertex_ai/gemini-2.5-pro-preview-tts",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant that speaks clearly."},
+        {"role": "user", "content": "Explain quantum computing in simple terms"}
+    ],
+    modalities=["audio"],
+    audio={
+        "voice": "Charon",
+        "format": "pcm16"
+    },
+    temperature=0.7,
+    max_tokens=150,
+    vertex_credentials=vertex_credentials_json
 )
 ```
 
-**Generating multiple images**
-
-Use the `n` parameter to pass how many images you want generated
-```python
-response = await litellm.aimage_generation(
-    prompt="An olympic size swimming pool",
-    model="vertex_ai/imagegeneration@006",
-    vertex_ai_project="adroit-crow-413218",
-    vertex_ai_location="us-central1",
-    n=1,
-)
-```
-
-### Supported Image Generation Models
-
-| Model Name                   | FUsage                                            |
-|------------------------------|--------------------------------------------------------------|
-| `imagen-3.0-generate-001`      | `litellm.image_generation('vertex_ai/imagen-3.0-generate-001', prompt)` |
-| `imagen-3.0-fast-generate-001` | `litellm.image_generation('vertex_ai/imagen-3.0-fast-generate-001', prompt)` |
-| `imagegeneration@006`          | `litellm.image_generation('vertex_ai/imagegeneration@006', prompt)`  |
-| `imagegeneration@005`          | `litellm.image_generation('vertex_ai/imagegeneration@005', prompt)`  |
-| `imagegeneration@002`          | `litellm.image_generation('vertex_ai/imagegeneration@002', prompt)`  |
-
-
-
+For more information about Gemini's TTS capabilities and available voices, see the [official Gemini TTS documentation](https://ai.google.dev/gemini-api/docs/speech-generation).
 
 ## **Text to Speech APIs**
 

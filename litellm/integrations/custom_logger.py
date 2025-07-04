@@ -16,7 +16,6 @@ from typing import (
 from pydantic import BaseModel
 
 from litellm.caching.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
 from litellm.types.utils import (
@@ -33,16 +32,18 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy._types import UserAPIKeyAuth
 
     Span = Union[_Span, Any]
 else:
     Span = Any
     LiteLLMLoggingObj = Any
+    UserAPIKeyAuth = Any
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
-    def __init__(self, message_logging: bool = True) -> None:
+    def __init__(self, message_logging: bool = True, **kwargs) -> None:
         self.message_logging = message_logging
         pass
 
@@ -87,6 +88,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
         tools: Optional[List[Dict]] = None,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Returns:
@@ -104,6 +107,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Returns:
@@ -234,6 +239,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         request_data: dict,
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: Optional[str] = None,
     ):
         pass
 
@@ -404,3 +410,20 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             if len(text) > max_length
             else text
         )
+
+    def _select_metadata_field(
+        self, request_kwargs: Optional[Dict] = None
+    ) -> Optional[str]:
+        """
+        Select the metadata field to use for logging
+
+        1. If `litellm_metadata` is in the request kwargs, use it
+        2. Otherwise, use `metadata`
+        """
+        from litellm.constants import LITELLM_METADATA_FIELD, OLD_LITELLM_METADATA_FIELD
+
+        if request_kwargs is None:
+            return None
+        if LITELLM_METADATA_FIELD in request_kwargs:
+            return LITELLM_METADATA_FIELD
+        return OLD_LITELLM_METADATA_FIELD

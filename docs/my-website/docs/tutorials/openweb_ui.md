@@ -2,35 +2,35 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# OpenWeb UI with LiteLLM
+# Open WebUI with LiteLLM
 
-This guide walks you through connecting OpenWeb UI to LiteLLM. Using LiteLLM with OpenWeb UI allows teams to 
-- Access 100+ LLMs on OpenWeb UI
+This guide walks you through connecting Open WebUI to LiteLLM. Using LiteLLM with Open WebUI allows teams to 
+- Access 100+ LLMs on Open WebUI
 - Track Spend / Usage, Set Budget Limits 
 - Send Request/Response Logs to logging destinations like langfuse, s3, gcs buckets, etc.
-- Set access controls eg. Control what models OpenWebUI can access.
+- Set access controls eg. Control what models Open WebUI can access.
 
 ## Quickstart
 
 - Make sure to setup LiteLLM with the [LiteLLM Getting Started Guide](https://docs.litellm.ai/docs/proxy/docker_quick_start)
 
 
-## 1. Start LiteLLM & OpenWebUI
+## 1. Start LiteLLM & Open WebUI
 
-- OpenWebUI starts running on [http://localhost:3000](http://localhost:3000)
+- Open WebUI starts running on [http://localhost:3000](http://localhost:3000)
 - LiteLLM starts running on [http://localhost:4000](http://localhost:4000)
 
 
 ## 2. Create a Virtual Key on LiteLLM
 
-Virtual Keys are API Keys that allow you to authenticate to LiteLLM Proxy. We will create a Virtual Key that will allow OpenWebUI to access LiteLLM.
+Virtual Keys are API Keys that allow you to authenticate to LiteLLM Proxy. We will create a Virtual Key that will allow Open WebUI to access LiteLLM.
 
 ### 2.1 LiteLLM User Management Hierarchy
 
 On LiteLLM, you can create Organizations, Teams, Users and Virtual Keys. For this tutorial, we will create a Team and a Virtual Key.
 
 - `Organization` - An Organization is a group of Teams. (US Engineering, EU Developer Tools)
-- `Team` - A Team is a group of Users. (OpenWeb UI Team, Data Science Team, etc.)
+- `Team` - A Team is a group of Users. (Open WebUI Team, Data Science Team, etc.)
 - `User` - A User is an individual user (employee, developer, eg. `krrish@litellm.ai`)
 - `Virtual Key` - A Virtual Key is an API Key that allows you to authenticate to LiteLLM Proxy. A Virtual Key is associated with a User or Team.
 
@@ -46,13 +46,13 @@ Navigate to [http://localhost:4000/ui](http://localhost:4000/ui) and create a ne
 
 Navigate to [http://localhost:4000/ui](http://localhost:4000/ui) and create a new virtual Key. 
 
-LiteLLM allows you to specify what models are available on OpenWeb UI (by specifying the models the key will have access to).
+LiteLLM allows you to specify what models are available on Open WebUI (by specifying the models the key will have access to).
 
 <Image img={require('../../img/create_key_in_team_oweb.gif')} />
 
-## 3. Connect OpenWeb UI to LiteLLM
+## 3. Connect Open WebUI to LiteLLM
 
-On OpenWeb UI, navigate to Settings -> Connections and create a new connection to LiteLLM
+On Open WebUI, navigate to Settings -> Connections and create a new connection to LiteLLM
 
 Enter the following details:
 - URL: `http://localhost:4000` (your litellm proxy base url)
@@ -68,17 +68,52 @@ Once you selected a model, enter your message content and click on `Submit`
 
 <Image img={require('../../img/basic_litellm.gif')} />
 
-### 3.2 Tracking Spend / Usage
+### 3.2 Tracking Usage & Spend
 
-After your request is made, navigate to `Logs` on the LiteLLM UI, you can see Team, Key, Model, Usage and Cost.
+#### Basic Tracking
 
-<!-- <Image img={require('../../img/litellm_logs_openweb.gif')} /> -->
+After making requests, navigate to the `Logs` section in the LiteLLM UI to view Model, Usage and Cost information.
+
+#### Per-User Tracking
+
+To track spend and usage for each Open WebUI user, configure both Open WebUI and LiteLLM:
+
+1. **Enable User Info Headers in Open WebUI**
+   
+  Set the following environment variable for Open WebUI to enable user information in request headers:
+  ```dotenv
+  ENABLE_FORWARD_USER_INFO_HEADERS=True
+  ```
+
+  For more details, see the [Environment Variable Configuration Guide](https://docs.openwebui.com/getting-started/env-configuration/#enable_forward_user_info_headers).
+
+2. **Configure LiteLLM to Parse User Headers**
+   
+  Add the following to your LiteLLM `config.yaml` to specify a header to use for user tracking:
+
+  ```yaml
+  general_settings:
+      user_header_name: X-OpenWebUI-User-Id
+  ```
+
+  ⓘ Available tracking options
+
+  You can use any of the following headers for `user_header_name`:
+  - `X-OpenWebUI-User-Id`
+  - `X-OpenWebUI-User-Email`
+  - `X-OpenWebUI-User-Name`
+  
+  These may offer better readability and easier mental attribution when hosting for a small group of users that you know well.
+
+  Choose based on your needs, but note that in Open WebUI: 
+  - Users can modify their own usernames
+  - Administrators can modify both usernames and emails of any account
 
 
 
-## Render `thinking` content on OpenWeb UI
+## Render `thinking` content on Open WebUI
 
-OpenWebUI requires reasoning/thinking content to be rendered with `<think></think>` tags. In order to render this for specific models, you can use the `merge_reasoning_content_in_choices` litellm parameter.
+Open WebUI requires reasoning/thinking content to be rendered with `<think></think>` tags. In order to render this for specific models, you can use the `merge_reasoning_content_in_choices` litellm parameter.
 
 Example litellm config.yaml:
 
@@ -92,11 +127,26 @@ model_list:
       merge_reasoning_content_in_choices: true
 ```
 
-### Test it on OpenWeb UI
+### Test it on Open WebUI
 
 On the models dropdown select `thinking-anthropic-claude-3-7-sonnet`
 
 <Image img={require('../../img/litellm_thinking_openweb.gif')} />
 
 ## Additional Resources
-- Running LiteLLM and OpenWebUI on Windows Localhost: A Comprehensive Guide [https://www.tanyongsheng.com/note/running-litellm-and-openwebui-on-windows-localhost-a-comprehensive-guide/](https://www.tanyongsheng.com/note/running-litellm-and-openwebui-on-windows-localhost-a-comprehensive-guide/)
+- Running LiteLLM and Open WebUI on Windows Localhost: A Comprehensive Guide [https://www.tanyongsheng.com/note/running-litellm-and-openwebui-on-windows-localhost-a-comprehensive-guide/](https://www.tanyongsheng.com/note/running-litellm-and-openwebui-on-windows-localhost-a-comprehensive-guide/)
+
+
+## Add Custom Headers to Spend Tracking
+
+You can add custom headers to the request to track spend and usage.
+
+```yaml
+litellm_settings:
+  extra_spend_tag_headers:
+    - "x-custom-header"
+```
+
+You can add custom headers to the request to track spend and usage.
+
+<Image img={require('../../img/custom_tag_headers.png')} />

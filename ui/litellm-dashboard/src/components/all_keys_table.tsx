@@ -33,8 +33,12 @@ import {
   TableBody,
   TableRow,
   TableCell,
+  Icon,
 } from "@tremor/react";
-import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
+import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
+import { Badge, Text } from "@tremor/react";
+import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 interface AllKeysTableProps {
   keys: KeyResponse[];
@@ -63,6 +67,7 @@ interface AllKeysTableProps {
     sortBy: string;
     sortOrder: 'asc' | 'desc';
   };
+  premiumUser: boolean;
 }
 
 // Define columns similar to our logs table
@@ -137,6 +142,7 @@ export function AllKeysTable({
   refresh,
   onSortChange,
   currentSort,
+  premiumUser,
 }: AllKeysTableProps) {
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
   const [userList, setUserList] = useState<UserResponse[]>([]);
@@ -152,6 +158,7 @@ export function AllKeysTable({
       desc: true
     }];
   });
+  const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
   // Use the filter logic hook
 
@@ -276,7 +283,11 @@ export function AllKeysTable({
       cell: (info) => {
         const userId = info.getValue() as string;
         const user = userList.find(u => u.user_id === userId);
-        return user?.user_email ? user.user_email : "-";
+        return user?.user_email ? (
+          <Tooltip title={user?.user_email}>
+            <span>{user?.user_email.slice(0, 20)}...</span>
+          </Tooltip>
+        ) : "-";
       },
     },
     {
@@ -284,12 +295,15 @@ export function AllKeysTable({
       accessorKey: "user_id",
       header: "User ID",
       cell: (info) => {
-        const userId = info.getValue() as string;
-        return userId ? (
-          <Tooltip title={userId}>
-            <span>{userId.slice(0, 7)}...</span>
-          </Tooltip>
-        ) : "-";
+        const userId = info.getValue() as string | null;
+        if (userId && userId.length > 15) {
+          return (
+            <Tooltip title={userId}>
+              <span>{userId.slice(0, 7)}...</span>
+            </Tooltip>
+          );
+        }
+        return userId ? userId : "-";
       },
     },
     {
@@ -306,8 +320,24 @@ export function AllKeysTable({
       accessorKey: "created_by",
       header: "Created By",
       cell: (info) => {
+        const value = info.getValue() as string | null;
+        if (value && value.length > 15) {
+          return (
+            <Tooltip title={value}>
+              <span>{value.slice(0, 7)}...</span>
+            </Tooltip>
+          );
+        }
+        return value;
+      },
+    },
+    {
+      id: "updated_at",
+      accessorKey: "updated_at",
+      header: "Updated At",
+      cell: (info) => {
         const value = info.getValue();
-        return value ? value : "Unknown";
+        return value ? new Date(value as string).toLocaleDateString() : "Never";
       },
     },
     {
@@ -323,16 +353,19 @@ export function AllKeysTable({
       id: "spend",
       accessorKey: "spend",
       header: "Spend (USD)",
-      cell: (info) => Number(info.getValue()).toFixed(4),
+      cell: (info) => formatNumberWithCommas(info.getValue() as number, 4),
     },
     {
       id: "max_budget",
       accessorKey: "max_budget",
       header: "Budget (USD)",
-      cell: (info) =>
-        info.getValue() !== null && info.getValue() !== undefined
-          ? info.getValue()
-          : "Unlimited",
+      cell: (info) => {
+        const maxBudget = info.getValue() as number | null;
+        if (maxBudget === null) {
+          return "Unlimited";
+        }
+        return `$${formatNumberWithCommas(maxBudget)}`;
+      },
     },
     {
       id: "budget_reset_at",
@@ -350,19 +383,93 @@ export function AllKeysTable({
       cell: (info) => {
         const models = info.getValue() as string[];
         return (
-          <div className="flex flex-wrap gap-1">
-            {models && models.length > 0 ? (
-              models.map((model, index) => (
-                <span
-                  key={index}
-                  className="px-2 py-1 bg-blue-100 rounded text-xs"
-                >
-                  {model}
-                </span>
-              ))
-            ) : (
-              "-"
-            )}
+          <div className="flex flex-col py-2">
+            {Array.isArray(models) ? (
+              <div className="flex flex-col">
+                {models.length === 0 ? (
+                  <Badge size={"xs"} className="mb-1" color="red">
+                    <Text>All Proxy Models</Text>
+                  </Badge>
+                ) : (
+                  <>
+                    <div className="flex items-start">
+                      {models.length > 3 && (
+                        <div>
+                          <Icon
+                            icon={expandedAccordions[info.row.id] ? ChevronDownIcon : ChevronRightIcon}
+                            className="cursor-pointer"
+                            size="xs"
+                            onClick={() => {
+                              setExpandedAccordions(prev => ({
+                                ...prev,
+                                [info.row.id]: !prev[info.row.id]
+                              }));
+                            }}
+                          />
+                        </div>
+                      )}
+                      <div className="flex flex-wrap gap-1">
+                        {models.slice(0, 3).map((model, index) => (
+                          model === "all-proxy-models" ? (
+                            <Badge
+                              key={index}
+                              size={"xs"}
+                              color="red"
+                            >
+                              <Text>All Proxy Models</Text>
+                            </Badge>
+                          ) : (
+                            <Badge
+                              key={index}
+                              size={"xs"}
+                              color="blue"
+                            >
+                              <Text>
+                                {model.length > 30
+                                  ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                  : getModelDisplayName(model)}
+                              </Text>
+                            </Badge>
+                          )
+                        ))}
+                        {models.length > 3 && !expandedAccordions[info.row.id] && (
+                          <Badge size={"xs"} color="gray" className="cursor-pointer">
+                            <Text>+{models.length - 3} {models.length - 3 === 1 ? 'more model' : 'more models'}</Text>
+                          </Badge>
+                        )}
+                        {expandedAccordions[info.row.id] && (
+                          <div className="flex flex-wrap gap-1">
+                            {models.slice(3).map((model, index) => (
+                              model === "all-proxy-models" ? (
+                                <Badge
+                                  key={index + 3}
+                                  size={"xs"}
+                                  color="red"
+                                >
+                                  <Text>All Proxy Models</Text>
+                                </Badge>
+                              ) : (
+                                <Badge
+                                  key={index + 3}
+                                  size={"xs"}
+                                  color="blue"
+                                >
+                                  <Text>
+                                    {model.length > 30
+                                      ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                      : getModelDisplayName(model)}
+                                  </Text>
+                                </Badge>
+                              )
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : null}
           </div>
         );
       },
@@ -515,6 +622,7 @@ export function AllKeysTable({
           userID={userID}
           userRole={userRole}
           teams={allTeams}
+          premiumUser={premiumUser}
         />
       ) : (
         <div className="border-b py-4 flex-1 overflow-hidden">
@@ -608,11 +716,12 @@ export function AllKeysTable({
                           {row.getVisibleCells().map((cell) => (
                             <TableCell
                               key={cell.id}
-                              className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${
-                                cell.column.id === 'actions'
-                                  ? 'sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]'
-                                  : ''
-                              }`}
+                              style={{
+                                maxWidth: "8-x",
+                                whiteSpace: "pre-wrap",
+                                overflow: "hidden",
+                              }}
+                              className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${cell.column.id === 'models' && (cell.getValue() as string[]).length > 3 ? "px-0" : ""}`}
                             >
                               {flexRender(cell.column.columnDef.cell, cell.getContext())}
                             </TableCell>

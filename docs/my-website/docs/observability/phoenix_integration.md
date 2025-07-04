@@ -1,6 +1,6 @@
 import Image from '@theme/IdealImage';
 
-# Phoenix OSS
+# Arize Phoenix OSS
 
 Open source tracing and evaluation platform
 

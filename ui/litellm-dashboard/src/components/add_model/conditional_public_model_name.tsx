@@ -40,11 +40,14 @@ const ConditionalPublicModelName: React.FC = () => {
       const currentMappings = form.getFieldValue('model_mappings') || [];
       
       // Only update if the mappings don't exist or don't match the selected models
-      const shouldUpdateMappings = currentMappings.length !== selectedModels.length || 
-        !selectedModels.every(model => 
-          currentMappings.some((mapping: { public_name: string; litellm_model: string }) => 
-            mapping.public_name === model || 
-            (model === 'custom' && mapping.public_name === customModelName)));
+      const shouldUpdateMappings = currentMappings.length !== selectedModels.length ||
+        !selectedModels.every(model =>
+          currentMappings.some((mapping: { public_name: string; litellm_model: string }) => {
+            if (model === 'custom') {
+              return mapping.litellm_model === 'custom' || mapping.litellm_model === customModelName;
+            }
+            return mapping.litellm_model === model;
+          }));
       
       if (shouldUpdateMappings) {
         const mappings = selectedModels.map((model: string) => {

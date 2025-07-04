@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { Button as TremorButton, Text } from "@tremor/react";
-import { Modal, Table, Upload, message } from "antd";
-import { UploadOutlined, DownloadOutlined } from "@ant-design/icons";
+import { Modal, Table, Upload, message, Alert, Typography } from "antd";
+import { UploadOutlined, DownloadOutlined, WarningOutlined, FileTextOutlined, DeleteOutlined, FileExclamationOutlined } from "@ant-design/icons";
 import { userCreateCall, invitationCreateCall, getProxyUISettings } from "./networking";
 import Papa from "papaparse";
-import { CheckCircleIcon, XCircleIcon } from "@heroicons/react/outline";
+import { CheckCircleIcon, XCircleIcon, ExclamationIcon } from "@heroicons/react/outline";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { InvitationLink } from "./onboarding_link";
 
@@ -49,6 +49,9 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
   const [parsedData, setParsedData] = useState<UserData[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
+  const [csvStructureError, setCsvStructureError] = useState<string | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uiSettings, setUISettings] = useState<UISettings | null>(null);
   const [baseUrl, setBaseUrl] = useState("http://localhost:4000");
 
@@ -89,22 +92,80 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
   };
 
   const handleFileUpload = (file: File) => {
+    // Reset all error states
     setParseError(null);
+    setCsvStructureError(null);
+    setFileError(null);
+    
+    // Set the selected file - always show the file even if it's invalid
+    setSelectedFile(file);
+    
+    // Check file type
+    if (file.type !== 'text/csv' && !file.name.endsWith('.csv')) {
+      setFileError(`Invalid file type: ${file.name}. Please upload a CSV file (.csv extension).`);
+      message.error("Invalid file type. Please upload a CSV file.");
+      return false;
+    }
+    
+    // Check file size (limit to 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      setFileError(`File is too large (${(file.size / (1024 * 1024)).toFixed(1)} MB). Please upload a CSV file smaller than 5MB.`);
+      return false;
+    }
+
     Papa.parse(file, {
       complete: (results) => {
+        // Check if file is empty
+        if (!results.data || results.data.length === 0) {
+          setCsvStructureError("The CSV file appears to be empty. Please upload a file with data.");
+          setParsedData([]);
+          return;
+        }
+        
+        // Check if there's only header row
+        if (results.data.length === 1) {
+          setCsvStructureError("The CSV file only contains headers but no user data. Please add user data to your CSV.");
+          setParsedData([]);
+          return;
+        }
+        
         const headers = results.data[0] as string[];
+        
+        // Check if headers exist
+        if (headers.length === 0 || (headers.length === 1 && headers[0] === '')) {
+          setCsvStructureError("The CSV file doesn't contain any column headers. Please make sure your CSV has headers.");
+          setParsedData([]);
+          return;
+        }
+        
         const requiredColumns = ['user_email', 'user_role'];
         
         // Check if all required columns are present
         const missingColumns = requiredColumns.filter(col => !headers.includes(col));
         if (missingColumns.length > 0) {
-          setParseError(`Your CSV is missing these required columns: ${missingColumns.join(', ')}`);
+          setCsvStructureError(`Your CSV is missing these required columns: ${missingColumns.join(', ')}. Please add these columns to your CSV file.`);
           setParsedData([]);
           return;
         }
 
         try {
           const userData = results.data.slice(1).map((row: any, index: number) => {
+            // Skip empty rows
+            if (row.length === 0 || (row.length === 1 && row[0] === '')) {
+              return null;
+            }
+            
+            // Check if row has enough columns
+            if (row.length < headers.length) {
+              return {
+                rowNumber: index + 2,
+                isValid: false,
+                error: `Row ${index + 2} has fewer columns than the header row. Please ensure all data is properly formatted.`,
+                user_email: '',
+                user_role: ''
+              } as UserData;
+            }
+            
             const user: UserData = {
               user_email: row[headers.indexOf("user_email")]?.trim() || '',
               user_role: row[headers.indexOf("user_role")]?.trim() || '',
@@ -119,19 +180,50 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
 
             // Validate the row
             const errors: string[] = [];
-            if (!user.user_email) errors.push('Email is required');
-            if (!user.user_role) errors.push('Role is required');
-            if (user.user_email && !user.user_email.includes('@')) errors.push('Invalid email format');
             
-            // Validate user role
-            const validRoles = ['proxy_admin', 'proxy_admin_view_only', 'internal_user', 'internal_user_view_only'];
-            if (user.user_role && !validRoles.includes(user.user_role)) {
-              errors.push(`Invalid role. Must be one of: ${validRoles.join(', ')}`);
+            // Email validation
+            if (!user.user_email) {
+              errors.push('Email is required');
+            } else if (!user.user_email.includes('@') || !user.user_email.includes('.')) {
+              errors.push('Invalid email format (must contain @ and domain)');
             }
             
-            // Validate max_budget if provided
-            if (user.max_budget && isNaN(parseFloat(user.max_budget.toString()))) {
-              errors.push('Max budget must be a number');
+            // Role validation
+            if (!user.user_role) {
+              errors.push('Role is required');
+            } else {
+              // Validate user role
+              const validRoles = ['proxy_admin', 'proxy_admin_view_only', 'internal_user', 'internal_user_view_only'];
+              if (!validRoles.includes(user.user_role)) {
+                errors.push(`Invalid role "${user.user_role}". Must be one of: ${validRoles.join(', ')}`);
+              }
+            }
+            
+            // Budget validation
+            if (user.max_budget && user.max_budget.toString().trim() !== '') {
+              if (isNaN(parseFloat(user.max_budget.toString()))) {
+                errors.push(`Max budget "${user.max_budget}" must be a number`);
+              } else if (parseFloat(user.max_budget.toString()) <= 0) {
+                errors.push('Max budget must be greater than 0');
+              }
+            }
+            
+            // Budget duration validation
+            if (user.budget_duration && !user.budget_duration.match(/^\d+[dhmwy]$|^\d+mo$/)) {
+              errors.push(`Invalid budget duration format "${user.budget_duration}". Use format like "30d", "1mo", "2w", "6h"`);
+            }
+            
+            // Teams validation
+            if (user.teams && typeof user.teams === 'string') {
+              // Check if teams exist (if teams data is available)
+              if (teams && teams.length > 0) {
+                const teamIds = teams.map(t => t.team_id);
+                const userTeams = user.teams.split(',').map(t => t.trim());
+                const invalidTeams = userTeams.filter(t => !teamIds.includes(t));
+                if (invalidTeams.length > 0) {
+                  errors.push(`Unknown team(s): ${invalidTeams.join(', ')}`);
+                }
+              }
             }
 
             if (errors.length > 0) {
@@ -140,15 +232,17 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
             }
 
             return user;
-          });
+          }).filter(Boolean) as UserData[]; // Filter out null values (empty rows)
 
           const validData = userData.filter(user => user.isValid);
           setParsedData(userData);
 
-          if (validData.length === 0) {
-            setParseError('No valid users found in the CSV. Please check the errors below.');
+          if (userData.length === 0) {
+            setCsvStructureError("No valid data rows found in the CSV file. Please check your file format.");
+          } else if (validData.length === 0) {
+            setParseError('No valid users found in the CSV. Please check the errors below and fix your CSV file.');
           } else if (validData.length < userData.length) {
-            setParseError(`Found ${userData.length - validData.length} row(s) with errors. Please correct them before proceeding.`);
+            setParseError(`Found ${userData.length - validData.length} row(s) with errors out of ${userData.length} total rows. Please correct them before proceeding.`);
           } else {
             message.success(`Successfully parsed ${validData.length} users`);
           }
@@ -167,6 +261,14 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
     return false;
   };
 
+  const removeSelectedFile = () => {
+    setSelectedFile(null);
+    setParsedData([]);
+    setParseError(null);
+    setCsvStructureError(null);
+    setFileError(null);
+  };
+
   const handleBulkCreate = async () => {
     setIsProcessing(true);
     const updatedData = parsedData.map(user => ({ ...user, status: 'pending' }));
@@ -177,24 +279,50 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
     for (let index = 0; index < updatedData.length; index++) {
       const user = updatedData[index];
       try {
-        // Convert teams from comma-separated string to array if provided
-        const processedUser = { ...user };
-        if (processedUser.teams && typeof processedUser.teams === 'string') {
-          processedUser.teams = processedUser.teams.split(',').map(team => team.trim());
+        // Create a clean user object with only non-empty values
+        const cleanUser: Partial<UserData> = {
+          user_email: user.user_email,
+          user_role: user.user_role
+        };
+        
+        // Only add optional fields if they have values
+        if (user.teams && typeof user.teams === 'string' && user.teams.trim() !== '') {
+          cleanUser.teams = user.teams.split(',').map(team => team.trim()).filter(Boolean);
+          // Only include teams if there's at least one valid team
+          if (cleanUser.teams.length === 0) {
+            delete cleanUser.teams;
+          }
         }
         
-        // Convert models from comma-separated string to array if provided
-        if (processedUser.models && typeof processedUser.models === 'string') {
-          processedUser.models = processedUser.models.split(',').map(model => model.trim());
+        // Only add models if provided and non-empty
+        if (user.models && typeof user.models === 'string' && user.models.trim() !== '') {
+          cleanUser.models = user.models.split(',').map(model => model.trim()).filter(Boolean);
+          // Only include models if there's at least one valid model
+          if (cleanUser.models.length === 0) {
+            delete cleanUser.models;
+          }
         }
         
-        // Convert max_budget to number if provided
-        if (processedUser.max_budget && processedUser.max_budget.toString().trim() !== '') {
-          processedUser.max_budget = parseFloat(processedUser.max_budget.toString());
+        // Only add max_budget if it's a valid number
+        if (user.max_budget && user.max_budget.toString().trim() !== '') {
+          const budgetValue = parseFloat(user.max_budget.toString());
+          if (!isNaN(budgetValue) && budgetValue > 0) {
+            cleanUser.max_budget = budgetValue;
+          }
+        }
+        
+        // Only add budget_duration if provided and non-empty
+        if (user.budget_duration && user.budget_duration.trim() !== '') {
+          cleanUser.budget_duration = user.budget_duration.trim();
+        }
+        
+        // Only add metadata if provided and non-empty
+        if (user.metadata && typeof user.metadata === 'string' && user.metadata.trim() !== '') {
+          cleanUser.metadata = user.metadata.trim();
         }
 
-        
-        const response = await userCreateCall(accessToken, null, processedUser);
+        console.log('Sending user data:', cleanUser);
+        const response = await userCreateCall(accessToken, null, cleanUser);
         console.log('Full response:', response);
         
         // Check if response has key or user_id, indicating success
@@ -487,19 +615,81 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
               </div>
               
               <div className="ml-11">
-                <Upload
-                  beforeUpload={handleFileUpload}
-                  accept=".csv"
-                  maxCount={1}
-                  showUploadList={false}
-                >
-                  <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-500 transition-colors cursor-pointer">
-                    <UploadOutlined className="text-3xl text-gray-400 mb-2" />
-                    <p className="mb-1">Drag and drop your CSV file here</p>
-                    <p className="text-sm text-gray-500 mb-3">or</p>
-                    <TremorButton size="sm">Browse files</TremorButton>
+                {selectedFile ? (
+                  <div className={`mb-4 p-4 rounded-md border ${fileError ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center">
+                        {fileError ? (
+                          <FileExclamationOutlined className="text-red-500 text-xl mr-3" />
+                        ) : (
+                          <FileTextOutlined className="text-blue-500 text-xl mr-3" />
+                        )}
+                        <div>
+                          <Typography.Text strong className={fileError ? "text-red-800" : "text-blue-800"}>
+                            {selectedFile.name}
+                          </Typography.Text>
+                          <Typography.Text className={`block text-xs ${fileError ? "text-red-600" : "text-blue-600"}`}>
+                            {(selectedFile.size / 1024).toFixed(1)} KB • {new Date().toLocaleDateString()}
+                          </Typography.Text>
+                        </div>
+                      </div>
+                      <TremorButton
+                        size="xs"
+                        variant="secondary"
+                        onClick={removeSelectedFile}
+                        className="flex items-center"
+                      >
+                        <DeleteOutlined className="mr-1" /> Remove
+                      </TremorButton>
+                    </div>
+                    
+                    {fileError ? (
+                      <div className="mt-3 text-red-600 text-sm flex items-start">
+                        <WarningOutlined className="mr-2 mt-0.5" />
+                        <span>{fileError}</span>
+                      </div>
+                    ) : !csvStructureError && (
+                      <div className="mt-3 flex items-center">
+                        <div className="w-full bg-gray-200 rounded-full h-1.5">
+                          <div className="bg-blue-500 h-1.5 rounded-full w-full animate-pulse"></div>
+                        </div>
+                        <span className="ml-2 text-xs text-blue-600">Processing...</span>
+                      </div>
+                    )}
                   </div>
-                </Upload>
+                ) : (
+                  <Upload
+                    beforeUpload={handleFileUpload}
+                    accept=".csv"
+                    maxCount={1}
+                    showUploadList={false}
+                  >
+                    <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-500 transition-colors cursor-pointer">
+                      <UploadOutlined className="text-3xl text-gray-400 mb-2" />
+                      <p className="mb-1">Drag and drop your CSV file here</p>
+                      <p className="text-sm text-gray-500 mb-3">or</p>
+                      <TremorButton size="sm">Browse files</TremorButton>
+                      <p className="text-xs text-gray-500 mt-4">Only CSV files (.csv) are supported</p>
+                    </div>
+                  </Upload>
+                )}
+                
+                {csvStructureError && (
+                  <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-md">
+                    <div className="flex items-start">
+                      <ExclamationIcon className="h-5 w-5 text-yellow-500 mr-2 mt-0.5" />
+                      <div>
+                        <Typography.Text strong className="text-yellow-800">CSV Structure Error</Typography.Text>
+                        <Typography.Paragraph className="text-yellow-700 mt-1 mb-0">
+                          {csvStructureError}
+                        </Typography.Paragraph>
+                        <Typography.Paragraph className="text-yellow-700 mt-2 mb-0">
+                          Please download our template and ensure your CSV follows the required format.
+                        </Typography.Paragraph>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           ) : (
@@ -515,7 +705,19 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
               
               {parseError && (
                 <div className="ml-11 mb-4 p-4 bg-red-50 border border-red-200 rounded-md">
-                  <Text className="text-red-600 font-medium">{parseError}</Text>
+                  <div className="flex items-start">
+                    <WarningOutlined className="text-red-500 mr-2 mt-1" />
+                    <div>
+                      <Text className="text-red-600 font-medium">{parseError}</Text>
+                      {parsedData.some(user => !user.isValid) && (
+                        <ul className="mt-2 list-disc list-inside text-red-600 text-sm">
+                          <li>Check the table below for specific errors in each row</li>
+                          <li>Common issues include invalid email formats, missing required fields, or incorrect role values</li>
+                          <li>Fix these issues in your CSV file and upload again</li>
+                        </ul>
+                      )}
+                    </div>
+                  </div>
                 </div>
               )}
               
@@ -642,4 +844,4 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
   );
 };
 
-export default BulkCreateUsersButton; 
+export default BulkCreateUsersButton;

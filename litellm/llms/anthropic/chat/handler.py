@@ -4,7 +4,17 @@ Calling + translation logic for anthropic's `/v1/messages` endpoint
 
 import copy
 import json
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import httpx  # type: ignore
 
@@ -12,9 +22,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
-from litellm import LlmProviders
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -36,15 +44,20 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import (
     Delta,
     GenericStreamingChunk,
+    LlmProviders,
+    ModelResponse,
     ModelResponseStream,
     StreamingChoices,
     Usage,
 )
-from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
 
 from ...base import BaseLLM
 from ..common_utils import AnthropicError, process_anthropic_headers
 from .transformation import AnthropicConfig
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.llms.base_llm.chat.transformation import BaseConfig
 
 
 async def make_call(
@@ -181,6 +194,8 @@ class AnthropicChatCompletion(BaseLLM):
         logger_fn=None,
         headers={},
     ):
+        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
         data["stream"] = True
 
         completion_stream, headers = await make_call(
@@ -221,11 +236,11 @@ class AnthropicChatCompletion(BaseLLM):
         optional_params: dict,
         json_mode: bool,
         litellm_params: dict,
-        provider_config: BaseConfig,
+        provider_config: "BaseConfig",
         logger_fn=None,
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
-    ) -> Union[ModelResponse, CustomStreamWrapper]:
+    ) -> Union[ModelResponse, "CustomStreamWrapper"]:
         async_handler = client or get_async_httpx_client(
             llm_provider=litellm.LlmProviders.ANTHROPIC
         )
@@ -290,6 +305,9 @@ class AnthropicChatCompletion(BaseLLM):
         headers={},
         client=None,
     ):
+        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+        from litellm.utils import ProviderConfigManager
+
         optional_params = copy.deepcopy(optional_params)
         stream = optional_params.pop("stream", None)
         json_mode: bool = optional_params.pop("json_mode", False)
@@ -497,9 +515,7 @@ class ModelResponseIterator:
             usage_object=cast(dict, anthropic_usage_chunk), reasoning_content=None
         )
 
-    def _content_block_delta_helper(
-        self, chunk: dict
-    ) -> Tuple[
+    def _content_block_delta_helper(self, chunk: dict) -> Tuple[
         str,
         Optional[ChatCompletionToolCallChunk],
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]],
@@ -564,6 +580,37 @@ class ModelResponseIterator:
                 reasoning_content += thinking_content
         return reasoning_content
 
+    def _handle_redacted_thinking_content(
+        self,
+        content_block_start: ContentBlockStart,
+        provider_specific_fields: Dict[str, Any],
+    ) -> Tuple[List[ChatCompletionRedactedThinkingBlock], Dict[str, Any]]:
+        """
+        Handle the redacted thinking content
+        """
+        thinking_blocks = [
+            ChatCompletionRedactedThinkingBlock(
+                type="redacted_thinking",
+                data=content_block_start["content_block"]["data"],  # type: ignore
+            )
+        ]
+        provider_specific_fields["thinking_blocks"] = thinking_blocks
+
+        return thinking_blocks, provider_specific_fields
+
+    def get_content_block_start(self, chunk: dict) -> ContentBlockStart:
+        from litellm.types.llms.anthropic import (
+            ContentBlockStartText,
+            ContentBlockStartToolUse,
+        )
+
+        if chunk.get("content_block", {}).get("type") == "tool_use":
+            content_block_start = ContentBlockStartToolUse(**chunk)  # type: ignore
+        else:
+            content_block_start = ContentBlockStartText(**chunk)  # type: ignore
+
+        return content_block_start
+
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
             type_chunk = chunk.get("type", "") or ""
@@ -603,7 +650,8 @@ class ModelResponseIterator:
                 event: content_block_start
                 data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01T1x1fJ34qAmk2tNTrN7Up6","name":"get_weather","input":{}}}
                 """
-                content_block_start = ContentBlockStart(**chunk)  # type: ignore
+
+                content_block_start = self.get_content_block_start(chunk=chunk)
                 self.content_blocks = []  # reset content blocks when new block starts
                 if content_block_start["content_block"]["type"] == "text":
                     text = content_block_start["content_block"]["text"]
@@ -621,12 +669,13 @@ class ModelResponseIterator:
                 elif (
                     content_block_start["content_block"]["type"] == "redacted_thinking"
                 ):
-                    thinking_blocks = [
-                        ChatCompletionRedactedThinkingBlock(
-                            type="redacted_thinking",
-                            data=content_block_start["content_block"]["data"],
-                        )
-                    ]
+                    (
+                        thinking_blocks,
+                        provider_specific_fields,
+                    ) = self._handle_redacted_thinking_content(  # type: ignore
+                        content_block_start=content_block_start,
+                        provider_specific_fields=provider_specific_fields,
+                    )
             elif type_chunk == "content_block_stop":
                 ContentBlockStop(**chunk)  # type: ignore
                 # check if tool call content block

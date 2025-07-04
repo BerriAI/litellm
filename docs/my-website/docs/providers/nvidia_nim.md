@@ -10,10 +10,19 @@ https://docs.api.nvidia.com/nim/reference/
 
 :::
 
+| Property | Details |
+|-------|-------|
+| Description | Nvidia NIM is a platform that provides a simple API for deploying and using AI models. LiteLLM supports all models from [Nvidia NIM](https://developer.nvidia.com/nim/) |
+| Provider Route on LiteLLM | `nvidia_nim/` |
+| Provider Doc | [Nvidia NIM Docs ↗](https://developer.nvidia.com/nim/) |
+| API Endpoint for Provider | https://integrate.api.nvidia.com/v1/ |
+| Supported OpenAI Endpoints | `/chat/completions`, `/completions`, `/responses`, `/embeddings` |
+
 ## API Key
 ```python
 # env variable
-os.environ['NVIDIA_NIM_API_KEY']
+os.environ['NVIDIA_NIM_API_KEY'] = ""
+os.environ['NVIDIA_NIM_API_BASE'] = "" # [OPTIONAL] - default is https://integrate.api.nvidia.com/v1/
 ```
 
 ## Sample Usage
@@ -100,6 +109,7 @@ Here's how to call an Nvidia NIM Endpoint with the LiteLLM Proxy Server
       litellm_params:
         model: nvidia_nim/<your-model-name>  # add nvidia_nim/ prefix to route as Nvidia NIM provider
         api_key: api-key                 # api key to send your model
+       # api_base: "" # [OPTIONAL] - default is https://integrate.api.nvidia.com/v1/
   ```
 
 

@@ -12,7 +12,10 @@ from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
+from litellm.llms.custom_httpx.http_handler import (
+    _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+    AsyncHTTPHandler,
+)
 
 
 class OpenAIError(BaseLLMException):
@@ -196,6 +199,8 @@ class BaseOpenAILLM:
         return httpx.AsyncClient(
             limits=httpx.Limits(max_connections=1000, max_keepalive_connections=100),
             verify=litellm.ssl_verify,
+            transport=AsyncHTTPHandler._create_async_transport(),
+            follow_redirects=True,
         )
 
     @staticmethod
@@ -205,4 +210,5 @@ class BaseOpenAILLM:
         return httpx.Client(
             limits=httpx.Limits(max_connections=1000, max_keepalive_connections=100),
             verify=litellm.ssl_verify,
+            follow_redirects=True,
         )

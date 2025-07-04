@@ -604,6 +604,73 @@ def test_redact_msgs_from_logs():
     print("Test passed")
 
 
+def test_redact_embedding_response():
+    """
+    Tests that EmbeddingResponse redaction preserves critical metadata while clearing sensitive data
+
+    This test ensures that:
+    1. usage field is preserved for token/cost tracking
+    2. model field is preserved for response structure integrity
+    3. data field (containing embeddings) is cleared for privacy
+    4. original response object is not modified
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.redact_messages import (
+        redact_message_input_output_from_logging,
+    )
+
+    litellm.turn_off_message_logging = True
+
+    # Create a test EmbeddingResponse with usage data
+    original_usage = litellm.Usage(prompt_tokens=10, completion_tokens=0, total_tokens=10)
+    original_data = [
+        {"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3, 0.4, 0.5]},
+        {"object": "embedding", "index": 1, "embedding": [0.6, 0.7, 0.8, 0.9, 1.0]}
+    ]
+
+    response_obj = litellm.EmbeddingResponse(
+        model="text-embedding-ada-002",
+        data=original_data,
+        usage=original_usage,
+        object="list"
+    )
+
+    litellm_logging_obj = Logging(
+        model="text-embedding-ada-002",
+        messages=[{"role": "user", "content": "test input"}],
+        stream=False,
+        call_type="embedding",
+        litellm_call_id="1234",
+        start_time=datetime.now(),
+        function_id="1234",
+    )
+
+    _redacted_response_obj = redact_message_input_output_from_logging(
+        result=response_obj,
+        model_call_details=litellm_logging_obj.model_call_details,
+    )
+
+    # Assert the original response_obj is NOT modified
+    assert response_obj.data == original_data
+    assert response_obj.usage == original_usage
+    assert response_obj.model == "text-embedding-ada-002"
+    assert response_obj.object == "list"
+
+    # Assert the redacted response preserves critical metadata
+    assert _redacted_response_obj.usage == original_usage  # usage should be preserved
+    assert _redacted_response_obj.model == "text-embedding-ada-002"  # model should be preserved
+    assert _redacted_response_obj.object == "list"  # object should be preserved
+
+    # Assert sensitive data is cleared
+    assert _redacted_response_obj.data == []  # data should be cleared
+
+    # Assert it's still an EmbeddingResponse instance
+    assert isinstance(_redacted_response_obj, litellm.EmbeddingResponse)
+
+    litellm.turn_off_message_logging = False
+    print("Test passed")
+
+
 def test_redact_msgs_from_logs_with_dynamic_params():
     """
     Tests redaction behavior based on standard_callback_dynamic_params setting:
@@ -1024,20 +1091,25 @@ def test_async_http_handler(mock_async_client):
     event_hooks = {"request": [lambda r: r]}
     concurrent_limit = 2
 
-    AsyncHTTPHandler(timeout, event_hooks, concurrent_limit)
+    # Mock the transport creation to return a specific transport
+    with mock.patch.object(AsyncHTTPHandler, '_create_async_transport') as mock_create_transport:
+        mock_transport = mock.MagicMock()
+        mock_create_transport.return_value = mock_transport
 
-    mock_async_client.assert_called_with(
-        cert="/client.pem",
-        transport=None,
-        event_hooks=event_hooks,
-        headers=headers,
-        limits=httpx.Limits(
-            max_connections=concurrent_limit,
-            max_keepalive_connections=concurrent_limit,
-        ),
-        timeout=timeout,
-        verify="/certificate.pem",
-    )
+        AsyncHTTPHandler(timeout, event_hooks, concurrent_limit)
+
+        mock_async_client.assert_called_with(
+            cert="/client.pem",
+            transport=mock_transport,
+            event_hooks=event_hooks,
+            headers=headers,
+            limits=httpx.Limits(
+                max_connections=concurrent_limit,
+                max_keepalive_connections=concurrent_limit,
+            ),
+            timeout=timeout,
+            verify="/certificate.pem",
+        )
 
 
 @mock.patch("httpx.AsyncClient")
@@ -1053,6 +1125,7 @@ def test_async_http_handler_force_ipv4(mock_async_client):
 
     # Set force_ipv4 to True
     litellm.force_ipv4 = True
+    litellm.disable_aiohttp_transport = True
 
     try:
         timeout = 120
@@ -1253,20 +1326,20 @@ def test_get_end_user_id_for_cost_tracking(
 
 
 @pytest.mark.parametrize(
-    "litellm_params, disable_end_user_cost_tracking_prometheus_only, expected_end_user_id",
+    "litellm_params, enable_end_user_cost_tracking_prometheus_only, expected_end_user_id",
     [
-        ({}, False, None),
-        ({"user_api_key_end_user_id": "123"}, False, "123"),
-        ({"user_api_key_end_user_id": "123"}, True, None),
+        ({}, True, None),
+        ({"user_api_key_end_user_id": "123"}, True, "123"),
+        ({"user_api_key_end_user_id": "123"}, False, None),
     ],
 )
 def test_get_end_user_id_for_cost_tracking_prometheus_only(
-    litellm_params, disable_end_user_cost_tracking_prometheus_only, expected_end_user_id
+    litellm_params, enable_end_user_cost_tracking_prometheus_only, expected_end_user_id
 ):
     from litellm.utils import get_end_user_id_for_cost_tracking
 
-    litellm.disable_end_user_cost_tracking_prometheus_only = (
-        disable_end_user_cost_tracking_prometheus_only
+    litellm.enable_end_user_cost_tracking_prometheus_only = (
+        enable_end_user_cost_tracking_prometheus_only
     )
     assert (
         get_end_user_id_for_cost_tracking(
@@ -2102,10 +2175,10 @@ def test_get_provider_audio_transcription_config():
 
 def test_claude_3_7_sonnet_supports_pdf_input(model, expected_bool):
     from litellm.utils import supports_pdf_input
-    
+
     assert supports_pdf_input(model) == expected_bool
 
-    
+
 def test_get_valid_models_from_provider():
     """
     Test that get_valid_models returns the correct models for a given provider
@@ -2158,4 +2231,24 @@ def test_get_valid_models_from_dynamic_api_key():
     assert len(valid_models) > 0
     assert "anthropic/claude-3-7-sonnet-20250219" in valid_models
 
-    
+
+
+def test_get_whitelisted_models():
+    """
+    Snapshot of all bedrock models as of 12/24/2024.
+
+    Enforce any new bedrock chat model to be added as `bedrock_converse` unless explicitly whitelisted.
+
+    Create whitelist to prevent naming regressions for older litellm versions.
+    """
+    whitelisted_models = []
+    for model, info in litellm.model_cost.items():
+        if info["litellm_provider"] == "bedrock" and info["mode"] == "chat":
+            whitelisted_models.append(model)
+
+        # Write to a local file
+    with open("whitelisted_bedrock_models.txt", "w") as file:
+        for model in whitelisted_models:
+            file.write(f"{model}\n")
+
+    print("whitelisted_models written to whitelisted_bedrock_models.txt")

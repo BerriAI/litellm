@@ -33,6 +33,9 @@ import {
   getPossibleUserRoles,
   userFilterUICall,
 } from "./networking";
+import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
+import PremiumVectorStoreSelector from "./common_components/PremiumVectorStoreSelector";
+import PremiumMCPSelector from "./common_components/PremiumMCPSelector";
 import { Team } from "./key_team_helpers/key_list";
 import TeamDropdown from "./common_components/team_dropdown";
 import { InfoCircleOutlined } from '@ant-design/icons';
@@ -41,6 +44,7 @@ import Createuser from "./create_user_button";
 import debounce from 'lodash/debounce';
 import { rolesWithWriteAccess } from '../utils/roles';
 import BudgetDurationDropdown from "./common_components/budget_duration_dropdown";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 
 
@@ -54,6 +58,7 @@ interface CreateKeyProps {
   data: any[] | null;
   teams: Team[] | null;
   addKey: (data: any) => void;
+  premiumUser?: boolean;
 }
 
 interface User {
@@ -104,7 +109,8 @@ export const fetchTeamModels = async (userID: string, userRole: string, accessTo
         userID,
         userRole,
         true,
-        teamID
+        teamID,
+        true
       );
       let available_model_names = model_available["data"].map(
         (element: { id: string }) => element.id
@@ -150,6 +156,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   accessToken,
   data,
   addKey,
+  premiumUser = false,
 }) => {
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -227,6 +234,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     fetchPossibleRoles();
   }, [accessToken]);
 
+  // Check if team selection is required
+  const isTeamSelectionRequired = modelsToPick.includes('no-default-models');
+  const isFormDisabled = isTeamSelectionRequired && !selectedCreateKeyTeam;
+
   const handleCreate = async (formValues: Record<string, any>) => {
     try {
       const newKeyAlias = formValues?.key_alias ?? "";
@@ -261,6 +272,25 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         metadata["service_account_id"] = formValues.key_alias;
         // Update the formValues with the new metadata
         formValues.metadata = JSON.stringify(metadata);
+      }
+
+      // Transform allowed_vector_store_ids and allowed_mcp_server_ids into object_permission format
+      if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
+        formValues.object_permission = {
+          vector_stores: formValues.allowed_vector_store_ids
+        };
+        // Remove the original field as it's now part of object_permission
+        delete formValues.allowed_vector_store_ids;
+      }
+
+      // Transform allowed_mcp_server_ids into object_permission format
+      if (formValues.allowed_mcp_server_ids && formValues.allowed_mcp_server_ids.length > 0) {
+        if (!formValues.object_permission) {
+          formValues.object_permission = {};
+        }
+        formValues.object_permission.mcp_servers = formValues.allowed_mcp_server_ids;
+        // Remove the original field as it's now part of object_permission
+        delete formValues.allowed_mcp_server_ids;
       }
 
       const response = await keyCreateCall(accessToken, userID, formValues);
@@ -462,9 +492,19 @@ const CreateKey: React.FC<CreateKeyProps> = ({
 
           </div>
 
+          {/* Show message when team selection is required */}
+          {isFormDisabled && (
+            <div className="mb-8 p-4 bg-blue-50 border border-blue-200 rounded-md">
+              <Text className="text-blue-800 text-sm">
+                Please select a team to continue configuring your API key.
+              </Text>
+            </div>
+          )}
+
           {/* Section 2: Key Details */}
-          <div className="mb-8">
-            <Title className="mb-4">Key Details</Title>
+          {!isFormDisabled && (
+            <div className="mb-8">
+              <Title className="mb-4">Key Details</Title>
             <Form.Item
               label={
                 <span>
@@ -518,10 +558,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               </Select>
             </Form.Item>
           </div>
+          )}
 
           {/* Section 3: Optional Settings */}
-          <div className="mb-8">
-            <Accordion className="mt-4 mb-4">
+          {!isFormDisabled && (
+            <div className="mb-8">
+              <Accordion className="mt-4 mb-4">
               <AccordionHeader>
                 <Title className="m-0">Optional Settings</Title>
               </AccordionHeader>
@@ -548,7 +590,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                           value > team.max_budget
                         ) {
                           throw new Error(
-                            `Budget cannot exceed team max budget: $${team.max_budget}`
+                            `Budget cannot exceed team max budget: $${formatNumberWithCommas(team.max_budget, 4)}`
                           );
                         }
                       },
@@ -675,6 +717,49 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     options={guardrailsList.map(name => ({ value: name, label: name }))}
                   />
                 </Form.Item>
+                <Form.Item 
+                      label={
+                        <span>
+                          Allowed Vector Stores{' '}
+                          <Tooltip title="Select which vector stores this key can access. If none selected, the key will have access to all available vector stores">
+                            <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                          </Tooltip>
+                        </span>
+                      } 
+                      name="allowed_vector_store_ids" 
+                      className="mt-4"
+                      help="Select vector stores this key can access. Leave empty for access to all vector stores"
+                    >
+                      <PremiumVectorStoreSelector
+                        onChange={(values) => form.setFieldValue('allowed_vector_store_ids', values)}
+                        value={form.getFieldValue('allowed_vector_store_ids')}
+                        accessToken={accessToken}
+                        placeholder="Select vector stores (optional)"
+                        premiumUser={premiumUser}
+                      />
+                    </Form.Item>
+
+                <Form.Item 
+                      label={
+                        <span>
+                          Allowed MCP Servers{' '}
+                          <Tooltip title="Select which MCP servers this key can access. If none selected, the key will have access to all available MCP servers">
+                            <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                          </Tooltip>
+                        </span>
+                      } 
+                      name="allowed_mcp_server_ids" 
+                      className="mt-4"
+                      help="Select MCP servers this key can access. Leave empty for access to all MCP servers"
+                    >
+                      <PremiumMCPSelector
+                        onChange={(values) => form.setFieldValue('allowed_mcp_server_ids', values)}
+                        value={form.getFieldValue('allowed_mcp_server_ids')}
+                        accessToken={accessToken}
+                        placeholder="Select MCP servers (optional)"
+                        premiumUser={premiumUser}
+                      />
+                    </Form.Item>
 
                 <Form.Item 
                   label={
@@ -747,9 +832,16 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               </AccordionBody>
             </Accordion>
           </div>
+          )}
 
           <div style={{ textAlign: "right", marginTop: "10px" }}>
-            <Button2 htmlType="submit">Create Key</Button2>
+            <Button2 
+              htmlType="submit" 
+              disabled={isFormDisabled}
+              style={{ opacity: isFormDisabled ? 0.5 : 1 }}
+            >
+              Create Key
+            </Button2>
           </div>
         </Form>
       </Modal>
