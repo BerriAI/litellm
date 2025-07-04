@@ -1405,7 +1405,7 @@ def client(original_function):  # noqa: PLR0915
                     kwargs["max_tokens"] = modified_max_tokens
                 except Exception as e:
                     print_verbose(f"Error while checking max token limit: {str(e)}")
-            
+
             # MODEL CALL
             result = await original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
@@ -7410,3 +7410,13 @@ def get_empty_usage() -> Usage:
         completion_tokens=0,
         total_tokens=0,
     )
+
+
+def should_run_mock_completion(
+    mock_response: Optional[Any],
+    mock_tool_calls: Optional[Any],
+    mock_timeout: Optional[Any],
+) -> bool:
+    if mock_response or mock_tool_calls or mock_timeout:
+        return True
+    return False
