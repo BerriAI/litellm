@@ -17,10 +17,11 @@ interface ProviderParam {
   default_value?: string;
   options?: string[];
   type?: string;
+  fields?: { [key: string]: ProviderParam };
 }
 
 interface ProviderParamsResponse {
-  [provider: string]: ProviderParam[];
+  [provider: string]: { [key: string]: ProviderParam };
 }
 
 const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
@@ -88,19 +89,34 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
   console.log("Provider key:", providerKey);
   console.log("Provider fields:", providerFields);
   
-  if (!providerFields || providerFields.length === 0) {
+  if (!providerFields || Object.keys(providerFields).length === 0) {
     return <div>No configuration fields available for this provider.</div>;
   }
 
-  return (
-    <>
-      {providerFields.map((field) => (
+  // Convert object to array of entries and render fields
+  const renderFields = (fields: { [key: string]: ProviderParam }, parentKey = "") => {
+    return Object.entries(fields).map(([fieldKey, field]) => {
+      const fullFieldKey = parentKey ? `${parentKey}.${fieldKey}` : fieldKey;
+      
+      // Handle nested fields (like azure/text_moderations optional_params)
+      if (field.type === "nested" && field.fields) {
+        return (
+          <div key={fullFieldKey}>
+            <div className="mb-2 font-medium">{fieldKey}</div>
+            <div className="ml-4 border-l-2 border-gray-200 pl-4">
+              {renderFields(field.fields, fullFieldKey)}
+            </div>
+          </div>
+        );
+      }
+      
+      return (
         <Form.Item
-          key={field.param}
-          name={field.param}
-          label={field.param}
+          key={fullFieldKey}
+          name={fullFieldKey}
+          label={fieldKey}
           tooltip={field.description}
-          rules={field.required ? [{ required: true, message: `${field.param} is required` }] : undefined}
+          rules={field.required ? [{ required: true, message: `${fieldKey} is required` }] : undefined}
         >
           {field.type === "select" && field.options ? (
             <Select 
@@ -113,15 +129,20 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
                 </Select.Option>
               ))}
             </Select>
-          ) : field.type === "bool" ? (
+          ) : field.type === "bool" || field.type === "boolean" ? (
             <Select
               placeholder={field.description}
               defaultValue={field.default_value}
             >
-              <Select.Option value="True">True</Select.Option>
-              <Select.Option value="False">False</Select.Option>
+              <Select.Option value="true">True</Select.Option>
+              <Select.Option value="false">False</Select.Option>
             </Select>
-          ) : field.param.includes("password") || field.param.includes("secret") ? (
+          ) : field.type === "number" ? (
+            <TextInput
+              placeholder={field.description}
+              type="text"
+            />
+          ) : fieldKey.includes("password") || fieldKey.includes("secret") || fieldKey.includes("key") ? (
             <TextInput
               placeholder={field.description}
               type="password"
@@ -133,7 +154,13 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
             />
           )}
         </Form.Item>
-      ))}
+      );
+    });
+  };
+
+  return (
+    <>
+      {renderFields(providerFields)}
     </>
   );
 };
