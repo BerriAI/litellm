@@ -5,6 +5,9 @@ from pydantic import BaseModel, Field
 from ..base import GuardrailConfigModel
 from .base import AzureContentSafetyConfigModel
 
+# Shared Azure Content Safety categories
+AZURE_CONTENT_SAFETY_CATEGORIES = ["Hate", "SelfHarm", "Sexual", "Violence"]
+
 
 class AzureTextModerationRequestBodyOptionalParams(TypedDict, total=False):
     """Optional parameters for the Azure Text Moderation guardrail"""
@@ -37,17 +40,20 @@ class AzureTextModerationGuardrailResponse(TypedDict):
     categoriesAnalysis: List[AzureTextModerationGuardrailResponseCategoriesAnalysis]
 
 
+AzureHarmCategories = Literal["Hate", "SelfHarm", "Sexual", "Violence"]
+
+
 class AzureTextModerationOptionalParams(BaseModel):
     severity_threshold: Optional[int] = Field(
         default=None,
         description="Severity threshold for the Azure Content Safety Text Moderation guardrail across all categories",
     )
-    severity_threshold_by_category: Optional[Dict[str, int]] = Field(
+    severity_threshold_by_category: Optional[Dict[AzureHarmCategories, int]] = Field(
         default=None,
         description="Severity threshold by category for the Azure Content Safety Text Moderation guardrail. See list of categories - https://learn.microsoft.com/en-us/azure/ai-services/content-safety/concepts/harm-categories?tabs=warning",
     )
 
-    categories: Optional[List[str]] = Field(
+    categories: Optional[List[AzureHarmCategories]] = Field(
         default=None,
         description="Categories to scan for the Azure Content Safety Text Moderation guardrail. See list of categories - https://learn.microsoft.com/en-us/azure/ai-services/content-safety/concepts/harm-categories?tabs=warning",
     )

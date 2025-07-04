@@ -130,6 +130,18 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
                 </Select.Option>
               ))}
             </Select>
+          ) : field.type === "multiselect" && field.options ? (
+            <Select 
+              mode="multiple"
+              placeholder={field.description} 
+              defaultValue={field.default_value}
+            >
+              {field.options.map((option) => (
+                <Select.Option key={option} value={option}>
+                  {option}
+                </Select.Option>
+              ))}
+            </Select>
           ) : field.type === "bool" || field.type === "boolean" ? (
             <Select
               placeholder={field.description}

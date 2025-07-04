@@ -692,7 +692,11 @@ def _get_field_type_from_annotation(field_annotation: Any) -> str:
     Convert a Python type annotation to a UI-friendly type string
     """
     # Handle Union types (like Optional[T])
-    if hasattr(field_annotation, "__origin__") and field_annotation.__origin__ is Union:
+    if (
+        hasattr(field_annotation, "__origin__")
+        and field_annotation.__origin__ is Union
+        and hasattr(field_annotation, "__args__")
+    ):
         # For Optional[T], get the non-None type
         args = field_annotation.__args__
         non_none_args = [arg for arg in args if arg is not type(None)]
@@ -705,10 +709,12 @@ def _get_field_type_from_annotation(field_annotation: Any) -> str:
 
     # Handle Dict types
     if hasattr(field_annotation, "__origin__") and field_annotation.__origin__ is dict:
-        return "object"
+        return "dict"
 
     # Handle Literal types
-    if hasattr(field_annotation, "__origin__"):
+    if hasattr(field_annotation, "__origin__") and hasattr(
+        field_annotation, "__args__"
+    ):
         # Check for Literal types (Python 3.8+)
         origin = field_annotation.__origin__
         if hasattr(origin, "__name__") and origin.__name__ == "Literal":
@@ -730,6 +736,65 @@ def _get_field_type_from_annotation(field_annotation: Any) -> str:
 
     # Default to string for unknown types
     return "string"
+
+
+def _extract_literal_values(annotation: Any) -> List[str]:
+    """
+    Extract literal values from a Literal type annotation
+    """
+    if hasattr(annotation, "__origin__") and hasattr(annotation, "__args__"):
+        origin = annotation.__origin__
+        if hasattr(origin, "__name__") and origin.__name__ == "Literal":
+            return list(annotation.__args__)
+    return []
+
+
+def _get_dict_key_options(field_annotation: Any) -> Optional[List[str]]:
+    """
+    Extract key options from Dict[Literal[...], T] types
+    """
+    if (
+        hasattr(field_annotation, "__origin__")
+        and field_annotation.__origin__ is dict
+        and hasattr(field_annotation, "__args__")
+    ):
+        args = field_annotation.__args__
+        if len(args) >= 2:
+            key_type = args[0]
+            return _extract_literal_values(key_type)
+    return None
+
+
+def _get_dict_value_type(field_annotation: Any) -> str:
+    """
+    Get the value type from Dict[K, V] types
+    """
+    if (
+        hasattr(field_annotation, "__origin__")
+        and field_annotation.__origin__ is dict
+        and hasattr(field_annotation, "__args__")
+    ):
+        args = field_annotation.__args__
+        if len(args) >= 2:
+            value_type = args[1]
+            return _get_field_type_from_annotation(value_type)
+    return "string"
+
+
+def _get_list_element_options(field_annotation: Any) -> Optional[List[str]]:
+    """
+    Extract element options from List[Literal[...]] types
+    """
+    if (
+        hasattr(field_annotation, "__origin__")
+        and field_annotation.__origin__ is list
+        and hasattr(field_annotation, "__args__")
+    ):
+        args = field_annotation.__args__
+        if len(args) >= 1:
+            element_type = args[0]
+            return _extract_literal_values(element_type)
+    return None
 
 
 def _get_fields_from_model(model_class: Type[BaseModel]) -> Dict[str, Any]:
@@ -758,6 +823,7 @@ def _get_fields_from_model(model_class: Type[BaseModel]) -> Dict[str, Any]:
             if (
                 hasattr(field_annotation, "__origin__")
                 and field_annotation.__origin__ is Union
+                and hasattr(field_annotation, "__args__")
             ):
                 # For Optional[BaseModel], get the non-None type
                 args = field_annotation.__args__
@@ -791,13 +857,43 @@ def _get_fields_from_model(model_class: Type[BaseModel]) -> Dict[str, Any]:
                 field_json_schema_extra = getattr(field, "json_schema_extra", {})
                 if field_json_schema_extra and "ui_type" in field_json_schema_extra:
                     field_type = field_json_schema_extra["ui_type"].value
+                elif field_json_schema_extra and "type" in field_json_schema_extra:
+                    field_type = field_json_schema_extra["type"]
 
                 # Add the field to the dictionary
-                fields[field_name] = {
+                field_dict = {
                     "description": description,
                     "required": required,
                     "type": field_type,
                 }
+
+                # Extract options from type annotations
+                if field_type == "dict":
+                    # For Dict[Literal[...], T] types, extract key options
+                    dict_key_options = _get_dict_key_options(field_annotation)
+                    if dict_key_options:
+                        field_dict["dict_key_options"] = dict_key_options
+
+                    # Extract value type for the dict values
+                    dict_value_type = _get_dict_value_type(field_annotation)
+                    field_dict["dict_value_type"] = dict_value_type
+
+                elif field_type == "array":
+                    # For List[Literal[...]] types, extract element options
+                    list_element_options = _get_list_element_options(field_annotation)
+                    if list_element_options:
+                        field_dict["options"] = list_element_options
+                        field_dict["type"] = "multiselect"
+
+                # Add options if they exist in json_schema_extra (this takes precedence)
+                if field_json_schema_extra and "options" in field_json_schema_extra:
+                    field_dict["options"] = field_json_schema_extra["options"]
+
+                # Add default value if it exists
+                if field.default is not None and field.default is not ...:
+                    field_dict["default_value"] = field.default
+
+                fields[field_name] = field_dict
 
         return fields
 
@@ -850,7 +946,9 @@ async def get_provider_specific_params():
                     "categories": {
                         "description": "Categories to scan for the Azure Content Safety Text Moderation guardrail",
                         "required": false,
-                        "type": null
+                        "type": "multiselect",
+                        "options": ["Hate", "SelfHarm", "Sexual", "Violence"],
+                        "default_value": None
                     }
                 }
             }
