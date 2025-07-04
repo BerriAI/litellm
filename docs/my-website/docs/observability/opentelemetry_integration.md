@@ -51,16 +51,6 @@ OTEL_EXPORTER_OTLP_HEADERS="api-key=key,other-config-value=value"
 
 </TabItem>
 
-<TabItem value="laminar" label="Log to Laminar">
-
-```shell
-OTEL_EXPORTER="otlp_grpc"
-OTEL_ENDPOINT="https://api.lmnr.ai:8443"
-OTEL_HEADERS="authorization=Bearer <project-api-key>"
-```
-
-</TabItem>
-
 </Tabs>
 
 Use just 1 line of code, to instantly log your LLM responses **across all providers** with OpenTelemetry:
