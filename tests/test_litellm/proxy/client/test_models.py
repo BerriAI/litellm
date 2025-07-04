@@ -23,6 +23,10 @@ def base_url():
 def api_key():
     return "test-api-key"
 
+@pytest.fixture
+def requests_mock():
+    return requests_mock
+
 
 @pytest.fixture
 def client(base_url, api_key):
