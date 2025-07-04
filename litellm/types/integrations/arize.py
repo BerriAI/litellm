@@ -9,10 +9,6 @@ else:
 
 
 class ArizeConfig(BaseModel):
-    space_id: Optional[str] = None
-    """
-    Use space_id instead of space_key
-    """
     space_key: Optional[str] = None
     """
     Deprecated field name, arize used to call this space_key
