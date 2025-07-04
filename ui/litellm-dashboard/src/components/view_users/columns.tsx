@@ -3,6 +3,7 @@ import { Badge, Grid, Icon } from "@tremor/react";
 import { Tooltip } from "antd";
 import { UserInfo } from "./types";
 import { PencilAltIcon, TrashIcon, InformationCircleIcon, RefreshIcon } from "@heroicons/react/outline";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 export const columns = (
   possibleUIRoles: Record<string, Record<string, string>>,
@@ -41,7 +42,7 @@ export const columns = (
     accessorKey: "spend",
     cell: ({ row }) => (
       <span className="text-xs">
-        {row.original.spend ? row.original.spend.toFixed(4) : "-"}
+        {row.original.spend ? formatNumberWithCommas(row.original.spend, 4) : "-"}
       </span>
     ),
   },
