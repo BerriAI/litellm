@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Form, Select, Spin } from "antd";
+import { Form, Select, Spin, Button } from "antd";
 import { TextInput } from "@tremor/react";
 import { GuardrailProviders, guardrail_provider_map } from './guardrail_info_helpers';
 import { getGuardrailProviderSpecificParams } from "../networking";
@@ -19,11 +19,107 @@ interface ProviderParam {
   options?: string[];
   type?: string;
   fields?: { [key: string]: ProviderParam };
+  dict_key_options?: string[];
+  dict_value_type?: string;
 }
 
 interface ProviderParamsResponse {
   [provider: string]: { [key: string]: ProviderParam };
 }
+
+interface DictFieldProps {
+  field: ProviderParam;
+  fieldKey: string;
+  fullFieldKey: string;
+}
+
+const DictField: React.FC<DictFieldProps> = ({ field, fieldKey, fullFieldKey }) => {
+  const [selectedEntries, setSelectedEntries] = useState<Array<{key: string, id: string}>>([]);
+  const [availableKeys, setAvailableKeys] = useState<string[]>(field.dict_key_options || []);
+
+  const addEntry = (selectedKey: string) => {
+    if (!selectedKey) return;
+    
+    const newEntry = {
+      key: selectedKey,
+      id: `${selectedKey}_${Date.now()}`
+    };
+    
+    setSelectedEntries([...selectedEntries, newEntry]);
+    setAvailableKeys(availableKeys.filter(key => key !== selectedKey));
+  };
+
+  const removeEntry = (entryId: string, keyToRemove: string) => {
+    setSelectedEntries(selectedEntries.filter(entry => entry.id !== entryId));
+    setAvailableKeys([...availableKeys, keyToRemove].sort());
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="text-sm text-gray-600 mb-3">
+        {field.description}
+      </div>
+      
+      {/* Existing entries */}
+      {selectedEntries.map((entry) => (
+        <div key={entry.id} className="flex items-center space-x-3 p-3 border rounded-lg">
+          <div className="w-24 font-medium text-sm">{entry.key}</div>
+          <div className="flex-1">
+            <Form.Item
+              name={[fullFieldKey, entry.key]}
+              style={{ marginBottom: 0 }}
+            >
+              {field.dict_value_type === "number" ? (
+                <NumericalInput
+                  step={1}
+                  width={200}
+                  placeholder={`Enter ${entry.key} value`}
+                />
+              ) : field.dict_value_type === "boolean" ? (
+                <Select placeholder={`Select ${entry.key} value`}>
+                  <Select.Option value={true}>True</Select.Option>
+                  <Select.Option value={false}>False</Select.Option>
+                </Select>
+              ) : (
+                <TextInput
+                  placeholder={`Enter ${entry.key} value`}
+                  type="text"
+                />
+              )}
+            </Form.Item>
+          </div>
+          <Button 
+            type="link" 
+            danger 
+            onClick={() => removeEntry(entry.id, entry.key)}
+            size="small"
+          >
+            Remove
+          </Button>
+        </div>
+      ))}
+      
+      {/* Add new entry */}
+      {availableKeys.length > 0 && (
+        <div className="flex items-center space-x-3 mt-2">
+          <Select
+            placeholder="Select category to configure"
+            style={{ width: 200 }}
+            onSelect={(value: string | undefined) => value && addEntry(value)}
+            value={undefined}
+          >
+            {availableKeys.map((key) => (
+              <Select.Option key={key} value={key}>
+                {key}
+              </Select.Option>
+            ))}
+          </Select>
+          <span className="text-sm text-gray-500">Select a category to add threshold configuration</span>
+        </div>
+      )}
+    </div>
+  );
+};
 
 const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
   selectedProvider,
@@ -107,6 +203,20 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
             <div className="ml-4 border-l-2 border-gray-200 pl-4">
               {renderFields(field.fields, fullFieldKey)}
             </div>
+          </div>
+        );
+      }
+      
+      // Handle dict fields separately since they manage their own Form.Items
+      if (field.type === "dict" && field.dict_key_options) {
+        return (
+          <div key={fullFieldKey}>
+            <div className="mb-2 font-medium">{fieldKey}</div>
+            <DictField
+              field={field}
+              fieldKey={fieldKey}
+              fullFieldKey={fullFieldKey}
+            />
           </div>
         );
       }
