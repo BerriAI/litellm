@@ -1,5 +1,5 @@
 ---
-title: "[PRE-RELEASE] v1.73.6-stable"
+title: "v1.73.6-stable"
 slug: "v1-73-6-stable"
 date: 2025-06-28T10:00:00
 authors:
