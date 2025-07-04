@@ -37,6 +37,7 @@ import ObjectPermissionsView from "../object_permissions_view";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import PremiumVectorStoreSelector from "../common_components/PremiumVectorStoreSelector";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 export interface TeamMembership {
   user_id: string;
@@ -322,7 +323,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               <Card>
                 <Text>Budget Status</Text>
                 <div className="mt-2">
-                  <Title>${info.spend.toFixed(6)}</Title>
+                  <Title>${formatNumberWithCommas(info.spend, 4)}</Title>
                   <Text>of {info.max_budget === null ? "Unlimited" : `$${info.max_budget}`}</Text>
                   {info.budget_duration && (
                     <Text className="text-gray-500">Reset: {info.budget_duration}</Text>
