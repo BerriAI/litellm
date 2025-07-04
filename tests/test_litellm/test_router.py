@@ -122,7 +122,7 @@ async def test_router_with_tags_and_fallbacks():
 
 
 @pytest.mark.asyncio
-async def test_router_acreate_file():
+async def test_async_router_acreate_file():
     """
     Write to all deployments of a model
     """
@@ -151,7 +151,7 @@ async def test_router_acreate_file():
 
 
 @pytest.mark.asyncio
-async def test_router_acreate_file_with_jsonl():
+async def test_async_router_acreate_file_with_jsonl():
     """
     Test router.acreate_file with both JSONL and non-JSONL files
     """

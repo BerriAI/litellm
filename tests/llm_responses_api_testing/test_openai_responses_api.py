@@ -1117,13 +1117,15 @@ def test_mcp_tools_with_responses_api():
     MCP_TOOLS = [
         {
             "type": "mcp",
-            "server_label": "deepwiki",
-            "server_url": "https://mcp.deepwiki.com/mcp",
-            "allowed_tools": ["ask_question"]
+            "server_label": "zapier",
+            "server_url": "https://mcp.zapier.com/api/mcp/mcp",
+            "headers": {
+                "Authorization": f"Bearer {os.getenv('ZAPIER_CI_CD_MCP_TOKEN')}"
+            }
         }
     ]
     MODEL = "openai/gpt-4.1"
-    USER_QUERY = "What transport protocols does the 2025-03-26 version of the MCP spec (modelcontextprotocol/modelcontextprotocol) support?"
+    USER_QUERY = "how does tiktoken work?"
     #########################################################
     # Step 1: OpenAI will use MCP LIST, and return a list of MCP calls for our approval 
     response = litellm.responses(
@@ -1135,26 +1137,27 @@ def test_mcp_tools_with_responses_api():
 
     response = cast(ResponsesAPIResponse, response)
 
-    mcp_approval_id: Optional[str]
+    mcp_approval_id: Optional[str] = None
     for output in response.output:
         if output.type == "mcp_approval_request":
             mcp_approval_id = output.id
             break
 
     # Step 2: Send followup with approval for the MCP call
-    response_with_mcp_call = litellm.responses(
-        model=MODEL,
-        tools=MCP_TOOLS,
-        input=[
-            {
-                "type": "mcp_approval_response",
-                "approve": True,
-                "approval_request_id": mcp_approval_id
-            }
-        ],
-        previous_response_id=response.id,
-    )
-    print(response_with_mcp_call)
+    if mcp_approval_id:
+        response_with_mcp_call = litellm.responses(
+            model=MODEL,
+            tools=MCP_TOOLS,
+            input=[
+                {
+                    "type": "mcp_approval_response",
+                    "approve": True,
+                    "approval_request_id": mcp_approval_id
+                }
+            ],
+            previous_response_id=response.id,
+        )
+        print(response_with_mcp_call)
 
 
 @pytest.mark.asyncio
