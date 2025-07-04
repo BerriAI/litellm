@@ -416,6 +416,7 @@ const sidebars = {
         "providers/topaz",
         "providers/groq",
         "providers/github",
+        "providers/github_copilot",
         "providers/deepseek",
         "providers/elevenlabs",
         "providers/fireworks_ai",
