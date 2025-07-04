@@ -486,6 +486,7 @@ elevenlabs_models: List = []
 def is_bedrock_pricing_only_model(key: str) -> bool:
     """
     Excludes keys with the pattern 'bedrock/<region>/<model>'. These are in the model_prices_and_context_window.json file for pricing purposes only.
+    Exception: GovCloud models (us-gov-east-1, us-gov-west-1) are NOT pricing-only and should be included.
 
     Args:
         key (str): A key to filter.
@@ -500,6 +501,17 @@ def is_bedrock_pricing_only_model(key: str) -> bool:
         return True
 
     is_match = bedrock_pattern.match(key)
+    
+    # If it matches the regional pattern, check if it's a GovCloud region
+    if is_match:
+        # Extract the region from the key
+        parts = key.split("/")
+        if len(parts) >= 2:
+            region = parts[1]
+            # GovCloud regions should NOT be excluded
+            if region in ["us-gov-east-1", "us-gov-west-1"]:
+                return False
+    
     return is_match is not None
 
 
