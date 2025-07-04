@@ -56,7 +56,6 @@ const AzureTextModerationExample: React.FC = () => {
     <div style={{ maxWidth: 800, margin: '0 auto', padding: 20 }}>
       <Card title="Azure Text Moderation Configuration Example" className="mb-6">
         <AzureTextModerationConfiguration
-          categories={AZURE_TEXT_MODERATION_CATEGORIES.map(c => c.name)}
           selectedCategories={selectedCategories}
           globalSeverityThreshold={globalSeverityThreshold}
           categorySpecificThresholds={categorySpecificThresholds}
