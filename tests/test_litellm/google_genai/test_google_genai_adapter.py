@@ -5,8 +5,11 @@ Test to verify the Google GenAI generate_content adapter functionality
 import json
 import os
 import sys
+import unittest
 
 import pytest
+
+from litellm.google_genai.main import agenerate_content
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -1048,3 +1051,78 @@ def test_shared_schema_normalization_utilities():
     assert normalize_json_schema_types("not_a_dict") == "not_a_dict"
     assert normalize_json_schema_types([{"type": "STRING"}]) == [{"type": "string"}]
     assert normalize_tool_schema("not_a_dict") == "not_a_dict"
+
+@pytest.mark.asyncio
+async def test_google_generate_content_with_openai():
+    """
+    
+    """
+    import unittest.mock
+
+    from litellm.types.llms.openai import ChatCompletionAssistantMessage
+    from litellm.types.router import GenericLiteLLMParams
+    from litellm.types.utils import Choices, ModelResponse, Usage
+
+    # Create a proper mock response object with expected attributes
+    mock_message = ChatCompletionAssistantMessage(
+        role="assistant",
+        content="Hello! How can I help you today?"
+    )
+
+    mock_choice = Choices(
+        finish_reason="stop",
+        index=0,
+        message=mock_message
+    )
+    
+    mock_usage = Usage(
+        prompt_tokens=10,
+        completion_tokens=20, 
+        total_tokens=30
+    )
+    
+    mock_response = ModelResponse(
+        id="test-123",
+        choices=[mock_choice],
+        created=1234567890,
+        model="gpt-4o-mini",
+        object="chat.completion",
+        usage=mock_usage
+    )
+    
+    # Use AsyncMock for proper async function mocking
+    with unittest.mock.patch("litellm.acompletion", new_callable=unittest.mock.AsyncMock) as mock_completion:
+        # Set the return value directly on the AsyncMock
+        mock_completion.return_value = mock_response
+        
+        response = await agenerate_content(
+            model="openai/gpt-4o-mini",
+            contents=[
+                {"role": "user", "parts": [{"text": "Hello, world!"}]}
+            ],
+            systemInstruction="You are a helpful assistant.",
+            safetySettings=[
+                {
+                    "category": "HARM_CATEGORY_HATE_SPEECH",
+                    "threshold": "OFF"
+                }
+            ]
+        )
+        
+        # Print the request args sent to litellm.acompletion
+        call_args, call_kwargs = mock_completion.call_args
+        print("Arguments sent to litellm.acompletion:")
+        print(f"Args: {call_args}")
+        print(f"Kwargs: {call_kwargs}")
+        
+        # Verify the mock was called
+        mock_completion.assert_called_once()
+        
+        # Print the response for verification
+        print(f"Response: {response}")
+        ######################################################### 
+        # validate only expected fields were sent to litellm.acompletion
+        passed_fields = set(call_kwargs.keys())
+        # remove any GenericLiteLLMParams fields
+        passed_fields = passed_fields - set(GenericLiteLLMParams.model_fields.keys())
+        assert passed_fields == set(["model", "messages"]), f"Expected only model, contents, systemInstruction, and safetySettings to be passed through, got {passed_fields}"
