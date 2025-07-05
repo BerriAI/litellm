@@ -26,6 +26,16 @@ export const shouldRenderPIIConfigSettings = (provider: string | null) => {
     return providerEnum === GuardrailProviders.PresidioPII;
 };
 
+// Decides if we should render the Azure Text Moderation config settings for a given provider
+export const shouldRenderAzureTextModerationConfigSettings = (provider: string | null) => {
+    if (!provider) {
+        return false;
+    }
+    // cast provider to GuardrailProviders enum
+    const providerEnum = GuardrailProviders[provider as keyof typeof GuardrailProviders];
+    return providerEnum === GuardrailProviders.AzureContentSafetyTextModeration;
+};
+
 const asset_logos_folder = '../ui/assets/logos/';
 
 export const guardrailLogoMap: Record<string, string> = {

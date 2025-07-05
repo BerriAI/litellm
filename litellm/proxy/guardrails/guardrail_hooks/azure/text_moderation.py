@@ -3,7 +3,7 @@
 Azure Text Moderation Native Guardrail Integrationfor LiteLLM
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Union, cast
 
 from fastapi import HTTPException
 
@@ -21,11 +21,13 @@ from litellm.proxy._types import UserAPIKeyAuth
 from .base import AzureGuardrailBase
 
 if TYPE_CHECKING:
+
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import AllMessageValues
     from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_text_moderation import (
         AzureTextModerationGuardrailResponse,
     )
+    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
     from litellm.types.utils import EmbeddingResponse, ImageResponse, ModelResponse
 
 
@@ -95,6 +97,14 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         verbose_proxy_logger.info(
             f"Initialized Azure Prompt Shield Guardrail: {guardrail_name}"
         )
+
+    @staticmethod
+    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+        from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_text_moderation import (
+            AzureContentSafetyTextModerationConfigModel,
+        )
+
+        return AzureContentSafetyTextModerationConfigModel
 
     async def async_make_request(
         self, text: str
