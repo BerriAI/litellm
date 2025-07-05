@@ -415,6 +415,13 @@ class LiteLLMCompletionResponsesConfig:
         return new_item
 
     @staticmethod
+    def _transform_input_image_item_to_image_item(item: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Transform a Responses API input_image item to a Chat Completion image item
+        """
+        return {"type": "image", "image_url": {"url": item.get("image_url") or "", "detail": item.get("detail") or "auto"}}
+
+    @staticmethod
     def _transform_responses_api_content_to_chat_completion_content(
         content: Any,
     ) -> Union[str, List[Union[str, Dict[str, Any]]]]:
@@ -433,6 +440,12 @@ class LiteLLMCompletionResponsesConfig:
                     if item.get("type") == "input_file":
                         content_list.append(
                             LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
+                                item
+                            )
+                        )
+                    elif item.get("type") == "input_image":
+                        content_list.append(
+                            LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(
                                 item
                             )
                         )
