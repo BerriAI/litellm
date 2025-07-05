@@ -43,7 +43,13 @@ export function useFilterLogic({
   const [allTeams, setAllTeams] = useState<Team[]>(teams || []);
   const [allOrganizations, setAllOrganizations] = useState<Organization[]>(organizations || []);
   const [filteredKeys, setFilteredKeys] = useState<KeyResponse[]>(keys);
+  const [serverData, setServerData] = useState<KeyResponse[]>(keys);
   const lastSearchTimestamp = useRef(0);
+
+  useEffect(() => {
+    setServerData(keys);
+  }, [keys]);
+
   const debouncedSearch = useCallback(
     debounce(async (filters: FilterState) => {
       if (!accessToken) {
@@ -60,7 +66,7 @@ export function useFilterLogic({
           filters["Organization ID"] || null,
           filters["Team ID"] || null,
           filters["Key Alias"] || null,
-          filters["User ID"] || null,
+          null,
           filters["Key Hash"] || null,
           1, // Reset to first page when searching
           defaultPageSize,
@@ -71,7 +77,7 @@ export function useFilterLogic({
         // Only update state if this is the most recent search
         if (currentTimestamp === lastSearchTimestamp.current) {
           if (data) {
-            setFilteredKeys(data.keys);
+            setServerData(data.keys);
             console.log("called from debouncedSearch filters:", JSON.stringify(filters));
             console.log("called from debouncedSearch data:", JSON.stringify(data));
           }
@@ -84,26 +90,23 @@ export function useFilterLogic({
   );
   // Apply filters to keys whenever keys or filters change
   useEffect(() => {
-    if (!keys) {
+    if (!serverData) {
       setFilteredKeys([]);
       return;
     }
 
-    let result = [...keys];
-
-    // Apply Team ID filter
-    if (filters['Team ID']) {
-      result = result.filter(key => key.team_id === filters['Team ID']);
+    const userIdFilter = filters["User ID"];
+    if (userIdFilter && userIdFilter.length > 0) {
+      const filteredData = serverData.filter(
+        (key) =>
+          key.user_id &&
+          key.user_id.toLowerCase().includes(userIdFilter.toLowerCase())
+      );
+      setFilteredKeys(filteredData);
+    } else {
+      setFilteredKeys(serverData);
     }
-
-    // Apply Organization ID filter
-    if (filters['Organization ID']) {
-      result = result.filter(key => key.organization_id === filters['Organization ID']);
-    }
-
-
-    setFilteredKeys(result);
-  }, [keys, filters]);
+  }, [serverData, filters]);
 
   // Fetch all data for filters when component mounts
   useEffect(() => {
@@ -158,22 +161,11 @@ export function useFilterLogic({
   }, [organizations]);
 
   const handleFilterChange = (newFilters: Record<string, string>) => {
-    // Update filters state
-    setFilters({
-      'Team ID': newFilters['Team ID'] || '',
-      'Organization ID': newFilters['Organization ID'] || '',
-      'Key Alias': newFilters['Key Alias'] || '',
-      'User ID': newFilters['User ID'] || '',
-      'Sort By': newFilters['Sort By'] || 'created_at',
-      'Sort Order': newFilters['Sort Order'] || 'desc'
+    setFilters(prevFilters => {
+      const updatedFilters = { ...prevFilters, ...newFilters };
+      debouncedSearch(updatedFilters);
+      return updatedFilters;
     });
-
-    // Fetch keys based on new filters
-    const updatedFilters = {
-      ...filters,
-      ...newFilters
-    }
-    debouncedSearch(updatedFilters);
   };
 
   const handleFilterReset = () => {
