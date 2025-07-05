@@ -81,13 +81,11 @@ def perform_redaction(model_call_details: dict, result):
                         choice.delta.content = "redacted-by-litellm"
         elif isinstance(_result, litellm.ResponsesAPIResponse):
             if hasattr(_result, "output"):
-                for output_item in _result.output:  # type: ignore
-                    if hasattr(output_item, "content") and isinstance(
-                        output_item.content, list  # type: ignore
-                    ):
-                        for content_part in output_item.content:  # type: ignore
+                for output_item in _result.output:
+                    if hasattr(output_item, "content") and isinstance(output_item.content, list):
+                        for content_part in output_item.content:
                             if hasattr(content_part, "text"):
-                                content_part.text = "redacted-by-litellm"  # type: ignore
+                                content_part.text = "redacted-by-litellm"
         elif isinstance(_result, litellm.EmbeddingResponse):
             if hasattr(_result, "data") and _result.data is not None:
                 _result.data = []

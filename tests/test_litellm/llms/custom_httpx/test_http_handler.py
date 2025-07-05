@@ -15,10 +15,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
-from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
-    get_ssl_configuration,
-)
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_ssl_configuration
 
 
 @pytest.mark.asyncio
