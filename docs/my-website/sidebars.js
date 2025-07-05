@@ -355,7 +355,6 @@ const sidebars = {
           ]
         },
         "providers/azure_ai",
-        "providers/aiml",
         {
           type: "category",
           label: "Vertex AI",
@@ -423,6 +422,7 @@ const sidebars = {
         "providers/llamafile",
         "providers/infinity",
         "providers/xinference",
+        "providers/aiml",
         "providers/cloudflare_workers",
         "providers/deepinfra",
         "providers/github",
