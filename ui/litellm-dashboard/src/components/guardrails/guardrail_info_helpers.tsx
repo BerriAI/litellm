@@ -73,6 +73,7 @@ export const populateGuardrailProviderMap = (providerParamsResponse: Record<stri
 
 // Function to get current guardrail provider map (dynamic or fallback to legacy)
 export const getGuardrailProviderMap = () => {
+    console.log("DynamicGuardrailProviderMap: ", DynamicGuardrailProviderMap);
     return Object.keys(DynamicGuardrailProviderMap).length > 0 ? DynamicGuardrailProviderMap : guardrail_provider_map;
 };
 

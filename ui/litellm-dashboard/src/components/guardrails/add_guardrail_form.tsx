@@ -292,7 +292,9 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
 
       // Use pre-fetched provider params to copy recognised params
       if (providerParams && selectedProvider) {
-        const providerKey = guardrail_provider_map[selectedProvider]?.toLowerCase();
+        const currentProviderMap = getGuardrailProviderMap();
+        const providerKey = currentProviderMap[selectedProvider]?.toLowerCase();
+        console.log("providerKey: ", providerKey);
         const providerSpecificParams = providerParams[providerKey] || {};
         
         const allowedParams = new Set<string>();
@@ -515,7 +517,10 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
   const renderOptionalParams = () => {
     if (!selectedProvider || !providerParams) return null;
     
-    const providerKey = guardrail_provider_map[selectedProvider]?.toLowerCase();
+    const currentProviderMap = getGuardrailProviderMap();
+    console.log("currentProviderMap: ", currentProviderMap);
+    console.log("selectedProvider: ", selectedProvider);
+    const providerKey = currentProviderMap[selectedProvider]?.toLowerCase();
     const providerFields = providerParams && providerParams[providerKey];
     
     if (!providerFields || !providerFields.optional_params) return null;
