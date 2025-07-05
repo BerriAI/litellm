@@ -167,6 +167,8 @@ This release brings significant performance improvements to the Python SDK with 
   - Add logos to callback list - [PR](https://github.com/BerriAI/litellm/pull/12244)
 - **CLI**
   - Add litellm-proxy cli login for starting to use litellm proxy - [PR](https://github.com/BerriAI/litellm/pull/12216)
+- **Email Templates**
+  - Customizable Email template - Subject and Signature - [PR](https://github.com/BerriAI/litellm/pull/12218)
 
 ---
 
@@ -219,8 +221,6 @@ This release brings significant performance improvements to the Python SDK with 
 
 - **Startup**
   - Add new banner on startup - [PR](https://github.com/BerriAI/litellm/pull/12328)
-- **Email Templates**
-  - Customizable Email template - Subject and Signature - [PR](https://github.com/BerriAI/litellm/pull/12218)
 - **Dependencies**
   - Update pydantic version - [PR](https://github.com/BerriAI/litellm/pull/12213)
 
