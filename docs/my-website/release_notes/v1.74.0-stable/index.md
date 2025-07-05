@@ -66,7 +66,6 @@ This release brings significant performance improvements to the Python SDK with 
 ## New Models / Updated Models
 
 ### New Providers
-- **[GitHub Copilot](../../docs/providers/github_copilot)** - New LLM API provider support
 
 ### Updated Models
 #### Bugs
@@ -89,6 +88,8 @@ This release brings significant performance improvements to the Python SDK with 
   - Fix Hugging Face tests - [PR](https://github.com/BerriAI/litellm/pull/12286)
 
 #### Features
+- **[🆕 GitHub Copilot](../../docs/providers/github_copilot)** - Use GitHub Copilot API with LiteLLM
+- **[🆕 VertexAI DeepSeek](../../docs/providers/vertex)** - Add support for VertexAI DeepSeek models - [PR](https://github.com/BerriAI/litellm/pull/12312)
 - **[Azure AI](../../docs/providers/azure_ai)**
   - Add azure_ai cohere rerank v3.5 - [PR](https://github.com/BerriAI/litellm/pull/12283)
 - **[Vertex AI](../../docs/providers/vertex)**
