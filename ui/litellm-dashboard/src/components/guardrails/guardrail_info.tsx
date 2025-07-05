@@ -15,15 +15,33 @@ import {
 } from "@tremor/react";
 import { Button, Form, Input, Select, message, Tooltip, Divider } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { getGuardrailInfo, updateGuardrailCall, getGuardrailUISettings } from "@/components/networking";
-import { getGuardrailLogoAndName } from "./guardrail_info_helpers";
+import { getGuardrailInfo, updateGuardrailCall, getGuardrailUISettings, getGuardrailProviderSpecificParams } from "@/components/networking";
+import { getGuardrailLogoAndName, guardrail_provider_map } from "./guardrail_info_helpers";
 import PiiConfiguration from "./pii_configuration";
+import GuardrailProviderFields from "./guardrail_provider_fields";
+import GuardrailOptionalParams from "./guardrail_optional_params";
 
 export interface GuardrailInfoProps {
   guardrailId: string;
   onClose: () => void;
   accessToken: string | null;
   isAdmin: boolean;
+}
+
+interface ProviderParam {
+  param: string;
+  description: string;
+  required: boolean;
+  default_value?: string;
+  options?: string[];
+  type?: string;
+  fields?: { [key: string]: ProviderParam };
+  dict_key_options?: string[];
+  dict_value_type?: string;
+}
+
+interface ProviderParamsResponse {
+  [provider: string]: { [key: string]: ProviderParam };
 }
 
 const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ 
@@ -33,6 +51,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
   isAdmin
 }) => {
   const [guardrailData, setGuardrailData] = useState<any>(null);
+  const [guardrailProviderSpecificParams, setGuardrailProviderSpecificParams] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
   const [form] = Form.useForm();
@@ -89,20 +108,52 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
     }
   };
 
+  const fetchGuardrailProviderSpecificParams = async () => {
+    try {
+      if (!accessToken) return;
+      const response = await getGuardrailProviderSpecificParams(accessToken);
+      setGuardrailProviderSpecificParams(response);
+    } catch (error) {
+      console.error("Error fetching guardrail provider specific params:", error);
+    }
+  };
+
   const fetchGuardrailUISettings = async () => {
     try {
       if (!accessToken) return;
       const uiSettings = await getGuardrailUISettings(accessToken);
       setGuardrailSettings(uiSettings);
+      
     } catch (error) {
       console.error("Error fetching guardrail UI settings:", error);
     }
   };
 
   useEffect(() => {
+    fetchGuardrailProviderSpecificParams();
+  }, [accessToken]);
+
+  useEffect(() => {
     fetchGuardrailInfo();
     fetchGuardrailUISettings();
   }, [guardrailId, accessToken]);
+
+  // Reset form when guardrail data or provider params change
+  useEffect(() => {
+    if (guardrailData && form) {
+      form.setFieldsValue({
+        guardrail_name: guardrailData.guardrail_name,
+        ...guardrailData.litellm_params,
+        guardrail_info: guardrailData.guardrail_info 
+          ? JSON.stringify(guardrailData.guardrail_info, null, 2) 
+          : "",
+        // Include any optional_params if they exist
+        ...(guardrailData.litellm_params?.optional_params && {
+          optional_params: guardrailData.litellm_params.optional_params
+        })
+      });
+    }
+  }, [guardrailData, guardrailProviderSpecificParams, form]);
 
   const handlePiiEntitySelect = (entity: string) => {
     setSelectedPiiEntities(prev => {
@@ -148,6 +199,61 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
         // If no entities selected, explicitly set to empty object
         // This will clear any existing PII config
         updateData.litellm_params.pii_entities_config = {};
+      }
+      
+      /******************************
+       * Add provider-specific params (reusing logic from add_guardrail_form.tsx)
+       * ----------------------------------
+       * The backend exposes exactly which extra parameters a provider
+       * accepts via `/guardrails/ui/provider_specific_params`.
+       * Instead of copying every unknown form field, we fetch the list for
+       * the selected provider and ONLY pass those recognised params.
+       ******************************/
+      
+      // Get the current provider from the guardrail data
+      const currentProvider = Object.keys(guardrail_provider_map).find(
+        key => guardrail_provider_map[key] === guardrailData.litellm_params?.guardrail
+      );
+      
+      console.log("values: ", JSON.stringify(values));
+      console.log("currentProvider: ", currentProvider);
+      
+      // Use pre-fetched provider params to copy recognised params
+      if (guardrailProviderSpecificParams && currentProvider) {
+        const providerKey = guardrail_provider_map[currentProvider]?.toLowerCase();
+        const providerSpecificParams = guardrailProviderSpecificParams[providerKey] || {};
+        
+        const allowedParams = new Set<string>();
+
+        console.log("providerSpecificParams: ", JSON.stringify(providerSpecificParams));
+        
+        // Add root-level parameters (like api_key, api_base, api_version)
+        Object.keys(providerSpecificParams).forEach(paramName => {
+          if (paramName !== 'optional_params') {
+            allowedParams.add(paramName);
+          }
+        });
+        
+        // Add nested parameters from optional_params.fields
+        if (providerSpecificParams.optional_params && 
+            providerSpecificParams.optional_params.fields) {
+          Object.keys(providerSpecificParams.optional_params.fields).forEach(paramName => {
+            allowedParams.add(paramName);
+          });
+        }
+
+        console.log("allowedParams: ", allowedParams);
+        allowedParams.forEach((paramName) => {
+          // Check for both direct parameter name and nested optional_params object
+          let paramValue = values[paramName];
+          if (paramValue === undefined || paramValue === null || paramValue === '') {
+            paramValue = values.optional_params?.[paramName];
+          }
+          
+          if (paramValue !== undefined && paramValue !== null && paramValue !== '') {
+            updateData.litellm_params[paramName] = paramValue;
+          }
+        });
       }
       
       await updateGuardrailCall(accessToken, guardrailId, updateData);
@@ -290,6 +396,10 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
                       guardrail_info: guardrailData.guardrail_info 
                         ? JSON.stringify(guardrailData.guardrail_info, null, 2) 
                         : "",
+                      // Include any optional_params if they exist
+                      ...(guardrailData.litellm_params?.optional_params && {
+                        optional_params: guardrailData.litellm_params.optional_params
+                      })
                     }}
                     layout="vertical"
                   >
@@ -329,6 +439,40 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
                       </div>
                       </>
                     )}
+                    
+                    <Divider orientation="left">Provider Settings</Divider>
+                    
+                    {/* Provider-specific fields */}
+                    <GuardrailProviderFields 
+                      selectedProvider={Object.keys(guardrail_provider_map).find(
+                        key => guardrail_provider_map[key] === guardrailData.litellm_params?.guardrail
+                      ) || null}
+                      accessToken={accessToken} 
+                      providerParams={guardrailProviderSpecificParams}
+                    />
+                    
+                    {/* Optional parameters */}
+                    {guardrailProviderSpecificParams && (
+                      (() => {
+                        const currentProvider = Object.keys(guardrail_provider_map).find(
+                          key => guardrail_provider_map[key] === guardrailData.litellm_params?.guardrail
+                        );
+                        if (!currentProvider) return null;
+                        
+                        const providerKey = guardrail_provider_map[currentProvider]?.toLowerCase();
+                        const providerFields = guardrailProviderSpecificParams[providerKey];
+                        
+                        if (!providerFields || !providerFields.optional_params) return null;
+                        
+                        return (
+                          <GuardrailOptionalParams
+                            optionalParams={providerFields.optional_params}
+                            parentFieldKey="optional_params"
+                          />
+                        );
+                      })()
+                    )}
+                    
                     <Divider orientation="left">Advanced Settings</Divider>
                     <Form.Item
                       label="Guardrail Information"
