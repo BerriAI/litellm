@@ -630,3 +630,25 @@ def test_azure_openai_responses_bridge():
             == "test-azure-computer-use-preview"
         )
         assert mock_responses.call_args.kwargs["custom_llm_provider"] == "azure"
+
+
+@pytest.mark.asyncio
+async def test_azure_with_content_safety_error():
+    """
+    Verify user can access "innererror" from the Azure OpenAI exception
+    """
+    from litellm import completion
+    from litellm.exceptions import ContentPolicyViolationError
+    
+    with pytest.raises(ContentPolicyViolationError) as exc_info:
+        response = completion(
+            model="azure/gpt-4o-new-test",
+            messages=[{"role": "user", "content": "All prisoners must be hanged"}],
+        )
+    
+    # Access the exception via exc_info.value
+    e = exc_info.value
+    print("got exception=", e)
+    assert e.provider_specific_fields is not None
+    print("got provider_specific_fields=", e.provider_specific_fields)
+    assert e.provider_specific_fields.get("innererror") is not None

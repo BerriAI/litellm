@@ -71,6 +71,24 @@ class ExceptionCheckers:
             if substring in _error_str_lowercase:
                 return True
         return False
+    
+    @staticmethod
+    def is_azure_content_policy_violation_error(error_str: str) -> bool:
+        """
+        Check if an error string indicates a content policy violation error.
+        """
+        known_exception_substrings = [
+            "invalid_request_error",
+            "content_policy_violation",
+            "the response was filtered due to the prompt triggering azure openai's content management",
+            "your task failed as a result of our safety system",
+            "the model produced invalid content",
+            "content_filter_policy",
+        ]
+        for substring in known_exception_substrings:
+            if substring in error_str.lower():
+                return True
+        return False
 
 
 def get_error_message(error_obj) -> Optional[str]:
@@ -2011,26 +2029,19 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         response=getattr(original_exception, "response", None),
                     )
                 elif (
-                    (
-                        "invalid_request_error" in error_str
-                        and "content_policy_violation" in error_str
-                    )
-                    or (
-                        "The response was filtered due to the prompt triggering Azure OpenAI's content management"
-                        in error_str
-                    )
-                    or "Your task failed as a result of our safety system" in error_str
-                    or "The model produced invalid content" in error_str
-                    or "content_filter_policy" in error_str
+                    ExceptionCheckers.is_azure_content_policy_violation_error(error_str)
                 ):
                     exception_mapping_worked = True
-                    raise ContentPolicyViolationError(
-                        message=f"litellm.ContentPolicyViolationError: AzureException - {message}",
-                        llm_provider="azure",
-                        model=model,
-                        litellm_debug_info=extra_information,
-                        response=getattr(original_exception, "response", None),
+                    from litellm.llms.azure.exception_mapping import (
+                        AzureOpenAIExceptionMapping,
                     )
+                    raise AzureOpenAIExceptionMapping.create_content_policy_violation_error(
+                        message=message,
+                        model=model,
+                        extra_information=extra_information,
+                        original_exception=original_exception,
+                    )
+                    
                 elif "invalid_request_error" in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(
