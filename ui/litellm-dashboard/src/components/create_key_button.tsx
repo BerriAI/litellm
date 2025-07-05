@@ -512,7 +512,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           {isFormDisabled && (
             <div className="mb-8 p-4 bg-blue-50 border border-blue-200 rounded-md">
               <Text className="text-blue-800 text-sm">
-                Please select a team to continue configuring your API key. If you don't see any teams, please contact your Proxy Admin to either provide you with access to models or to add you to a team.
+                Please select a team to continue configuring your API key. If you do not see any teams, please contact your Proxy Admin to either provide you with access to models or to add you to a team.
               </Text>
             </div>
           )}
