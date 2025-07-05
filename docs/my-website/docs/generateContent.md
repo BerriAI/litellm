@@ -129,35 +129,6 @@ for chunk in response:
 ```
 
 </TabItem>
-
-<TabItem value="vertex" label="Vertex AI">
-
-#### Vertex AI example
-```python showLineNumbers title="Vertex AI Usage"
-from litellm.google_genai import agenerate_content
-from google.genai.types import ContentDict, PartDict
-import os
-
-# Set Vertex AI credentials
-os.environ["VERTEXAI_PROJECT"] = "your-gcp-project-id"
-os.environ["VERTEXAI_LOCATION"] = "us-central1"
-
-contents = ContentDict(
-    parts=[
-        PartDict(text="Hello, can you tell me a short joke?")
-    ],
-    role="user",
-)
-
-response = await agenerate_content(
-    contents=contents,
-    model="vertex_ai/gemini-2.0-flash",
-    max_tokens=100,
-)
-print(response)
-```
-
-</TabItem>
 </Tabs>
 
 ### LiteLLM Proxy Server 
@@ -302,38 +273,6 @@ curl -L -X POST 'http://localhost:4000/v1beta/models/gemini-flash:streamGenerate
 
 </TabItem>
 </Tabs>
-
-
-## Request Format
----
-
-### Google GenAI SDK Format
-
-For the direct Google GenAI SDK, use `ContentDict` and `PartDict`:
-
-```python
-from google.genai.types import ContentDict, PartDict
-
-contents = ContentDict(
-    parts=[
-        PartDict(text="Hello, world")
-    ],
-    role="user",
-)
-```
-
-
-## Response Format
----
-
-### Google GenAI SDK Response
-
-Direct SDK returns Google's native response format:
-
-```python
-# GenerateContentResponse object
-print(response.model_dump_json(indent=4))
-```
 
 
 ## Related 
