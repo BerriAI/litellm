@@ -102,10 +102,13 @@ class CustomGuardrail(CustomLogger):
         for _guardrail in requested_guardrails:
             if isinstance(_guardrail, dict):
                 if self.guardrail_name in _guardrail:
+
                     return True
             elif isinstance(_guardrail, str):
                 if self.guardrail_name == _guardrail:
+
                     return True
+
         return False
 
     def should_run_guardrail(self, data, event_type: GuardrailEventHooks) -> bool:

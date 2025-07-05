@@ -20,17 +20,34 @@ interface ProviderParam {
 interface GuardrailOptionalParamsProps {
   optionalParams: ProviderParam;
   parentFieldKey: string;
+  values?: Record<string, any>;
 }
 
 interface DictFieldProps {
   field: ProviderParam;
   fieldKey: string;
   fullFieldKey: string | string[];
+  value: any | null;
 }
 
-const DictField: React.FC<DictFieldProps> = ({ field, fieldKey, fullFieldKey }) => {
+const DictField: React.FC<DictFieldProps> = ({ field, fieldKey, fullFieldKey, value }) => {
   const [selectedEntries, setSelectedEntries] = React.useState<Array<{key: string, id: string}>>([]);
   const [availableKeys, setAvailableKeys] = React.useState<string[]>(field.dict_key_options || []);
+
+  // Initialize selectedEntries and availableKeys based on existing value
+  React.useEffect(() => {
+    if (value && typeof value === 'object') {
+      const existingKeys = Object.keys(value);
+      const entries = existingKeys.map(key => ({
+        key: key,
+        id: `${key}_${Date.now()}_${Math.random()}`
+      }));
+      setSelectedEntries(entries);
+      
+      const remainingKeys = (field.dict_key_options || []).filter(key => !existingKeys.includes(key));
+      setAvailableKeys(remainingKeys);
+    }
+  }, [value, field.dict_key_options]);
 
   const addEntry = (selectedKey: string) => {
     if (!selectedKey) return;
@@ -59,6 +76,12 @@ const DictField: React.FC<DictFieldProps> = ({ field, fieldKey, fullFieldKey }) 
             <Form.Item
               name={Array.isArray(fullFieldKey) ? [...fullFieldKey, entry.key] : [fullFieldKey, entry.key]}
               style={{ marginBottom: 0 }}
+              initialValue={value && typeof value === 'object' ? value[entry.key] : undefined}
+              normalize={field.dict_value_type === "number" ? (value) => {
+                if (value === null || value === undefined || value === '') return undefined;
+                const num = Number(value);
+                return isNaN(num) ? value : num;
+              } : undefined}
             >
               {field.dict_value_type === "number" ? (
                 <NumericalInput
@@ -113,11 +136,13 @@ const DictField: React.FC<DictFieldProps> = ({ field, fieldKey, fullFieldKey }) 
 
 const GuardrailOptionalParams: React.FC<GuardrailOptionalParamsProps> = ({
   optionalParams,
-  parentFieldKey
+  parentFieldKey,
+  values,
 }) => {
   const renderField = (fieldKey: string, field: ProviderParam) => {
     const fullFieldKey = `${parentFieldKey}.${fieldKey}`;
-    
+    const value = values?.[fieldKey];
+    console.log("value", value);
     // Handle dict fields separately since they manage their own Form.Items
     if (field.type === "dict" && field.dict_key_options) {
       return (
@@ -128,6 +153,7 @@ const GuardrailOptionalParams: React.FC<GuardrailOptionalParamsProps> = ({
             field={field}
             fieldKey={fieldKey}
             fullFieldKey={[parentFieldKey, fieldKey]}
+            value={value}
           />
         </div>
       );
@@ -145,11 +171,16 @@ const GuardrailOptionalParams: React.FC<GuardrailOptionalParamsProps> = ({
           }
           rules={field.required ? [{ required: true, message: `${fieldKey} is required` }] : undefined}
           className="mb-0"
+          initialValue={value !== undefined ? value : field.default_value}
+          normalize={field.type === "number" ? (value) => {
+            if (value === null || value === undefined || value === '') return undefined;
+            const num = Number(value);
+            return isNaN(num) ? value : num;
+          } : undefined}
         >
         {field.type === "select" && field.options ? (
           <Select 
-            placeholder={field.description} 
-            defaultValue={field.default_value}
+            placeholder={field.description}
           >
             {field.options.map((option) => (
               <Select.Option key={option} value={option}>
@@ -160,8 +191,7 @@ const GuardrailOptionalParams: React.FC<GuardrailOptionalParamsProps> = ({
         ) : field.type === "multiselect" && field.options ? (
           <Select 
             mode="multiple"
-            placeholder={field.description} 
-            defaultValue={field.default_value}
+            placeholder={field.description}
           >
             {field.options.map((option) => (
               <Select.Option key={option} value={option}>
@@ -172,7 +202,6 @@ const GuardrailOptionalParams: React.FC<GuardrailOptionalParamsProps> = ({
         ) : field.type === "bool" || field.type === "boolean" ? (
           <Select
             placeholder={field.description}
-            defaultValue={field.default_value}
           >
             <Select.Option value="true">True</Select.Option>
             <Select.Option value="false">False</Select.Option>

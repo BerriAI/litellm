@@ -29,18 +29,24 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
             AzureContentSafetyTextModerationGuardrail,
         ] = AzureContentSafetyPromptShieldGuardrail(
             guardrail_name=guardrail_name,
-            api_key=litellm_params.api_key,
-            api_base=litellm_params.api_base,
-            default_on=litellm_params.default_on,
-            event_hook=litellm_params.mode,
+            **{
+                **litellm_params.model_dump(exclude_none=True),
+                "api_key": litellm_params.api_key,
+                "api_base": litellm_params.api_base,
+                "default_on": litellm_params.default_on,
+                "event_hook": litellm_params.mode,
+            },
         )
     elif azure_guardrail == "text_moderations":
         azure_content_safety_guardrail = AzureContentSafetyTextModerationGuardrail(
             guardrail_name=guardrail_name,
-            api_key=litellm_params.api_key,
-            api_base=litellm_params.api_base,
-            default_on=litellm_params.default_on,
-            event_hook=litellm_params.mode,
+            **{
+                **litellm_params.model_dump(exclude_none=True),
+                "api_key": litellm_params.api_key,
+                "api_base": litellm_params.api_base,
+                "default_on": litellm_params.default_on,
+                "event_hook": litellm_params.mode,
+            },
         )
     else:
         raise ValueError(
