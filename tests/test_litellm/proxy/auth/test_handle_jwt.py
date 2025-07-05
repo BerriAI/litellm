@@ -300,12 +300,23 @@ async def test_auth_builder_non_proxy_admin_user_role():
 
 @pytest.mark.asyncio
 async def test_sync_user_role_and_teams():
+    from unittest.mock import MagicMock
+
+    # Create mock objects for required types
+    mock_user_api_key_cache = MagicMock()
+    mock_proxy_logging_obj = MagicMock()
+    
     jwt_handler = JWTHandler()
-    jwt_handler.litellm_jwtauth.team_id_jwt_field = "my_id_teams"
-    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
-        jwt_litellm_role_map=[
-            JWTLiteLLMRoleMap(jwt_role="ADMIN", litellm_role=LitellmUserRoles.PROXY_ADMIN)
-        ]
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=mock_user_api_key_cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            jwt_litellm_role_map=[
+                JWTLiteLLMRoleMap(jwt_role="ADMIN", litellm_role=LitellmUserRoles.PROXY_ADMIN)
+            ],
+            roles_jwt_field="roles",
+            team_ids_jwt_field="my_id_teams"
+        ),
     )
 
     token = {"roles": ["ADMIN"], "my_id_teams": ["team1", "team2"]}
