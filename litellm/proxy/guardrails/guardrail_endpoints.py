@@ -760,6 +760,7 @@ def _get_fields_from_model(model_class: Type[BaseModel]) -> Dict[str, Any]:
     Get the fields from a Pydantic model as a nested dictionary structure
     """
     import inspect
+    from typing import TypeVar
 
     def _extract_fields_recursive(
         model: Type[BaseModel],
@@ -775,6 +776,24 @@ def _get_fields_from_model(model_class: Type[BaseModel]) -> Dict[str, Any]:
         fields = {}
 
         for field_name, field in model.model_fields.items():
+            # Skip optional_params if it's not meaningfully overridden
+            if field_name == "optional_params":
+                field_annotation = field.annotation
+                if field_annotation is None:
+                    continue
+                # Check if the annotation is still a generic TypeVar (not specialized)
+                if isinstance(field_annotation, TypeVar) or (
+                    hasattr(field_annotation, "__origin__")
+                    and field_annotation.__origin__ is TypeVar
+                ):
+                    # Skip this field as it's not meaningfully overridden
+                    continue
+                # Also skip if it's a generic type that wasn't specialized
+                if hasattr(
+                    field_annotation, "__name__"
+                ) and field_annotation.__name__ in ("T", "TypeVar"):
+                    continue
+
             # Get field metadata
             description = field.description or field_name
 
