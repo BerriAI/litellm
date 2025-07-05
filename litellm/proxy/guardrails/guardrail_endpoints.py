@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.types.guardrails import (
@@ -760,7 +761,17 @@ def _get_fields_from_model(model_class: Type[BaseModel]) -> Dict[str, Any]:
     """
     import inspect
 
-    def _extract_fields_recursive(model: Type[BaseModel]) -> Dict[str, Any]:
+    def _extract_fields_recursive(
+        model: Type[BaseModel],
+        depth: int = 0,
+    ) -> Dict[str, Any]:
+        # Check if we've exceeded the maximum recursion depth
+        if depth > DEFAULT_MAX_RECURSE_DEPTH:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing model fields. Please check the model structure for excessive nesting.",
+            )
+
         fields = {}
 
         for field_name, field in model.model_fields.items():
@@ -798,7 +809,7 @@ def _get_fields_from_model(model_class: Type[BaseModel]) -> Dict[str, Any]:
             if is_basemodel_subclass:
                 # Recursively get fields from the nested model
                 nested_fields = _extract_fields_recursive(
-                    cast(Type[BaseModel], field_annotation)
+                    cast(Type[BaseModel], field_annotation), depth + 1
                 )
                 fields[field_name] = {
                     "description": description,
@@ -854,7 +865,7 @@ def _get_fields_from_model(model_class: Type[BaseModel]) -> Dict[str, Any]:
 
         return fields
 
-    return _extract_fields_recursive(model_class)
+    return _extract_fields_recursive(model_class, depth=0)
 
 
 @router.get(
