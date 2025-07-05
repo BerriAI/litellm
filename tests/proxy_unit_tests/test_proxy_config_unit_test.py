@@ -3,6 +3,8 @@ import sys
 import traceback
 from unittest import mock
 import pytest
+import glob
+import tempfile
 
 from dotenv import load_dotenv
 
@@ -229,6 +231,45 @@ def test_add_callbacks_from_db_config():
     litellm.success_callback = []
     litellm.failure_callback = []
     litellm._known_custom_logger_compatible_callbacks = []
+
+
+def test_s3_config_temp_file_cleanup():
+    """
+    Test that get_file_contents_from_s3 properly cleans up temporary files. Ensures no .yaml files are left in /tmp after S3 config loading.
+    """
+    # Skip test if S3 configuration is not provided
+    if not all([
+        os.getenv("LITELLM_CONFIG_BUCKET_NAME"),
+        os.getenv("LITELLM_CONFIG_BUCKET_OBJECT_KEY")
+    ]):
+        pytest.skip("S3 config not configured - skipping S3 temp file cleanup test")
+
+    from litellm.proxy.common_utils.load_config_utils import get_file_contents_from_s3
+    
+    # Count .yaml files in /tmp before the function call
+    yaml_files_before = glob.glob("/tmp/*.yaml")
+    yaml_count_before = len(yaml_files_before)
+    print(f"YAML files in /tmp before: {yaml_count_before}")
+    
+    # Call the function that should clean up after itself
+    bucket_name = os.getenv("LITELLM_CONFIG_BUCKET_NAME")
+    object_key = os.getenv("LITELLM_CONFIG_BUCKET_OBJECT_KEY")
+    
+    try:
+        config = get_file_contents_from_s3(bucket_name, object_key)
+        print(f"Successfully loaded config from S3: {config is not None}")
+    except Exception as e:
+        print(f"Error loading from S3 (expected if bucket/key doesn't exist): {e}")
+        # Even if the S3 call fails, temp files should still be cleaned up
+        pass
+    
+    # Count .yaml files in /tmp after the function call
+    yaml_files_after = glob.glob("/tmp/*.yaml") 
+    yaml_count_after = len(yaml_files_after)
+    print(f"YAML files in /tmp after: {yaml_count_after}")
+    
+    # Assert that no additional .yaml files were left behind
+    assert yaml_count_after == yaml_count_before
 
 
 def test_add_callbacks_invalid_input():
