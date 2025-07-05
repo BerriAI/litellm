@@ -84,7 +84,6 @@ This release brings significant performance improvements to the Python SDK with 
   - Fix user_id validation logic - [PR](https://github.com/BerriAI/litellm/pull/11432)
 - **[Bedrock](../../docs/providers/bedrock)**
   - Support optional args for bedrock - [PR](https://github.com/BerriAI/litellm/pull/12287)
-  - Fix bedrock guardrails post_call for streaming responses - [PR](https://github.com/BerriAI/litellm/pull/12252)
 - **[Ollama](../../docs/providers/ollama)**
   - Fix default parameters for ollama-chat - [PR](https://github.com/BerriAI/litellm/pull/12201)
 - **[VLLM](../../docs/providers/vllm)**
@@ -98,10 +97,6 @@ This release brings significant performance improvements to the Python SDK with 
 ## LLM API Endpoints
 
 #### Features
-- **[/v1/messages](../../docs/anthropic_unified)**
-  - Remove hardcoded model name on streaming - [PR](https://github.com/BerriAI/litellm/pull/12131)
-  - Support lowest latency routing - [PR](https://github.com/BerriAI/litellm/pull/12180)
-  - Non-anthropic models token usage returned - [PR](https://github.com/BerriAI/litellm/pull/12184)
 - **[/generateContent](../../docs/generate_content)**
   - Allow passing litellm_params - [PR](https://github.com/BerriAI/litellm/pull/12177)
   - Only pass supported params when using OpenAI models - [PR](https://github.com/BerriAI/litellm/pull/12297)
@@ -121,13 +116,15 @@ This release brings significant performance improvements to the Python SDK with 
 
 
 #### Bugs
-- **Tool Choice**
+- **[/v1/messages](../../docs/anthropic_unified)**
+  - Remove hardcoded model name on streaming - [PR](https://github.com/BerriAI/litellm/pull/12131)
+  - Support lowest latency routing - [PR](https://github.com/BerriAI/litellm/pull/12180)
+  - Non-anthropic models token usage returned - [PR](https://github.com/BerriAI/litellm/pull/12184)
+- **[/chat/completions](../../docs/providers/anthropic_unified)**
   - Support Cursor IDE tool_choice format `{"type": "auto"}` - [PR](https://github.com/BerriAI/litellm/pull/12168)
 - **Streaming**
   - Fix Error code: 307 for LlamaAPI Streaming Chat - [PR](https://github.com/BerriAI/litellm/pull/11946)
   - Store finish reason even if is_finished - [PR](https://github.com/BerriAI/litellm/pull/12250)
-- **Cost Calculation**
-  - Fix allow strings in calculate cost - [PR](https://github.com/BerriAI/litellm/pull/12200)
 
 ---
 
@@ -136,6 +133,9 @@ This release brings significant performance improvements to the Python SDK with 
 #### Features
 - **Cost Tracking**
   - VertexAI Anthropic streaming cost tracking with prompt caching fixes - [PR](https://github.com/BerriAI/litellm/pull/12188)
+
+#### Bugs
+  - Fix allow strings in calculate cost - [PR](https://github.com/BerriAI/litellm/pull/12200)
 
 ---
 
@@ -196,6 +196,8 @@ This release brings significant performance improvements to the Python SDK with 
   - Integration error handling fix - [PR](https://github.com/BerriAI/litellm/pull/12147)
 - **Message Redaction**
   - Ensure message redaction works for responses API logging - [PR](https://github.com/BerriAI/litellm/pull/12291)
+- **Bedrock Guardrails**
+  - Fix bedrock guardrails post_call for streaming responses - [PR](https://github.com/BerriAI/litellm/pull/12252)
 ---
 
 ## Performance / Loadbalancing / Reliability improvements
