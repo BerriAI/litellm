@@ -131,12 +131,9 @@ This release brings significant performance improvements to the Python SDK with 
 
 ## Spend Tracking / Budget Improvements
 
-#### Features
-- **Cost Tracking**
-  - VertexAI Anthropic streaming cost tracking with prompt caching fixes - [PR](https://github.com/BerriAI/litellm/pull/12188)
-
 #### Bugs
   - Fix allow strings in calculate cost - [PR](https://github.com/BerriAI/litellm/pull/12200)
+  - VertexAI Anthropic streaming cost tracking with prompt caching fixes - [PR](https://github.com/BerriAI/litellm/pull/12188)
 
 ---
 
