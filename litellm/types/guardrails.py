@@ -339,16 +339,7 @@ class LassoGuardrailConfigModel(BaseModel):
     )
 
 
-class LitellmParams(
-    PresidioConfigModel,
-    BedrockGuardrailConfigModel,
-    LakeraV2GuardrailConfigModel,
-    LassoGuardrailConfigModel,
-):
-    guardrail: str = Field(description="The type of guardrail integration to use")
-    mode: Union[str, List[str]] = Field(
-        description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
-    )
+class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
     api_key: Optional[str] = Field(
         default=None, description="API key for the guardrail service"
     )
@@ -396,6 +387,19 @@ class LitellmParams(
     )
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
+
+
+class LitellmParams(
+    PresidioConfigModel,
+    BedrockGuardrailConfigModel,
+    LakeraV2GuardrailConfigModel,
+    LassoGuardrailConfigModel,
+    BaseLitellmParams,
+):
+    guardrail: str = Field(description="The type of guardrail integration to use")
+    mode: Union[str, List[str]] = Field(
+        description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
+    )
 
 
 class Guardrail(TypedDict, total=False):
@@ -482,12 +486,7 @@ class ApplyGuardrailResponse(BaseModel):
     response_text: str
 
 
-class PatchGuardrailLitellmParams(BaseModel):
-    default_on: Optional[bool] = None
-    pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]] = None
-
-
 class PatchGuardrailRequest(BaseModel):
     guardrail_name: Optional[str] = None
-    litellm_params: Optional[PatchGuardrailLitellmParams] = None
+    litellm_params: Optional[BaseLitellmParams] = None
     guardrail_info: Optional[Dict[str, Any]] = None

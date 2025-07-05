@@ -543,19 +543,13 @@ async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
         litellm_params = LitellmParams(
             **dict(existing_guardrail.get("litellm_params", {}))
         )
-        if (
-            request.litellm_params is not None
-            and request.litellm_params.default_on is not None
-        ):
-            litellm_params.default_on = request.litellm_params.default_on
-
-        if (
-            request.litellm_params is not None
-            and request.litellm_params.pii_entities_config is not None
-        ):
-            litellm_params.pii_entities_config = (
-                request.litellm_params.pii_entities_config
+        if request.litellm_params is not None:
+            requested_litellm_params = request.litellm_params.model_dump(
+                exclude_unset=True
             )
+            litellm_params_dict = litellm_params.model_dump(exclude_unset=True)
+            litellm_params_dict.update(requested_litellm_params)
+            litellm_params = LitellmParams(**litellm_params_dict)
 
         # Update guardrail_info if provided
         guardrail_info = (
