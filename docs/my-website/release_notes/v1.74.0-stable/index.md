@@ -49,15 +49,7 @@ pip install litellm==1.74.0.post1
 
 ### Team / Key Based Logging on UI
 
-Major improvements to team management including:
-- Team-specific model access controls
-- Improved budget display with comma-separated formatting
-- Team-based logging callbacks
-- Better team member management workflows
-
 ### Azure Content Safety Guardrails
-
-New Azure Content Safety integration provides advanced content moderation and safety guardrails for your LLM applications, with full UI support for configuration and monitoring.
 
 ### MCP Gateway: Segregate MCP tools
 
@@ -116,12 +108,20 @@ This release brings significant performance improvements to the Python SDK with 
 - **[/generateContent](../../docs/generate_content)**
   - Allow passing litellm_params - [PR](https://github.com/BerriAI/litellm/pull/12177)
   - Only pass supported params when using OpenAI models - [PR](https://github.com/BerriAI/litellm/pull/12297)
+  - Fix using gemini-cli with Vertex Anthropic Models - [PR](https://github.com/BerriAI/litellm/pull/12246)
 - **[/batches](../../docs/batches)**
   - Support batch retrieve with target model Query Param - [PR](https://github.com/BerriAI/litellm/pull/12228)
   - Anthropic completion bridge improvements - [PR](https://github.com/BerriAI/litellm/pull/12228)
 - **[/responses](../../docs/response_api)**
   - Azure responses api bridge improvements - [PR](https://github.com/BerriAI/litellm/pull/12224)
   - Fix responses api error handling - [PR](https://github.com/BerriAI/litellm/pull/12225)
+- **[/mcp (MCP Gateway)](../../docs/mcp)**
+  - Add MCP url masking on frontend - [PR](https://github.com/BerriAI/litellm/pull/12247)
+  - Add MCP servers header to scope - [PR](https://github.com/BerriAI/litellm/pull/12266)
+  - Litellm mcp tool prefix - [PR](https://github.com/BerriAI/litellm/pull/12289)
+  - Segregate MCP tools on connections using headers - [PR](https://github.com/BerriAI/litellm/pull/12296)
+  - Added changes to mcp url wrapping - [PR](https://github.com/BerriAI/litellm/pull/12207)
+
 
 #### Bugs
 - **Tool Choice**
@@ -166,11 +166,6 @@ This release brings significant performance improvements to the Python SDK with 
   - Add logos to callback list - [PR](https://github.com/BerriAI/litellm/pull/12244)
 - **CLI**
   - Add litellm-proxy cli login for starting to use litellm proxy - [PR](https://github.com/BerriAI/litellm/pull/12216)
-- **MCP (Model Context Protocol)**
-  - Add MCP url masking on frontend - [PR](https://github.com/BerriAI/litellm/pull/12247)
-  - Add MCP servers header to scope - [PR](https://github.com/BerriAI/litellm/pull/12266)
-  - Litellm mcp tool prefix - [PR](https://github.com/BerriAI/litellm/pull/12289)
-  - Segregate MCP tools on connections using headers - [PR](https://github.com/BerriAI/litellm/pull/12296)
 
 ---
 
@@ -188,8 +183,6 @@ This release brings significant performance improvements to the Python SDK with 
   - Langfuse prompt_version support - [PR](https://github.com/BerriAI/litellm/pull/12301)
 - **Message Redaction**
   - Ensure message redaction works for responses API logging - [PR](https://github.com/BerriAI/litellm/pull/12291)
-- **JSON Logging**
-  - Initialize JSON logging for all loggers when JSON_LOGS=True - [PR](https://github.com/BerriAI/litellm/pull/12206)
 - **Sentry Integration**
   - Add sentry scrubbing - [PR](https://github.com/BerriAI/litellm/pull/12210)
 - **[AWS SQS Logging](../../docs/observability/aws_sqs)**
@@ -219,22 +212,11 @@ This release brings significant performance improvements to the Python SDK with 
   - Fix SSL certificate error - [PR](https://github.com/BerriAI/litellm/pull/12327)
   - Fix custom ca bundle support in aiohttp transport - [PR](https://github.com/BerriAI/litellm/pull/12281)
 
-#### Bugs
-- **Testing**
-  - Fix Flaky test_keys_delete_error_handling test - [PR](https://github.com/BerriAI/litellm/pull/12209)
-  - Fix credentials CLI test - [PR](https://github.com/BerriAI/litellm/pull/12304) [PR](https://github.com/BerriAI/litellm/pull/12305)
 
 ---
 
 ## General Proxy Improvements
 
-#### Features
-- **Documentation**
-  - Update management_cli.md - [PR](https://github.com/BerriAI/litellm/pull/12157)
-  - Use the -d flag in docs instead of -D - [PR](https://github.com/BerriAI/litellm/pull/12179)
-  - Update Vertex Model Garden doc - [PR](https://github.com/BerriAI/litellm/pull/12219)
-  - Improve readme: replace claude-3-sonnet with updated model - [PR](https://github.com/BerriAI/litellm/pull/12239)
-  - Fix config file description in k8s deployment - [PR](https://github.com/BerriAI/litellm/pull/12230)
 - **Startup**
   - Add new banner on startup - [PR](https://github.com/BerriAI/litellm/pull/12328)
 - **Email Templates**
@@ -242,11 +224,6 @@ This release brings significant performance improvements to the Python SDK with 
 - **Dependencies**
   - Update pydantic version - [PR](https://github.com/BerriAI/litellm/pull/12213)
 
-#### Bugs
-- **MCP**
-  - Added changes to mcp url wrapping - [PR](https://github.com/BerriAI/litellm/pull/12207)
-- **Gemini CLI**
-  - Fix using gemini-cli with Vertex Anthropic Models - [PR](https://github.com/BerriAI/litellm/pull/12246)
 
 ---
 
