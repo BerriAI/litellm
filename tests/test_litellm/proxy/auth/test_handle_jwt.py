@@ -315,7 +315,8 @@ async def test_sync_user_role_and_teams():
                 JWTLiteLLMRoleMap(jwt_role="ADMIN", litellm_role=LitellmUserRoles.PROXY_ADMIN)
             ],
             roles_jwt_field="roles",
-            team_ids_jwt_field="my_id_teams"
+            team_ids_jwt_field="my_id_teams",
+            sync_user_role_and_teams=True
         ),
     )
 
@@ -336,3 +337,113 @@ async def test_sync_user_role_and_teams():
     mock_patch.assert_called_once()
     assert user.user_role == LitellmUserRoles.PROXY_ADMIN.value
     assert set(user.teams) == {"team1", "team2"}
+
+
+@pytest.mark.asyncio
+async def test_map_jwt_role_to_litellm_role():
+    """Test JWT role mapping to LiteLLM roles with various patterns"""
+    from unittest.mock import MagicMock
+
+    # Create mock objects for required types
+    mock_user_api_key_cache = MagicMock()
+    
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=mock_user_api_key_cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            jwt_litellm_role_map=[
+                # Exact match
+                JWTLiteLLMRoleMap(jwt_role="ADMIN", litellm_role=LitellmUserRoles.PROXY_ADMIN),
+                # Wildcard patterns
+                JWTLiteLLMRoleMap(jwt_role="user_*", litellm_role=LitellmUserRoles.INTERNAL_USER),
+                JWTLiteLLMRoleMap(jwt_role="team_?", litellm_role=LitellmUserRoles.TEAM),
+                JWTLiteLLMRoleMap(jwt_role="dev_[123]", litellm_role=LitellmUserRoles.INTERNAL_USER),
+            ],
+            roles_jwt_field="roles"
+        ),
+    )
+
+    # Test exact match
+    token = {"roles": ["ADMIN"]}
+    result = jwt_handler.map_jwt_role_to_litellm_role(token)
+    assert result == LitellmUserRoles.PROXY_ADMIN
+
+    # Test wildcard match with *
+    token = {"roles": ["user_manager"]}
+    result = jwt_handler.map_jwt_role_to_litellm_role(token)
+    assert result == LitellmUserRoles.INTERNAL_USER
+
+    token = {"roles": ["user_"]}
+    result = jwt_handler.map_jwt_role_to_litellm_role(token)
+    assert result == LitellmUserRoles.INTERNAL_USER
+
+    # Test wildcard match with ?
+    token = {"roles": ["team_1"]}
+    result = jwt_handler.map_jwt_role_to_litellm_role(token)
+    assert result == LitellmUserRoles.TEAM
+
+    token = {"roles": ["team_a"]}
+    result = jwt_handler.map_jwt_role_to_litellm_role(token)
+    assert result == LitellmUserRoles.TEAM
+
+    # Test character class match
+    token = {"roles": ["dev_1"]}
+    result = jwt_handler.map_jwt_role_to_litellm_role(token)
+    assert result == LitellmUserRoles.INTERNAL_USER
+
+    token = {"roles": ["dev_2"]}
+    result = jwt_handler.map_jwt_role_to_litellm_role(token)
+    assert result == LitellmUserRoles.INTERNAL_USER
+
+    # Test no match
+    token = {"roles": ["unknown_role"]}
+    result = jwt_handler.map_jwt_role_to_litellm_role(token)
+    assert result is None
+
+    # Test multiple roles - should return first mapping match
+    token = {"roles": ["user_test", "ADMIN"]}
+    result = jwt_handler.map_jwt_role_to_litellm_role(token)
+    assert result == LitellmUserRoles.PROXY_ADMIN  # ADMIN matches first mapping
+
+    # Test empty roles
+    token = {"roles": []}
+    result = jwt_handler.map_jwt_role_to_litellm_role(token)
+    assert result is None
+
+    # Test no roles field
+    token = {}
+    result = jwt_handler.map_jwt_role_to_litellm_role(token)
+    assert result is None
+
+    # Test no role mappings configured
+    jwt_handler.litellm_jwtauth.jwt_litellm_role_map = None
+    token = {"roles": ["ADMIN"]}
+    result = jwt_handler.map_jwt_role_to_litellm_role(token)
+    assert result is None
+
+    # Test empty role mappings
+    jwt_handler.litellm_jwtauth.jwt_litellm_role_map = []
+    token = {"roles": ["ADMIN"]}
+    result = jwt_handler.map_jwt_role_to_litellm_role(token)
+    assert result is None
+
+    # Test patterns that don't match character classes
+    jwt_handler.litellm_jwtauth.jwt_litellm_role_map = [
+        JWTLiteLLMRoleMap(jwt_role="dev_[123]", litellm_role=LitellmUserRoles.INTERNAL_USER),
+    ]
+    token = {"roles": ["dev_4"]}  # 4 is not in [123]
+    result = jwt_handler.map_jwt_role_to_litellm_role(token)
+    assert result is None
+
+    # Test ? pattern that requires exactly one character
+    jwt_handler.litellm_jwtauth.jwt_litellm_role_map = [
+        JWTLiteLLMRoleMap(jwt_role="team_?", litellm_role=LitellmUserRoles.TEAM),
+    ]
+    token = {"roles": ["team_12"]}  # More than one character after underscore
+    result = jwt_handler.map_jwt_role_to_litellm_role(token)
+    assert result is None
+
+    token = {"roles": ["team_"]}  # No character after underscore
+    result = jwt_handler.map_jwt_role_to_litellm_role(token)
+    assert result is None
