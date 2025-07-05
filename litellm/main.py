@@ -1154,6 +1154,15 @@ def completion(  # type: ignore # noqa: PLR0915
 
         if dynamic_api_key is not None:
             api_key = dynamic_api_key
+        # Force include_usage=true for streaming to get accurate token counts from providers
+        if stream:
+            if stream_options is None:
+                stream_options = {"include_usage": True}
+            else:
+                # Create a copy to avoid modifying the original
+                stream_options = dict(stream_options)
+                stream_options["include_usage"] = True
+        
         # check if user passed in any of the OpenAI optional params
         optional_param_args = {
             "functions": functions,
