@@ -1,5 +1,5 @@
 ---
-title: "v1.74.0-stable"
+title: "[Pre-Release] v1.74.0"
 slug: "v1-74-0-stable"
 date: 2025-07-05T10:00:00
 authors:
