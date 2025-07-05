@@ -714,3 +714,14 @@ def test_streaming_handler_with_created_time_propagation(
             created = chunk.created
         else:
             assert created == chunk.created
+
+
+def test_streaming_handler_with_stream_options(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """Test that the stream options are propagated to the response"""
+
+    mr = initialized_custom_stream_wrapper.model_response_creator()
+    mr_dict = mr.model_dump()
+    print(mr_dict)
+    assert "stream_options" not in mr_dict
