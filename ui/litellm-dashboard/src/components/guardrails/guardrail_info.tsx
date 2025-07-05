@@ -468,6 +468,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
                           <GuardrailOptionalParams
                             optionalParams={providerFields.optional_params}
                             parentFieldKey="optional_params"
+                            values={guardrailData.litellm_params}
                           />
                         );
                       })()

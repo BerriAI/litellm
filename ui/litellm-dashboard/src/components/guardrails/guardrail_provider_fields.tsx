@@ -4,7 +4,6 @@ import { TextInput } from "@tremor/react";
 import { GuardrailProviders, guardrail_provider_map } from './guardrail_info_helpers';
 import { getGuardrailProviderSpecificParams } from "../networking";
 import NumericalInput from "../shared/numerical_input";
-import GuardrailOptionalParams from "./guardrail_optional_params";
 
 interface GuardrailProviderFieldsProps {
   selectedProvider: string | null;
