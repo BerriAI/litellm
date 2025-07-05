@@ -43,6 +43,7 @@ from litellm.constants import (
     openai_compatible_providers,
     openai_text_completion_compatible_providers,
     _openai_like_providers,
+    asksage_models,
     replicate_models,
     clarifai_models,
     huggingface_models,
@@ -176,6 +177,7 @@ modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
 retry = True
 ### AUTH ###
 api_key: Optional[str] = None
+asksage_api_key: Optional[str] = None
 openai_key: Optional[str] = None
 groq_key: Optional[str] = None
 databricks_key: Optional[str] = None
@@ -655,6 +657,8 @@ def add_known_models():
             featherless_ai_models.append(key)
         elif value.get("litellm_provider") == "deepgram":
             deepgram_models.append(key)
+        elif value.get("litellm_provider") == "asksage":
+            asksage_models.append(key)
         elif value.get("litellm_provider") == "elevenlabs":
             elevenlabs_models.append(key)
 
@@ -693,6 +697,7 @@ model_list = (
     + cohere_models
     + cohere_chat_models
     + anthropic_models
+    + asksage_models
     + replicate_models
     + openrouter_models
     + datarobot_models
@@ -753,6 +758,7 @@ models_by_provider: dict = {
     "cohere": cohere_models + cohere_chat_models,
     "cohere_chat": cohere_chat_models,
     "anthropic": anthropic_models,
+    "asksage": asksage_models,
     "replicate": replicate_models,
     "huggingface": huggingface_models,
     "together_ai": together_ai_models,
@@ -1121,6 +1127,7 @@ from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
 from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
 from .llms.github_copilot.chat.transformation import GithubCopilotConfig
 from .llms.nebius.chat.transformation import NebiusConfig
+from .llms.asksage.chat.transformation import AskSageConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .exceptions import (
