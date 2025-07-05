@@ -101,7 +101,7 @@ def show_commands():
 
 def setup_shell(ctx: click.Context):
     """Set up the interactive shell with banner and initial info."""
-    from .banner import show_banner
+    from litellm.proxy.common_utils.banner import show_banner
     
     show_banner()
     
@@ -123,7 +123,7 @@ def handle_special_commands(user_input: str) -> bool:
         return True
     elif user_input.lower() == "clear":
         click.clear()
-        from .banner import show_banner
+        from litellm.proxy.common_utils.banner import show_banner
         show_banner()
         show_commands()
         return True

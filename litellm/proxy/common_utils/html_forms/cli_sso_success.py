@@ -1,5 +1,4 @@
-
-from litellm.proxy.client.cli.banner import LITELLM_BANNER
+from litellm.proxy.common_utils.banner import LITELLM_BANNER
 
 
 def render_cli_sso_success_page() -> str:
