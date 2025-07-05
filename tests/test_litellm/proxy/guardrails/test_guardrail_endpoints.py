@@ -21,7 +21,11 @@ from litellm.proxy.guardrails.guardrail_registry import (
     IN_MEMORY_GUARDRAIL_HANDLER,
     InMemoryGuardrailHandler,
 )
-from litellm.types.guardrails import GuardrailInfoResponse, LitellmParams
+from litellm.types.guardrails import (
+    BaseLitellmParams,
+    GuardrailInfoResponse,
+    LitellmParams,
+)
 
 # Mock data for testing
 MOCK_DB_GUARDRAIL = {
@@ -95,7 +99,7 @@ async def test_list_guardrails_v2_with_db_and_config(
     )
     assert db_guardrail.guardrail_name == "Test DB Guardrail"
     assert db_guardrail.guardrail_definition_location == "db"
-    assert isinstance(db_guardrail.litellm_params, LitellmParams)
+    assert isinstance(db_guardrail.litellm_params, BaseLitellmParams)
 
     # Check config guardrail
     config_guardrail = next(
@@ -103,7 +107,7 @@ async def test_list_guardrails_v2_with_db_and_config(
     )
     assert config_guardrail.guardrail_name == "Test Config Guardrail"
     assert config_guardrail.guardrail_definition_location == "config"
-    assert isinstance(config_guardrail.litellm_params, LitellmParams)
+    assert isinstance(config_guardrail.litellm_params, BaseLitellmParams)
 
 
 @pytest.mark.asyncio
@@ -115,7 +119,7 @@ async def test_get_guardrail_info_from_db(mocker, mock_prisma_client):
 
     assert response.guardrail_id == "test-db-guardrail"
     assert response.guardrail_name == "Test DB Guardrail"
-    assert isinstance(response.litellm_params, LitellmParams)
+    assert isinstance(response.litellm_params, BaseLitellmParams)
     assert response.guardrail_info == {"description": "Test guardrail from DB"}
 
 
@@ -139,7 +143,7 @@ async def test_get_guardrail_info_from_config(
 
     assert response.guardrail_id == "test-config-guardrail"
     assert response.guardrail_name == "Test Config Guardrail"
-    assert isinstance(response.litellm_params, LitellmParams)
+    assert isinstance(response.litellm_params, BaseLitellmParams)
     assert response.guardrail_info == {"description": "Test guardrail from config"}
 
 
