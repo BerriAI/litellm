@@ -107,7 +107,7 @@ def get_guardrail_initializer_from_hooks():
                     )
 
             except ImportError as e:
-                verbose_proxy_logger.debug(f"Could not import {module_path}: {e}")
+                verbose_proxy_logger.error(f"Could not import {module_path}: {e}")
                 continue
             except Exception as e:
                 verbose_proxy_logger.error(f"Error processing {module_path}: {e}")

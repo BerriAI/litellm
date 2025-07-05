@@ -31,7 +31,6 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
 from litellm.types.guardrails import GuardrailEventHooks
 
 litellm.set_verbose = True
@@ -197,12 +196,16 @@ class AporiaGuardrail(CustomGuardrail):
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
+        from litellm.proxy.guardrails.guardrail_helpers import (
+            should_proceed_based_on_metadata,
+        )
 
         event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return
 
         # old implementation - backwards compatibility
+
         if (
             await should_proceed_based_on_metadata(
                 data=data,
