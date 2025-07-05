@@ -53,7 +53,7 @@ pip install litellm==1.74.0.post1
 
 ### MCP Gateway: Segregate MCP tools
 
-### Python SDK: 2.3 Second Faster Python SDK Import Times
+### Python SDK: 2.3 Second Faster Import Times
 
 This release brings significant performance improvements to the Python SDK with 2.3 seconds faster import times. We've refactored the initialization process to reduce startup overhead, making LiteLLM more efficient for applications that need quick initialization. This is a major improvement for applications that need to initialize LiteLLM quickly.
 
@@ -61,6 +61,13 @@ This release brings significant performance improvements to the Python SDK with 
 ---
 
 ## New Models / Updated Models
+
+#### Pricing / Context Window Updates
+
+| Provider    | Model                                  | Context Window | Input ($/1M tokens) | Output ($/1M tokens) | Type |
+| ----------- | -------------------------------------- | -------------- | ------------------- | -------------------- | ---- |
+| Watsonx | `watsonx/mistralai/mistral-large` | 131k | $3.00 | $10.00 | New |
+| Azure AI | `azure_ai/cohere-rerank-v3.5` | 4k | $2.00/1k queries | - | New (Rerank) |
 
 
 #### Features
@@ -88,19 +95,13 @@ This release brings significant performance improvements to the Python SDK with 
   - Fix default parameters for ollama-chat - [PR](https://github.com/BerriAI/litellm/pull/12201)
 - **[VLLM](../../docs/providers/vllm)**
   - Add 'audio_url' message type support - [PR](https://github.com/BerriAI/litellm/pull/12270)
-- **[Hugging Face](../../docs/providers/huggingface)**
-  - Fix Hugging Face tests - [PR](https://github.com/BerriAI/litellm/pull/12286)
-
 
 ---
 
 ## LLM API Endpoints
 
 #### Features
-- **[/generateContent](../../docs/generate_content)**
-  - Allow passing litellm_params - [PR](https://github.com/BerriAI/litellm/pull/12177)
-  - Only pass supported params when using OpenAI models - [PR](https://github.com/BerriAI/litellm/pull/12297)
-  - Fix using gemini-cli with Vertex Anthropic Models - [PR](https://github.com/BerriAI/litellm/pull/12246)
+
 - **[/batches](../../docs/batches)**
   - Support batch retrieve with target model Query Param - [PR](https://github.com/BerriAI/litellm/pull/12228)
   - Anthropic completion bridge improvements - [PR](https://github.com/BerriAI/litellm/pull/12228)
@@ -122,6 +123,10 @@ This release brings significant performance improvements to the Python SDK with 
   - Non-anthropic models token usage returned - [PR](https://github.com/BerriAI/litellm/pull/12184)
 - **[/chat/completions](../../docs/providers/anthropic_unified)**
   - Support Cursor IDE tool_choice format `{"type": "auto"}` - [PR](https://github.com/BerriAI/litellm/pull/12168)
+- **[/generateContent](../../docs/generate_content)**
+  - Allow passing litellm_params - [PR](https://github.com/BerriAI/litellm/pull/12177)
+  - Only pass supported params when using OpenAI models - [PR](https://github.com/BerriAI/litellm/pull/12297)
+  - Fix using gemini-cli with Vertex Anthropic Models - [PR](https://github.com/BerriAI/litellm/pull/12246)
 - **Streaming**
   - Fix Error code: 307 for LlamaAPI Streaming Chat - [PR](https://github.com/BerriAI/litellm/pull/11946)
   - Store finish reason even if is_finished - [PR](https://github.com/BerriAI/litellm/pull/12250)
@@ -130,12 +135,9 @@ This release brings significant performance improvements to the Python SDK with 
 
 ## Spend Tracking / Budget Improvements
 
-#### Features
-- **Cost Tracking**
-  - VertexAI Anthropic streaming cost tracking with prompt caching fixes - [PR](https://github.com/BerriAI/litellm/pull/12188)
-
 #### Bugs
   - Fix allow strings in calculate cost - [PR](https://github.com/BerriAI/litellm/pull/12200)
+  - VertexAI Anthropic streaming cost tracking with prompt caching fixes - [PR](https://github.com/BerriAI/litellm/pull/12188)
 
 ---
 
