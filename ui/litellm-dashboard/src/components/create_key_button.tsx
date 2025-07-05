@@ -40,7 +40,7 @@ import { Team } from "./key_team_helpers/key_list";
 import TeamDropdown from "./common_components/team_dropdown";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { Tooltip } from 'antd';
-import LoggingSettings from "./team/LoggingSettings";
+import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
 import Createuser from "./create_user_button";
 import debounce from 'lodash/debounce';
 import { rolesWithWriteAccess } from '../utils/roles';
@@ -512,7 +512,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           {isFormDisabled && (
             <div className="mb-8 p-4 bg-blue-50 border border-blue-200 rounded-md">
               <Text className="text-blue-800 text-sm">
-                Please select a team to continue configuring your API key.
+                Please select a team to continue configuring your API key. If you do not see any teams, please contact your Proxy Admin to either provide you with access to models or to add you to a team.
               </Text>
             </div>
           )}
@@ -822,7 +822,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   </AccordionHeader>
                   <AccordionBody>
                     <div className="mt-4">
-                      <LoggingSettings value={loggingSettings} onChange={setLoggingSettings} />
+                      <PremiumLoggingSettings
+                        value={loggingSettings}
+                        onChange={setLoggingSettings}
+                        premiumUser={premiumUser}
+                      />
                     </div>
                   </AccordionBody>
                 </Accordion>
