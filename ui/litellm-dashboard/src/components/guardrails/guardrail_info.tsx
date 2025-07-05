@@ -311,21 +311,24 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
                       </Select>
                     </Form.Item>
                     
-                    <Divider orientation="left">PII Protection</Divider>
-                    <div className="mb-6">
-                      {guardrailSettings && (
-                        <PiiConfiguration 
-                          entities={guardrailSettings.supported_entities}
-                          actions={guardrailSettings.supported_actions}
-                          selectedEntities={selectedPiiEntities}
-                          selectedActions={selectedPiiActions}
-                          onEntitySelect={handlePiiEntitySelect}
-                          onActionSelect={handlePiiActionSelect}
-                          entityCategories={guardrailSettings.pii_entity_categories}
-                        />
-                      )}
-                    </div>
-
+                    {guardrailData.litellm_params?.guardrail === "presidio" && (
+                      <>
+                      <Divider orientation="left">PII Protection</Divider>
+                      <div className="mb-6">
+                        {guardrailSettings && (
+                          <PiiConfiguration 
+                            entities={guardrailSettings.supported_entities}
+                            actions={guardrailSettings.supported_actions}
+                            selectedEntities={selectedPiiEntities}
+                            selectedActions={selectedPiiActions}
+                            onEntitySelect={handlePiiEntitySelect}
+                            onActionSelect={handlePiiActionSelect}
+                            entityCategories={guardrailSettings.pii_entity_categories}
+                          />
+                        )}
+                      </div>
+                      </>
+                    )}
                     <Divider orientation="left">Advanced Settings</Divider>
                     <Form.Item
                       label="Guardrail Information"
