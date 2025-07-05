@@ -40,6 +40,7 @@ import { Team } from "./key_team_helpers/key_list";
 import TeamDropdown from "./common_components/team_dropdown";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { Tooltip } from 'antd';
+import LoggingSettings from "./team/LoggingSettings";
 import Createuser from "./create_user_button";
 import debounce from 'lodash/debounce';
 import { rolesWithWriteAccess } from '../utils/roles';
@@ -167,6 +168,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [keyOwner, setKeyOwner] = useState("you");
   const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
   const [isCreateUserModalVisible, setIsCreateUserModalVisible] = useState(false);
   const [newlyCreatedUserId, setNewlyCreatedUserId] = useState<string | null>(null);
@@ -179,6 +181,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
+    setLoggingSettings([]);
   };
 
   const handleCancel = () => {
@@ -186,6 +189,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     setApiKey(null);
     setSelectedCreateKeyTeam(null);
     form.resetFields();
+    setLoggingSettings([]);
   };
 
   useEffect(() => {
@@ -258,21 +262,33 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       setIsModalVisible(true);
       
       if(keyOwner === "you"){
-        formValues.user_id = userID 
+        formValues.user_id = userID
       }
+      
+      // Handle metadata for all key types
+      let metadata: Record<string, any> = {};
+      try {
+        metadata = JSON.parse(formValues.metadata || "{}");
+      } catch (error) {
+        console.error("Error parsing metadata:", error);
+      }
+      
       // If it's a service account, add the service_account_id to the metadata
       if (keyOwner === "service_account") {
-        // Parse existing metadata or create an empty object
-        let metadata: Record<string, any> = {};
-        try {
-          metadata = JSON.parse(formValues.metadata || "{}");
-        } catch (error) {
-          console.error("Error parsing metadata:", error);
-        }
         metadata["service_account_id"] = formValues.key_alias;
-        // Update the formValues with the new metadata
-        formValues.metadata = JSON.stringify(metadata);
       }
+
+      // Add logging settings to the metadata
+      if (loggingSettings.length > 0) {
+        metadata = {
+          ...metadata,
+          logging: loggingSettings.filter(config => config.callback_name)
+        };
+      }
+      
+      // Update the formValues with the final metadata
+      formValues.metadata = JSON.stringify(metadata);
+
 
       // Transform allowed_vector_store_ids and allowed_mcp_server_ids into object_permission format
       if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
@@ -778,7 +794,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     placeholder="Enter metadata as JSON"
                   />
                 </Form.Item>
-                <Form.Item 
+                <Form.Item
                   label={
                     <span>
                       Tags{' '}
@@ -786,9 +802,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         <InfoCircleOutlined style={{ marginLeft: '4px' }} />
                       </Tooltip>
                     </span>
-                  } 
-                  name="tags" 
-                  className="mt-4" 
+                  }
+                  name="tags"
+                  className="mt-4"
                   help={`Tags for tracking spend and/or doing tag-based routing.`}
                 >
                 <Select
@@ -799,6 +815,17 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     options={predefinedTags}
                   />
                 </Form.Item>
+
+                <Accordion className="mt-4 mb-4">
+                  <AccordionHeader>
+                    <b>Logging Settings</b>
+                  </AccordionHeader>
+                  <AccordionBody>
+                    <div className="mt-4">
+                      <LoggingSettings value={loggingSettings} onChange={setLoggingSettings} />
+                    </div>
+                  </AccordionBody>
+                </Accordion>
                 <Accordion className="mt-4 mb-4">
                   <AccordionHeader>
                   <div className="flex items-center gap-2">

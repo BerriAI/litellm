@@ -50,6 +50,15 @@ export const callbackInfo: Record<string, CallbackInfo> = {
         "arize_space_id": "text",
       }
     },
+    [Callbacks.LangSmith]: {
+      logo: `${asset_logos_folder}langsmith.png`,
+      supports_key_team_logging: true,
+      dynamic_params: {
+        "langsmith_api_key": "password",
+        "langsmith_project": "text",
+        "langsmith_base_url": "text"
+      }
+  },
     [Callbacks.Braintrust]: {
         logo: `${asset_logos_folder}braintrust.png`,
         supports_key_team_logging: false,
@@ -62,11 +71,6 @@ export const callbackInfo: Record<string, CallbackInfo> = {
     },
     [Callbacks.Datadog]: {
         logo: `${asset_logos_folder}datadog.png`,
-        supports_key_team_logging: false,
-        dynamic_params: {}
-    },
-    [Callbacks.LangSmith]: {
-        logo: `${asset_logos_folder}langsmith.png`,
         supports_key_team_logging: false,
         dynamic_params: {}
     },
