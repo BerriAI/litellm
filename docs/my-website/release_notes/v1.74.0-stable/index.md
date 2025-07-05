@@ -1,7 +1,7 @@
 ---
 title: "v1.74.0-stable"
 slug: "v1-74-0-stable"
-date: 2025-01-05T10:00:00
+date: 2025-07-05T10:00:00
 authors:
   - name: Krrish Dholakia
     title: CEO, LiteLLM
@@ -125,7 +125,7 @@ This release brings significant performance improvements to the Python SDK with 
 
 #### Bugs
 - **Tool Choice**
-  - Support Cursor IDE tool_choice format {"type": "auto"} - [PR](https://github.com/BerriAI/litellm/pull/12168)
+  - Support Cursor IDE tool_choice format `{"type": "auto"}` - [PR](https://github.com/BerriAI/litellm/pull/12168)
 - **Streaming**
   - Fix Error code: 307 for LlamaAPI Streaming Chat - [PR](https://github.com/BerriAI/litellm/pull/11946)
   - Store finish reason even if is_finished - [PR](https://github.com/BerriAI/litellm/pull/12250)
@@ -137,10 +137,6 @@ This release brings significant performance improvements to the Python SDK with 
 ## Spend Tracking / Budget Improvements
 
 #### Features
-- **[AWS SQS Logging](../../docs/observability/aws_sqs)**
-  - New AWS SQS Logging Integration - [PR](https://github.com/BerriAI/litellm/pull/12176)
-- **[S3 Logger](../../docs/observability/s3)**
-  - Add failure logging support - [PR](https://github.com/BerriAI/litellm/pull/12299)
 - **Cost Tracking**
   - VertexAI Anthropic streaming cost tracking with prompt caching fixes - [PR](https://github.com/BerriAI/litellm/pull/12188)
 
@@ -196,14 +192,16 @@ This release brings significant performance improvements to the Python SDK with 
   - Initialize JSON logging for all loggers when JSON_LOGS=True - [PR](https://github.com/BerriAI/litellm/pull/12206)
 - **Sentry Integration**
   - Add sentry scrubbing - [PR](https://github.com/BerriAI/litellm/pull/12210)
+- **[AWS SQS Logging](../../docs/observability/aws_sqs)**
+  - New AWS SQS Logging Integration - [PR](https://github.com/BerriAI/litellm/pull/12176)
+- **[S3 Logger](../../docs/observability/s3)**
+  - Add failure logging support - [PR](https://github.com/BerriAI/litellm/pull/12299)
 
 #### Bugs
 - **Security**
   - Ensure only LLM API route fails get logged on Langfuse - [PR](https://github.com/BerriAI/litellm/pull/12308)
 - **OpenMeter**
   - Integration error handling fix - [PR](https://github.com/BerriAI/litellm/pull/12147)
-- **Callback Management**
-  - Handle proxy internal callbacks in callback management test - [PR](https://github.com/BerriAI/litellm/pull/12294)
 
 ---
 
