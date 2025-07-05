@@ -181,9 +181,7 @@ This release brings significant performance improvements to the Python SDK with 
   - Add Arize Team Based Logging - [PR](https://github.com/BerriAI/litellm/pull/12264)
 - **[Langfuse](../../docs/proxy/logging#langfuse)**
   - Langfuse prompt_version support - [PR](https://github.com/BerriAI/litellm/pull/12301)
-- **Message Redaction**
-  - Ensure message redaction works for responses API logging - [PR](https://github.com/BerriAI/litellm/pull/12291)
-- **Sentry Integration**
+- **[Sentry Integration](../../docs/observability/sentry)**
   - Add sentry scrubbing - [PR](https://github.com/BerriAI/litellm/pull/12210)
 - **[AWS SQS Logging](../../docs/proxy/logging#aws-sqs)**
   - New AWS SQS Logging Integration - [PR](https://github.com/BerriAI/litellm/pull/12176)
@@ -197,7 +195,8 @@ This release brings significant performance improvements to the Python SDK with 
   - Ensure only LLM API route fails get logged on Langfuse - [PR](https://github.com/BerriAI/litellm/pull/12308)
 - **OpenMeter**
   - Integration error handling fix - [PR](https://github.com/BerriAI/litellm/pull/12147)
-
+- **Message Redaction**
+  - Ensure message redaction works for responses API logging - [PR](https://github.com/BerriAI/litellm/pull/12291)
 ---
 
 ## Performance / Loadbalancing / Reliability improvements
