@@ -51,23 +51,6 @@ pip install litellm==1.74.0.post1
 
 ## Key Highlights 
 
-### ⚡️ 2 Second Faster Python SDK Import Times
-
-This release brings significant performance improvements to the Python SDK with **2 seconds faster import times**. We've optimized the import process and refactored the initialization to use a model registry, making LiteLLM even more efficient for your applications.
-
-### 🔧 GitHub Copilot Provider Support
-
-v1.74.0 introduces support for **GitHub Copilot** as a new LLM API provider, expanding the range of AI services you can access through LiteLLM's unified interface.
-
-### 🔐 Enhanced Security & Logging
-
-- **Security improvements**: Fixed security bug to ensure only LLM API route failures get logged on Langfuse and other loggers
-- **Message redaction**: Enhanced message redaction capabilities for responses API logging
-- **Sentry integration**: Added Sentry scrubbing for better error tracking and privacy
-
-### 📊 New AWS SQS Logging Integration
-
-Added a new AWS SQS logging integration, allowing you to send your LiteLLM logs directly to Amazon Simple Queue Service for better log management and processing.
 
 ---
 
