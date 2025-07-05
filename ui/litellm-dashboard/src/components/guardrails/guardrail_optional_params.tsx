@@ -34,6 +34,21 @@ const DictField: React.FC<DictFieldProps> = ({ field, fieldKey, fullFieldKey, va
   const [selectedEntries, setSelectedEntries] = React.useState<Array<{key: string, id: string}>>([]);
   const [availableKeys, setAvailableKeys] = React.useState<string[]>(field.dict_key_options || []);
 
+  // Initialize selectedEntries and availableKeys based on existing value
+  React.useEffect(() => {
+    if (value && typeof value === 'object') {
+      const existingKeys = Object.keys(value);
+      const entries = existingKeys.map(key => ({
+        key: key,
+        id: `${key}_${Date.now()}_${Math.random()}`
+      }));
+      setSelectedEntries(entries);
+      
+      const remainingKeys = (field.dict_key_options || []).filter(key => !existingKeys.includes(key));
+      setAvailableKeys(remainingKeys);
+    }
+  }, [value, field.dict_key_options]);
+
   const addEntry = (selectedKey: string) => {
     if (!selectedKey) return;
     
@@ -61,6 +76,7 @@ const DictField: React.FC<DictFieldProps> = ({ field, fieldKey, fullFieldKey, va
             <Form.Item
               name={Array.isArray(fullFieldKey) ? [...fullFieldKey, entry.key] : [fullFieldKey, entry.key]}
               style={{ marginBottom: 0 }}
+              initialValue={value && typeof value === 'object' ? value[entry.key] : undefined}
               normalize={field.dict_value_type === "number" ? (value) => {
                 if (value === null || value === undefined || value === '') return undefined;
                 const num = Number(value);
@@ -126,6 +142,7 @@ const GuardrailOptionalParams: React.FC<GuardrailOptionalParamsProps> = ({
   const renderField = (fieldKey: string, field: ProviderParam) => {
     const fullFieldKey = `${parentFieldKey}.${fieldKey}`;
     const value = values?.[fieldKey];
+    console.log("value", value);
     // Handle dict fields separately since they manage their own Form.Items
     if (field.type === "dict" && field.dict_key_options) {
       return (
