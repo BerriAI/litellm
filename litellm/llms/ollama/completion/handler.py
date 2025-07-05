@@ -5,15 +5,15 @@ Ollama /chat/completion calls handled in llm_http_handler.py
 """
 
 from typing import Any, Dict, List
+
 import litellm
 from litellm.types.utils import EmbeddingResponse
 
+
 def _prepare_ollama_embedding_payload(
-    model: str,
-    prompts: List[str],
-    optional_params: Dict[str, Any]
+    model: str, prompts: List[str], optional_params: Dict[str, Any]
 ) -> Dict[str, Any]:
-   
+
     data: Dict[str, Any] = {"model": model, "input": prompts}
     special_optional_params = ["truncate", "options", "keep_alive"]
 
@@ -26,13 +26,14 @@ def _prepare_ollama_embedding_payload(
                 data["options"].update({k: v})
     return data
 
+
 def _process_ollama_embedding_response(
     response_json: dict,
     prompts: List[str],
     model: str,
     model_response: EmbeddingResponse,
     logging_obj: Any,
-    encoding: Any
+    encoding: Any,
 ) -> EmbeddingResponse:
     output_data = []
     embeddings: List[List[float]] = response_json["embeddings"]
@@ -46,11 +47,15 @@ def _process_ollama_embedding_response(
         if encoding is not None:
             input_tokens = len(encoding.encode("".join(prompts)))
             if logging_obj:
-                logging_obj.debug("Ollama response missing prompt_eval_count; estimated with encoding.")
+                logging_obj.debug(
+                    "Ollama response missing prompt_eval_count; estimated with encoding."
+                )
         else:
             input_tokens = 0
             if logging_obj:
-                logging_obj.warning("Missing prompt_eval_count and no encoding provided; defaulted to 0.")
+                logging_obj.warning(
+                    "Missing prompt_eval_count and no encoding provided; defaulted to 0."
+                )
 
     model_response.object = "list"
     model_response.data = output_data
@@ -63,6 +68,7 @@ def _process_ollama_embedding_response(
         completion_tokens_details=None,
     )
     return model_response
+
 
 async def ollama_aembeddings(
     api_base: str,
@@ -79,7 +85,7 @@ async def ollama_aembeddings(
     data = _prepare_ollama_embedding_payload(model, prompts, optional_params)
 
     response = await litellm.module_level_aclient.post(url=api_base, json=data)
-    response_json = await response.json()
+    response_json = response.json()
 
     return _process_ollama_embedding_response(
         response_json=response_json,
@@ -87,8 +93,9 @@ async def ollama_aembeddings(
         model=model,
         model_response=model_response,
         logging_obj=logging_obj,
-        encoding=encoding
+        encoding=encoding,
     )
+
 
 def ollama_embeddings(
     api_base: str,
@@ -113,5 +120,5 @@ def ollama_embeddings(
         model=model,
         model_response=model_response,
         logging_obj=logging_obj,
-        encoding=encoding
+        encoding=encoding,
     )

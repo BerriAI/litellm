@@ -950,14 +950,14 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/test_litellm --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 4
+            python -m pytest -vv tests/test_litellm --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 8
           no_output_timeout: 120m
       - run:
           name: Run enterprise tests
           command: |
             pwd
             ls
-            python -m pytest -vv tests/enterprise --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit-enterprise.xml --durations=10 -n 4
+            python -m pytest -vv tests/enterprise --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit-enterprise.xml --durations=10 -n 8
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1358,6 +1358,8 @@ jobs:
       # - run: python ./tests/documentation_tests/test_general_setting_keys.py
       - run: python ./tests/code_coverage_tests/check_licenses.py
       - run: python ./tests/code_coverage_tests/router_code_coverage.py
+      - run: python ./tests/code_coverage_tests/code_qa_check_tests.py
+      - run: python ./tests/code_coverage_tests/test_proxy_types_import.py
       - run: python ./tests/code_coverage_tests/callback_manager_test.py
       - run: python ./tests/code_coverage_tests/recursive_detector.py
       - run: python ./tests/code_coverage_tests/test_router_strategy_async.py

@@ -54,8 +54,6 @@ from litellm import (
 )
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -63,6 +61,8 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import (
     AlertType,
@@ -71,6 +71,7 @@ from litellm.proxy._types import (
     Member,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.db.create_views import (
     create_missing_views,
     should_create_missing_views,
@@ -843,8 +844,10 @@ class ProxyLogging:
             )
 
         ### LOGGING ###
-        if self._is_proxy_only_error(
-            original_exception=original_exception, error_type=error_type
+        if self._is_proxy_only_llm_api_error(
+            original_exception=original_exception,
+            error_type=error_type,
+            route=user_api_key_dict.request_route,
         ):
             await self._handle_logging_proxy_only_error(
                 request_data=request_data,
@@ -877,13 +880,14 @@ class ProxyLogging:
                 )
         return
 
-    def _is_proxy_only_error(
+    def _is_proxy_only_llm_api_error(
         self,
         original_exception: Exception,
         error_type: Optional[ProxyErrorTypes] = None,
+        route: Optional[str] = None,
     ) -> bool:
         """
-        Return True if the error is a Proxy Only Error
+        Return True if the error is a Proxy Only LLM API Error
 
         Prevents double logging of LLM API exceptions
 
@@ -891,6 +895,19 @@ class ProxyLogging:
             - Authentication Errors from user_api_key_auth
             - HTTP HTTPException (rate limit errors)
         """
+
+        #########################################################
+        # Only log LLM API errors for proxy level hooks
+        # eg. Authentication errors, rate limit errors, etc.
+        # Note: This fixes a security issue where we
+        #       would log temporary keys/auth info
+        #       from management endpoints
+        #########################################################
+        if route is None:
+            return False
+        if RouteChecks.is_llm_api_route(route) is not True:
+            return False
+
         return isinstance(original_exception, HTTPException) or (
             error_type == ProxyErrorTypes.auth_error
         )
@@ -2987,32 +3004,37 @@ def get_error_message_str(e: Exception) -> str:
     return error_message
 
 
-def _get_redoc_url() -> str:
+def _get_redoc_url() -> Optional[str]:
     """
-    Get the redoc URL from the environment variables.
+    Get the Redoc URL from the environment variables.
 
     - If REDOC_URL is set, return it.
+    - If NO_REDOC is True, return None.
     - Otherwise, default to "/redoc".
     """
-    return os.getenv("REDOC_URL", "/redoc")
+    if (redoc_url := os.getenv("REDOC_URL")):
+        return redoc_url
+
+    if str_to_bool(os.getenv("NO_REDOC")) is True:
+        return None
+
+    return "/redoc"
 
 
 def _get_docs_url() -> Optional[str]:
     """
-    Get the docs URL from the environment variables.
+    Get the docs (Swagger UI) URL from the environment variables.
 
     - If DOCS_URL is set, return it.
     - If NO_DOCS is True, return None.
     - Otherwise, default to "/".
     """
-    docs_url = os.getenv("DOCS_URL", None)
-    if docs_url:
+    if (docs_url := os.getenv("DOCS_URL")):
         return docs_url
 
-    if os.getenv("NO_DOCS", "False") == "True":
+    if str_to_bool(os.getenv("NO_DOCS")) is True:
         return None
 
-    # default to "/"
     return "/"
 
 

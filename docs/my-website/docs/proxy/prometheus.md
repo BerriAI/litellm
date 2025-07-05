@@ -64,9 +64,9 @@ Use this for for tracking per [user, key, team, etc.](virtual_keys)
 | Metric Name          | Description                          |
 |----------------------|--------------------------------------|
 | `litellm_spend_metric`                | Total Spend, per `"user", "key", "model", "team", "end-user"`                 |
-| `litellm_total_tokens`         | input + output tokens per `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "model"`     |
-| `litellm_input_tokens`         | input tokens per `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "model"`     |
-| `litellm_output_tokens`        | output tokens per `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "model"`             |
+| `litellm_total_tokens_metric`         | input + output tokens per `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "model"`     |
+| `litellm_input_tokens_metric`         | input tokens per `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "model"`     |
+| `litellm_output_tokens_metric`        | output tokens per `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "model"`             |
 
 ### Team - Budget
 
@@ -288,10 +288,11 @@ Control which labels are included for each metric to reduce cardinality:
 litellm_settings:
   callbacks: ["prometheus"]
   prometheus_metrics_config:
-    - group: "spend_and_tokens"
+    - group: "token_consumption"
       metrics:
-        - "litellm_spend_metric"
-        - "litellm_total_tokens"
+        - "litellm_input_tokens_metric"
+        - "litellm_output_tokens_metric"
+        - "litellm_total_tokens_metric"
       include_labels:
         - "model"
         - "team"
@@ -324,7 +325,6 @@ litellm_settings:
     # Budget metrics with full label set
     - group: "budget_tracking"
       metrics:
-        - "litellm_spend_metric"
         - "litellm_remaining_team_budget_metric"
       include_labels:
         - "team"
@@ -385,7 +385,7 @@ Use these metrics to monitor the health of the DB Transaction Queue. Eg. Monitor
 
 
 
-## **🔥 LiteLLM Maintained Grafana Dashboards **
+## 🔥 LiteLLM Maintained Grafana Dashboards 
 
 Link to Grafana Dashboards maintained by LiteLLM
 

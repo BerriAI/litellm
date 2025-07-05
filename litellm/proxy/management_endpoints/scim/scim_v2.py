@@ -18,6 +18,7 @@ from fastapi import (
     Response,
 )
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
@@ -361,6 +362,18 @@ async def create_user(
         # Create user in database
         user_id = user.userName or str(uuid.uuid4())
         metadata = _build_scim_metadata(user_data["given_name"], user_data["family_name"])
+
+        default_role: Optional[
+            Literal[
+            LitellmUserRoles.PROXY_ADMIN,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+            LitellmUserRoles.INTERNAL_USER,
+            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        ]
+        ] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+        if litellm.default_internal_user_params:
+            default_role = litellm.default_internal_user_params.get("user_role")
+
         new_user_request = NewUserRequest(
             user_id=user_id,
             user_email=user_data["user_email"],
@@ -368,6 +381,7 @@ async def create_user(
             teams=user_data["teams"],
             metadata=metadata,
             auto_create_key=False,
+            user_role=default_role,
         )
 
         # Check if user with email already exists and update if found

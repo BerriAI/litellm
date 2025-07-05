@@ -159,13 +159,11 @@ const MCPToolsViewer = ({
   const [searchTerm, setSearchTerm] = useState("");
   const [mcpAuthValue, setMcpAuthValue] = useState("");
   const [selectedTool, setSelectedTool] = useState<MCPTool | null>(null);
-  const [toolResult, setToolResult] = useState<CallMCPToolResponse | null>(
-    null
-  );
+  const [toolResult, setToolResult] = useState<CallMCPToolResponse | null>(null);
   const [toolError, setToolError] = useState<Error | null>(null);
 
   // Query to fetch MCP tools
-  const { data: mcpTools, isLoading: isLoadingTools } = useQuery({
+  const { data: mcpToolsResponse, isLoading: isLoadingTools, error: mcpToolsError } = useQuery({
     queryKey: ["mcpTools"],
     queryFn: () => {
       if (!accessToken) throw new Error("Access Token required");
@@ -192,9 +190,9 @@ const MCPToolsViewer = ({
 
   // Add onToolSelect handler to each tool
   const toolsData = React.useMemo(() => {
-    if (!mcpTools) return [];
+    if (!mcpToolsResponse) return [];
 
-    return mcpTools.map((tool: MCPTool) => ({
+    return (mcpToolsResponse.tools || []).map((tool: MCPTool) => ({
       ...tool,
       onToolSelect: (tool: MCPTool) => {
         setSelectedTool(tool);
@@ -202,108 +200,65 @@ const MCPToolsViewer = ({
         setToolError(null);
       },
     }));
-  }, [mcpTools]);
+  }, [mcpToolsResponse]);
 
-  // Filter tools based on search term
-  const filteredTools = React.useMemo(() => {
-    return toolsData.filter((tool: MCPTool) => {
-      const searchLower = searchTerm.toLowerCase();
-      return (
-        tool.name.toLowerCase().includes(searchLower) ||
-        (tool.description != null &&
-          tool.description.toLowerCase().includes(searchLower)) ||
-        tool.mcp_info.server_name.toLowerCase().includes(searchLower)
-      );
-    });
-  }, [toolsData, searchTerm]);
+  // Error message display
+  const errorMessage = mcpToolsResponse?.error ? (
+    <div className="p-4 mb-4 text-sm text-red-800 rounded-lg bg-red-50">
+      <p className="font-medium">Error: {mcpToolsResponse.message}</p>
+      {mcpToolsResponse.error === "server_not_found" && (
+        <p className="mt-2">The specified server could not be found. Please check the server ID and try again.</p>
+      )}
+      {mcpToolsResponse.error === "server_error" && (
+        <p className="mt-2">There was an error connecting to the server. Please try again later or contact support if the issue persists.</p>
+      )}
+      {mcpToolsResponse.error === "unexpected_error" && (
+        <p className="mt-2">An unexpected error occurred. Please try again later or contact support if the issue persists.</p>
+      )}
+    </div>
+  ) : null;
 
-  // Handle tool call submission
-  const handleToolSubmit = (args: Record<string, any>) => {
-    if (!selectedTool) return;
-
-    executeTool({
-      tool: selectedTool,
-      arguments: args,
-      authValue: mcpAuthValue
-    });
-  };
-
-  if (!accessToken || !userRole || !userID) {
-    return (
-      <div className="p-6 text-center text-gray-500">
-        Missing required authentication parameters.
-      </div>
-    );
-  }
+  // No tools message
+  const noToolsMessage = !isLoadingTools && !mcpToolsResponse?.error && (!toolsData || toolsData.length === 0) ? (
+    <div className="p-4 mb-4 text-sm text-gray-800 rounded-lg bg-gray-50">
+      <p className="font-medium">No tools available</p>
+      <p className="mt-2">No tools were found for this server. This could be because:</p>
+      <ul className="list-disc list-inside mt-2">
+        <li>The server has not registered any tools</li>
+        <li>There was an error connecting to the server</li>
+        <li>The server is still initializing</li>
+      </ul>
+    </div>
+  ) : null;
 
   return (
-    <div className="w-full p-6">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-xl font-semibold">MCP Tools</h1>
-      </div>
-
-      {mcpServerHasAuth(auth_type) && (
-            <AuthSection
-              authType={auth_type}
-              onAuthSubmit={(value: string) => {
-                setMcpAuthValue(value);
-              }}
-            />
-          )}
-
-      <div className="bg-white rounded-lg shadow">
-        <div className="border-b px-6 py-4">
-          <div className="flex items-center justify-between">
-            <div className="relative w-64">
-              <input
-                type="text"
-                placeholder="Search tools..."
-                className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-              <svg
-                className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                />
-              </svg>
-            </div>
-            <div className="text-sm text-gray-500">
-              {filteredTools.length} tool{filteredTools.length !== 1 ? "s" : ""}{" "}
-              available
-            </div>
-          </div>
-        </div>
-
-        <DataTableWrapper
-          columns={columns}
-          data={filteredTools}
-          isLoading={isLoadingTools}
-        />
-      </div>
-
-      {/* Tool Test Panel - Show when a tool is selected */}
+    <div className="space-y-4">
+      {errorMessage}
+      {noToolsMessage}
+      <DataTableWrapper
+        columns={columns}
+        data={toolsData}
+        isLoading={isLoadingTools}
+      />
       {selectedTool && (
-        <div className="fixed inset-0 bg-gray-800 bg-opacity-75 flex items-center justify-center z-50 p-4">
-          <ToolTestPanel
-            tool={selectedTool}
-            needsAuth={mcpServerHasAuth(auth_type)}
-            authValue={mcpAuthValue}
-            onSubmit={handleToolSubmit}
-            isLoading={isCallingTool}
-            result={toolResult}
-            error={toolError}
-            onClose={() => setSelectedTool(null)}
-          />
-        </div>
+        <ToolTestPanel
+          tool={selectedTool}
+          needsAuth={mcpServerHasAuth(auth_type)}
+          authValue={mcpAuthValue}
+          onSubmit={(args) => {
+            executeTool({ tool: selectedTool, arguments: args, authValue: mcpAuthValue });
+          }}
+          result={toolResult}
+          error={toolError}
+          isLoading={isCallingTool}
+          onClose={() => setSelectedTool(null)}
+        />
+      )}
+      {mcpServerHasAuth(auth_type) && (
+        <AuthSection
+          authType={auth_type}
+          onAuthSubmit={(value) => setMcpAuthValue(value)}
+        />
       )}
     </div>
   );

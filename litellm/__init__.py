@@ -2,7 +2,7 @@
 import warnings
 
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
-### INIT VARIABLES ############
+### INIT VARIABLES ################
 import threading
 import os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
@@ -61,12 +61,8 @@ from litellm.constants import (
     DEFAULT_ALLOWED_FAILS,
 )
 from litellm.types.guardrails import GuardrailItem
-from litellm.proxy._types import (
-    KeyManagementSystem,
-    KeyManagementSettings,
-    LiteLLM_UpperboundKeyGenerateParams,
-)
-from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams
+from litellm.types.secret_managers.main import KeyManagementSystem, KeyManagementSettings
+from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams, LiteLLM_UpperboundKeyGenerateParams
 from litellm.types.utils import StandardKeyGenerationConfig, LlmProviders
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
@@ -76,10 +72,11 @@ import dotenv
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     dotenv.load_dotenv()
-################################################
+
+##################################################
 if set_verbose == True:
     _turn_on_debug()
-################################################
+##################################################
 ### Callbacks /Logging / Success / Failure Handlers #####
 CALLBACK_TYPES = Union[str, Callable, CustomLogger]
 input_callback: List[CALLBACK_TYPES] = []
@@ -121,6 +118,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "smtp_email",
     "deepeval",
     "s3_v2",
+    "aws_sqs",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
@@ -216,11 +214,13 @@ use_litellm_proxy: bool = (
 )
 use_client: bool = False
 ssl_verify: Union[str, bool] = True
+ssl_security_level: Optional[str] = None
 ssl_certificate: Optional[str] = None
 disable_streaming_logging: bool = False
 disable_token_counter: bool = False
 disable_add_transform_inline_image_block: bool = False
 disable_add_user_agent_to_request_tags: bool = False
+extra_spend_tag_headers: Optional[List[str]] = None
 in_memory_llm_clients_cache: LLMClientCache = LLMClientCache()
 safe_memory_mode: bool = False
 enable_azure_ad_token_refresh: Optional[bool] = False
@@ -293,6 +293,7 @@ model_cost_map_url: str = (
 suppress_debug_info = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
+aws_sqs_callback_params: Optional[Dict] = None
 generic_logger_headers: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
 upperbound_key_generate_params: Optional[LiteLLM_UpperboundKeyGenerateParams] = None
@@ -323,8 +324,11 @@ priority_reservation: Optional[Dict[str, float]] = None
 use_aiohttp_transport: bool = (
     True  # Older variable, aiohttp is now the default. use disable_aiohttp_transport instead.
 )
+aiohttp_trust_env: bool = False  # set to true to use HTTP_ Proxy settings
 disable_aiohttp_transport: bool = False  # Set this to true to use httpx instead
-disable_aiohttp_trust_env: bool = False  # When False, aiohttp will respect HTTP(S)_PROXY env vars
+disable_aiohttp_trust_env: bool = (
+    False  # When False, aiohttp will respect HTTP(S)_PROXY env vars
+)
 force_ipv4: bool = (
     False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 )
@@ -477,6 +481,7 @@ nscale_models: List = []
 nebius_models: List = []
 nebius_embedding_models: List = []
 deepgram_models: List = []
+elevenlabs_models: List = []
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -650,6 +655,8 @@ def add_known_models():
             featherless_ai_models.append(key)
         elif value.get("litellm_provider") == "deepgram":
             deepgram_models.append(key)
+        elif value.get("litellm_provider") == "elevenlabs":
+            elevenlabs_models.append(key)
 
 
 add_known_models()
@@ -732,6 +739,7 @@ model_list = (
     + featherless_ai_models
     + nscale_models
     + deepgram_models
+    + elevenlabs_models
 )
 
 model_list_set = set(model_list)
@@ -796,6 +804,7 @@ models_by_provider: dict = {
     "nscale": nscale_models,
     "featherless_ai": featherless_ai_models,
     "deepgram": deepgram_models,
+    "elevenlabs": elevenlabs_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1038,7 +1047,7 @@ from .llms.groq.chat.transformation import GroqChatConfig
 from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
 from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig
 from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
-from .llms.mistral.mistral_chat_transformation import MistralConfig
+from .llms.mistral.chat.transformation import MistralConfig
 from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from .llms.openai.chat.o_series_transformation import (
@@ -1110,6 +1119,7 @@ from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
 from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig
 from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
 from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
+from .llms.github_copilot.chat.transformation import GithubCopilotConfig
 from .llms.nebius.chat.transformation import NebiusConfig
 from .main import *  # type: ignore
 from .integrations import *
@@ -1141,6 +1151,7 @@ from .router import Router
 from .assistants.main import *
 from .batches.main import *
 from .images.main import *
+from .vector_stores import *
 from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *

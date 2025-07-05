@@ -512,6 +512,20 @@ async def generate_key_fn(  # noqa: PLR0915
                                     },
                                 )
 
+        # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
+        try:
+            from litellm_enterprise.proxy.management_endpoints.key_management_endpoints import (
+                apply_enterprise_key_management_params,
+            )
+
+            data = apply_enterprise_key_management_params(data, team_table)
+        except Exception as e:
+            verbose_proxy_logger.info(
+                "litellm.proxy.proxy_server.generate_key_fn(): Enterprise key management params not applied - {}".format(
+                    str(e)
+                )
+            )
+
         # TODO: @ishaan-jaff: Migrate all budget tracking to use LiteLLM_BudgetTable
         _budget_id = data.budget_id
         if prisma_client is not None and data.soft_budget is not None:
@@ -536,7 +550,7 @@ async def generate_key_fn(  # noqa: PLR0915
         # ADD METADATA FIELDS
         # Set Management Endpoint Metadata Fields
         for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-            if getattr(data, field) is not None:
+            if getattr(data, field, None) is not None:
                 _set_object_metadata_field(
                     object_data=data,
                     field_name=field,
@@ -589,9 +603,9 @@ async def generate_key_fn(  # noqa: PLR0915
             request_type="key", **data_json, table_name="key"
         )
 
-        response[
-            "soft_budget"
-        ] = data.soft_budget  # include the user-input soft budget in the response
+        response["soft_budget"] = (
+            data.soft_budget
+        )  # include the user-input soft budget in the response
 
         response = GenerateKeyResponse(**response)
 
@@ -667,9 +681,9 @@ async def _set_object_permission(
                 data=data_json["object_permission"],
             )
         )
-        data_json[
-            "object_permission_id"
-        ] = created_object_permission.object_permission_id
+        data_json["object_permission_id"] = (
+            created_object_permission.object_permission_id
+        )
 
         # delete the object_permission from the data_json
         data_json.pop("object_permission")
@@ -682,6 +696,7 @@ async def prepare_key_update_data(
 ):
     data_json: dict = data.model_dump(exclude_unset=True)
     data_json.pop("key", None)
+    data_json.pop("new_key", None)
     non_default_values = {}
     for k, v in data_json.items():
         if k in LiteLLM_ManagementEndpoint_MetadataFields:
@@ -1652,10 +1667,10 @@ async def delete_verification_tokens(
     try:
         if prisma_client:
             tokens = [_hash_token_if_needed(token=key) for key in tokens]
-            _keys_being_deleted: List[
-                LiteLLM_VerificationToken
-            ] = await prisma_client.db.litellm_verificationtoken.find_many(
-                where={"token": {"in": tokens}}
+            _keys_being_deleted: List[LiteLLM_VerificationToken] = (
+                await prisma_client.db.litellm_verificationtoken.find_many(
+                    where={"token": {"in": tokens}}
+                )
             )
 
             if len(_keys_being_deleted) == 0:
@@ -1763,9 +1778,9 @@ async def _rotate_master_key(
     from litellm.proxy.proxy_server import proxy_config
 
     try:
-        models: Optional[
-            List
-        ] = await prisma_client.db.litellm_proxymodeltable.find_many()
+        models: Optional[List] = (
+            await prisma_client.db.litellm_proxymodeltable.find_many()
+        )
     except Exception:
         models = None
     # 2. process model table
@@ -1820,6 +1835,21 @@ async def _rotate_master_key(
                 )
 
 
+def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
+    if data and data.new_key is not None:
+        new_token = data.new_key
+        if not data.new_key.startswith("sk-"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "New key must start with 'sk-'. This is to distinguish a key hash (used by litellm for logging / internal logic) from the actual key."
+                },
+            )
+    else:
+        new_token = f"sk-{secrets.token_urlsafe(LENGTH_OF_LITELLM_GENERATED_KEY)}"
+    return new_token
+
+
 @router.post(
     "/key/{key:path}/regenerate",
     tags=["key management"],
@@ -1846,6 +1876,9 @@ async def regenerate_key_fn(
     Parameters:
     - key: str (path parameter) - The key to regenerate
     - data: Optional[RegenerateKeyRequest] - Request body containing optional parameters to update
+        - key: Optional[str] - The key to regenerate.
+        - new_master_key: Optional[str] - The new master key to use, if key is the master key.
+        - new_key: Optional[str] - The new key to use, if key is not the master key. If both set, new_master_key will be used.
         - key_alias: Optional[str] - User-friendly key alias
         - user_id: Optional[str] - User ID associated with key
         - team_id: Optional[str] - Team ID associated with key
@@ -1969,7 +2002,8 @@ async def regenerate_key_fn(
 
         verbose_proxy_logger.debug("key_in_db: %s", _key_in_db)
 
-        new_token = f"sk-{secrets.token_urlsafe(LENGTH_OF_LITELLM_GENERATED_KEY)}"
+        new_token = get_new_token(data=data)
+
         new_token_hash = hash_token(new_token)
         new_token_key_name = f"sk-...{new_token[-4:]}"
 
@@ -2057,11 +2091,11 @@ async def validate_key_list_check(
             param="user_id",
             code=status.HTTP_403_FORBIDDEN,
         )
-    complete_user_info_db_obj: Optional[
-        BaseModel
-    ] = await prisma_client.db.litellm_usertable.find_unique(
-        where={"user_id": user_api_key_dict.user_id},
-        include={"organization_memberships": True},
+    complete_user_info_db_obj: Optional[BaseModel] = (
+        await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": user_api_key_dict.user_id},
+            include={"organization_memberships": True},
+        )
     )
 
     if complete_user_info_db_obj is None:
@@ -2147,10 +2181,10 @@ async def get_admin_team_ids(
     if complete_user_info is None:
         return []
     # Get all teams that user is an admin of
-    teams: Optional[
-        List[BaseModel]
-    ] = await prisma_client.db.litellm_teamtable.find_many(
-        where={"team_id": {"in": complete_user_info.teams}}
+    teams: Optional[List[BaseModel]] = (
+        await prisma_client.db.litellm_teamtable.find_many(
+            where={"team_id": {"in": complete_user_info.teams}}
+        )
     )
     if teams is None:
         return []
@@ -2403,12 +2437,14 @@ async def _list_key_helper(
         where=where,  # type: ignore
         skip=skip,  # type: ignore
         take=size,  # type: ignore
-        order=order_by
-        if order_by
-        else [
-            {"created_at": "desc"},
-            {"token": "desc"},  # fallback sort
-        ],
+        order=(
+            order_by
+            if order_by
+            else [
+                {"created_at": "desc"},
+                {"token": "desc"},  # fallback sort
+            ]
+        ),
         include={"object_permission": True},
     )
 

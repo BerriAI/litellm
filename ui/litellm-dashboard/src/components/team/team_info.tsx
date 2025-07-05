@@ -37,6 +37,9 @@ import ObjectPermissionsView from "../object_permissions_view";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import PremiumVectorStoreSelector from "../common_components/PremiumVectorStoreSelector";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
+import EditLoggingSettings from "./EditLoggingSettings";
+import LoggingSettingsView from "../logging_settings_view";
 
 export interface TeamMembership {
   user_id: string;
@@ -251,13 +254,18 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         budget_duration: values.budget_duration,
         metadata: {
           ...parsedMetadata,
-          guardrails: values.guardrails || []
+          guardrails: values.guardrails || [],
+          logging: values.logging_settings || []
         },
         organization_id: values.organization_id,
       };
 
       if (values.team_member_budget !== undefined) {
         updateData.team_member_budget = Number(values.team_member_budget);
+      }
+
+      if (values.team_member_key_duration !== undefined) {
+        updateData.team_member_key_duration = values.team_member_key_duration;
       }
 
       // Handle object_permission updates
@@ -318,14 +326,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               <Card>
                 <Text>Budget Status</Text>
                 <div className="mt-2">
-                  <Title>${info.spend.toFixed(6)}</Title>
-                  <Text>of {info.max_budget === null ? "Unlimited" : `$${info.max_budget}`}</Text>
+                  <Title>${formatNumberWithCommas(info.spend, 4)}</Title>
+                  <Text>of {info.max_budget === null ? "Unlimited" : `$${formatNumberWithCommas(info.max_budget, 4)}`}</Text>
                   {info.budget_duration && (
                     <Text className="text-gray-500">Reset: {info.budget_duration}</Text>
                   )}
                   <br/>
                   {info.team_member_budget_table && (
-                    <Text className="text-gray-500">Team Member Budget: ${info.team_member_budget_table.max_budget}</Text>
+                    <Text className="text-gray-500">Team Member Budget: ${formatNumberWithCommas(info.team_member_budget_table.max_budget, 4)}</Text>
                   )}
                 </div>
               </Card>
@@ -360,6 +368,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 objectPermission={info.object_permission} 
                 variant="card"
                 accessToken={accessToken}
+              />
+
+              <LoggingSettingsView 
+                loggingConfigs={info.metadata?.logging || []}
+                variant="card"
               />
             </Grid>
           </TabPanel>
@@ -414,7 +427,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     max_budget: info.max_budget,
                     budget_duration: info.budget_duration,
                     guardrails: info.metadata?.guardrails || [],
-                    metadata: info.metadata ? JSON.stringify(info.metadata, null, 2) : "",
+                    metadata: info.metadata
+                      ? JSON.stringify((({ logging, ...rest }) => rest)(info.metadata), null, 2)
+                      : "",
+                    logging_settings: info.metadata?.logging || [],
                     organization_id: info.organization_id,
                     vector_stores: info.object_permission?.vector_stores || [],
                     mcp_servers: info.object_permission?.mcp_servers || []
@@ -437,7 +453,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <Select.Option key="all-proxy-models" value="all-proxy-models">
                         All Proxy Models
                       </Select.Option>
-                      {userModels.map((model, idx) => (
+                      {Array.from(new Set(userModels)).map((model, idx) => (
                         <Select.Option key={idx} value={model}>
                           {getModelDisplayName(model)}
                         </Select.Option>
@@ -452,6 +468,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   <Form.Item label="Team Member Budget (USD)" name="team_member_budget" tooltip="This is the individual budget for a user in the team.">
                     <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
                   </Form.Item>
+
+                  <Form.Item label="Team Member Key Duration" name="team_member_key_duration" tooltip="Set a limit to the duration of a team member's key.">
+                    <Select placeholder="n/a">
+                      <Select.Option value="1d">1 day</Select.Option>
+                      <Select.Option value="1w">1 week</Select.Option>
+                      <Select.Option value="1mo">1 month</Select.Option>
+                    </Select>
+                  </Form.Item>
+
 
                   <Form.Item label="Reset Budget" name="budget_duration">
                     <Select placeholder="n/a">
@@ -511,10 +536,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       placeholder="Select MCP servers"
                     />
                   </Form.Item>
-                  
                   <Form.Item label="Organization ID" name="organization_id">
                     <Input type=""/>
                   </Form.Item>
+
+                  <Form.Item label="Logging Settings" name="logging_settings">
+                    <EditLoggingSettings
+                      value={form.getFieldValue('logging_settings')}
+                      onChange={(values) => form.setFieldValue('logging_settings', values)}
+                    />
+                  </Form.Item>
+                  
 
                   <Form.Item label="Metadata" name="metadata">
                     <Input.TextArea rows={10} />
@@ -561,9 +593,19 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <div>RPM: {info.rpm_limit || 'Unlimited'}</div>
                   </div>
                   <div>
-                    <Text className="font-medium">Budget</Text>
-                      <div>Max: {info.max_budget !== null ? `$${info.max_budget}` : 'No Limit'}</div>
-                    <div>Reset: {info.budget_duration || 'Never'}</div>
+                    <Text className="font-medium">Team Budget</Text>
+                      <div>Max Budget: {info.max_budget !== null ? `$${formatNumberWithCommas(info.max_budget, 4)}` : 'No Limit'}</div>
+                    <div>Budget Reset: {info.budget_duration || 'Never'}</div>
+                  </div>
+                  <div>
+                    <Text className="font-medium">
+                      Team Member Settings{' '}
+                      <Tooltip title="These are limits on individual team members">
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </Tooltip>
+                    </Text>
+                    <div>Max Budget: {info.team_member_budget_table?.max_budget || 'No Limit'}</div>
+                    <div>Key Duration: {info.metadata?.team_member_key_duration || 'No Limit'}</div>
                   </div>
                   <div>
                     <Text className="font-medium">Organization ID</Text>
@@ -581,6 +623,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     variant="inline"
                     className="pt-4 border-t border-gray-200"
                     accessToken={accessToken}
+                  />
+
+                  <LoggingSettingsView 
+                    loggingConfigs={info.metadata?.logging || []}
+                    variant="inline"
+                    className="pt-4 border-t border-gray-200"
                   />
                 </div>
               )}

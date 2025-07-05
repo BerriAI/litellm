@@ -88,6 +88,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         if stream:
             completion_kwargs["stream"] = stream
+            completion_kwargs["stream_options"] = {
+                "include_usage": True,
+            }
 
         excluded_keys = {"anthropic_messages"}
         extra_kwargs = extra_kwargs or {}
@@ -100,6 +103,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 from litellm.types.utils import CallTypes
 
                 setattr(value, "call_type", CallTypes.completion.value)
+                setattr(
+                    value, "stream_options", completion_kwargs.get("stream_options")
+                )
             if (
                 key not in excluded_keys
                 and key not in completion_kwargs
@@ -153,7 +159,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             if stream:
                 transformed_stream = (
                     ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
-                        completion_response
+                        completion_response,
+                        model=model,
                     )
                 )
                 if transformed_stream is not None:
@@ -239,7 +246,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             if stream:
                 transformed_stream = (
                     ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
-                        completion_response
+                        completion_response,
+                        model=model,
                     )
                 )
                 if transformed_stream is not None:
