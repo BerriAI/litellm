@@ -566,6 +566,7 @@ async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
 
         # Create the guardrail object
         guardrail = Guardrail(
+            guardrail_id=guardrail_id,
             guardrail_name=guardrail_name or "",
             litellm_params=litellm_params,
             guardrail_info=guardrail_info,
