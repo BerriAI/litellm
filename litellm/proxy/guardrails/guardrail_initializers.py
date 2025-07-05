@@ -4,23 +4,6 @@ from litellm.proxy._types import CommonProxyErrors
 from litellm.types.guardrails import *
 
 
-def initialize_aporia(
-    litellm_params: LitellmParams,
-    guardrail: Guardrail,
-):
-    from litellm.proxy.guardrails.guardrail_hooks.aporia_ai import AporiaGuardrail
-
-    _aporia_callback = AporiaGuardrail(
-        api_base=litellm_params.api_base,
-        api_key=litellm_params.api_key,
-        guardrail_name=guardrail.get("guardrail_name", ""),
-        event_hook=litellm_params.mode,
-        default_on=litellm_params.default_on,
-    )
-    litellm.logging_callback_manager.add_litellm_callback(_aporia_callback)
-    return _aporia_callback
-
-
 def initialize_bedrock(litellm_params: LitellmParams, guardrail: Guardrail):
     from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
         BedrockGuardrail,

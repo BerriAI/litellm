@@ -13,7 +13,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import json
 import sys
-from typing import Any, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Type
 
 from fastapi import HTTPException
 
@@ -37,6 +37,9 @@ from litellm.types.guardrails import GuardrailEventHooks
 litellm.set_verbose = True
 
 GUARDRAIL_NAME = "aporia"
+
+if TYPE_CHECKING:
+    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
 class AporiaGuardrail(CustomGuardrail):
@@ -226,3 +229,11 @@ class AporiaGuardrail(CustomGuardrail):
                 "Aporia AI: not running guardrail. No messages in data"
             )
             pass
+
+    @staticmethod
+    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+        from litellm.types.proxy.guardrails.guardrail_hooks.aporia_ai import (
+            AporiaGuardrailConfigModel,
+        )
+
+        return AporiaGuardrailConfigModel

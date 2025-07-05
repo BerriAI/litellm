@@ -21,7 +21,6 @@ from litellm.types.guardrails import (
 )
 
 from .guardrail_initializers import (
-    initialize_aporia,
     initialize_bedrock,
     initialize_guardrails_ai,
     initialize_hide_secrets,
@@ -34,7 +33,6 @@ from .guardrail_initializers import (
 )
 
 guardrail_initializer_registry = {
-    SupportedGuardrailIntegrations.APORIA.value: initialize_aporia,
     SupportedGuardrailIntegrations.BEDROCK.value: initialize_bedrock,
     SupportedGuardrailIntegrations.LAKERA.value: initialize_lakera,
     SupportedGuardrailIntegrations.LAKERA_V2.value: initialize_lakera_v2,
