@@ -14,3 +14,7 @@ class AimGuardrailConfigModel(GuardrailConfigModel):
         default=None,
         description="The API base for the Aim guardrail. Default is https://api.aim.security. Also checks if the `AIM_API_BASE` environment variable is set.",
     )
+
+    @staticmethod
+    def ui_friendly_name() -> str:
+        return "AIM Guardrail"

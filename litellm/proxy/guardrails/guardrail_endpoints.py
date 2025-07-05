@@ -975,6 +975,8 @@ async def get_provider_specific_params():
 
         if guardrail_config_model:
             fields = _get_fields_from_model(guardrail_config_model)
+            ui_friendly_name = guardrail_config_model.ui_friendly_name()
+            fields["ui_friendly_name"] = ui_friendly_name
             provider_params[guardrail_name] = fields
 
     return provider_params

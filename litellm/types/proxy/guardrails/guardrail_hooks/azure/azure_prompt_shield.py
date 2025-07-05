@@ -27,4 +27,6 @@ class AzurePromptShieldGuardrailConfigModel(
     AzureContentSafetyConfigModel,
     GuardrailConfigModel,
 ):
-    pass
+    @staticmethod
+    def ui_friendly_name() -> str:
+        return "Azure Content Safety Prompt Shield"
