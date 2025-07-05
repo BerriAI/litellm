@@ -401,6 +401,14 @@ class LitellmParams(
         description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
     )
 
+    def __init__(self, **kwargs):
+        default_on = kwargs.pop("default_on", None)
+        if default_on is not None:
+            kwargs["default_on"] = default_on
+        else:
+            kwargs["default_on"] = False
+        super().__init__(**kwargs)
+
 
 class Guardrail(TypedDict, total=False):
     guardrail_id: Optional[str]
