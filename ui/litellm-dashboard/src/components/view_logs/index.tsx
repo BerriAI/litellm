@@ -102,7 +102,15 @@ export default function SpendLogsTable({
 
   const queryClient = useQueryClient();
 
-  const [isLiveTail, setIsLiveTail] = useState(true); // Default to true
+  const [isLiveTail, setIsLiveTail] = useState<boolean>(() => {
+    const storedValue = sessionStorage.getItem("isLiveTail");
+    // default to true if nothing is stored
+    return storedValue !== null ? JSON.parse(storedValue) : true;
+  });
+
+  useEffect(() => {
+    sessionStorage.setItem("isLiveTail", JSON.stringify(isLiveTail));
+  }, [isLiveTail]);
 
   const [selectedTimeInterval, setSelectedTimeInterval] = useState<{ value: number; unit: string }>({ 
     value: 24, 
@@ -244,7 +252,7 @@ export default function SpendLogsTable({
       return response;
     },
     enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs",
-    refetchInterval: isLiveTail ? 15000 : false,
+    refetchInterval: isLiveTail && currentPage === 1 ? 15000 : false,
     refetchIntervalInBackground: true,
   });
 
@@ -735,7 +743,7 @@ export default function SpendLogsTable({
                     </div>
                   </div>
                 </div>
-                {isLiveTail && (
+                {isLiveTail && currentPage === 1 && (
                   <div className="mb-4 px-4 py-2 bg-green-50 border border-greem-200 rounded-md flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <span className="text-sm text-green-700">
