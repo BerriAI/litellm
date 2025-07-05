@@ -9,6 +9,7 @@ interface GuardrailProviderFieldsProps {
   selectedProvider: string | null;
   accessToken?: string | null;
   providerParams?: ProviderParamsResponse | null;
+  value?: Record<string, any> | null;
 }
 
 interface ProviderParam {
@@ -30,7 +31,8 @@ interface ProviderParamsResponse {
 const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
   selectedProvider,
   accessToken,
-  providerParams: providerParamsProp = null
+  providerParams: providerParamsProp = null,
+  value = null
 }) => {
   const [loading, setLoading] = useState(false);
   const [providerParams, setProviderParams] = useState<ProviderParamsResponse | null>(providerParamsProp);
@@ -100,11 +102,13 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
     return <div>No configuration fields available for this provider.</div>;
   }
 
+  console.log("Value:", value);
   // Convert object to array of entries and render fields
-  const renderFields = (fields: { [key: string]: ProviderParam }, parentKey = "") => {
+  const renderFields = (fields: { [key: string]: ProviderParam }, parentKey = "", parentValue?: any) => {
     return Object.entries(fields).map(([fieldKey, field]) => {
       const fullFieldKey = parentKey ? `${parentKey}.${fieldKey}` : fieldKey;
-      
+      const fieldValue = parentValue ? parentValue[fieldKey] : value?.[fieldKey];
+      console.log("Field value:", fieldValue);
       // Skip ui_friendly_name - it's metadata for the UI dropdown, not a user configuration field
       if (fieldKey === "ui_friendly_name") {
         return null;
@@ -121,7 +125,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
           <div key={fullFieldKey}>
             <div className="mb-2 font-medium">{fieldKey}</div>
             <div className="ml-4 border-l-2 border-gray-200 pl-4">
-              {renderFields(field.fields, fullFieldKey)}
+              {renderFields(field.fields, fullFieldKey, fieldValue)}
             </div>
           </div>
         );
@@ -138,7 +142,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
           {field.type === "select" && field.options ? (
             <Select 
               placeholder={field.description} 
-              defaultValue={field.default_value}
+              defaultValue={fieldValue || field.default_value}
             >
               {field.options.map((option) => (
                 <Select.Option key={option} value={option}>
@@ -150,7 +154,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
             <Select 
               mode="multiple"
               placeholder={field.description} 
-              defaultValue={field.default_value}
+              defaultValue={fieldValue || field.default_value}
             >
               {field.options.map((option) => (
                 <Select.Option key={option} value={option}>
@@ -161,7 +165,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
           ) : field.type === "bool" || field.type === "boolean" ? (
             <Select
               placeholder={field.description}
-              defaultValue={field.default_value}
+              defaultValue={fieldValue !== undefined ? String(fieldValue) : field.default_value}
             >
               <Select.Option value="true">True</Select.Option>
               <Select.Option value="false">False</Select.Option>
@@ -171,16 +175,19 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
               step={1}
               width={400}
               placeholder={field.description}
+              defaultValue={fieldValue !== undefined ? Number(fieldValue) : undefined}
             />
           ) : fieldKey.includes("password") || fieldKey.includes("secret") || fieldKey.includes("key") ? (
             <TextInput
               placeholder={field.description}
               type="password"
+              defaultValue={fieldValue || ""}
             />
           ) : (
             <TextInput
               placeholder={field.description}
               type="text"
+              defaultValue={fieldValue || ""}
             />
           )}
         </Form.Item>
