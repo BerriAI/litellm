@@ -226,7 +226,7 @@ def test_get_provider_specific_params():
     )  # Should be number, not None
 
     # Check other field types
-    assert nested_fields["categories"]["type"] == "array"
+    assert nested_fields["categories"]["type"] == "multiselect"
     assert nested_fields["blocklistNames"]["type"] == "array"
     assert nested_fields["haltOnBlocklistHit"]["type"] == "boolean"
     assert (
