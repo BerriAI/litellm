@@ -71,6 +71,7 @@ from litellm.proxy._types import (
     Member,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.db.create_views import (
     create_missing_views,
     should_create_missing_views,
@@ -843,8 +844,10 @@ class ProxyLogging:
             )
 
         ### LOGGING ###
-        if self._is_proxy_only_error(
-            original_exception=original_exception, error_type=error_type
+        if self._is_proxy_only_llm_api_error(
+            original_exception=original_exception,
+            error_type=error_type,
+            route=user_api_key_dict.request_route,
         ):
             await self._handle_logging_proxy_only_error(
                 request_data=request_data,
@@ -877,13 +880,14 @@ class ProxyLogging:
                 )
         return
 
-    def _is_proxy_only_error(
+    def _is_proxy_only_llm_api_error(
         self,
         original_exception: Exception,
         error_type: Optional[ProxyErrorTypes] = None,
+        route: Optional[str] = None,
     ) -> bool:
         """
-        Return True if the error is a Proxy Only Error
+        Return True if the error is a Proxy Only LLM API Error
 
         Prevents double logging of LLM API exceptions
 
@@ -891,6 +895,19 @@ class ProxyLogging:
             - Authentication Errors from user_api_key_auth
             - HTTP HTTPException (rate limit errors)
         """
+
+        #########################################################
+        # Only log LLM API errors for proxy level hooks
+        # eg. Authentication errors, rate limit errors, etc.
+        # Note: This fixes a security issue where we
+        #       would log temporary keys/auth info
+        #       from management endpoints
+        #########################################################
+        if route is None:
+            return False
+        if RouteChecks.is_llm_api_route(route) is not True:
+            return False
+
         return isinstance(original_exception, HTTPException) or (
             error_type == ProxyErrorTypes.auth_error
         )
