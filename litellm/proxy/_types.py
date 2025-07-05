@@ -2941,7 +2941,6 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     enforce_rbac: bool = False
     roles_jwt_field: Optional[str] = None  # v2 on role mappings
     role_mappings: Optional[List[RoleMapping]] = None
-    jwt_litellm_role_map: Optional[List[JWTLiteLLMRoleMap]] = None
     object_id_jwt_field: Optional[str] = (
         None  # can be either user / team, inferred from the role mapping
     )
@@ -2949,6 +2948,11 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     enforce_scope_based_access: bool = False
     enforce_team_based_model_access: bool = False
     custom_validate: Optional[Callable[..., Literal[True]]] = None
+    #########################################################
+    # Fields for syncing user team membership and roles with IDP provider
+    jwt_litellm_role_map: Optional[List[JWTLiteLLMRoleMap]] = None
+    sync_user_role_and_teams: bool = False
+    #########################################################
 
     def __init__(self, **kwargs: Any) -> None:
         # get the attribute names for this Pydantic model

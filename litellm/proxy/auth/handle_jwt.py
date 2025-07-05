@@ -936,7 +936,18 @@ class JWTAuthManager:
         user_object: Optional[LiteLLM_UserTable],
         prisma_client: Optional[PrismaClient],
     ) -> None:
-        """Sync user role and team memberships with JWT claims"""
+        """
+        Sync user role and team memberships with JWT claims
+
+        The goal of this method is to ensure:
+        1. The user role on LiteLLM DB is in sync with the IDP provider role
+        2. The user is a member of the teams specified in the JWT token
+
+        This method is only called if sync_user_role_and_teams is set to True in the JWT config.
+        """
+        if not jwt_handler.litellm_jwtauth.sync_user_role_and_teams:
+            return None
+
         if user_object is None or prisma_client is None:
             return None
 
