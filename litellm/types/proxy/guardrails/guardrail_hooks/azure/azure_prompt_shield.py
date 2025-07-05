@@ -1,5 +1,9 @@
 from typing import Any, Dict, List, TypedDict
 
+from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+
+from .base import AzureContentSafetyConfigModel
+
 
 class AzurePromptShieldGuardrailRequestBody(TypedDict):
     """Configuration parameters for the Azure Prompt Shield guardrail"""
@@ -17,3 +21,10 @@ class AzurePromptShieldGuardrailResponse(TypedDict):
 
     userPromptAnalysis: UserPromptAnalysis
     documentsAnalysis: List[Dict[str, Any]]
+
+
+class AzurePromptShieldGuardrailConfigModel(
+    AzureContentSafetyConfigModel,
+    GuardrailConfigModel,
+):
+    pass

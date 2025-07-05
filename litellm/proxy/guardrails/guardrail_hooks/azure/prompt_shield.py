@@ -3,7 +3,7 @@
 Azure Prompt Shield Native Guardrail Integrationfor LiteLLM
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, cast
 
 from fastapi import HTTPException
 
@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_prompt_shield import (
         AzurePromptShieldGuardrailResponse,
     )
+    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
     from litellm.types.utils import ModelResponse
 
 
@@ -183,3 +184,14 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         )
 
         return response
+
+    @staticmethod
+    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+        """
+        Get the config model for the Azure Prompt Shield guardrail.
+        """
+        from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_prompt_shield import (
+            AzurePromptShieldGuardrailConfigModel,
+        )
+
+        return AzurePromptShieldGuardrailConfigModel
