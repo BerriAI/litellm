@@ -568,6 +568,9 @@ async def get_guardrail_info(guardrail_id: str):
     }
     ```
     """
+    from pydantic import BaseModel
+
+    from litellm.litellm_core_utils.litellm_logging import _get_masked_values
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
@@ -588,10 +591,23 @@ async def get_guardrail_info(guardrail_id: str):
                 status_code=404, detail=f"Guardrail with ID {guardrail_id} not found"
             )
 
+        litellm_params = result.get("litellm_params", {})
+        if isinstance(litellm_params, dict):
+            result_litellm_params_dict = litellm_params
+        elif isinstance(litellm_params, BaseModel):
+            result_litellm_params_dict = litellm_params.model_dump(exclude_none=True)
+        else:
+            result_litellm_params_dict = {}
+        masked_litellm_params_dict = _get_masked_values(
+            result_litellm_params_dict,
+            unmasked_length=4,
+            number_of_asterisks=4,
+        )
+
         return GuardrailInfoResponse(
             guardrail_id=result.get("guardrail_id"),
             guardrail_name=result.get("guardrail_name"),
-            litellm_params=dict(result.get("litellm_params") or {}),
+            litellm_params=masked_litellm_params_dict,
             guardrail_info=dict(result.get("guardrail_info") or {}),
             created_at=result.get("created_at"),
             updated_at=result.get("updated_at"),
