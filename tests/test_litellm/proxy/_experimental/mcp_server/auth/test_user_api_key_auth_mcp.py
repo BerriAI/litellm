@@ -15,7 +15,7 @@ sys.path.insert(
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
-from litellm.proxy._types import UserAPIKeyAuth, SpecialHeaders
+from litellm.proxy._types import SpecialHeaders, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 

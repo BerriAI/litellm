@@ -10,20 +10,21 @@ IGNORE_FUNCTIONS = [
     "_check_for_os_environ_vars",
     "clean_message",
     "unpack_defs",
-    "convert_anyof_null_to_nullable", # has a set max depth
+    "convert_anyof_null_to_nullable",  # has a set max depth
     "add_object_type",
     "strip_field",
     "_transform_prompt",
     "mask_dict",
     "_serialize",  # we now set a max depth for this
-    "_sanitize_request_body_for_spend_logs_payload", # testing added for circular reference
-    "_sanitize_value", # testing added for circular reference
-    "set_schema_property_ordering", # testing added for infinite recursion
-    "process_items", # testing added for infinite recursion + max depth set.
-    "_can_object_call_model", # max depth set.
-    "encode_unserializable_types", # max depth set.
-    "filter_value_from_dict", # max depth set.
-    "normalize_json_schema_types", # max depth set.
+    "_sanitize_request_body_for_spend_logs_payload",  # testing added for circular reference
+    "_sanitize_value",  # testing added for circular reference
+    "set_schema_property_ordering",  # testing added for infinite recursion
+    "process_items",  # testing added for infinite recursion + max depth set.
+    "_can_object_call_model",  # max depth set.
+    "encode_unserializable_types",  # max depth set.
+    "filter_value_from_dict",  # max depth set.
+    "normalize_json_schema_types",  # max depth set.
+    "_extract_fields_recursive",  # max depth set.
 ]
 
 
@@ -85,6 +86,7 @@ def find_recursive_functions_in_directory(directory):
                     ignored_recursive_functions[file_path] = ignored
     return recursive_functions, ignored_recursive_functions
 
+
 if __name__ == "__main__":
     # Example usage
     # raise exception if any recursive functions are found, except for the ignored ones
@@ -101,10 +103,9 @@ if __name__ == "__main__":
         # raise exception if any recursive functions are found
         for file, functions in recursive_functions.items():
             print(
-                    f"🚨 Unignored recursive functions found in {file}: {functions}. THIS IS REALLY BAD, it has caused CPU Usage spikes in the past. Only keep this if it's ABSOLUTELY necessary."
-                )
+                f"🚨 Unignored recursive functions found in {file}: {functions}. THIS IS REALLY BAD, it has caused CPU Usage spikes in the past. Only keep this if it's ABSOLUTELY necessary."
+            )
         file, functions = list(recursive_functions.items())[0]
         raise Exception(
-                f"🚨 Unignored recursive functions found include {file}: {functions}. THIS IS REALLY BAD, it has caused CPU Usage spikes in the past. Only keep this if it's ABSOLUTELY necessary."
-            )
-        
+            f"🚨 Unignored recursive functions found include {file}: {functions}. THIS IS REALLY BAD, it has caused CPU Usage spikes in the past. Only keep this if it's ABSOLUTELY necessary."
+        )

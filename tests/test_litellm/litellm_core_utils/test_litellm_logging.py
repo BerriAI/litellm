@@ -11,9 +11,9 @@ sys.path.insert(
 
 import time
 
+from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import set_callbacks
-from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
 
 
 @pytest.fixture
@@ -344,3 +344,53 @@ def test_sentry_event_scrubber_initialization(monkeypatch):
     call_args = mock_init.call_args[1]
     assert call_args["event_scrubber"] == mock_event_scrubber_instance
     assert call_args["send_default_pii"] is False
+
+
+def test_get_masked_values():
+    from litellm.litellm_core_utils.litellm_logging import _get_masked_values
+
+    sensitive_object = {
+        "mode": "pre_call",
+        "api_key": "sensitive_api_key",
+        "payload": True,
+        "api_base": "sensitive_api_base",
+        "dev_info": True,
+        "metadata": None,
+        "breakdown": True,
+        "guardrail": "azure/text_moderations",
+        "default_on": False,
+        "guard_name": None,
+        "project_id": None,
+        "aws_role_name": None,
+        "lasso_user_id": None,
+        "aws_region_name": None,
+        "aws_profile_name": None,
+        "aws_session_name": None,
+        "aws_sts_endpoint": None,
+        "guardrailVersion": None,
+        "output_parse_pii": None,
+        "aws_access_key_id": None,
+        "aws_session_token": None,
+        "presidio_language": "en",
+        "mock_redacted_text": None,
+        "severity_threshold": "5",
+        "category_thresholds": None,
+        "guardrailIdentifier": None,
+        "pangea_input_recipe": None,
+        "pii_entities_config": {},
+        "mask_request_content": None,
+        "pangea_output_recipe": None,
+        "aws_secret_access_key": None,
+        "detect_secrets_config": None,
+        "lasso_conversation_id": None,
+        "mask_response_content": None,
+        "aws_web_identity_token": None,
+        "presidio_analyzer_api_base": None,
+        "presidio_ad_hoc_recognizers": None,
+        "aws_bedrock_runtime_endpoint": None,
+        "presidio_anonymizer_api_base": None,
+    }
+    masked_values = _get_masked_values(
+        sensitive_object, unmasked_length=4, number_of_asterisks=4
+    )
+    assert masked_values["presidio_anonymizer_api_base"] is None

@@ -4,8 +4,8 @@ import ssl
 import time
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Union
 
-import httpx
 import certifi
+import httpx
 from aiohttp import ClientSession, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 from httpx._types import RequestFiles

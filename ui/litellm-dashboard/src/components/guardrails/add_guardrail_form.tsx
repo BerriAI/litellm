@@ -6,7 +6,6 @@ import { GuardrailProviders, guardrail_provider_map, shouldRenderPIIConfigSettin
 import { createGuardrailCall, getGuardrailUISettings, getGuardrailProviderSpecificParams } from '../networking';
 import PiiConfiguration from './pii_configuration';
 import GuardrailProviderFields from './guardrail_provider_fields';
-import AzureTextModerationConfiguration from './azure_text_moderation_configuration';
 import GuardrailOptionalParams from './guardrail_optional_params';
 
 const { Title, Text, Link } = Typography;
