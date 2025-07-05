@@ -175,20 +175,22 @@ This release brings significant performance improvements to the Python SDK with 
 - **[Azure Content Safety](../../docs/guardrails/azure_content_safety)**
   - Add Azure Content Safety Guardrails to LiteLLM proxy - [PR](https://github.com/BerriAI/litellm/pull/12268)
   - Add azure content safety guardrails to the UI - [PR](https://github.com/BerriAI/litellm/pull/12309)
-- **[DeepEval](../../docs/observability/deepeval)**
+- **[DeepEval](../../docs/observability/deepeval_integration)**
   - Fix DeepEval logging format for failure events - [PR](https://github.com/BerriAI/litellm/pull/12303)
-- **[Arize](../../docs/observability/arize)**
+- **[Arize](../../docs/proxy/logging#arize)**
   - Add Arize Team Based Logging - [PR](https://github.com/BerriAI/litellm/pull/12264)
-- **[Langfuse](../../docs/observability/langfuse)**
+- **[Langfuse](../../docs/proxy/logging#langfuse)**
   - Langfuse prompt_version support - [PR](https://github.com/BerriAI/litellm/pull/12301)
 - **Message Redaction**
   - Ensure message redaction works for responses API logging - [PR](https://github.com/BerriAI/litellm/pull/12291)
 - **Sentry Integration**
   - Add sentry scrubbing - [PR](https://github.com/BerriAI/litellm/pull/12210)
-- **[AWS SQS Logging](../../docs/observability/aws_sqs)**
+- **[AWS SQS Logging](../../docs/proxy/logging#aws-sqs)**
   - New AWS SQS Logging Integration - [PR](https://github.com/BerriAI/litellm/pull/12176)
-- **[S3 Logger](../../docs/observability/s3)**
+- **[S3 Logger](../../docs/proxy/logging#s3-buckets)**
   - Add failure logging support - [PR](https://github.com/BerriAI/litellm/pull/12299)
+- **[Prometheus Metrics](../../docs/proxy/prometheus)**
+  - Add better error validation for prometheus metrics and labels - [PR](https://github.com/BerriAI/litellm/pull/12182)
 
 #### Bugs
 - **Security**
@@ -204,8 +206,6 @@ This release brings significant performance improvements to the Python SDK with 
 - **Python SDK**
   - 2 second faster import times - [PR](https://github.com/BerriAI/litellm/pull/12135)
   - Reduce python sdk import time by .3s - [PR](https://github.com/BerriAI/litellm/pull/12140)
-- **Prometheus Metrics**
-  - Add better error validation for prometheus metrics and labels - [PR](https://github.com/BerriAI/litellm/pull/12182)
 - **Error Handling**
   - Add error handling for MCP tools not found or invalid server - [PR](https://github.com/BerriAI/litellm/pull/12223)
 - **SSL/TLS**
