@@ -7,6 +7,7 @@ import { modelAvailableCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
+import EditLoggingSettings from "./team/EditLoggingSettings";
 
 interface KeyEditViewProps {
   keyData: KeyResponse;
@@ -100,7 +101,8 @@ export function KeyEditView({
     metadata: keyData.metadata ? JSON.stringify(keyData.metadata, null, 2) : "",
     guardrails: keyData.metadata?.guardrails || [],
     vector_stores: keyData.object_permission?.vector_stores || [],
-    mcp_servers: keyData.object_permission?.mcp_servers || []
+    mcp_servers: keyData.object_permission?.mcp_servers || [],
+    logging_settings: keyData.metadata?.logging || []
   };
 
   return (
@@ -188,6 +190,13 @@ export function KeyEditView({
           value={form.getFieldValue('mcp_servers')}
           accessToken={accessToken || ""}
           placeholder="Select MCP servers"
+        />
+      </Form.Item>
+
+      <Form.Item label="Logging Settings" name="logging_settings">
+        <EditLoggingSettings
+          value={form.getFieldValue('logging_settings')}
+          onChange={(values) => form.setFieldValue('logging_settings', values)}
         />
       </Form.Item>
 
