@@ -2,7 +2,7 @@
 CRUD ENDPOINTS FOR GUARDRAILS
 """
 
-from typing import Any, Dict, List, Literal, Optional, Type, Union, cast
+from typing import Any, Dict, List, Optional, Type, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -16,7 +16,6 @@ from litellm.types.guardrails import (
     Guardrail,
     GuardrailEventHooks,
     GuardrailInfoResponse,
-    GuardrailParamUITypes,
     GuardrailUIAddGuardrailSettings,
     LakeraV2GuardrailConfigModel,
     ListGuardrailsResponse,
