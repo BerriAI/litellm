@@ -65,11 +65,11 @@ This release brings significant performance improvements to the Python SDK with 
 
 #### Features
 - **[🆕 GitHub Copilot](../../docs/providers/github_copilot)** - Use GitHub Copilot API with LiteLLM - [PR](https://github.com/BerriAI/litellm/pull/12325), [Get Started](../../docs/providers/github_copilot)
-- **[🆕 VertexAI DeepSeek](../../docs/providers/vertex)** - Add support for VertexAI DeepSeek models - [PR](https://github.com/BerriAI/litellm/pull/12312), [Get Started](../../docs/providers/vertex)
+- **[🆕 VertexAI DeepSeek](../../docs/providers/vertex)** - Add support for VertexAI DeepSeek models - [PR](https://github.com/BerriAI/litellm/pull/12312), [Get Started](../../docs/providers/vertex_partner#vertexai-deepseek)
 - **[Azure AI](../../docs/providers/azure_ai)**
-  - Add azure_ai cohere rerank v3.5 - [PR](https://github.com/BerriAI/litellm/pull/12283)
+  - Add azure_ai cohere rerank v3.5 - [PR](https://github.com/BerriAI/litellm/pull/12283), [Get Started](../../docs/providers/azure_ai#rerank-endpoint)
 - **[Vertex AI](../../docs/providers/vertex)**
-  - Add size parameter support for image generation - [PR](https://github.com/BerriAI/litellm/pull/12292)
+  - Add size parameter support for image generation - [PR](https://github.com/BerriAI/litellm/pull/12292), [Get Started](../../docs/providers/vertex_image)
 - **[Custom LLM](../../docs/providers/custom_llm_server)**
   - Pass through extra_ properties on "custom" llm provider - [PR](https://github.com/BerriAI/litellm/pull/12185)
 
