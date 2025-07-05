@@ -91,6 +91,77 @@ async def test_arize_dynamic_params():
     print("✅ All assertions passed - OpenTelemetry logger correctly received dynamic params")
 
 
+@pytest.mark.asyncio
+async def test_arize_dynamic_headers_in_grpc_requests():
+    """Test that dynamic Arize params are passed as headers to the gRPC/HTTP exporter."""
+    
+    # Track all exporter calls and their headers
+    exporter_headers = []
+    
+    def mock_otlp_http_exporter(*args, **kwargs):
+        # Capture the headers passed to the HTTP exporter
+        headers = kwargs.get('headers', {})
+        exporter_headers.append(headers)
+        
+        # Return a mock exporter
+        mock_exporter = MagicMock()
+        mock_exporter.export = MagicMock(return_value=None)
+        return mock_exporter
+    
+    # Patch the HTTP exporter (Arize uses HTTP by default)
+    with patch('opentelemetry.exporter.otlp.proto.http.trace_exporter.OTLPSpanExporter', mock_otlp_http_exporter):
+        
+        # Create ArizeLogger with HTTP configuration
+        config = OpenTelemetryConfig(
+            exporter="otlp_http",
+            endpoint="https://otlp.arize.com/v1"
+        )
+        arize_logger = ArizeLogger(config=config)
+        litellm.callbacks = [arize_logger]
+        
+        # Request 1: team1 dynamic params
+        await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi from team1"}],
+            mock_response="response1",
+            arize_api_key="team1_api_key",
+            arize_space_id="team1_space_id"
+        )
 
+        # Request 2: team2 dynamic params
+        await litellm.acompletion(
+            model="gpt-3.5-turbo", 
+            messages=[{"role": "user", "content": "hi from team2"}],
+            mock_response="response2",
+            arize_api_key="team2_api_key",
+            arize_space_id="team2_space_id"
+        )
+
+        # Allow time for async processing
+        await asyncio.sleep(3)
+
+        # Assertions
+        print(f"Captured exporter headers: {exporter_headers}")
+        
+        # Should have multiple exporter calls (default + dynamic)
+        assert len(exporter_headers) >= 2, f"Expected at least 2 exporter calls, got {len(exporter_headers)}"
+        
+        # Find team1 and team2 headers
+        team1_found = False
+        team2_found = False
+        
+        for headers in exporter_headers:
+            if headers.get('api_key') == 'team1_api_key' and headers.get('arize-space-id') == 'team1_space_id':
+                team1_found = True
+                print(f"✅ Found team1 headers: {headers}")
+            elif headers.get('api_key') == 'team2_api_key' and headers.get('arize-space-id') == 'team2_space_id':
+                team2_found = True  
+                print(f"✅ Found team2 headers: {headers}")
+        
+        # Verify both dynamic header sets were used
+        assert team1_found, "team1 dynamic headers not found in exporter calls"
+        assert team2_found, "team2 dynamic headers not found in exporter calls"
+        
+        print("✅ Test passed - Dynamic Arize params correctly passed to gRPC/HTTP exporter")
 
 
