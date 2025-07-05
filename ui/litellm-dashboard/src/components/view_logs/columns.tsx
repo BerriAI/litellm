@@ -163,7 +163,7 @@ export const columns: ColumnDef<LogEntry>[] = [
     ),
   },
   {
-    header: "Duration",
+    header: "Duration (s)",
     accessorKey: "duration",
     cell: (info: any) => (
       <Tooltip title={String(info.getValue() || "-")}>

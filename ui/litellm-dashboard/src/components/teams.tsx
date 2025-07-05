@@ -60,7 +60,7 @@ import AvailableTeamsPanel from "@/components/team/available_teams";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import PremiumVectorStoreSelector from "./common_components/PremiumVectorStoreSelector";
 import PremiumMCPSelector from "./common_components/PremiumMCPSelector";
-import LoggingSettings from "./team/LoggingSettings";
+import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
 import type { KeyResponse, Team } from "./key_team_helpers/key_list";
 import { formatNumberWithCommas } from "../utils/dataUtils";
 
@@ -1178,9 +1178,10 @@ const Teams: React.FC<TeamProps> = ({
                         </AccordionHeader>
                         <AccordionBody>
                           <div className="mt-4">
-                            <LoggingSettings
+                            <PremiumLoggingSettings
                               value={loggingSettings}
                               onChange={setLoggingSettings}
+                              premiumUser={premiumUser}
                             />
                           </div>
                         </AccordionBody>

@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { Form, Select, Space, Tooltip, Divider } from 'antd';
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { Button, Card } from '@tremor/react';
+import { Button, Card, TextInput } from '@tremor/react';
 import { PlusIcon, TrashIcon, CogIcon } from '@heroicons/react/outline';
 import { callbackInfo, Callbacks, callback_map } from '../callback_info_helpers';
 
@@ -111,9 +111,8 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({ value = [], onChange 
                   </span>
                 )}
               </label>
-              <input
+              <TextInput
                 type={paramType === 'password' ? 'password' : 'text'}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors duration-200"
                 placeholder={`os.environ/${paramName.toUpperCase()}`}
                 value={config.callback_vars[paramName] || ''}
                 onChange={(e) => updateCallbackVar(configIndex, paramName, e.target.value)}
