@@ -83,21 +83,6 @@ def initialize_lakera_v2(litellm_params: LitellmParams, guardrail: Guardrail):
     return _lakera_v2_callback
 
 
-def initialize_aim(litellm_params: LitellmParams, guardrail: Guardrail):
-    from litellm.proxy.guardrails.guardrail_hooks.aim import AimGuardrail
-
-    _aim_callback = AimGuardrail(
-        api_base=litellm_params.api_base,
-        api_key=litellm_params.api_key,
-        guardrail_name=guardrail.get("guardrail_name", ""),
-        event_hook=litellm_params.mode,
-        default_on=litellm_params.default_on,
-    )
-    litellm.logging_callback_manager.add_litellm_callback(_aim_callback)
-
-    return _aim_callback
-
-
 def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
     from litellm.proxy.guardrails.guardrail_hooks.presidio import (
         _OPTIONAL_PresidioPIIMasking,
@@ -214,16 +199,19 @@ def initialize_panw_prisma_airs(litellm_params, guardrail):
     from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs import (
         PanwPrismaAirsHandler,
     )
-    
+
     if not litellm_params.api_key:
         raise ValueError("PANW Prisma AIRS: api_key is required")
     if not litellm_params.profile_name:
         raise ValueError("PANW Prisma AIRS: profile_name is required")
 
     _panw_callback = PanwPrismaAirsHandler(
-        guardrail_name=guardrail.get("guardrail_name", "panw_prisma_airs"),  # Use .get() with default
+        guardrail_name=guardrail.get(
+            "guardrail_name", "panw_prisma_airs"
+        ),  # Use .get() with default
         api_key=litellm_params.api_key,
-        api_base=litellm_params.api_base or "https://service.api.aisecurity.paloaltonetworks.com/v1/scan/sync/request",
+        api_base=litellm_params.api_base
+        or "https://service.api.aisecurity.paloaltonetworks.com/v1/scan/sync/request",
         profile_name=litellm_params.profile_name,
         default_on=litellm_params.default_on,
     )
