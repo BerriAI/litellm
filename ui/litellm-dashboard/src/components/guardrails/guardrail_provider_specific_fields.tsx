@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Form, Select, Spin } from 'antd';
 import { TextInput } from '@tremor/react';
-import { GuardrailProviders, guardrail_provider_map } from './guardrail_info_helpers';
+import { GuardrailProviders, guardrail_provider_map, populateGuardrailProviders, populateGuardrailProviderMap, getGuardrailProviderMap } from './guardrail_info_helpers';
 import { getGuardrailProviderSpecificParams } from '../networking';
 import NumericalInput from '../shared/numerical_input';
 
@@ -52,6 +52,10 @@ const GuardrailProviderSpecificFields: React.FC<GuardrailProviderSpecificFieldsP
       try {
         const data = await getGuardrailProviderSpecificParams(accessToken);
         setProviderParams(data);
+        
+        // Populate dynamic providers from API response
+        populateGuardrailProviders(data);
+        populateGuardrailProviderMap(data);
       } catch (error) {
         console.error("Error fetching provider params:", error);
         setError("Failed to load provider parameters");
@@ -81,7 +85,8 @@ const GuardrailProviderSpecificFields: React.FC<GuardrailProviderSpecificFieldsP
   }
 
   // Get the provider key matching the selected provider
-  const providerKey = guardrail_provider_map[selectedProvider]?.toLowerCase();
+  const currentProviderMap = getGuardrailProviderMap();
+  const providerKey = currentProviderMap[selectedProvider]?.toLowerCase();
   
   // Get parameters for the selected provider
   const providerFields = providerParams && providerParams[providerKey];
