@@ -1401,9 +1401,23 @@ ModelResponse(
 )
 ```
 
+## VertexAI DeepSeek
+
+| Property | Details |
+|----------|---------|
+| Provider Route | `vertex_ai/deepseek-ai/{MODEL}` |
+| Vertex Documentation | [Vertex AI - DeepSeek Models](https://cloud.google.com/vertex-ai/generative-ai/docs/maas/deepseek) |
+
+#### Usage
+
+**LiteLLM Supports all Vertex AI DeepSeek Models.** Ensure you use the `vertex_ai/deepseek-ai/` prefix for all Vertex AI DeepSeek models.
+
+| Model Name       | Usage                        |
+|------------------|------------------------------|
+| vertex_ai/deepseek-ai/deepseek-r1-0528-maas | `completion('vertex_ai/deepseek-ai/deepseek-r1-0528-maas', messages)` |
 
 
-## Meta/Llama API
+## VertexAI Meta/Llama API
  
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
@@ -1416,7 +1430,7 @@ ModelResponse(
 | meta/llama-4-maverick-17b-128e-instruct-maas | `completion('vertex_ai/meta/llama-4-maverick-17b-128e-instruct-maas',messages)` |
 | meta/llama-4-maverick-17b-16e-instruct-maas | `completion('vertex_ai/meta/llama-4-maverick-17b-16e-instruct-maas',messages)` |
 
-### Usage
+#### Usage
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -1487,7 +1501,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 </TabItem>
 </Tabs>
 
-## Mistral API
+## VertexAI Mistral API
 
 [**Supported OpenAI Params**](https://github.com/BerriAI/litellm/blob/e0f3cd580cb85066f7d36241a03c30aa50a8a31d/litellm/llms/openai.py#L137)
  
@@ -1499,7 +1513,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 | codestral@latest   | `completion('vertex_ai/codestral@latest', messages)` |
 | codestral@@2405   | `completion('vertex_ai/codestral@2405', messages)` |
 
-### Usage
+#### Usage
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -1571,7 +1585,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 </Tabs>
 
 
-### Usage - Codestral FIM
+#### Usage - Codestral FIM
 
 Call Codestral on VertexAI via the OpenAI [`/v1/completion`](https://platform.openai.com/docs/api-reference/completions/create) endpoint for FIM tasks. 
 
@@ -1658,14 +1672,14 @@ curl -X POST 'http://0.0.0.0:4000/completions' \
 </Tabs>
 
 
-## AI21 Models
+## VertexAI AI21 Models
  
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
 | jamba-1.5-mini@001   | `completion(model='vertex_ai/jamba-1.5-mini@001', messages)` |
 | jamba-1.5-large@001   | `completion(model='vertex_ai/jamba-1.5-large@001', messages)` |
 
-### Usage
+#### Usage
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
