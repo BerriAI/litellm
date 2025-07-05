@@ -62,6 +62,13 @@ This release brings significant performance improvements to the Python SDK with 
 
 ## New Models / Updated Models
 
+#### Pricing / Context Window Updates
+
+| Provider    | Model                                  | Context Window | Input ($/1M tokens) | Output ($/1M tokens) | Type |
+| ----------- | -------------------------------------- | -------------- | ------------------- | -------------------- | ---- |
+| Watsonx | `watsonx/mistralai/mistral-large` | 131k | $3.00 | $10.00 | New |
+| Azure AI | `azure_ai/cohere-rerank-v3.5` | 4k | $2.00/1k queries | - | New (Rerank) |
+
 
 #### Features
 - **[🆕 GitHub Copilot](../../docs/providers/github_copilot)** - Use GitHub Copilot API with LiteLLM - [PR](https://github.com/BerriAI/litellm/pull/12325), [Get Started](../../docs/providers/github_copilot)
@@ -88,9 +95,6 @@ This release brings significant performance improvements to the Python SDK with 
   - Fix default parameters for ollama-chat - [PR](https://github.com/BerriAI/litellm/pull/12201)
 - **[VLLM](../../docs/providers/vllm)**
   - Add 'audio_url' message type support - [PR](https://github.com/BerriAI/litellm/pull/12270)
-- **[Hugging Face](../../docs/providers/huggingface)**
-  - Fix Hugging Face tests - [PR](https://github.com/BerriAI/litellm/pull/12286)
-
 
 ---
 
