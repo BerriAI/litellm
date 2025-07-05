@@ -22,7 +22,6 @@ from litellm.types.guardrails import (
 
 from .guardrail_initializers import (
     initialize_bedrock,
-    initialize_guardrails_ai,
     initialize_hide_secrets,
     initialize_lakera,
     initialize_lakera_v2,
@@ -38,7 +37,6 @@ guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.LAKERA_V2.value: initialize_lakera_v2,
     SupportedGuardrailIntegrations.PRESIDIO.value: initialize_presidio,
     SupportedGuardrailIntegrations.HIDE_SECRETS.value: initialize_hide_secrets,
-    SupportedGuardrailIntegrations.GURDRAILS_AI.value: initialize_guardrails_ai,
     SupportedGuardrailIntegrations.PANGEA.value: initialize_pangea,
     SupportedGuardrailIntegrations.LASSO.value: initialize_lasso,
     SupportedGuardrailIntegrations.PANW_PRISMA_AIRS.value: initialize_panw_prisma_airs,
@@ -179,7 +177,7 @@ def get_guardrail_class_from_hooks():
                 verbose_proxy_logger.debug(f"Could not import {module_path}: {e}")
                 continue
             except Exception as e:
-                verbose_proxy_logger.error(f"Error processing {module_path}: {e}")
+                verbose_proxy_logger.exception(f"Error processing {module_path}: {e}")
                 continue
 
     except Exception as e:

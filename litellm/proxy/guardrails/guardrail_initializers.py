@@ -122,26 +122,6 @@ def initialize_hide_secrets(litellm_params: LitellmParams, guardrail: Guardrail)
     return _secret_detection_object
 
 
-def initialize_guardrails_ai(litellm_params, guardrail):
-    from litellm.proxy.guardrails.guardrail_hooks.guardrails_ai import GuardrailsAI
-
-    _guard_name = litellm_params.guard_name
-    if not _guard_name:
-        raise Exception(
-            "GuardrailsAIException - Please pass the Guardrails AI guard name via 'litellm_params::guard_name'"
-        )
-
-    _guardrails_ai_callback = GuardrailsAI(
-        api_base=litellm_params.api_base,
-        guard_name=_guard_name,
-        guardrail_name=SupportedGuardrailIntegrations.GURDRAILS_AI.value,
-        default_on=litellm_params.default_on,
-    )
-    litellm.logging_callback_manager.add_litellm_callback(_guardrails_ai_callback)
-
-    return _guardrails_ai_callback
-
-
 def initialize_pangea(litellm_params, guardrail):
     from litellm.proxy.guardrails.guardrail_hooks.pangea import PangeaHandler
 
