@@ -194,16 +194,6 @@ export function KeyEditView({
         />
       </Form.Item>
 
-      <Form.Item label="Logging Settings" name="logging_settings">
-        <EditLoggingSettings
-          value={form.getFieldValue('logging_settings')}
-          onChange={(values) => form.setFieldValue('logging_settings', values)}
-        />
-      </Form.Item>
-
-      <Form.Item label="Metadata" name="metadata">
-        <Input.TextArea rows={10} />
-      </Form.Item>
 
       <Form.Item label="Team ID" name="team_id">
         <Select
@@ -218,6 +208,18 @@ export function KeyEditView({
           ))}
         </Select>
       </Form.Item>
+      <Form.Item label="Logging Settings" name="logging_settings">
+        <EditLoggingSettings
+          value={form.getFieldValue('logging_settings')}
+          onChange={(values) => form.setFieldValue('logging_settings', values)}
+        />
+      </Form.Item>
+
+
+      <Form.Item label="Metadata" name="metadata">
+        <Input.TextArea rows={10} />
+      </Form.Item>
+
 
       {/* Hidden form field for token */}
       <Form.Item name="token" hidden>
