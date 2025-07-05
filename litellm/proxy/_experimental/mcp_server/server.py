@@ -20,7 +20,6 @@ from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
     LITELLM_MCP_SERVER_VERSION,
-    LITELLM_MCP_SERVER_DESCRIPTION, 
     normalize_server_name,
 )
 from litellm.proxy._types import UserAPIKeyAuth
