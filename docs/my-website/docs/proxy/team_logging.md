@@ -4,50 +4,23 @@ import TabItem from '@theme/TabItem';
 
 # Team/Key Based Logging
 
-Allow each key/team to use their own Langfuse Project / custom callbacks
+## Overview
 
-**This allows you to do the following**
-```
+Allow each key/team to use their own Langfuse Project / custom callbacks. This enables granular control over logging and compliance requirements.
+
+**Example Use Cases:**
+```showLineNumbers title="Team Based Logging"
 Team 1 -> Logs to Langfuse Project 1 
 Team 2 -> Logs to Langfuse Project 2
 Team 3 -> Disabled Logging (for GDPR compliance)
 ```
 
-## Team Based Logging
+## Supported Logging Integrations
+- `langfuse`
+- `gcs_bucket`
+- `langsmith`
+- `arize`
 
-
-
-### Setting Team Logging via `config.yaml`
-
-Turn on/off logging and caching for a specific team id. 
-
-**Example:**
-
-This config would send langfuse logs to 2 different langfuse projects, based on the team id 
-
-```yaml
-litellm_settings:
-  default_team_settings: 
-    - team_id: "dbe2f686-a686-4896-864a-4c3924458709"
-      success_callback: ["langfuse"]
-      langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_1 # Project 1
-      langfuse_secret: os.environ/LANGFUSE_PRIVATE_KEY_1 # Project 1
-    - team_id: "06ed1e01-3fa7-4b9e-95bc-f2e59b74f3a8"
-      success_callback: ["langfuse"]
-      langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_2 # Project 2
-      langfuse_secret: os.environ/LANGFUSE_SECRET_2 # Project 2
-```
-
-Now, when you [generate keys](./virtual_keys.md) for this team-id 
-
-```bash
-curl -X POST 'http://0.0.0.0:4000/key/generate' \
--H 'Authorization: Bearer sk-1234' \
--H 'Content-Type: application/json' \
--d '{"team_id": "06ed1e01-3fa7-4b9e-95bc-f2e59b74f3a8"}'
-```
-
-All requests made with these keys will log data to their team-specific logging. -->
 
 ## [BETA] Team Logging via API 
 
@@ -189,6 +162,37 @@ curl -X GET 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/cal
 
 
 
+## Team Logging - `config.yaml`
+
+Turn on/off logging and caching for a specific team id. 
+
+**Example:**
+
+This config would send langfuse logs to 2 different langfuse projects, based on the team id 
+
+```yaml
+litellm_settings:
+  default_team_settings: 
+    - team_id: "dbe2f686-a686-4896-864a-4c3924458709"
+      success_callback: ["langfuse"]
+      langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_1 # Project 1
+      langfuse_secret: os.environ/LANGFUSE_PRIVATE_KEY_1 # Project 1
+    - team_id: "06ed1e01-3fa7-4b9e-95bc-f2e59b74f3a8"
+      success_callback: ["langfuse"]
+      langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_2 # Project 2
+      langfuse_secret: os.environ/LANGFUSE_SECRET_2 # Project 2
+```
+
+Now, when you [generate keys](./virtual_keys.md) for this team-id 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{"team_id": "06ed1e01-3fa7-4b9e-95bc-f2e59b74f3a8"}'
+```
+
+All requests made with these keys will log data to their team-specific logging. 
 
 
 ## [BETA] Key Based Logging 
