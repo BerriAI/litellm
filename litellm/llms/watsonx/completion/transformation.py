@@ -299,6 +299,11 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         model_response.choices[0].finish_reason = map_finish_reason(
             json_resp["results"][0]["stop_reason"]
         )
+        if len(json_resp["results"]) > 0 and json_resp["results"][0].get("moderations"):
+            if hasattr(model_response.choices[0], "message"):
+                model_response.choices[0].message.provider_specific_fields = {
+                    "moderations": json_resp["results"][0]["moderations"]
+                }
         if json_resp.get("created_at"):
             try:
                 created_datetime = datetime.fromisoformat(json_resp["created_at"])
@@ -376,6 +381,12 @@ class WatsonxTextCompletionResponseIterator(BaseModelResponseIterator):
                 finish_reason = results[0].get("stop_reason")
                 is_finished = finish_reason != "not_finished"
 
+                provider_specific_fields = None
+                if len(results) > 0 and results[0].get("moderations"):
+                    provider_specific_fields = {
+                        "moderations": results[0]["moderations"]
+                    }
+
                 return GenericStreamingChunk(
                     text=text,
                     is_finished=is_finished,
@@ -386,6 +397,7 @@ class WatsonxTextCompletionResponseIterator(BaseModelResponseIterator):
                         total_tokens=results[0].get("input_token_count", 0)
                         + results[0].get("generated_token_count", 0),
                     ),
+                    provider_specific_fields=provider_specific_fields,
                 )
             return GenericStreamingChunk(
                 text="",

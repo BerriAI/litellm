@@ -11,6 +11,7 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from unittest.mock import patch, Mock
 import pytest
 from typing import Optional
+from litellm.utils import get_optional_params
 
 
 @pytest.fixture
@@ -203,3 +204,22 @@ def test_watsonx_completion_regular_model_includes_model_id(
     assert json_data["model_id"] == "regular-model"  # Provider prefix is stripped
     # Ensure project_id is also included for regular models
     assert "project_id" in json_data
+
+
+def test_watsonx_text_moderations():
+    optional_params = get_optional_params(
+        model="ibm/granite-3.3-8b-instruct",
+        custom_llm_provider="watsonx_text",
+        moderations={
+            "hap": {
+                "input": {"enabled": True, "threshold": 0.5},
+                "output": {"enabled": True, "threshold": 0.5},
+            },
+        },
+    )
+    assert optional_params["moderations"] == {
+        "hap": {
+            "input": {"enabled": True, "threshold": 0.5},
+            "output": {"enabled": True, "threshold": 0.5},
+        }
+    }
