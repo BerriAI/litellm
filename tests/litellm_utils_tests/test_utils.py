@@ -1086,6 +1086,7 @@ def test_is_base64_encoded():
 )
 def test_async_http_handler(mock_async_client):
     import httpx
+    import ssl
 
     timeout = 120
     event_hooks = {"request": [lambda r: r]}
@@ -1098,18 +1099,19 @@ def test_async_http_handler(mock_async_client):
 
         AsyncHTTPHandler(timeout, event_hooks, concurrent_limit)
 
-        mock_async_client.assert_called_with(
-            cert="/client.pem",
-            transport=mock_transport,
-            event_hooks=event_hooks,
-            headers=headers,
-            limits=httpx.Limits(
-                max_connections=concurrent_limit,
-                max_keepalive_connections=concurrent_limit,
-            ),
-            timeout=timeout,
-            verify="/certificate.pem",
-        )
+        # Get the call arguments
+        call_args = mock_async_client.call_args[1]
+        
+        # Assert SSL context is being used instead of direct cert/verify params
+        assert call_args["cert"] == "/client.pem"
+        assert isinstance(call_args["verify"], ssl.SSLContext)
+        assert call_args["transport"] == mock_transport
+        assert call_args["event_hooks"] == event_hooks
+        assert call_args["headers"] == headers
+        assert isinstance(call_args["limits"], httpx.Limits)
+        assert call_args["limits"].max_connections == concurrent_limit
+        assert call_args["limits"].max_keepalive_connections == concurrent_limit
+        assert call_args["timeout"] == timeout
 
 
 @mock.patch("httpx.AsyncClient")
@@ -1121,6 +1123,7 @@ def test_async_http_handler_force_ipv4(mock_async_client):
     This is prod test - we need to ensure that httpx always uses ipv4 when litellm.force_ipv4 is True
     """
     import httpx
+    import ssl
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
     # Set force_ipv4 to True
@@ -1151,7 +1154,7 @@ def test_async_http_handler_force_ipv4(mock_async_client):
         assert call_args["limits"].max_connections == concurrent_limit
         assert call_args["limits"].max_keepalive_connections == concurrent_limit
         assert call_args["timeout"] == timeout
-        assert call_args["verify"] is True
+        assert isinstance(call_args["verify"], ssl.SSLContext)
         assert call_args["cert"] is None
 
     finally:
