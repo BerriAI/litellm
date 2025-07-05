@@ -53,7 +53,7 @@ pip install litellm==1.74.0.post1
 
 ### MCP Gateway: Segregate MCP tools
 
-### Python SDK: 2.3 Second Faster Python SDK Import Times
+### Python SDK: 2.3 Second Faster Import Times
 
 This release brings significant performance improvements to the Python SDK with 2.3 seconds faster import times. We've refactored the initialization process to reduce startup overhead, making LiteLLM more efficient for applications that need quick initialization. This is a major improvement for applications that need to initialize LiteLLM quickly.
 
