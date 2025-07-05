@@ -1,7 +1,7 @@
 ---
-title: "[Pre-Release] v1.74.0-stable"
+title: "v1.74.0-stable"
 slug: "v1-74-0-stable"
-date: 2025-07-05T10:00:00
+date: 2025-01-05T10:00:00
 authors:
   - name: Krrish Dholakia
     title: CEO, LiteLLM
@@ -18,12 +18,6 @@ hide_table_of_contents: false
 import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
-
-:::info
-
-This is a pre-release version of v1.74.0. The stable version will be released on July 9th, 2025.
-
-:::
 
 ## Deploy this version
 
@@ -52,213 +46,233 @@ pip install litellm==1.74.0.post1
 ## Key Highlights 
 
 
+
+### Team / Key Based Logging on UI
+
+Major improvements to team management including:
+- Team-specific model access controls
+- Improved budget display with comma-separated formatting
+- Team-based logging callbacks
+- Better team member management workflows
+
+### Azure Content Safety Guardrails
+
+New Azure Content Safety integration provides advanced content moderation and safety guardrails for your LLM applications, with full UI support for configuration and monitoring.
+
+### MCP Gateway: Segregate MCP tools
+
+### Python SDK: 2.3 Second Faster Python SDK Import Times
+
+This release brings significant performance improvements to the Python SDK with over 2 seconds faster import times. We've refactored the initialization process to reduce startup overhead, making LiteLLM more efficient for applications that need quick initialization. This is a major improvement for applications that need to initialize LiteLLM quickly.
+
+
+
+
+
 ---
 
 ## New Models / Updated Models
 
 ### New Providers
-- **GitHub Copilot**: New LLM API provider support
+- **[GitHub Copilot](../../docs/providers/github_copilot)** - New LLM API provider support
 
 ### Updated Models
 #### Bugs
-    - **[Azure](../../docs/providers/azure)**
-        - Support Azure Content Safety Guardrails in LiteLLM proxy
-        - Fix responses API bridge - respect responses/ format
-        - Add Azure AI Cohere rerank v3.5 support
-    - **[Gemini](../../docs/providers/gemini)**
-        - Fix gemini tool call sequence
-        - Handle kwargs + litellm params containing stream in generate content bridge
-        - Fix custom api_base path preservation (with revert for further improvements)
-    - **[Mistral](../../docs/providers/mistral)**
-        - Fix transform_response handling for empty string content
-        - Turn Mistral to use llm_http_handler for improved performance
-    - **[Vertex AI](../../docs/providers/vertex)**
-        - Add size parameter support for Vertex AI image generation
-        - Fix Vertex Anthropic models usage with gemini-cli
-    - **[Bedrock](../../docs/providers/bedrock)**
-        - Fix bedrock guardrails post_call for streaming responses
-        - Support optional args for bedrock in factory.py
-    - **[Ollama](../../docs/providers/ollama)**
-        - Fix default parameters for ollama-chat
-    - **[VLLM](../../docs/providers/vllm)**
-        - Add 'audio_url' message type support
-    - **[Hugging Face](../../docs/providers/huggingface)**
-        - Fix Hugging Face tests and integration
+- **[Mistral](../../docs/providers/mistral)**
+  - Fix transform_response handling for empty string content - [PR](https://github.com/BerriAI/litellm/pull/12202)
+  - Turn Mistral to use llm_http_handler - [PR](https://github.com/BerriAI/litellm/pull/12245)
+- **[Gemini](../../docs/providers/gemini)**
+  - Fix tool call sequence - [PR](https://github.com/BerriAI/litellm/pull/11999)
+  - Fix custom api_base path preservation - [PR](https://github.com/BerriAI/litellm/pull/12215)
+- **[Anthropic](../../docs/providers/anthropic)**
+  - Fix user_id validation logic - [PR](https://github.com/BerriAI/litellm/pull/11432)
+- **[Bedrock](../../docs/providers/bedrock)**
+  - Support optional args for bedrock - [PR](https://github.com/BerriAI/litellm/pull/12287)
+  - Fix bedrock guardrails post_call for streaming responses - [PR](https://github.com/BerriAI/litellm/pull/12252)
+- **[Ollama](../../docs/providers/ollama)**
+  - Fix default parameters for ollama-chat - [PR](https://github.com/BerriAI/litellm/pull/12201)
+- **[VLLM](../../docs/providers/vllm)**
+  - Add 'audio_url' message type support - [PR](https://github.com/BerriAI/litellm/pull/12270)
+- **[Hugging Face](../../docs/providers/huggingface)**
+  - Fix Hugging Face tests - [PR](https://github.com/BerriAI/litellm/pull/12286)
 
 #### Features
-    - **Custom LLM Providers**
-        - Pass through extra_ properties on "custom" llm provider
-    - **Anthropic**
-        - Fix user_id validation logic
-        - Support anthropic_messages call type with max tokens check
-    - **Prompt Management**
-        - Langfuse prompt_version support for better prompt management
+- **[Azure AI](../../docs/providers/azure_ai)**
+  - Add azure_ai cohere rerank v3.5 - [PR](https://github.com/BerriAI/litellm/pull/12283)
+- **[Vertex AI](../../docs/providers/vertex)**
+  - Add size parameter support for image generation - [PR](https://github.com/BerriAI/litellm/pull/12292)
+- **[Custom LLM](../../docs/providers/custom_llm_server)**
+  - Pass through extra_ properties on "custom" llm provider - [PR](https://github.com/BerriAI/litellm/pull/12185)
 
 ---
 
 ## LLM API Endpoints
 
 #### Features
-    - [**/v1/messages**](../../docs/anthropic_unified)
-        - Remove hardcoded model name on streaming
-        - Support for non-anthropic models (gemini/openai/etc.) token usage returned when calling /v1/messages
-        - Fix using /messages with lowest latency routing
-    - [**/generateContent**](../../docs/providers/gemini)
-        - Allow passing litellm_params when using generateContent API endpoint
-        - Support for OpenAI models - only pass supported params
-    - [**/responses**](../../docs/response_api)
-        - Fix responses API - resolve 'got multiple values for keyword argument litellm_trace_id'
-        - Support for Azure responses API bridge
-    - **Tool Choice**
-        - Support Cursor IDE tool_choice format `{"type": "auto"}`
-    - **Streaming**
-        - Store finish reason, even if is_finished flag is set
-        - Fix streaming cost tracking with prompt caching for VertexAI Anthropic
+- **[/v1/messages](../../docs/anthropic_unified)**
+  - Remove hardcoded model name on streaming - [PR](https://github.com/BerriAI/litellm/pull/12131)
+  - Support lowest latency routing - [PR](https://github.com/BerriAI/litellm/pull/12180)
+  - Non-anthropic models token usage returned - [PR](https://github.com/BerriAI/litellm/pull/12184)
+- **[/generateContent](../../docs/generate_content)**
+  - Allow passing litellm_params - [PR](https://github.com/BerriAI/litellm/pull/12177)
+  - Only pass supported params when using OpenAI models - [PR](https://github.com/BerriAI/litellm/pull/12297)
+- **[/batches](../../docs/batches)**
+  - Support batch retrieve with target model Query Param - [PR](https://github.com/BerriAI/litellm/pull/12228)
+  - Anthropic completion bridge improvements - [PR](https://github.com/BerriAI/litellm/pull/12228)
+- **[/responses](../../docs/response_api)**
+  - Azure responses api bridge improvements - [PR](https://github.com/BerriAI/litellm/pull/12224)
+  - Fix responses api error handling - [PR](https://github.com/BerriAI/litellm/pull/12225)
 
 #### Bugs
-    - **LlamaAPI**
-        - Fix Error code: 307 for LlamaAPI Streaming Chat
-    - **Custom Headers**
-        - Enable setting custom header tags
-    - **Cost Calculation**
-        - Fix allow strings in calculate cost function
+- **Tool Choice**
+  - Support Cursor IDE tool_choice format {"type": "auto"} - [PR](https://github.com/BerriAI/litellm/pull/12168)
+- **Streaming**
+  - Fix Error code: 307 for LlamaAPI Streaming Chat - [PR](https://github.com/BerriAI/litellm/pull/11946)
+  - Store finish reason even if is_finished - [PR](https://github.com/BerriAI/litellm/pull/12250)
+- **Cost Calculation**
+  - Fix allow strings in calculate cost - [PR](https://github.com/BerriAI/litellm/pull/12200)
 
 ---
 
 ## Spend Tracking / Budget Improvements
 
 #### Features
-    - **Batches**
-        - Support batch retrieve with target model Query Param
-        - Add failure logging support for s3 logger
-    - **DeepEval**
-        - Fix DeepEval logging format for failure events
-    - **Arize**
-        - Add Arize Team Based Logging capabilities
+- **[AWS SQS Logging](../../docs/observability/aws_sqs)**
+  - New AWS SQS Logging Integration - [PR](https://github.com/BerriAI/litellm/pull/12176)
+- **[S3 Logger](../../docs/observability/s3)**
+  - Add failure logging support - [PR](https://github.com/BerriAI/litellm/pull/12299)
+- **Cost Tracking**
+  - VertexAI Anthropic streaming cost tracking with prompt caching fixes - [PR](https://github.com/BerriAI/litellm/pull/12188)
 
 ---
 
 ## Management Endpoints / UI
 
 #### Bugs
-    - **Teams**
-        - Prevent team model reset on model add
-        - Return team-only models on /v2/model/info
-        - Render team member budget correctly
-    - **User Roles**
-        - Correctly display 'Internal Viewer' user role
-    - **UI Rendering**
-        - Fix rendering UI on non-root images
-    - **Callback Management**
-        - Handle proxy internal callbacks in callback management test
+- **Team Management**
+  - Prevent team model reset on model add - [PR](https://github.com/BerriAI/litellm/pull/12144)
+  - Return team-only models on /v2/model/info - [PR](https://github.com/BerriAI/litellm/pull/12144)
+  - Render team member budget correctly - [PR](https://github.com/BerriAI/litellm/pull/12144)
+- **UI Rendering**
+  - Fix rendering ui on non-root images - [PR](https://github.com/BerriAI/litellm/pull/12226)
+  - Correctly display 'Internal Viewer' user role - [PR](https://github.com/BerriAI/litellm/pull/12284)
+- **Configuration**
+  - Handle empty config.yaml - [PR](https://github.com/BerriAI/litellm/pull/12189)
+  - Fix gemini /models - replace models/ as expected - [PR](https://github.com/BerriAI/litellm/pull/12189)
 
 #### Features
-    - **Team Management**
-        - Allow viewing/editing team based callbacks
-        - Add team specific logging callbacks support
-    - **Budget Display**
-        - Comma separated spend and budget display
-    - **Proxy CLI**
-        - Add litellm-proxy cli login for starting to use litellm proxy
-    - **Callback UI**
-        - Add logos to callback list for better visualization
+- **Team Management**
+  - Allow adding team specific logging callbacks - [PR](https://github.com/BerriAI/litellm/pull/12261)
+  - Add Arize Team Based Logging - [PR](https://github.com/BerriAI/litellm/pull/12264)
+  - Allow Viewing/Editing Team Based Callbacks - [PR](https://github.com/BerriAI/litellm/pull/12265)
+- **UI Improvements**
+  - Comma separated spend and budget display - [PR](https://github.com/BerriAI/litellm/pull/12317)
+  - Add logos to callback list - [PR](https://github.com/BerriAI/litellm/pull/12244)
+- **CLI**
+  - Add litellm-proxy cli login for starting to use litellm proxy - [PR](https://github.com/BerriAI/litellm/pull/12216)
+- **MCP (Model Context Protocol)**
+  - Add MCP url masking on frontend - [PR](https://github.com/BerriAI/litellm/pull/12247)
+  - Add MCP servers header to scope - [PR](https://github.com/BerriAI/litellm/pull/12266)
+  - Litellm mcp tool prefix - [PR](https://github.com/BerriAI/litellm/pull/12289)
+  - Segregate MCP tools on connections using headers - [PR](https://github.com/BerriAI/litellm/pull/12296)
 
 ---
 
 ## Logging / Guardrail Integrations
 
 #### Features
-    - **AWS SQS**
-        - New AWS SQS Logging Integration
-    - **Azure Content Safety**
-        - Add Azure Content Safety Guardrails to LiteLLM proxy
-        - Add azure content safety guardrails to the UI
-    - **Customizable Email Templates**
-        - Support customizable email template - subject and signature
-    - **JSON Logging**
-        - Initialize JSON logging for all loggers when JSON_LOGS=True
-    - **Sentry Integration**
-        - Add Sentry scrubbing for better error tracking
-    - **Message Redaction**
-        - Ensure message redaction works for responses API logging
+- **[Azure Content Safety](../../docs/guardrails/azure_content_safety)**
+  - Add Azure Content Safety Guardrails to LiteLLM proxy - [PR](https://github.com/BerriAI/litellm/pull/12268)
+  - Add azure content safety guardrails to the UI - [PR](https://github.com/BerriAI/litellm/pull/12309)
+- **[DeepEval](../../docs/observability/deepeval)**
+  - Fix DeepEval logging format for failure events - [PR](https://github.com/BerriAI/litellm/pull/12303)
+- **[Arize](../../docs/observability/arize)**
+  - Add Arize Team Based Logging - [PR](https://github.com/BerriAI/litellm/pull/12264)
+- **[Langfuse](../../docs/observability/langfuse)**
+  - Langfuse prompt_version support - [PR](https://github.com/BerriAI/litellm/pull/12301)
+- **Message Redaction**
+  - Ensure message redaction works for responses API logging - [PR](https://github.com/BerriAI/litellm/pull/12291)
+- **JSON Logging**
+  - Initialize JSON logging for all loggers when JSON_LOGS=True - [PR](https://github.com/BerriAI/litellm/pull/12206)
+- **Sentry Integration**
+  - Add sentry scrubbing - [PR](https://github.com/BerriAI/litellm/pull/12210)
 
----
-
-## MCP (Model Context Protocol) Improvements
-
-#### Features
-    - **URL Handling**
-        - Add changes to MCP URL wrapping
-        - Add MCP URL masking on frontend
-    - **Tool Management**
-        - Add error handling for MCP tools not found or invalid server
-        - Add MCP tool prefix functionality
-        - Segregate MCP tools on connections using headers
-    - **Security**
-        - Add MCP servers header to the scope of header
-        - Fix SSL certificate error for MCP connections
+#### Bugs
+- **Security**
+  - Ensure only LLM API route fails get logged on Langfuse - [PR](https://github.com/BerriAI/litellm/pull/12308)
+- **OpenMeter**
+  - Integration error handling fix - [PR](https://github.com/BerriAI/litellm/pull/12147)
+- **Callback Management**
+  - Handle proxy internal callbacks in callback management test - [PR](https://github.com/BerriAI/litellm/pull/12294)
 
 ---
 
 ## Performance / Loadbalancing / Reliability improvements
 
 #### Features
-    - **SDK Performance**
-        - 2 second faster Python SDK import times
-        - Reduce python sdk import time by additional 0.3s
-    - **Prometheus Metrics**
-        - Add better error validation when users configure prometheus metrics and labels to control cardinality
-    - **OpenMeter Integration**
-        - Fix OpenMeter integration error handling
+- **Python SDK**
+  - 2 second faster import times - [PR](https://github.com/BerriAI/litellm/pull/12135)
+  - Reduce python sdk import time by .3s - [PR](https://github.com/BerriAI/litellm/pull/12140)
+- **Prometheus Metrics**
+  - Add better error validation for prometheus metrics and labels - [PR](https://github.com/BerriAI/litellm/pull/12182)
+- **Error Handling**
+  - Add error handling for MCP tools not found or invalid server - [PR](https://github.com/BerriAI/litellm/pull/12223)
+- **SSL/TLS**
+  - Fix SSL certificate error - [PR](https://github.com/BerriAI/litellm/pull/12327)
+  - Fix custom ca bundle support in aiohttp transport - [PR](https://github.com/BerriAI/litellm/pull/12281)
+
+#### Bugs
+- **Testing**
+  - Fix Flaky test_keys_delete_error_handling test - [PR](https://github.com/BerriAI/litellm/pull/12209)
+  - Fix credentials CLI test - [PR](https://github.com/BerriAI/litellm/pull/12304) [PR](https://github.com/BerriAI/litellm/pull/12305)
 
 ---
 
 ## General Proxy Improvements
 
-#### Bugs
-    - **Configuration Handling**
-        - Handle empty config.yaml
-        - Fix gemini /models - replace models/ as expected, instead of using 'strip'
-        - Fix flaky test_keys_delete_error_handling test
-    - **Custom CA Bundle**
-        - Fix custom ca bundle support in aiohttp transport
-    - **Pydantic**
-        - Update pydantic version
-
 #### Features
-    - **Documentation**
-        - Update management_cli.md
-        - Use the -d flag in docs instead of -D
-        - Update Vertex Model Garden doc to use SDK for deploy + chat completion
-        - Fix config file description in k8s deployment
-        - Improve readme: replace claude-3-sonnet because it will be retired soon
-    - **Startup Banner**
-        - Add new banner on startup
-    - **Test Infrastructure**
-        - Move panw prisma airs test file location per feedback
+- **Documentation**
+  - Update management_cli.md - [PR](https://github.com/BerriAI/litellm/pull/12157)
+  - Use the -d flag in docs instead of -D - [PR](https://github.com/BerriAI/litellm/pull/12179)
+  - Update Vertex Model Garden doc - [PR](https://github.com/BerriAI/litellm/pull/12219)
+  - Improve readme: replace claude-3-sonnet with updated model - [PR](https://github.com/BerriAI/litellm/pull/12239)
+  - Fix config file description in k8s deployment - [PR](https://github.com/BerriAI/litellm/pull/12230)
+- **Startup**
+  - Add new banner on startup - [PR](https://github.com/BerriAI/litellm/pull/12328)
+- **Email Templates**
+  - Customizable Email template - Subject and Signature - [PR](https://github.com/BerriAI/litellm/pull/12218)
+- **Dependencies**
+  - Update pydantic version - [PR](https://github.com/BerriAI/litellm/pull/12213)
+
+#### Bugs
+- **MCP**
+  - Added changes to mcp url wrapping - [PR](https://github.com/BerriAI/litellm/pull/12207)
+- **Gemini CLI**
+  - Fix using gemini-cli with Vertex Anthropic Models - [PR](https://github.com/BerriAI/litellm/pull/12246)
 
 ---
 
 ## New Contributors
 * @wildcard made their first contribution in https://github.com/BerriAI/litellm/pull/12157
 * @colesmcintosh made their first contribution in https://github.com/BerriAI/litellm/pull/12168
-* @szafranek made their first contribution in https://github.com/BerriAI/litellm/pull/12179
 * @seyeong-han made their first contribution in https://github.com/BerriAI/litellm/pull/11946
 * @dinggh made their first contribution in https://github.com/BerriAI/litellm/pull/12162
 * @raz-alon made their first contribution in https://github.com/BerriAI/litellm/pull/11432
 * @tofarr made their first contribution in https://github.com/BerriAI/litellm/pull/12200
+* @szafranek made their first contribution in https://github.com/BerriAI/litellm/pull/12179
+* @SamBoyd made their first contribution in https://github.com/BerriAI/litellm/pull/12147
 * @lizzij made their first contribution in https://github.com/BerriAI/litellm/pull/12219
 * @cipri-tom made their first contribution in https://github.com/BerriAI/litellm/pull/12201
 * @zsimjee made their first contribution in https://github.com/BerriAI/litellm/pull/12185
 * @jroberts2600 made their first contribution in https://github.com/BerriAI/litellm/pull/12175
-* @SamBoyd made their first contribution in https://github.com/BerriAI/litellm/pull/12147
 * @njbrake made their first contribution in https://github.com/BerriAI/litellm/pull/12202
 * @NANDINI-star made their first contribution in https://github.com/BerriAI/litellm/pull/12244
 * @utsumi-fj made their first contribution in https://github.com/BerriAI/litellm/pull/12230
 * @dcieslak19973 made their first contribution in https://github.com/BerriAI/litellm/pull/12283
 * @hanouticelina made their first contribution in https://github.com/BerriAI/litellm/pull/12286
-* @takashiishida made their first contribution in https://github.com/BerriAI/litellm/pull/12239
 * @lowjiansheng made their first contribution in https://github.com/BerriAI/litellm/pull/11999
 * @JoostvDoorn made their first contribution in https://github.com/BerriAI/litellm/pull/12281
+* @takashiishida made their first contribution in https://github.com/BerriAI/litellm/pull/12239
 
 ## **[Git Diff](https://github.com/BerriAI/litellm/compare/v1.73.6-stable...v1.74.0-stable)**
+
