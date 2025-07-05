@@ -176,29 +176,39 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
     try {
       if (!accessToken) return;
       
-      // Prepare update data object
+      // Prepare update data object - only include changed fields
       const updateData: any = {
-        guardrail_name: values.guardrail_name,
-        litellm_params: {
-          default_on: values.default_on,
-        },
-        guardrail_info: values.guardrail_info ? JSON.parse(values.guardrail_info) : undefined
+        litellm_params: {}
       };
       
-      // Only add PII entities config if we have selected entities
-      if (selectedPiiEntities.length > 0) {
-        // Create PII config object only with selected entities
-        const piiEntitiesConfig: {[key: string]: string} = {};
-        selectedPiiEntities.forEach(entity => {
-          piiEntitiesConfig[entity] = selectedPiiActions[entity] || "MASK";
-        });
-        
-        // Add to litellm_params only if we have entities
-        updateData.litellm_params.pii_entities_config = piiEntitiesConfig;
-      } else {
-        // If no entities selected, explicitly set to empty object
-        // This will clear any existing PII config
-        updateData.litellm_params.pii_entities_config = {};
+      // Only include guardrail_name if it has changed
+      if (values.guardrail_name !== guardrailData.guardrail_name) {
+        updateData.guardrail_name = values.guardrail_name;
+      }
+      
+      // Only include default_on if it has changed
+      if (values.default_on !== guardrailData.litellm_params?.default_on) {
+        updateData.litellm_params.default_on = values.default_on;
+      }
+      
+      // Only include guardrail_info if it has changed
+      const originalGuardrailInfo = guardrailData.guardrail_info;
+      const newGuardrailInfo = values.guardrail_info ? JSON.parse(values.guardrail_info) : undefined;
+      if (JSON.stringify(originalGuardrailInfo) !== JSON.stringify(newGuardrailInfo)) {
+        updateData.guardrail_info = newGuardrailInfo;
+      }
+      
+      // Only add PII entities config if there are changes
+      const originalPiiConfig = guardrailData.litellm_params?.pii_entities_config || {};
+      const newPiiEntitiesConfig: {[key: string]: string} = {};
+      
+      selectedPiiEntities.forEach(entity => {
+        newPiiEntitiesConfig[entity] = selectedPiiActions[entity] || "MASK";
+      });
+      
+      // Only update if PII config has changed
+      if (JSON.stringify(originalPiiConfig) !== JSON.stringify(newPiiEntitiesConfig)) {
+        updateData.litellm_params.pii_entities_config = newPiiEntitiesConfig;
       }
       
       /******************************
@@ -250,10 +260,35 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
             paramValue = values.optional_params?.[paramName];
           }
           
-          if (paramValue !== undefined && paramValue !== null && paramValue !== '') {
-            updateData.litellm_params[paramName] = paramValue;
+          // Get the original value for comparison
+          const originalValue = guardrailData.litellm_params?.[paramName];
+          
+          // Check if the value has changed from the original
+          const hasChanged = JSON.stringify(paramValue) !== JSON.stringify(originalValue);
+          
+          // Include if value has changed and has a meaningful value, OR if user explicitly cleared a value
+          if (hasChanged) {
+            if (paramValue !== undefined && paramValue !== null && paramValue !== '') {
+              // User set a new value
+              updateData.litellm_params[paramName] = paramValue;
+            } else if (originalValue !== undefined && originalValue !== null && originalValue !== '') {
+              // User cleared an existing value - set to null to indicate removal
+              updateData.litellm_params[paramName] = null;
+            }
           }
         });
+      }
+      
+      // Remove empty litellm_params object if no parameters were changed
+      if (Object.keys(updateData.litellm_params).length === 0) {
+        delete updateData.litellm_params;
+      }
+      
+      // Only proceed with update if there are actual changes
+      if (Object.keys(updateData).length === 0) {
+        message.info("No changes detected");
+        setIsEditing(false);
+        return;
       }
       
       await updateGuardrailCall(accessToken, guardrailId, updateData);

@@ -127,6 +127,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         verbose_proxy_logger.debug(
             "Azure Text Moderation guard request: %s", request_body
         )
+
         response = await self.async_handler.post(
             url=f"{self.api_base}/contentsafety/text:analyze?api-version={self.api_version}",
             headers={
@@ -149,6 +150,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         - Check if general severity threshold set
         - If both none, use default_severity_threshold
         """
+
         if self.severity_threshold_by_category:
             for category in response["categoriesAnalysis"]:
                 severity_category_threshold_item = (
@@ -156,7 +158,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
                 )
                 if (
                     severity_category_threshold_item is not None
-                    and severity_category_threshold_item >= category["severity"]
+                    and category["severity"] >= severity_category_threshold_item
                 ):
                     raise HTTPException(
                         status_code=400,
