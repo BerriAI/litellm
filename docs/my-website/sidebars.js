@@ -256,6 +256,7 @@ const sidebars = {
         "embedding/supported_embedding",
         "anthropic_unified",
         "mcp",
+        "generateContent",
         {
           type: "category",
           label: "/images",
