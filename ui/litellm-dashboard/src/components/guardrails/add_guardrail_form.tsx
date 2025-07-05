@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Card, Form, Typography, Select, Input, Switch, Tooltip, Modal, message, Divider, Space, Tag, Image, Steps } from 'antd';
 import { Button, TextInput } from '@tremor/react';
 import type { FormInstance } from 'antd';
-import { GuardrailProviders, guardrail_provider_map, shouldRenderPIIConfigSettings, guardrailLogoMap } from './guardrail_info_helpers';
+import { GuardrailProviders, guardrail_provider_map, shouldRenderPIIConfigSettings, guardrailLogoMap, populateGuardrailProviders, populateGuardrailProviderMap, getGuardrailProviders, getGuardrailProviderMap } from './guardrail_info_helpers';
 import { createGuardrailCall, getGuardrailUISettings, getGuardrailProviderSpecificParams } from '../networking';
 import PiiConfiguration from './pii_configuration';
 import GuardrailProviderFields from './guardrail_provider_fields';
@@ -96,6 +96,10 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
 
         setGuardrailSettings(uiSettings);
         setProviderParams(providerParamsResp);
+        
+        // Populate dynamic providers from API response
+        populateGuardrailProviders(providerParamsResp);
+        populateGuardrailProviderMap(providerParamsResp);
       } catch (error) {
         console.error('Error fetching guardrail data:', error);
         message.error('Failed to load guardrail configuration');
@@ -223,7 +227,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
 
 
       // Get the guardrail provider value from the map
-      const guardrailProvider = guardrail_provider_map[values.provider];
+      const currentProviderMap = getGuardrailProviderMap();
+      const guardrailProvider = currentProviderMap[values.provider];
       
       // Prepare the guardrail data with proper typings
       const guardrailData: {
@@ -369,7 +374,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
             dropdownRender={menu => menu}
             showSearch={true}
           >
-            {Object.entries(GuardrailProviders).map(([key, value]) => (
+            {Object.entries(getGuardrailProviders()).map(([key, value]) => (
               <Option 
                 key={key} 
                 value={key}
