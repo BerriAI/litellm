@@ -3,25 +3,24 @@ Test suite for PANW AIRS Guardrail Integration
 
 This test file follows LiteLLM's testing patterns and covers:
 - Guardrail initialization
-- Prompt scanning (blocking and allowing)  
+- Prompt scanning (blocking and allowing)
 - Response scanning
 - Error handling
 - Configuration validation
 """
 
-import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
-from fastapi import HTTPException
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs import (
+import pytest
+from fastapi import HTTPException
+
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs import (
     PanwPrismaAirsHandler,
 )
-from litellm.proxy.guardrails.guardrail_initializers import (
-    initialize_panw_prisma_airs,
-)
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import ModelResponse, Choices, Message
+from litellm.proxy.guardrails.guardrail_initializers import initialize_panw_prisma_airs
+from litellm.types.utils import Choices, Message, ModelResponse
 
 
 class TestPanwAirsInitialization:
@@ -46,7 +45,7 @@ class TestPanwAirsInitialization:
         """Test the initialize_panw_prisma_airs function."""
         litellm_params = SimpleNamespace(
             api_key="test_key",
-            profile_name="test_profile", 
+            profile_name="test_profile",
             api_base="https://test.panw.com/api",
             default_on=True,
         )
@@ -64,7 +63,7 @@ class TestPanwAirsInitialization:
             profile_name="test_profile",
             api_base=None,
             default_on=True,
-            api_key=None  # Missing API key
+            api_key=None,  # Missing API key
         )
         guardrail_config = {"guardrail_name": "test_guardrail"}
 
@@ -77,7 +76,7 @@ class TestPanwAirsInitialization:
             api_key="test_key",
             api_base=None,
             default_on=True,
-            profile_name=None  # Missing profile name
+            profile_name=None,  # Missing profile name
         )
         guardrail_config = {"guardrail_name": "test_guardrail"}
 
