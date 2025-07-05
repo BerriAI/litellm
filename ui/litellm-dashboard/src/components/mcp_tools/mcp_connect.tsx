@@ -72,7 +72,8 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
     if (useServerHeader && serverName) {
       // Replace spaces with underscores in server name
       const formattedServerName = serverName.replace(/\s+/g, '_');
-      headers["x-mcp-servers"] = `["${formattedServerName}"]`;
+      // Use simple comma-separated format
+      headers["x-mcp-servers"] = formattedServerName;
     }
     
     return headers;
@@ -101,6 +102,24 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
             />
             <Text className="text-sm">Segregate tools to just use {serverName} tools</Text>
           </div>
+          {useServerHeader && (
+            <Alert
+              className="mt-2"
+              type="info"
+              showIcon
+              message="MCP Server Header Format"
+              description={
+                <div>
+                  <p>Specify one or more MCP servers using a comma-separated list:</p>
+                  <ul>
+                    <li><strong>Single server:</strong> "Server1"</li>
+                    <li><strong>Multiple servers:</strong> "Server1,Server2,Server3"</li>
+                  </ul>
+                  <p>Note: Server names with spaces will be automatically converted to use underscores.</p>
+                </div>
+              }
+            />
+          )}
         </Form.Item>
       )}
       {React.Children.map(children, child => {
@@ -153,7 +172,11 @@ const MCPConnect: React.FC = () => {
     };
     
     if (serverHeaders[type]?.length > 0) {
-      headers["x-mcp-servers"] = JSON.stringify(serverHeaders[type]);
+      // Format server names (replace spaces with underscores)
+      const formattedServers = serverHeaders[type].map(s => s.replace(/\s+/g, '_'));
+      
+      // Use comma-separated format
+      headers["x-mcp-servers"] = formattedServers.join(',');
     }
     
     return headers;
