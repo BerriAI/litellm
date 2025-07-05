@@ -1,20 +1,8 @@
 model_list:
-  - model_name: vertex_ai/*
+  - model_name: anthropic/*
     litellm_params:
-      model: vertex_ai/*
-  - model_name: "anthropic/*"
+      model: anthropic/*
+  - model_name: openai/*
     litellm_params:
-      model: "anthropic/*"
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: openai/*
 
-mcp_servers:
-  deepwiki_mcp:
-    url: "https://mcp.deepwiki.com/mcp"
-    transport: "http"
-
-general_settings:
-  store_model_in_db: true
-  store_prompts_in_spend_logs: true
-
-litellm_settings:
-  callbacks: ["langfuse", "datadog"]

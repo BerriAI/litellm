@@ -1,10 +1,11 @@
 import React from "react";
 import { ColumnDef } from "@tanstack/react-table";
 import { Tooltip } from "antd";
-import { Icon, Button } from "@tremor/react";
+import { Icon } from "@tremor/react";
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { MCPServer, handleAuth, handleTransport } from "./types";
 import { isAdminRole } from "@/utils/roles";
+import { maskUrl } from "./utils";
 
 const displayFriendlyId = (id: string) => `${id.slice(0, 7)}...`;
 
@@ -20,64 +21,41 @@ export const mcpServerColumns = (
   onDelete: (serverId: string) => void
 ): ColumnDef<MCPServer>[] => [
   {
-    header: "Server ID",
     accessorKey: "server_id",
-    cell: ({ row, getValue }) => (
-      <div className="overflow-hidden">
-        <Tooltip title={getValue() as string}>
-          <Button
-            size="xs"
-            variant="light"
-            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
-            onClick={() => onSelect(row.original.server_id)}
-          >
-            {displayFriendlyId(getValue() as string)}
-          </Button>
-        </Tooltip>
-      </div>
+    header: "ID",
+    cell: ({ getValue, row }) => (
+      <button
+        onClick={() => onSelect(row.original.server_id)}
+        className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+      >
+        {displayFriendlyId(getValue() as string)}
+      </button>
     ),
   },
   {
-    header: "Server Name",
     accessorKey: "alias",
-    cell: ({ getValue }) => <span>{getValue() as string}</span>,
+    header: "Name",
   },
   {
-    header: "Description",
-    accessorKey: "description",
-    cell: ({ getValue }) => <span>{getValue() as string}</span>,
-  },
-  {
-    header: "Transport",
-    accessorKey: "transport",
-    cell: ({ getValue }) => <span>{handleTransport(getValue() as string)}</span>,
-  },
-  {
-    header: "Auth Type",
-    accessorKey: "auth_type",
-    cell: ({ getValue }) => <span>{handleAuth(getValue() as string)}</span>,
-  },
-  {
-    header: "Url",
     accessorKey: "url",
+    header: "URL",
     cell: ({ getValue }) => (
-      <div className="overflow-hidden">
-        <Tooltip title={getValue() as string}>
-          <span className="font-mono text-gray-600 text-xs">
-            {displayFriendlyUrl(getValue() as string)}
-          </span>
-        </Tooltip>
-      </div>
+      <Tooltip title={getValue() as string}>
+        <span className="font-mono text-gray-600 text-xs">
+          {maskUrl(getValue() as string)}
+        </span>
+      </Tooltip>
     ),
   },
   {
-    header: "Created",
-    accessorKey: "created_at",
-    cell: ({ getValue }) => (
-      <span>
-        {getValue() ? new Date(getValue() as string).toLocaleDateString() : "N/A"}
-      </span>
-    ),
+    accessorKey: "transport",
+    header: "Transport",
+    cell: ({ row }) => handleTransport(row.original.transport),
+  },
+  {
+    accessorKey: "auth_type",
+    header: "Auth Type",
+    cell: ({ row }) => handleAuth(row.original.auth_type),
   },
   {
     id: "actions",

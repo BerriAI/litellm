@@ -1333,8 +1333,15 @@ export const userDailyActivityCall = async (
       ? `${proxyBaseUrl}/user/daily/activity`
       : `/user/daily/activity`;
     const queryParams = new URLSearchParams();
-    queryParams.append("start_date", startTime.toISOString());
-    queryParams.append("end_date", endTime.toISOString());
+    // Format dates as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    queryParams.append("start_date", formatDate(startTime));
+    queryParams.append("end_date", formatDate(endTime));
     queryParams.append("page_size", "1000");
     queryParams.append("page", page.toString());
     const queryString = queryParams.toString();
@@ -1379,8 +1386,15 @@ export const tagDailyActivityCall = async (
       ? `${proxyBaseUrl}/tag/daily/activity`
       : `/tag/daily/activity`;
     const queryParams = new URLSearchParams();
-    queryParams.append("start_date", startTime.toISOString());
-    queryParams.append("end_date", endTime.toISOString());
+    // Format dates as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    queryParams.append("start_date", formatDate(startTime));
+    queryParams.append("end_date", formatDate(endTime));
     queryParams.append("page_size", "1000");
     queryParams.append("page", page.toString());
     if (tags) {
@@ -1428,8 +1442,15 @@ export const teamDailyActivityCall = async (
       ? `${proxyBaseUrl}/team/daily/activity`
       : `/team/daily/activity`;
     const queryParams = new URLSearchParams();
-    queryParams.append("start_date", startTime.toISOString());
-    queryParams.append("end_date", endTime.toISOString());
+    // Format dates as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    queryParams.append("start_date", formatDate(startTime));
+    queryParams.append("end_date", formatDate(endTime));
     queryParams.append("page_size", "1000");
     queryParams.append("page", page.toString());
     if (teamIds) {
@@ -4868,18 +4889,28 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
       },
     });
 
+    const data = await response.json();
+    console.log("Fetched MCP tools response:", data);
+
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      // If the server returned an error response, use it
+      if (data.error && data.message) {
+        throw new Error(data.message);
+      }
+      // Otherwise use a generic error
+      throw new Error("Failed to fetch MCP tools");
     }
 
-    const data = await response.json();
-    console.log("Fetched MCP tools:", data);
+    // Return the full response object which includes tools, error, and message
     return data;
   } catch (error) {
     console.error("Failed to fetch MCP tools:", error);
-    throw error;
+    // Return an error response in the same format as the API
+    return {
+      tools: [],
+      error: "network_error",
+      message: error instanceof Error ? error.message : "Failed to fetch MCP tools"
+    };
   }
 };
 

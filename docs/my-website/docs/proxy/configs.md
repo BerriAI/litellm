@@ -593,6 +593,16 @@ NO_DOCS="True"
 
 in your environment, and restart the proxy. 
 
+### Disable Redoc
+
+To disable the Redoc docs (defaults to `<your-proxy-url>/redoc`), set 
+
+```env
+NO_REDOC="True"
+```
+
+in your environment, and restart the proxy. 
+
 ### Use CONFIG_FILE_PATH for proxy (Easier Azure container deployment)
 
 1. Setup config.yaml

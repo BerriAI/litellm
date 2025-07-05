@@ -323,6 +323,7 @@ from litellm.proxy.utils import (
     get_custom_url,
     get_error_message_str,
     get_server_root_path,
+    handle_exception_on_proxy,
     hash_token,
     update_spend,
 )
@@ -352,10 +353,18 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseUsageBlock,
 )
 from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.proxy.management_endpoints.ui_sso import (
+    DefaultTeamSSOParams,
+    LiteLLM_UpperboundKeyGenerateParams,
+)
 from litellm.types.router import DeploymentTypedDict
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import RouterGeneralSettings, updateDeployment
 from litellm.types.scheduler import DefaultPriorities
+from litellm.types.secret_managers.main import (
+    KeyManagementSettings,
+    KeyManagementSystem,
+)
 from litellm.types.utils import CredentialItem, CustomHuggingfaceTokenizer
 from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.types.utils import RawRequestTypedDict, StandardLoggingPayload
@@ -758,46 +767,49 @@ try:
     current_dir = os.path.dirname(os.path.abspath(__file__))
     ui_path = os.path.join(current_dir, "_experimental", "out")
     litellm_asset_prefix = "/litellm-asset-prefix"
-    # Iterate through files in the UI directory
-    for root, dirs, files in os.walk(ui_path):
-        for filename in files:
-            file_path = os.path.join(root, filename)
-            # Skip binary files and files that don't need path replacement
-            if filename.endswith(
-                (
-                    ".png",
-                    ".jpg",
-                    ".jpeg",
-                    ".gif",
-                    ".ico",
-                    ".woff",
-                    ".woff2",
-                    ".ttf",
-                    ".eot",
-                )
-            ):
-                continue
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    content = f.read()
 
-                # Replace the asset prefix with the server root path
-                modified_content = content.replace(
-                    f"{litellm_asset_prefix}",
-                    f"{server_root_path}",
-                )
+    # Only modify files if a custom server root path is set
+    if server_root_path and server_root_path != "/":
+        # Iterate through files in the UI directory
+        for root, dirs, files in os.walk(ui_path):
+            for filename in files:
+                file_path = os.path.join(root, filename)
+                # Skip binary files and files that don't need path replacement
+                if filename.endswith(
+                    (
+                        ".png",
+                        ".jpg",
+                        ".jpeg",
+                        ".gif",
+                        ".ico",
+                        ".woff",
+                        ".woff2",
+                        ".ttf",
+                        ".eot",
+                    )
+                ):
+                    continue
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        content = f.read()
 
-                # Replace the /.well-known/litellm-ui-config with the server root path
-                modified_content = modified_content.replace(
-                    "/litellm/.well-known/litellm-ui-config",
-                    f"{server_root_path}/.well-known/litellm-ui-config",
-                )
+                    # Replace the asset prefix with the server root path
+                    modified_content = content.replace(
+                        f"{litellm_asset_prefix}",
+                        f"{server_root_path}",
+                    )
 
-                with open(file_path, "w", encoding="utf-8") as f:
-                    f.write(modified_content)
-            except UnicodeDecodeError:
-                # Skip binary files that can't be decoded
-                continue
+                    # Replace the /.well-known/litellm-ui-config with the server root path
+                    modified_content = modified_content.replace(
+                        "/litellm/.well-known/litellm-ui-config",
+                        f"{server_root_path}/.well-known/litellm-ui-config",
+                    )
+
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write(modified_content)
+                except UnicodeDecodeError:
+                    # Skip binary files that can't be decoded
+                    continue
 
     # # Mount the _next directory at the root level
     app.mount(
@@ -1052,9 +1064,6 @@ async def update_cache(  # noqa: PLR0915
         existing_spend_obj: LiteLLM_VerificationTokenView = await user_api_key_cache.async_get_cache(key=hashed_token)  # type: ignore
         verbose_proxy_logger.debug(
             f"_update_key_cache: existing_spend_obj={existing_spend_obj}"
-        )
-        verbose_proxy_logger.debug(
-            f"_update_key_cache: existing spend: {existing_spend_obj}"
         )
         if existing_spend_obj is None:
             return
@@ -1381,6 +1390,8 @@ class ProxyConfig:
                 "litellm_settings": {},
             }
 
+        if config is None:
+            raise Exception("Config cannot be None or Empty.")
         # Process includes
         config = self._process_includes(
             config=config, base_dir=os.path.dirname(os.path.abspath(file_path or ""))
@@ -2966,6 +2977,8 @@ async def initialize(  # noqa: PLR0915
     config=None,
 ):
     global user_model, user_api_base, user_debug, user_detailed_debug, user_user_max_tokens, user_request_timeout, user_temperature, user_telemetry, user_headers, experimental, llm_model_list, llm_router, general_settings, master_key, user_custom_auth, prisma_client
+    from litellm.proxy.common_utils.banner import show_banner
+    show_banner()
     if os.getenv("LITELLM_DONT_SHOW_FEEDBACK_BOX", "").lower() != "true":
         generate_feedback_box()
     user_model = model
@@ -3440,6 +3453,29 @@ class ProxyStartupEvent:
                 verbose_proxy_logger.error(
                     "Invalid maximum_spend_logs_retention_interval value"
                 )
+        ### CHECK BATCH COST ###
+        if llm_router is not None:
+            try:
+                from litellm_enterprise.proxy.common_utils.check_batch_cost import (
+                    CheckBatchCost,
+                )
+
+                check_batch_cost_job = CheckBatchCost(
+                    proxy_logging_obj=proxy_logging_obj,
+                    prisma_client=prisma_client,
+                    llm_router=llm_router,
+                )
+                scheduler.add_job(
+                    check_batch_cost_job.check_batch_cost,
+                    "interval",
+                    seconds=3600,  # these can run infrequently, as batch jobs take time to complete
+                )
+
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "Checking batch cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
+                )
+                pass
 
         scheduler.start()
 
@@ -5579,7 +5615,9 @@ def _add_team_models_to_all_models(
                         team_models.setdefault(model_id, set()).add(team_object.team_id)
         else:
             for model_name in team_object.models:
-                _models = llm_router.get_model_list(model_name=model_name)
+                _models = llm_router.get_model_list(
+                    model_name=model_name, team_id=team_object.team_id
+                )
                 if _models is not None:
                     for model in _models:
                         model_id = model.get("model_info", {}).get("id", None)
@@ -5615,6 +5653,7 @@ async def get_all_team_models(
         team_db_objects = await prisma_client.db.litellm_teamtable.find_many(
             where={"team_id": {"in": user_teams}}
         )
+
         team_db_objects_typed = [
             LiteLLM_TeamTable(**team_db_object.model_dump())
             for team_db_object in team_db_objects
@@ -5685,6 +5724,7 @@ async def get_all_team_and_direct_access_models(
             prisma_client=prisma_client,
             llm_router=llm_router,
         )
+
         for _model in all_models:
             model_id = _model.get("model_info", {}).get("id", None)
             team_only_model_id = _model.get("model_info", {}).get("team_id", None)
@@ -5700,9 +5740,11 @@ async def get_all_team_and_direct_access_models(
                     )
 
     ## ADD DIRECT_ACCESS TO RELEVANT MODELS
+
     for _model in all_models:
         model_id = _model.get("model_info", {}).get("id", None)
         if model_id is not None and model_id in direct_access_models:
+
             _model["model_info"]["direct_access"] = True
 
     ## FILTER OUT MODELS THAT ARE NOT IN DIRECT_ACCESS_MODELS OR ACCESS_VIA_TEAM_IDS - only show user models they can call
@@ -7490,49 +7532,37 @@ async def new_invitation(
         }'
     ```
     """
-    global prisma_client
-
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": CommonProxyErrors.db_not_connected_error.value},
-        )
-
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "{}, your role={}".format(
-                    CommonProxyErrors.not_allowed_access.value,
-                    user_api_key_dict.user_role,
-                )
-            },
-        )
-
-    current_time = litellm.utils.get_utc_datetime()
-    expires_at = current_time + timedelta(days=7)
-
     try:
-        response = await prisma_client.db.litellm_invitationlink.create(
-            data={
-                "user_id": data.user_id,
-                "created_at": current_time,
-                "expires_at": expires_at,
-                "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-                "updated_at": current_time,
-                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-            }  # type: ignore
+        from litellm.proxy.management_helpers.user_invitation import (
+            create_invitation_for_user,
         )
-        return response
-    except Exception as e:
-        if "Foreign key constraint failed on the field" in str(e):
+
+        global prisma_client
+
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": "User id does not exist in 'LiteLLM_UserTable'. Fix this by creating user via `/user/new`."
+                    "error": "{}, your role={}".format(
+                        CommonProxyErrors.not_allowed_access.value,
+                        user_api_key_dict.user_role,
+                    )
                 },
             )
-        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+        response = await create_invitation_for_user(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+        return response
+    except Exception as e:
+        raise handle_exception_on_proxy(e)
 
 
 @router.get(

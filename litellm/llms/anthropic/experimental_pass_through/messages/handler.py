@@ -17,6 +17,7 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.types.llms.anthropic_messages.anthropic_request import AnthropicMetadata
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -91,6 +92,16 @@ async def anthropic_messages(
         response = init_response
     return response
 
+def validate_anthropic_api_metadata(metadata: Optional[Dict] = None) -> Optional[Dict]:
+    """
+    Validate Anthropic API metadata - This is done to ensure only allowed `metadata` fields are passed to Anthropic API
+
+    If there are any litellm specific metadata fields, use `litellm_metadata` key to pass them.
+    """
+    if metadata is None:
+        return None
+    anthropic_metadata_obj = AnthropicMetadata(**metadata)
+    return anthropic_metadata_obj.model_dump(exclude_none=True)
 
 def anthropic_messages_handler(
     max_tokens: int,
@@ -120,6 +131,7 @@ def anthropic_messages_handler(
     Makes Anthropic `/v1/messages` API calls In the Anthropic API Spec
     """
     from litellm.types.utils import LlmProviders
+    metadata = validate_anthropic_api_metadata(metadata)
 
     local_vars = locals()
     is_async = kwargs.pop("is_async", False)
