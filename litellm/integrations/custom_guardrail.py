@@ -342,14 +342,11 @@ def log_guardrail_information(func):
     import asyncio
     import functools
 
-    start_time = datetime.now()
-
     @functools.wraps(func)
     async def async_wrapper(*args, **kwargs):
+        start_time = datetime.now()  # Move start_time inside the wrapper
         self: CustomGuardrail = args[0]
-        request_data: Optional[dict] = (
-            kwargs.get("data") or kwargs.get("request_data") or {}
-        )
+        request_data: dict = kwargs.get("data") or kwargs.get("request_data") or {}
         try:
             response = await func(*args, **kwargs)
             return self._process_response(
@@ -370,10 +367,9 @@ def log_guardrail_information(func):
 
     @functools.wraps(func)
     def sync_wrapper(*args, **kwargs):
+        start_time = datetime.now()  # Move start_time inside the wrapper
         self: CustomGuardrail = args[0]
-        request_data: Optional[dict] = (
-            kwargs.get("data") or kwargs.get("request_data") or {}
-        )
+        request_data: dict = kwargs.get("data") or kwargs.get("request_data") or {}
         try:
             response = func(*args, **kwargs)
             return self._process_response(
