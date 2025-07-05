@@ -783,6 +783,8 @@ def completion_cost(  # noqa: PLR0915
                             n=n,
                             size=size,
                             optional_params=optional_params,
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
                         )
                 elif (
                     call_type == CallTypes.speech.value
@@ -1090,6 +1092,8 @@ def default_image_cost_calculator(
     n: Optional[int] = 1,  # Default to 1 image
     size: Optional[str] = "1024-x-1024",  # OpenAI default
     optional_params: Optional[dict] = None,
+    prompt_tokens: Optional[int] = None,  # Actual prompt tokens from usage
+    completion_tokens: Optional[int] = None,  # Actual completion tokens from usage
 ) -> float:
     """
     Default image cost calculator for image generation
@@ -1107,13 +1111,12 @@ def default_image_cost_calculator(
     Raises:
         Exception: If model pricing not found in cost map
     """
-    # Standardize size format to use "-x-"
-    size_str: str = size or "1024-x-1024"
-    size_str = (
-        size_str.replace("x", "-x-")
-        if "x" in size_str and "-x-" not in size_str
-        else size_str
-    )
+    # Ensure size_str is always a concrete `str` (mypy: avoid Optional[str])
+    size_str: str = size if size is not None else "1024-x-1024"
+
+    # Standardize the dimension delimiter to "-x-" (e.g., "1024x1024" -> "1024-x-1024")
+    if "x" in size_str and "-x-" not in size_str:
+        size_str = size_str.replace("x", "-x-")
 
     # Parse dimensions
     height, width = map(int, size_str.split("-x-"))
@@ -1121,7 +1124,7 @@ def default_image_cost_calculator(
     # Build model names for cost lookup
     base_model_name = f"{size_str}/{model}"
     model_name_without_custom_llm_provider: Optional[str] = None
-    if custom_llm_provider and model.startswith(f"{custom_llm_provider}/"):
+    if custom_llm_provider is not None and model.startswith(f"{custom_llm_provider}/"):
         model_name_without_custom_llm_provider = model.replace(
             f"{custom_llm_provider}/", ""
         )
@@ -1157,16 +1160,143 @@ def default_image_cost_calculator(
         model,
         model_name_without_custom_llm_provider,
     ]
-    for _model in models_to_check:
-        if _model is not None and _model in litellm.model_cost:
-            cost_info = litellm.model_cost[_model]
+
+    # Azure custom deployments may use arbitrary deployment names that don't contain
+    # "gpt-image-1". In such cases, try falling back to the canonical
+    # `gpt-image-1` entry for Azure before raising an exception. This ensures cost
+    # tracking works even when users set `model="<custom-deployment-name>"` in
+    # their Azure portal.
+    if cost_info is None and custom_llm_provider == "azure":
+        # Within this block, custom_llm_provider is guaranteed to be "azure" (not None)
+        assert custom_llm_provider is not None
+        azure_base_model_name: str = f"{custom_llm_provider}/{size_str}/gpt-image-1"
+        azure_model_with_quality: str
+        if quality:
+            azure_model_with_quality = f"{quality}/{azure_base_model_name}"
+        else:
+            azure_model_with_quality = azure_base_model_name
+        models_to_check.extend([azure_model_with_quality, azure_base_model_name])
+
+        for _model in [azure_model_with_quality, azure_base_model_name]:
+            if _model is not None and _model in litellm.model_cost:
+                assert _model is not None  # mypy narrowing
+                cost_info = litellm.model_cost[_model]
+                break
+
+    for _model_candidate in models_to_check:
+        if _model_candidate is not None and _model_candidate in litellm.model_cost:
+            cost_info = litellm.model_cost[_model_candidate]
             break
+
     if cost_info is None:
         raise Exception(
             f"Model not found in cost map. Tried checking {models_to_check}"
         )
 
-    return cost_info["input_cost_per_pixel"] * height * width * n
+    # Ensure n is never None for calculations
+    n_value = n if n is not None else 1
+
+    # Decide pricing type
+    if "input_cost_per_token" in cost_info or "output_cost_per_token" in cost_info:
+        return _calculate_token_based_image_cost(
+            model=model,
+            cost_info=cost_info,
+            quality=quality,
+            height=height,
+            width=width,
+            n=n_value,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+    else:
+        # Pixel-based pricing (legacy DALL-E models)
+        return cost_info.get("input_cost_per_pixel", 0) * height * width * n_value
+
+
+# ---------------- Token-based image cost helper ---------------- #
+
+def _calculate_token_based_image_cost(
+    *,
+    model: str,
+    cost_info: dict,
+    quality: Optional[str],
+    height: int,
+    width: int,
+    n: int,
+    prompt_tokens: Optional[int] = None,
+    completion_tokens: Optional[int] = None,
+) -> float:
+    """Compute cost for token-priced image models.
+
+    This function supports token-based pricing for image generation models,
+    including GPT-image-1 and other models with similar pricing structures.
+    It requires real token usage from the API – if these are missing we raise so
+    callers know to pass `prompt_tokens` and `completion_tokens` extracted from
+    the response `usage` field.
+    """
+
+    # Validate that cost_info has token-based pricing fields
+    if not (cost_info.get("input_cost_per_token") or cost_info.get("output_cost_per_token")):
+        raise ValueError(
+            f"Model {model} does not have token-based pricing configuration in cost_info"
+        )
+
+    if prompt_tokens is None or completion_tokens is None:
+        raise ValueError(
+            "Token counts are required for token-based image cost calculation."
+        )
+
+    input_cost_per_token = cost_info.get("input_cost_per_token", 0)
+    output_cost_per_token = cost_info.get("output_cost_per_token", 0)
+    
+    # Validate that cost fields are not None and are valid numbers
+    if input_cost_per_token is None:
+        input_cost_per_token = 0
+    if output_cost_per_token is None:
+        output_cost_per_token = 0
+        
+    if not isinstance(input_cost_per_token, (int, float)) or not isinstance(output_cost_per_token, (int, float)):
+        raise ValueError(
+            f"Invalid cost configuration for model {model}: input_cost_per_token={input_cost_per_token}, output_cost_per_token={output_cost_per_token}"
+        )
+
+    input_cost = prompt_tokens * input_cost_per_token
+    output_cost = completion_tokens * output_cost_per_token
+
+    # Some providers (e.g., OpenAI) separate image-token cost – already included
+    # inside input_cost_per_token via model_prices table.
+
+    return (input_cost + output_cost) * n
+
+
+def _estimate_gpt_image_1_output_tokens(
+    quality: Optional[str], height: int, width: int
+) -> int:
+    """Heuristic estimator retained for backwards-compatibility with tests.
+
+    Although LiteLLM now prefers real token counts returned by the provider, we
+    still expose this helper so that existing unit-tests (and potential user
+    code) continue to work.
+    """
+
+    # Default quality = medium
+    if not quality:
+        quality = "medium"
+
+    quality = quality.lower()
+
+    if height == 1024 and width == 1024:
+        base = {"low": 272, "medium": 1056, "high": 4160}
+        return base.get(quality, 1056)
+    elif (height == 1024 and width == 1536) or (height == 1536 and width == 1024):
+        base = {"low": 408, "medium": 1584, "high": 6240}
+        return base.get(quality, 1584)
+    else:
+        # Scale proportionally by pixel count relative to 1024×1024 baseline.
+        baseline_pixels = 1024 * 1024
+        pixel_ratio = (height * width) / baseline_pixels
+        default_tokens = {"low": 272, "medium": 1056, "high": 4160}
+        return int(default_tokens.get(quality, 1056) * pixel_ratio)
 
 
 def batch_cost_calculator(
