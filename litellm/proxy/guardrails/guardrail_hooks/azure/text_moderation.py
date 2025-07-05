@@ -21,7 +21,6 @@ from litellm.proxy._types import UserAPIKeyAuth
 from .base import AzureGuardrailBase
 
 if TYPE_CHECKING:
-    from pydantic import BaseModel
 
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import AllMessageValues
