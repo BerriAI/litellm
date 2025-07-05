@@ -133,9 +133,6 @@ for chunk in response:
 
 ### LiteLLM Proxy Server 
 
-<Tabs>
-<TabItem value="gemini-proxy" label="Google AI Studio">
-
 1. Setup config.yaml
 
 ```yaml
@@ -153,6 +150,9 @@ litellm --config /path/to/config.yaml
 ```
 
 3. Test it! 
+
+<Tabs>
+<TabItem value="gemini-proxy" label="Google GenAI SDK">
 
 ```python showLineNumbers title="Google GenAI SDK with LiteLLM Proxy"
 from google.genai import Client
@@ -176,50 +176,6 @@ response = client.models.generate_content(
 )
 ```
 
-</TabItem>
-
-<TabItem value="vertex-proxy" label="Vertex AI">
-
-1. Setup config.yaml
-
-```yaml
-model_list:
-    - model_name: vertex-gemini
-      litellm_params:
-        model: vertex_ai/gemini-2.0-flash
-        vertex_project: your-gcp-project-id
-        vertex_location: us-central1
-```
-
-2. Start proxy 
-
-```bash
-litellm --config /path/to/config.yaml
-```
-
-3. Test it! 
-
-```python showLineNumbers title="Google GenAI SDK with LiteLLM Proxy (Vertex AI)"
-from google.genai import Client
-import os
-
-# Configure Google GenAI SDK to use LiteLLM proxy
-os.environ["GOOGLE_GEMINI_BASE_URL"] = "http://localhost:4000"
-os.environ["GEMINI_API_KEY"] = "sk-1234"
-
-client = Client()
-
-response = client.models.generate_content(
-    model="vertex-gemini",
-    contents=[
-        {
-            "parts": [{"text": "Write a short story about AI"}],
-            "role": "user"
-        }
-    ],
-    config={"max_output_tokens": 100}
-)
-```
 
 </TabItem>
 
