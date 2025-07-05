@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.types.guardrails import (
@@ -264,64 +265,6 @@ async def create_guardrail(request: CreateGuardrailRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get(
-    "/guardrails/{guardrail_id}",
-    tags=["Guardrails"],
-    dependencies=[Depends(user_api_key_auth)],
-)
-async def get_guardrail(guardrail_id: str):
-    """
-    Get a guardrail by ID
-
-    👉 [Guardrail docs](https://docs.litellm.ai/docs/proxy/guardrails/quick_start)
-
-    Example Request:
-    ```bash
-    curl -X GET "http://localhost:4000/guardrails/123e4567-e89b-12d3-a456-426614174000" \\
-        -H "Authorization: Bearer <your_api_key>"
-    ```
-
-    Example Response:
-    ```json
-    {
-        "guardrail_id": "123e4567-e89b-12d3-a456-426614174000",
-        "guardrail_name": "my-bedrock-guard",
-        "litellm_params": {
-            "guardrail": "bedrock",
-            "mode": "pre_call",
-            "guardrailIdentifier": "ff6ujrregl1q",
-            "guardrailVersion": "DRAFT",
-            "default_on": true
-        },
-        "guardrail_info": {
-            "description": "Bedrock content moderation guardrail"
-        },
-        "created_at": "2023-11-09T12:34:56.789Z",
-        "updated_at": "2023-11-09T12:34:56.789Z"
-    }
-    ```
-    """
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail="Prisma client not initialized")
-
-    try:
-        result = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
-            guardrail_id=guardrail_id, prisma_client=prisma_client
-        )
-
-        if result is None:
-            raise HTTPException(
-                status_code=404, detail=f"Guardrail with ID {guardrail_id} not found"
-            )
-        return result
-    except HTTPException as e:
-        raise e
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 class UpdateGuardrailRequest(BaseModel):
     guardrail: Guardrail
 
@@ -542,19 +485,13 @@ async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
         litellm_params = LitellmParams(
             **dict(existing_guardrail.get("litellm_params", {}))
         )
-        if (
-            request.litellm_params is not None
-            and request.litellm_params.default_on is not None
-        ):
-            litellm_params.default_on = request.litellm_params.default_on
-
-        if (
-            request.litellm_params is not None
-            and request.litellm_params.pii_entities_config is not None
-        ):
-            litellm_params.pii_entities_config = (
-                request.litellm_params.pii_entities_config
+        if request.litellm_params is not None:
+            requested_litellm_params = request.litellm_params.model_dump(
+                exclude_unset=True
             )
+            litellm_params_dict = litellm_params.model_dump(exclude_unset=True)
+            litellm_params_dict.update(requested_litellm_params)
+            litellm_params = LitellmParams(**litellm_params_dict)
 
         # Update guardrail_info if provided
         guardrail_info = (
@@ -565,6 +502,7 @@ async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
 
         # Create the guardrail object
         guardrail = Guardrail(
+            guardrail_id=guardrail_id,
             guardrail_name=guardrail_name or "",
             litellm_params=litellm_params,
             guardrail_info=guardrail_info,
@@ -588,6 +526,11 @@ async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get(
+    "/guardrails/{guardrail_id}",
+    tags=["Guardrails"],
+    dependencies=[Depends(user_api_key_auth)],
+)
 @router.get(
     "/guardrails/{guardrail_id}/info",
     tags=["Guardrails"],
@@ -625,6 +568,8 @@ async def get_guardrail_info(guardrail_id: str):
     }
     ```
     """
+
+    from litellm.litellm_core_utils.litellm_logging import _get_masked_values
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
@@ -645,10 +590,24 @@ async def get_guardrail_info(guardrail_id: str):
                 status_code=404, detail=f"Guardrail with ID {guardrail_id} not found"
             )
 
+        litellm_params: Optional[Union[LitellmParams, dict]] = result.get(
+            "litellm_params"
+        )
+        result_litellm_params_dict = (
+            litellm_params.model_dump(exclude_none=True)
+            if isinstance(litellm_params, LitellmParams)
+            else litellm_params
+        ) or {}
+        masked_litellm_params_dict = _get_masked_values(
+            result_litellm_params_dict,
+            unmasked_length=4,
+            number_of_asterisks=4,
+        )
+
         return GuardrailInfoResponse(
             guardrail_id=result.get("guardrail_id"),
             guardrail_name=result.get("guardrail_name"),
-            litellm_params=dict(result.get("litellm_params") or {}),
+            litellm_params=masked_litellm_params_dict,
             guardrail_info=dict(result.get("guardrail_info") or {}),
             created_at=result.get("created_at"),
             updated_at=result.get("updated_at"),
@@ -802,7 +761,17 @@ def _get_fields_from_model(model_class: Type[BaseModel]) -> Dict[str, Any]:
     """
     import inspect
 
-    def _extract_fields_recursive(model: Type[BaseModel]) -> Dict[str, Any]:
+    def _extract_fields_recursive(
+        model: Type[BaseModel],
+        depth: int = 0,
+    ) -> Dict[str, Any]:
+        # Check if we've exceeded the maximum recursion depth
+        if depth > DEFAULT_MAX_RECURSE_DEPTH:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing model fields. Please check the model structure for excessive nesting.",
+            )
+
         fields = {}
 
         for field_name, field in model.model_fields.items():
@@ -840,7 +809,7 @@ def _get_fields_from_model(model_class: Type[BaseModel]) -> Dict[str, Any]:
             if is_basemodel_subclass:
                 # Recursively get fields from the nested model
                 nested_fields = _extract_fields_recursive(
-                    cast(Type[BaseModel], field_annotation)
+                    cast(Type[BaseModel], field_annotation), depth + 1
                 )
                 fields[field_name] = {
                     "description": description,
@@ -896,7 +865,7 @@ def _get_fields_from_model(model_class: Type[BaseModel]) -> Dict[str, Any]:
 
         return fields
 
-    return _extract_fields_recursive(model_class)
+    return _extract_fields_recursive(model_class, depth=0)
 
 
 @router.get(

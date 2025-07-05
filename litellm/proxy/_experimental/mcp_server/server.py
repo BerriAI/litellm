@@ -17,15 +17,15 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
 from litellm.proxy._experimental.mcp_server.utils import (
+    LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
     LITELLM_MCP_SERVER_VERSION,
-    LITELLM_MCP_SERVER_DESCRIPTION, normalize_server_name,
+    normalize_server_name,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.utils import StandardLoggingMCPToolCall
 from litellm.utils import client
-
 
 # Check if MCP is available
 # "mcp" requires python 3.10 or higher, but several litellm users use python 3.8
@@ -67,7 +67,9 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.tool_registry import (
         global_mcp_tool_registry,
     )
-    from litellm.proxy._experimental.mcp_server.utils import get_server_name_prefix_tool_mcp
+    from litellm.proxy._experimental.mcp_server.utils import (
+        get_server_name_prefix_tool_mcp,
+    )
 
     ######################################################
     ############ MCP Tools List REST API Response Object #
