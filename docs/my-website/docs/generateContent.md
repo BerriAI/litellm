@@ -15,10 +15,6 @@ Use LiteLLM to call Google AI's generateContent endpoints for text generation, m
 | Streaming | ✅ | |
 | Fallbacks | ✅ | between supported models |
 | Loadbalancing | ✅ | between supported models |
-| Multimodal | ✅ | images, audio, video, PDF |
-| Function Calling | ✅ | |
-| JSON Mode | ✅ | |
-| System Instructions | ✅ | |
 
 ## Usage 
 ---
@@ -187,19 +183,25 @@ litellm --config /path/to/config.yaml
 
 3. Test it! 
 
-```python showLineNumbers title="Google AI Studio Example using LiteLLM Proxy Server"
-import openai
+```python showLineNumbers title="Google GenAI SDK with LiteLLM Proxy"
+from google.genai import Client
+import os
 
-# point openai sdk to litellm proxy 
-client = openai.OpenAI(
-    base_url="http://0.0.0.0:4000",
-    api_key="sk-1234",
-)
+# Configure Google GenAI SDK to use LiteLLM proxy
+os.environ["GOOGLE_GEMINI_BASE_URL"] = "http://localhost:4000"
+os.environ["GEMINI_API_KEY"] = "sk-1234"
 
-response = client.chat.completions.create(
-    messages=[{"role": "user", "content": "Write a short story about AI"}],
+client = Client()
+
+response = client.models.generate_content(
     model="gemini-flash",
-    max_tokens=100,
+    contents=[
+        {
+            "parts": [{"text": "Write a short story about AI"}],
+            "role": "user"
+        }
+    ],
+    config={"max_output_tokens": 100}
 )
 ```
 
@@ -226,19 +228,25 @@ litellm --config /path/to/config.yaml
 
 3. Test it! 
 
-```python showLineNumbers title="Vertex AI Example using LiteLLM Proxy Server"
-import openai
+```python showLineNumbers title="Google GenAI SDK with LiteLLM Proxy (Vertex AI)"
+from google.genai import Client
+import os
 
-# point openai sdk to litellm proxy 
-client = openai.OpenAI(
-    base_url="http://0.0.0.0:4000",
-    api_key="sk-1234",
-)
+# Configure Google GenAI SDK to use LiteLLM proxy
+os.environ["GOOGLE_GEMINI_BASE_URL"] = "http://localhost:4000"
+os.environ["GEMINI_API_KEY"] = "sk-1234"
 
-response = client.chat.completions.create(
-    messages=[{"role": "user", "content": "Write a short story about AI"}],
+client = Client()
+
+response = client.models.generate_content(
     model="vertex-gemini",
-    max_tokens=100,
+    contents=[
+        {
+            "parts": [{"text": "Write a short story about AI"}],
+            "role": "user"
+        }
+    ],
+    config={"max_output_tokens": 100}
 )
 ```
 
@@ -246,19 +254,49 @@ response = client.chat.completions.create(
 
 <TabItem value="curl-proxy" label="curl">
 
-```bash showLineNumbers title="Example using LiteLLM Proxy Server"
-curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+#### Generate Content
+
+```bash showLineNumbers title="generateContent via LiteLLM Proxy"
+curl -L -X POST 'http://localhost:4000/v1beta/models/gemini-flash:generateContent' \
 -H 'content-type: application/json' \
 -H 'authorization: Bearer sk-1234' \
 -d '{
-  "model": "gemini-flash",
-  "messages": [
+  "contents": [
     {
-      "role": "user",
-      "content": "Write a short story about AI"
+      "parts": [
+        {
+          "text": "Write a short story about AI"
+        }
+      ],
+      "role": "user"
     }
   ],
-  "max_tokens": 100
+  "generationConfig": {
+    "maxOutputTokens": 100
+  }
+}'
+```
+
+#### Stream Generate Content
+
+```bash showLineNumbers title="streamGenerateContent via LiteLLM Proxy"
+curl -L -X POST 'http://localhost:4000/v1beta/models/gemini-flash:streamGenerateContent' \
+-H 'content-type: application/json' \
+-H 'authorization: Bearer sk-1234' \
+-d '{
+  "contents": [
+    {
+      "parts": [
+        {
+          "text": "Write a long story about space exploration"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "generationConfig": {
+    "maxOutputTokens": 500
+  }
 }'
 ```
 
