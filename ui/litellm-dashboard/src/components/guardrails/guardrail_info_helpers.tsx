@@ -45,16 +45,9 @@ export const guardrail_provider_map: Record<string, string> = {
     Lakera: "lakera_v2",
 };
 
-// Dynamic guardrail provider map - populated from API response
-export let DynamicGuardrailProviderMap: Record<string, string> = {};
-
-// Function to populate dynamic provider map
+// Function to populate provider map from API response - updates the original map
 export const populateGuardrailProviderMap = (providerParamsResponse: Record<string, any>) => {
-    const providerMap: Record<string, string> = {
-        ...guardrail_provider_map // Start with legacy mappings
-    };
-    
-    // Add dynamic providers from API response
+    // Add dynamic providers from API response directly to the main map
     Object.entries(providerParamsResponse).forEach(([key, value]) => {
         if (value && typeof value === 'object' && 'ui_friendly_name' in value) {
             // Create a key from the provider name (camelCase)
@@ -63,18 +56,9 @@ export const populateGuardrailProviderMap = (providerParamsResponse: Record<stri
                 word.charAt(0).toUpperCase() + word.slice(1)
             ).join('');
             
-            providerMap[providerKey] = key; // Map to the original key from API
+            guardrail_provider_map[providerKey] = key; // Add directly to the main map
         }
     });
-    
-    DynamicGuardrailProviderMap = providerMap;
-    return providerMap;
-};
-
-// Function to get current guardrail provider map (dynamic or fallback to legacy)
-export const getGuardrailProviderMap = () => {
-    console.log("DynamicGuardrailProviderMap: ", DynamicGuardrailProviderMap);
-    return Object.keys(DynamicGuardrailProviderMap).length > 0 ? DynamicGuardrailProviderMap : guardrail_provider_map;
 };
 
 // Decides if we should render the PII config settings for a given provider
@@ -116,9 +100,8 @@ export const getGuardrailLogoAndName = (guardrailValue: string): { logo: string,
     }
 
     // Find the enum key by matching guardrail_provider_map values
-    const currentProviderMap = getGuardrailProviderMap();
-    const enumKey = Object.keys(currentProviderMap).find(
-        key => currentProviderMap[key].toLowerCase() === guardrailValue.toLowerCase()
+    const enumKey = Object.keys(guardrail_provider_map).find(
+        key => guardrail_provider_map[key].toLowerCase() === guardrailValue.toLowerCase()
     );
 
     if (!enumKey) {

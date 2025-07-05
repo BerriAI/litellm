@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Form, Select, Spin } from 'antd';
 import { TextInput } from '@tremor/react';
-import { GuardrailProviders, guardrail_provider_map, populateGuardrailProviders, populateGuardrailProviderMap, getGuardrailProviderMap } from './guardrail_info_helpers';
+import { GuardrailProviders, guardrail_provider_map, populateGuardrailProviders, populateGuardrailProviderMap } from './guardrail_info_helpers';
 import { getGuardrailProviderSpecificParams } from '../networking';
 import NumericalInput from '../shared/numerical_input';
 
@@ -85,8 +85,7 @@ const GuardrailProviderSpecificFields: React.FC<GuardrailProviderSpecificFieldsP
   }
 
   // Get the provider key matching the selected provider
-  const currentProviderMap = getGuardrailProviderMap();
-  const providerKey = currentProviderMap[selectedProvider]?.toLowerCase();
+  const providerKey = guardrail_provider_map[selectedProvider]?.toLowerCase();
   
   // Get parameters for the selected provider
   const providerFields = providerParams && providerParams[providerKey];

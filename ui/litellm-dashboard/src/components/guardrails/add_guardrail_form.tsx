@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Card, Form, Typography, Select, Input, Switch, Tooltip, Modal, message, Divider, Space, Tag, Image, Steps } from 'antd';
 import { Button, TextInput } from '@tremor/react';
 import type { FormInstance } from 'antd';
-import { GuardrailProviders, guardrail_provider_map, shouldRenderPIIConfigSettings, guardrailLogoMap, populateGuardrailProviders, populateGuardrailProviderMap, getGuardrailProviders, getGuardrailProviderMap } from './guardrail_info_helpers';
+import { GuardrailProviders, guardrail_provider_map, shouldRenderPIIConfigSettings, guardrailLogoMap, populateGuardrailProviders, populateGuardrailProviderMap, getGuardrailProviders } from './guardrail_info_helpers';
 import { createGuardrailCall, getGuardrailUISettings, getGuardrailProviderSpecificParams } from '../networking';
 import PiiConfiguration from './pii_configuration';
 import GuardrailProviderFields from './guardrail_provider_fields';
@@ -226,8 +226,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
 
 
       // Get the guardrail provider value from the map
-      const currentProviderMap = getGuardrailProviderMap();
-      const guardrailProvider = currentProviderMap[values.provider];
+      const guardrailProvider = guardrail_provider_map[values.provider];
       
       // Prepare the guardrail data with proper typings
       const guardrailData: {
@@ -292,8 +291,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
 
       // Use pre-fetched provider params to copy recognised params
       if (providerParams && selectedProvider) {
-        const currentProviderMap = getGuardrailProviderMap();
-        const providerKey = currentProviderMap[selectedProvider]?.toLowerCase();
+        const providerKey = guardrail_provider_map[selectedProvider]?.toLowerCase();
         console.log("providerKey: ", providerKey);
         const providerSpecificParams = providerParams[providerKey] || {};
         
@@ -517,10 +515,9 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
   const renderOptionalParams = () => {
     if (!selectedProvider || !providerParams) return null;
     
-    const currentProviderMap = getGuardrailProviderMap();
-    console.log("currentProviderMap: ", currentProviderMap);
+    console.log("guardrail_provider_map: ", guardrail_provider_map);
     console.log("selectedProvider: ", selectedProvider);
-    const providerKey = currentProviderMap[selectedProvider]?.toLowerCase();
+    const providerKey = guardrail_provider_map[selectedProvider]?.toLowerCase();
     const providerFields = providerParams && providerParams[providerKey];
     
     if (!providerFields || !providerFields.optional_params) return null;
