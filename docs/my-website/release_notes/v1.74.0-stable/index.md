@@ -58,16 +58,21 @@ pip install litellm==1.74.0.post1
 This release brings significant performance improvements to the Python SDK with 2.3 seconds faster import times. We've refactored the initialization process to reduce startup overhead, making LiteLLM more efficient for applications that need quick initialization. This is a major improvement for applications that need to initialize LiteLLM quickly.
 
 
-
-
-
 ---
 
 ## New Models / Updated Models
 
-### New Providers
 
-### Updated Models
+#### Features
+- **[🆕 GitHub Copilot](../../docs/providers/github_copilot)** - Use GitHub Copilot API with LiteLLM - [PR](https://github.com/BerriAI/litellm/pull/12325), [Get Started](../../docs/providers/github_copilot)
+- **[🆕 VertexAI DeepSeek](../../docs/providers/vertex)** - Add support for VertexAI DeepSeek models - [PR](https://github.com/BerriAI/litellm/pull/12312), [Get Started](../../docs/providers/vertex)
+- **[Azure AI](../../docs/providers/azure_ai)**
+  - Add azure_ai cohere rerank v3.5 - [PR](https://github.com/BerriAI/litellm/pull/12283)
+- **[Vertex AI](../../docs/providers/vertex)**
+  - Add size parameter support for image generation - [PR](https://github.com/BerriAI/litellm/pull/12292)
+- **[Custom LLM](../../docs/providers/custom_llm_server)**
+  - Pass through extra_ properties on "custom" llm provider - [PR](https://github.com/BerriAI/litellm/pull/12185)
+
 #### Bugs
 - **[Mistral](../../docs/providers/mistral)**
   - Fix transform_response handling for empty string content - [PR](https://github.com/BerriAI/litellm/pull/12202)
@@ -87,15 +92,6 @@ This release brings significant performance improvements to the Python SDK with 
 - **[Hugging Face](../../docs/providers/huggingface)**
   - Fix Hugging Face tests - [PR](https://github.com/BerriAI/litellm/pull/12286)
 
-#### Features
-- **[🆕 GitHub Copilot](../../docs/providers/github_copilot)** - Use GitHub Copilot API with LiteLLM
-- **[🆕 VertexAI DeepSeek](../../docs/providers/vertex)** - Add support for VertexAI DeepSeek models - [PR](https://github.com/BerriAI/litellm/pull/12312)
-- **[Azure AI](../../docs/providers/azure_ai)**
-  - Add azure_ai cohere rerank v3.5 - [PR](https://github.com/BerriAI/litellm/pull/12283)
-- **[Vertex AI](../../docs/providers/vertex)**
-  - Add size parameter support for image generation - [PR](https://github.com/BerriAI/litellm/pull/12292)
-- **[Custom LLM](../../docs/providers/custom_llm_server)**
-  - Pass through extra_ properties on "custom" llm provider - [PR](https://github.com/BerriAI/litellm/pull/12185)
 
 ---
 

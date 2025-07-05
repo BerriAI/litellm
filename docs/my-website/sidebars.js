@@ -360,6 +360,7 @@ const sidebars = {
           label: "Vertex AI",
           items: [
             "providers/vertex",
+            "providers/vertex_partner",
             "providers/vertex_image",
           ]
         },
