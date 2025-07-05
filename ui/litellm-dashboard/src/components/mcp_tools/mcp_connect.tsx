@@ -100,7 +100,7 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
               checked={useServerHeader}
               onChange={setUseServerHeader}
             />
-            <Text className="text-sm">Segregate tools to just use {serverName} tools</Text>
+            <Text className="text-sm">Segregate tools to just use a specific MCP Server e.g. {serverName} tools</Text>
           </div>
           {useServerHeader && (
             <Alert
@@ -151,7 +151,7 @@ const MCPConnect: React.FC = () => {
     cursor: [],
     http: []
   });
-  const [currentServer] = useState("Zapier Gmail"); // This should match the current server being viewed
+  const [currentServer] = useState("Zapier_MCP"); // This should match the current server being viewed
 
   const copyToClipboard = async (text: string, key: string) => {
     try {
