@@ -122,22 +122,6 @@ def initialize_hide_secrets(litellm_params: LitellmParams, guardrail: Guardrail)
     return _secret_detection_object
 
 
-def initialize_pangea(litellm_params, guardrail):
-    from litellm.proxy.guardrails.guardrail_hooks.pangea import PangeaHandler
-
-    _pangea_callback = PangeaHandler(
-        guardrail_name=guardrail["guardrail_name"],
-        pangea_input_recipe=litellm_params.pangea_input_recipe,
-        pangea_output_recipe=litellm_params.pangea_output_recipe,
-        api_base=litellm_params.api_base,
-        api_key=litellm_params.api_key,
-        default_on=litellm_params.default_on,
-    )
-    litellm.logging_callback_manager.add_litellm_callback(_pangea_callback)
-
-    return _pangea_callback
-
-
 def initialize_panw_prisma_airs(litellm_params, guardrail):
     from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs import (
         PanwPrismaAirsHandler,

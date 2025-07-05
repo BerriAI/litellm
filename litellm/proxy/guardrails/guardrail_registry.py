@@ -25,7 +25,6 @@ from .guardrail_initializers import (
     initialize_hide_secrets,
     initialize_lakera,
     initialize_lakera_v2,
-    initialize_pangea,
     initialize_panw_prisma_airs,
     initialize_presidio,
 )
@@ -36,7 +35,6 @@ guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.LAKERA_V2.value: initialize_lakera_v2,
     SupportedGuardrailIntegrations.PRESIDIO.value: initialize_presidio,
     SupportedGuardrailIntegrations.HIDE_SECRETS.value: initialize_hide_secrets,
-    SupportedGuardrailIntegrations.PANGEA.value: initialize_pangea,
     SupportedGuardrailIntegrations.PANW_PRISMA_AIRS.value: initialize_panw_prisma_airs,
 }
 
