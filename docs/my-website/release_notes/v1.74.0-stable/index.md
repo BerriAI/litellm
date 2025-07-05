@@ -97,10 +97,7 @@ This release brings significant performance improvements to the Python SDK with 
 ## LLM API Endpoints
 
 #### Features
-- **[/generateContent](../../docs/generate_content)**
-  - Allow passing litellm_params - [PR](https://github.com/BerriAI/litellm/pull/12177)
-  - Only pass supported params when using OpenAI models - [PR](https://github.com/BerriAI/litellm/pull/12297)
-  - Fix using gemini-cli with Vertex Anthropic Models - [PR](https://github.com/BerriAI/litellm/pull/12246)
+
 - **[/batches](../../docs/batches)**
   - Support batch retrieve with target model Query Param - [PR](https://github.com/BerriAI/litellm/pull/12228)
   - Anthropic completion bridge improvements - [PR](https://github.com/BerriAI/litellm/pull/12228)
@@ -122,6 +119,10 @@ This release brings significant performance improvements to the Python SDK with 
   - Non-anthropic models token usage returned - [PR](https://github.com/BerriAI/litellm/pull/12184)
 - **[/chat/completions](../../docs/providers/anthropic_unified)**
   - Support Cursor IDE tool_choice format `{"type": "auto"}` - [PR](https://github.com/BerriAI/litellm/pull/12168)
+- **[/generateContent](../../docs/generate_content)**
+  - Allow passing litellm_params - [PR](https://github.com/BerriAI/litellm/pull/12177)
+  - Only pass supported params when using OpenAI models - [PR](https://github.com/BerriAI/litellm/pull/12297)
+  - Fix using gemini-cli with Vertex Anthropic Models - [PR](https://github.com/BerriAI/litellm/pull/12246)
 - **Streaming**
   - Fix Error code: 307 for LlamaAPI Streaming Chat - [PR](https://github.com/BerriAI/litellm/pull/11946)
   - Store finish reason even if is_finished - [PR](https://github.com/BerriAI/litellm/pull/12250)
