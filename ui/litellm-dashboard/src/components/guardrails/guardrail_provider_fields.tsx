@@ -107,6 +107,11 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
     return Object.entries(fields).map(([fieldKey, field]) => {
       const fullFieldKey = parentKey ? `${parentKey}.${fieldKey}` : fieldKey;
       
+      // Skip ui_friendly_name - it's metadata for the UI dropdown, not a user configuration field
+      if (fieldKey === "ui_friendly_name") {
+        return null;
+      }
+      
       // Skip optional_params - they are handled in a separate step
       if (fieldKey === "optional_params" && field.type === "nested" && field.fields) {
         return null;
