@@ -180,9 +180,11 @@ You can choose to access specific MCP servers and only list their tools using th
 - Limit tool access to one or more specific MCP servers
 - Control which tools are available in different environments or use cases
 
-The header accepts a JSON array of server names, where:
+The header accepts either:
+1. A comma-separated list of server names: `"Zapier_Gmail,Server2,Server3"`
+
+Notes:
 - Server names with spaces should be replaced with underscores
-- Multiple servers can be specified: `["Server1", "Server2", "Server3"]`
 - If the header is not provided, tools from all available MCP servers will be accessible
 
 <Tabs>
@@ -202,7 +204,7 @@ curl --location 'https://api.openai.com/v1/responses' \
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
-                "x-mcp-servers": "[\"Zapier_Gmail\"]"
+                "x-mcp-servers": "Zapier_Gmail"
             }
         }
     ],
@@ -231,7 +233,7 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
-                "x-mcp-servers": "[\"Zapier_Gmail\"]"
+                "x-mcp-servers": "Zapier_Gmail,Server2"
             }
         }
     ],
@@ -240,7 +242,7 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
 }'
 ```
 
-This configuration restricts the request to only use tools from the specified MCP server.
+This configuration restricts the request to only use tools from the specified MCP servers.
 
 </TabItem>
 
@@ -253,7 +255,7 @@ This configuration restricts the request to only use tools from the specified MC
       "url": "<your-litellm-proxy-base-url>/mcp",
       "headers": {
         "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
-        "x-mcp-servers": "[\"Zapier_Gmail\"]"
+        "x-mcp-servers": "Zapier_Gmail,Server2"
       }
     }
   }
