@@ -591,13 +591,10 @@ async def get_guardrail_info(guardrail_id: str):
                 status_code=404, detail=f"Guardrail with ID {guardrail_id} not found"
             )
 
-        litellm_params = result.get("litellm_params", {})
-        if isinstance(litellm_params, dict):
-            result_litellm_params_dict = litellm_params
-        elif isinstance(litellm_params, BaseModel):
-            result_litellm_params_dict = litellm_params.model_dump(exclude_none=True)
-        else:
-            result_litellm_params_dict = {}
+        litellm_params: Optional[LitellmParams] = result.get("litellm_params")
+        result_litellm_params_dict = (
+            litellm_params.model_dump(exclude_none=True) if litellm_params else {}
+        )
         masked_litellm_params_dict = _get_masked_values(
             result_litellm_params_dict,
             unmasked_length=4,
