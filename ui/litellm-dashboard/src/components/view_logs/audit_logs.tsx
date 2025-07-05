@@ -18,6 +18,11 @@ interface AuditLogsProps {
   allTeams: Team[];
 }
 
+
+const asset_logos_folder = '../ui/assets/';
+export const auditLogsPreviewImg = `${asset_logos_folder}audit-logs-preview.png`;
+
+
 export default function AuditLogs({
   userID,
   userRole,
@@ -402,7 +407,7 @@ export default function AuditLogs({
           Here&apos;s a preview of what Audit Logs offer:
         </Text>
         <img 
-          src="/audit-logs-preview.png"
+          src={auditLogsPreviewImg}
           alt="Audit Logs Preview" 
           style={{ 
             maxWidth: '100%', 
@@ -412,6 +417,10 @@ export default function AuditLogs({
             boxShadow: '0 4px 8px rgba(0,0,0,0.1)',
             margin: '0 auto'
           }} 
+          onError={(e) => {
+            console.error('Failed to load audit logs preview image');
+            (e.target as HTMLImageElement).style.display = 'none';
+          }}
         />
       </div>
     );
