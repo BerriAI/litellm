@@ -341,8 +341,6 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         llm_router,
         premium_user,
         prisma_client,
-        user_api_key_cache,
-        user_custom_key_generate,
     )
 
     common_key_access_checks(
@@ -663,14 +661,61 @@ async def generate_service_account_key_fn(
     ),
 ):
     """
-    Generate a service account key for a team.
+    Generate a Service Account API key based on the provided data. This key does not belong to any user. It belongs to the team.
 
-    Does not belong to any user. Just belongs to the team.
+    Why use a service account key?
+    - Prevent key from being deleted when user is deleted.
+
+    Docs: https://docs.litellm.ai/docs/proxy/virtual_keys
 
     Parameters:
-    - team_id: Optional[str] - Team ID associated with key
-    - key_alias: Optional[str] - User-friendly key alias
-    - metadata: Optional[dict] - Metadata for key. Example {"team": "core-infra", "app": "app2"}
+    - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+    - key_alias: Optional[str] - User defined key alias
+    - key: Optional[str] - User defined key value. If not set, a 16-digit unique sk-key is created for you.
+    - team_id: Optional[str] - The team id of the key
+    - user_id: Optional[str] - [NON-FUNCTIONAL] THIS WILL BE IGNORED. The user id of the key
+    - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
+    - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
+    - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
+    - config: Optional[dict] - any key-specific configs, overrides config in config.yaml
+    - spend: Optional[int] - Amount spent by key. Default is 0. Will be updated by proxy whenever key is used. https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---tracking-spend
+    - send_invite_email: Optional[bool] - Whether to send an invite email to the user_id, with the generate key
+    - max_budget: Optional[float] - Specify max budget for a given key.
+    - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+    - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
+    - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
+    - guardrails: Optional[List[str]] - List of active guardrails for the key
+    - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
+    - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
+    - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
+    - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
+    - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request
+    - blocked: Optional[bool] - Whether the key is blocked.
+    - rpm_limit: Optional[int] - Specify rpm limit for a given key (Requests per minute)
+    - tpm_limit: Optional[int] - Specify tpm limit for a given key (Tokens per minute)
+    - soft_budget: Optional[float] - Specify soft budget for a given key. Will trigger a slack alert when this soft budget is reached.
+    - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
+    - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
+    - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    Examples:
+
+    1. Allow users to turn on/off pii masking
+
+    ```bash
+    curl --location 'http://0.0.0.0:4000/key/generate' \
+        --header 'Authorization: Bearer sk-1234' \
+        --header 'Content-Type: application/json' \
+        --data '{
+            "permissions": {"allow_pii_controls": true}
+    }'
+    ```
+
+    Returns:
+    - key: (str) The generated api key
+    - expires: (datetime) Datetime object for when key expires.
+    - user_id: (str) Unique user id - used for tracking spend across multiple keys for same user id.
+
     """
     from litellm.proxy.proxy_server import (
         prisma_client,
@@ -711,6 +756,8 @@ async def generate_service_account_key_fn(
         data=data,
         route=KeyManagementRoutes.KEY_GENERATE_SERVICE_ACCOUNT,
     )
+
+    data.user_id = None  # do not allow user_id to be set for service account keys
 
     return await _common_key_generation_helper(
         data=data,
