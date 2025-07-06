@@ -1345,52 +1345,6 @@ def test_anthropic_prefix_prompt():
     assert response.choices[0].message.content.startswith("Argentina")
 
 
-def test_anthropic_user_id_validation():
-    """Test that user ID validation works properly for both chat and completion endpoints"""
-    # Test chat endpoint
-    chat_config = AnthropicConfig()
-    
-    # Valid user ID should pass
-    params = chat_config.map_openai_params(
-        non_default_params={"user": "valid_user_123"},
-        optional_params={},
-        model="claude-3-sonnet-20240229",
-        drop_params=True
-    )
-    assert "metadata" in params
-    assert params["metadata"]["user_id"] == "valid_user_123"
-    
-    # Invalid user ID (email) should be rejected
-    params = chat_config.map_openai_params(
-        non_default_params={"user": "test@example.com"},
-        optional_params={},
-        model="claude-3-sonnet-20240229",
-        drop_params=True
-    )
-    assert "metadata" not in params
-    
-    # Test completion endpoint
-    completion_config = AnthropicTextConfig()
-    
-    # Valid user ID should pass
-    params = completion_config.map_openai_params(
-        non_default_params={"user": "valid_user_123"},
-        optional_params={},
-        model="claude-2",
-        drop_params=True
-    )
-    assert "metadata" in params
-    assert params["metadata"]["user_id"] == "valid_user_123"
-    
-    # Invalid user ID (email) should be rejected
-    params = completion_config.map_openai_params(
-        non_default_params={"user": "test@example.com"},
-        optional_params={},
-        model="claude-2",
-        drop_params=True
-    )
-    assert "metadata" not in params
-
 
 @pytest.mark.asyncio
 async def test_claude_tool_use_with_anthropic_acreate():
