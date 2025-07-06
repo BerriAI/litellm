@@ -32,9 +32,9 @@ Team 3 -> Disabled Logging (for GDPR compliance)
 
 ### UI Usage
 
-1. Create a Team with Logging Settings
+1. **Create a Team with Logging Settings**
 
-Create a team called "AI Agents" on LiteLLM. We will connect this team's Logging settings to the specific Arize project (space) for the AI Agents team.
+   Navigate to the Teams section and create a new team called "AI Agents". Here, you can configure team-specific logging settings, such as connecting to a dedicated Arize project (space) for the AI Agents team.
 
 <Image 
   img={require('../../img/team_logging1.png')}
@@ -43,10 +43,9 @@ Create a team called "AI Agents" on LiteLLM. We will connect this team's Logging
 
 <br />
 
+2. **Generate a Team-Specific Key**
 
-2. Create a Key for the Team
-
-We will create a key for the team "AI Agents". The team logging settings will be used for all keys created for the team.
+   Create an API key associated with the "AI Agents" team. Any logging settings configured for the team will automatically apply to all keys generated for that team.
 
 <Image 
   img={require('../../img/team_logging2.png')}
@@ -55,10 +54,9 @@ We will create a key for the team "AI Agents". The team logging settings will be
 
 <br />
 
+3. **Verify with a Test Request**
 
-3. Make a test LLM API Request 
-
-Use the new key to make a test LLM API Request, we expect to see the logs on your logging provider configured in step 1.
+   Make a test LLM API request using your newly generated team key. This will help verify that your logging configuration is working as expected.
 
 <Image 
   img={require('../../img/team_logging3.png')}
@@ -67,9 +65,9 @@ Use the new key to make a test LLM API Request, we expect to see the logs on you
 
 <br />
 
-4. Check Logs on your Logging Provider 
+4. **Confirm Logging Setup**
 
-Navigate to your configured logging provider and check if you received the logs from step 2.
+   Access your configured logging provider's dashboard to verify that the logs from your test request were successfully captured and stored.
 
 <Image 
   img={require('../../img/team_logging4.png')}
@@ -261,9 +259,9 @@ Use the `/key/generate` or `/key/update` endpoints to add logging callbacks to a
 
 ### UI Usage 
 
-1. Create a Key with Logging Settings
+1. **Configure Key with Custom Logging**
 
-When creating a key, you can configure the specific logging settings for the key. These logging settings will be used for all requests made with this key.
+   When generating a new key, you can set up key-specific logging configurations. These settings will override any team-level logging settings and will apply exclusively to requests made with this key.
 
 <Image 
   img={require('../../img/key_logging.png')}
@@ -271,10 +269,9 @@ When creating a key, you can configure the specific logging settings for the key
 />
 <br />
 
+2. **Test Key Configuration**
 
-2. Make a test LLM API Request 
-
-Use the new key to make a test LLM API Request, we expect to see the logs on your logging provider configured in step 1.
+   Send a test LLM API request using your newly configured key to ensure the logging settings are properly applied.
 
 <Image 
   img={require('../../img/key_logging2.png')}
@@ -283,9 +280,9 @@ Use the new key to make a test LLM API Request, we expect to see the logs on you
 
 <br />
 
-3. Check Logs on your Logging Provider 
+3. **Verify Logging Integration**
 
-Navigate to your configured logging provider and check if you received the logs from step 2.
+   Check your logging provider's platform to confirm that the test request logs were successfully captured according to your key-specific configuration.
 
 <Image 
   img={require('../../img/key_logging_arize.png')}
