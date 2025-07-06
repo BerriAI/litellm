@@ -32,6 +32,7 @@ import {
   proxyBaseUrl,
   getPossibleUserRoles,
   userFilterUICall,
+  keyCreateServiceAccountCall,
 } from "./networking";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import PremiumVectorStoreSelector from "./common_components/PremiumVectorStoreSelector";
@@ -308,8 +309,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         // Remove the original field as it's now part of object_permission
         delete formValues.allowed_mcp_server_ids;
       }
-
-      const response = await keyCreateCall(accessToken, userID, formValues);
+      let response;
+      if (keyOwner === "service_account") {
+        response = await keyCreateServiceAccountCall(accessToken, formValues);
+      } else {
+        response = await keyCreateCall(accessToken, userID, formValues);
+      }
 
       console.log("key create Response:", response);
       
