@@ -46,12 +46,29 @@ pip install litellm==1.74.0.post1
 ## Key Highlights 
 
 
-
-### Team / Key Based Logging on UI
-
 ### Azure Content Safety Guardrails
 
 ### MCP Gateway: Segregate MCP tools
+
+### Team / Key Based Logging on UI
+
+<Image 
+  img={require('../../img/release_notes/team_key_logging.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+<br />
+
+This release brings support for Proxy Admins to configure Team/Key Based Logging Settings on the UI. This allows routing LLM request/response logs to different Langfuse/Arize projects based on the team or key.
+
+For developers using LiteLLM, their logs are automatically routed to their specific Arize/Langfuse projects. On this release, we support the following integrations for key/team based logging:
+
+- `langfuse`
+- `arize`
+- `langsmith`
+
+
+
 
 ### Python SDK: 2.3 Second Faster Import Times
 
