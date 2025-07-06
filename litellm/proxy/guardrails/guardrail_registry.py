@@ -21,31 +21,19 @@ from litellm.types.guardrails import (
 )
 
 from .guardrail_initializers import (
-    initialize_aim,
-    initialize_aporia,
     initialize_bedrock,
-    initialize_guardrails_ai,
     initialize_hide_secrets,
     initialize_lakera,
     initialize_lakera_v2,
-    initialize_lasso,
-    initialize_pangea,
-    initialize_panw_prisma_airs,
     initialize_presidio,
 )
 
 guardrail_initializer_registry = {
-    SupportedGuardrailIntegrations.APORIA.value: initialize_aporia,
     SupportedGuardrailIntegrations.BEDROCK.value: initialize_bedrock,
     SupportedGuardrailIntegrations.LAKERA.value: initialize_lakera,
     SupportedGuardrailIntegrations.LAKERA_V2.value: initialize_lakera_v2,
-    SupportedGuardrailIntegrations.AIM.value: initialize_aim,
     SupportedGuardrailIntegrations.PRESIDIO.value: initialize_presidio,
     SupportedGuardrailIntegrations.HIDE_SECRETS.value: initialize_hide_secrets,
-    SupportedGuardrailIntegrations.GURDRAILS_AI.value: initialize_guardrails_ai,
-    SupportedGuardrailIntegrations.PANGEA.value: initialize_pangea,
-    SupportedGuardrailIntegrations.LASSO.value: initialize_lasso,
-    SupportedGuardrailIntegrations.PANW_PRISMA_AIRS.value: initialize_panw_prisma_airs,
 }
 
 guardrail_class_registry: Dict[str, Type[CustomGuardrail]] = {}
@@ -111,7 +99,7 @@ def get_guardrail_initializer_from_hooks():
                     )
 
             except ImportError as e:
-                verbose_proxy_logger.debug(f"Could not import {module_path}: {e}")
+                verbose_proxy_logger.error(f"Could not import {module_path}: {e}")
                 continue
             except Exception as e:
                 verbose_proxy_logger.error(f"Error processing {module_path}: {e}")
@@ -183,7 +171,7 @@ def get_guardrail_class_from_hooks():
                 verbose_proxy_logger.debug(f"Could not import {module_path}: {e}")
                 continue
             except Exception as e:
-                verbose_proxy_logger.error(f"Error processing {module_path}: {e}")
+                verbose_proxy_logger.exception(f"Error processing {module_path}: {e}")
                 continue
 
     except Exception as e:
@@ -323,7 +311,7 @@ class GuardrailRegistry:
 
             guardrails: List[Guardrail] = []
             for guardrail in guardrails_from_db:
-                guardrails.append(Guardrail(**(dict(guardrail))))
+                guardrails.append(Guardrail(**(dict(guardrail))))  # type: ignore
 
             return guardrails
         except Exception as e:
@@ -343,7 +331,7 @@ class GuardrailRegistry:
             if not guardrail:
                 return None
 
-            return Guardrail(**(dict(guardrail)))
+            return Guardrail(**(dict(guardrail)))  # type: ignore
         except Exception as e:
             raise Exception(f"Error getting guardrail from DB: {str(e)}")
 
@@ -361,7 +349,7 @@ class GuardrailRegistry:
             if not guardrail:
                 return None
 
-            return Guardrail(**(dict(guardrail)))
+            return Guardrail(**(dict(guardrail)))  # type: ignore
         except Exception as e:
             raise Exception(f"Error getting guardrail from DB: {str(e)}")
 
@@ -384,7 +372,7 @@ class InMemoryGuardrailHandler:
 
     def initialize_guardrail(
         self,
-        guardrail: Dict,
+        guardrail: Guardrail,
         config_file_path: Optional[str] = None,
     ) -> Optional[Guardrail]:
         """
@@ -404,7 +392,10 @@ class InMemoryGuardrailHandler:
         litellm_params_data = guardrail["litellm_params"]
         verbose_proxy_logger.debug("litellm_params= %s", litellm_params_data)
 
-        litellm_params = LitellmParams(**litellm_params_data)
+        if isinstance(litellm_params_data, dict):
+            litellm_params = LitellmParams(**litellm_params_data)
+        else:
+            litellm_params = litellm_params_data
 
         if (
             "category_thresholds" in litellm_params_data
@@ -433,7 +424,7 @@ class InMemoryGuardrailHandler:
             custom_guardrail_callback = initializer(litellm_params, guardrail)
         elif isinstance(guardrail_type, str) and "." in guardrail_type:
             custom_guardrail_callback = self.initialize_custom_guardrail(
-                guardrail=guardrail,
+                guardrail=cast(dict, guardrail),
                 guardrail_type=guardrail_type,
                 litellm_params=litellm_params,
                 config_file_path=config_file_path,

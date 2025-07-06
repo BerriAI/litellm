@@ -484,6 +484,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
                       ) || null}
                       accessToken={accessToken} 
                       providerParams={guardrailProviderSpecificParams}
+                      value={guardrailData.litellm_params}
                     />
                     
                     {/* Optional parameters */}
