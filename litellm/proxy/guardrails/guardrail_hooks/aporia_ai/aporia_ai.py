@@ -13,7 +13,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import json
 import sys
-from typing import Any, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Type
 
 from fastapi import HTTPException
 
@@ -31,12 +31,14 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
 from litellm.types.guardrails import GuardrailEventHooks
 
 litellm.set_verbose = True
 
 GUARDRAIL_NAME = "aporia"
+
+if TYPE_CHECKING:
+    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
 class AporiaGuardrail(CustomGuardrail):
@@ -194,12 +196,16 @@ class AporiaGuardrail(CustomGuardrail):
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
+        from litellm.proxy.guardrails.guardrail_helpers import (
+            should_proceed_based_on_metadata,
+        )
 
         event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return
 
         # old implementation - backwards compatibility
+
         if (
             await should_proceed_based_on_metadata(
                 data=data,
@@ -226,3 +232,11 @@ class AporiaGuardrail(CustomGuardrail):
                 "Aporia AI: not running guardrail. No messages in data"
             )
             pass
+
+    @staticmethod
+    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+        from litellm.types.proxy.guardrails.guardrail_hooks.aporia_ai import (
+            AporiaGuardrailConfigModel,
+        )
+
+        return AporiaGuardrailConfigModel

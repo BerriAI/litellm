@@ -6,7 +6,8 @@
 #  Thank you for using Litellm! - Krrish & Ishaan
 
 import json
-from typing import Optional, TypedDict
+import os
+from typing import TYPE_CHECKING, Optional, Type, TypedDict
 
 from fastapi import HTTPException
 
@@ -20,10 +21,10 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_utils.callback_utils import (
-    add_guardrail_to_applied_guardrails_header,
-)
 from litellm.types.guardrails import GuardrailEventHooks
+
+if TYPE_CHECKING:
+    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
 class GuardrailsAIResponse(TypedDict):
@@ -45,7 +46,9 @@ class GuardrailsAI(CustomGuardrail):
                 "GuardrailsAIException - Please pass the Guardrails AI guard name via 'litellm_params::guard_name'"
             )
         # store kwargs as optional_params
-        self.guardrails_ai_api_base = api_base or "http://0.0.0.0:8000"
+        self.guardrails_ai_api_base = (
+            api_base or os.getenv("GUARDRAILS_AI_API_BASE") or "http://0.0.0.0:8000"
+        )
         self.guardrails_ai_guard_name = guard_name
         self.optional_params = kwargs
         supported_event_hooks = [GuardrailEventHooks.post_call]
@@ -94,6 +97,10 @@ class GuardrailsAI(CustomGuardrail):
 
         It can be used to reject a response
         """
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
+
         event_type: GuardrailEventHooks = GuardrailEventHooks.post_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return
@@ -112,3 +119,11 @@ class GuardrailsAI(CustomGuardrail):
             )
 
         return
+
+    @staticmethod
+    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+        from litellm.types.proxy.guardrails.guardrail_hooks.guardrails_ai import (
+            GuardrailsAIGuardrailConfigModel,
+        )
+
+        return GuardrailsAIGuardrailConfigModel

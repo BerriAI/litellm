@@ -4,8 +4,9 @@ PANW Prisma AIRS Built-in Guardrail for LiteLLM
 
 """
 
+import os
 import uuid
-from typing import Any, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, cast
 
 from fastapi import HTTPException
 
@@ -20,6 +21,9 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import ModelResponse
+
+if TYPE_CHECKING:
+    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
 class PanwPrismaAirsHandler(CustomGuardrail):
@@ -52,8 +56,12 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         super().__init__(guardrail_name=guardrail_name, default_on=default_on, **kwargs)
 
         # Store configuration
-        self.api_key = api_key
-        self.api_base = api_base
+        self.api_key = api_key or os.getenv("PANW_PRISMA_AIRS_API_KEY")
+        self.api_base = (
+            api_base
+            or os.getenv("PANW_PRISMA_AIRS_API_BASE")
+            or "https://service.api.aisecurity.paloaltonetworks.com"
+        )
         self.profile_name = profile_name
 
         verbose_proxy_logger.info(
@@ -98,14 +106,15 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     def _extract_response_text(self, response: ModelResponse) -> str:
         """Extract text from LLM response."""
         try:
+            from litellm.types.utils import Choices
+
             if (
                 hasattr(response, "choices")
                 and response.choices
                 and len(response.choices) > 0
                 and hasattr(response.choices[0], "message")
-                and hasattr(response.choices[0].message, "content")
             ):
-                return response.choices[0].message.content or ""
+                return cast(Choices, response.choices[0]).message.content or ""
         except (AttributeError, IndexError):
             verbose_proxy_logger.error(
                 "PANW Prisma AIRS: Error extracting response text"
@@ -132,9 +141,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             "tr_id": transaction_id,
             "ai_profile": {"profile_name": self.profile_name},
             "metadata": {
-                "app_user": metadata.get("user", "litellm_user")
-                if metadata
-                else "litellm_user",
+                "app_user": (
+                    metadata.get("user", "litellm_user") if metadata else "litellm_user"
+                ),
                 "ai_model": metadata.get("model", "unknown") if metadata else "unknown",
                 "source": "litellm_builtin_guardrail",
             },
@@ -157,7 +166,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             )
 
             response = await async_client.post(
-                self.api_base, headers=headers, json=payload, timeout=10.0
+                f"{self.api_base}/v1/scan/sync/request",
+                headers=headers,
+                json=payload,
+                timeout=10.0,
             )
             response.raise_for_status()
 
@@ -231,6 +243,8 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             "image_generation",
             "moderation",
             "audio_transcription",
+            "pass_through_endpoint",
+            "rerank",
         ],
     ) -> Optional[Dict[str, Any]]:
         """
@@ -328,3 +342,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             raise HTTPException(status_code=400, detail=error_detail)
 
         return response
+
+    @staticmethod
+    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+        from litellm.types.proxy.guardrails.guardrail_hooks.panw_prisma_airs import (
+            PanwPrismaAirsGuardrailConfigModel,
+        )
+
+        return PanwPrismaAirsGuardrailConfigModel
