@@ -2,7 +2,8 @@
 CRUD ENDPOINTS FOR GUARDRAILS
 """
 
-from typing import Any, Dict, List, Optional, Type, Union, cast
+import inspect
+from typing import Any, Dict, List, Optional, Type, TypeVar, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -755,115 +756,135 @@ def _get_list_element_options(field_annotation: Any) -> Optional[List[str]]:
     return None
 
 
+def _extract_fields_recursive(
+    model: Type[BaseModel],
+    depth: int = 0,
+) -> Dict[str, Any]:
+
+    # Check if we've exceeded the maximum recursion depth
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing model fields. Please check the model structure for excessive nesting.",
+        )
+
+    fields = {}
+
+    for field_name, field in model.model_fields.items():
+        # Skip optional_params if it's not meaningfully overridden
+        if field_name == "optional_params":
+            field_annotation = field.annotation
+            if field_annotation is None:
+                continue
+            # Check if the annotation is still a generic TypeVar (not specialized)
+            if isinstance(field_annotation, TypeVar) or (
+                hasattr(field_annotation, "__origin__")
+                and field_annotation.__origin__ is TypeVar
+            ):
+                # Skip this field as it's not meaningfully overridden
+                continue
+            # Also skip if it's a generic type that wasn't specialized
+            if hasattr(field_annotation, "__name__") and field_annotation.__name__ in (
+                "T",
+                "TypeVar",
+            ):
+                continue
+
+        # Get field metadata
+        description = field.description or field_name
+
+        # Check if this field is required
+        required = field.is_required()
+
+        # Check if the field annotation is a BaseModel subclass
+        field_annotation = field.annotation
+
+        # Handle Optional types and get the actual type
+        if field_annotation is None:
+            continue
+
+        if (
+            hasattr(field_annotation, "__origin__")
+            and field_annotation.__origin__ is Union
+            and hasattr(field_annotation, "__args__")
+        ):
+            # For Optional[BaseModel], get the non-None type
+            args = field_annotation.__args__
+            non_none_args = [arg for arg in args if arg is not type(None)]
+            if non_none_args:
+                field_annotation = non_none_args[0]
+
+        # Check if this is a BaseModel subclass
+        is_basemodel_subclass = (
+            inspect.isclass(field_annotation)
+            and issubclass(field_annotation, BaseModel)
+            and field_annotation is not BaseModel
+        )
+
+        if is_basemodel_subclass:
+            # Recursively get fields from the nested model
+            nested_fields = _extract_fields_recursive(
+                cast(Type[BaseModel], field_annotation), depth + 1
+            )
+            fields[field_name] = {
+                "description": description,
+                "required": required,
+                "type": "nested",
+                "fields": nested_fields,
+            }
+        else:
+            # Determine the field type from annotation
+            field_type = _get_field_type_from_annotation(field_annotation)
+
+            # Check for custom UI type override
+            field_json_schema_extra = getattr(field, "json_schema_extra", {})
+            if field_json_schema_extra and "ui_type" in field_json_schema_extra:
+                field_type = field_json_schema_extra["ui_type"].value
+            elif field_json_schema_extra and "type" in field_json_schema_extra:
+                field_type = field_json_schema_extra["type"]
+
+            # Add the field to the dictionary
+            field_dict = {
+                "description": description,
+                "required": required,
+                "type": field_type,
+            }
+
+            # Extract options from type annotations
+            if field_type == "dict":
+                # For Dict[Literal[...], T] types, extract key options
+                dict_key_options = _get_dict_key_options(field_annotation)
+                if dict_key_options:
+                    field_dict["dict_key_options"] = dict_key_options
+
+                # Extract value type for the dict values
+                dict_value_type = _get_dict_value_type(field_annotation)
+                field_dict["dict_value_type"] = dict_value_type
+
+            elif field_type == "array":
+                # For List[Literal[...]] types, extract element options
+                list_element_options = _get_list_element_options(field_annotation)
+                if list_element_options:
+                    field_dict["options"] = list_element_options
+                    field_dict["type"] = "multiselect"
+
+            # Add options if they exist in json_schema_extra (this takes precedence)
+            if field_json_schema_extra and "options" in field_json_schema_extra:
+                field_dict["options"] = field_json_schema_extra["options"]
+
+            # Add default value if it exists
+            if field.default is not None and field.default is not ...:
+                field_dict["default_value"] = field.default
+
+            fields[field_name] = field_dict
+
+    return fields
+
+
 def _get_fields_from_model(model_class: Type[BaseModel]) -> Dict[str, Any]:
     """
     Get the fields from a Pydantic model as a nested dictionary structure
     """
-    import inspect
-
-    def _extract_fields_recursive(
-        model: Type[BaseModel],
-        depth: int = 0,
-    ) -> Dict[str, Any]:
-        # Check if we've exceeded the maximum recursion depth
-        if depth > DEFAULT_MAX_RECURSE_DEPTH:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing model fields. Please check the model structure for excessive nesting.",
-            )
-
-        fields = {}
-
-        for field_name, field in model.model_fields.items():
-            # Get field metadata
-            description = field.description or field_name
-
-            # Check if this field is required
-            required = field.is_required()
-
-            # Check if the field annotation is a BaseModel subclass
-            field_annotation = field.annotation
-
-            # Handle Optional types and get the actual type
-            if field_annotation is None:
-                continue
-
-            if (
-                hasattr(field_annotation, "__origin__")
-                and field_annotation.__origin__ is Union
-                and hasattr(field_annotation, "__args__")
-            ):
-                # For Optional[BaseModel], get the non-None type
-                args = field_annotation.__args__
-                non_none_args = [arg for arg in args if arg is not type(None)]
-                if non_none_args:
-                    field_annotation = non_none_args[0]
-
-            # Check if this is a BaseModel subclass
-            is_basemodel_subclass = (
-                inspect.isclass(field_annotation)
-                and issubclass(field_annotation, BaseModel)
-                and field_annotation is not BaseModel
-            )
-
-            if is_basemodel_subclass:
-                # Recursively get fields from the nested model
-                nested_fields = _extract_fields_recursive(
-                    cast(Type[BaseModel], field_annotation), depth + 1
-                )
-                fields[field_name] = {
-                    "description": description,
-                    "required": required,
-                    "type": "nested",
-                    "fields": nested_fields,
-                }
-            else:
-                # Determine the field type from annotation
-                field_type = _get_field_type_from_annotation(field_annotation)
-
-                # Check for custom UI type override
-                field_json_schema_extra = getattr(field, "json_schema_extra", {})
-                if field_json_schema_extra and "ui_type" in field_json_schema_extra:
-                    field_type = field_json_schema_extra["ui_type"].value
-                elif field_json_schema_extra and "type" in field_json_schema_extra:
-                    field_type = field_json_schema_extra["type"]
-
-                # Add the field to the dictionary
-                field_dict = {
-                    "description": description,
-                    "required": required,
-                    "type": field_type,
-                }
-
-                # Extract options from type annotations
-                if field_type == "dict":
-                    # For Dict[Literal[...], T] types, extract key options
-                    dict_key_options = _get_dict_key_options(field_annotation)
-                    if dict_key_options:
-                        field_dict["dict_key_options"] = dict_key_options
-
-                    # Extract value type for the dict values
-                    dict_value_type = _get_dict_value_type(field_annotation)
-                    field_dict["dict_value_type"] = dict_value_type
-
-                elif field_type == "array":
-                    # For List[Literal[...]] types, extract element options
-                    list_element_options = _get_list_element_options(field_annotation)
-                    if list_element_options:
-                        field_dict["options"] = list_element_options
-                        field_dict["type"] = "multiselect"
-
-                # Add options if they exist in json_schema_extra (this takes precedence)
-                if field_json_schema_extra and "options" in field_json_schema_extra:
-                    field_dict["options"] = field_json_schema_extra["options"]
-
-                # Add default value if it exists
-                if field.default is not None and field.default is not ...:
-                    field_dict["default_value"] = field.default
-
-                fields[field_name] = field_dict
-
-        return fields
 
     return _extract_fields_recursive(model_class, depth=0)
 
@@ -944,6 +965,8 @@ async def get_provider_specific_params():
 
         if guardrail_config_model:
             fields = _get_fields_from_model(guardrail_config_model)
+            ui_friendly_name = guardrail_config_model.ui_friendly_name()
+            fields["ui_friendly_name"] = ui_friendly_name
             provider_params[guardrail_name] = fields
 
     return provider_params

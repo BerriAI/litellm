@@ -80,3 +80,7 @@ class AzureContentSafetyTextModerationConfigModel(
     optional_params: AzureTextModerationOptionalParams = Field(
         description="Optional parameters for the Azure Content Safety Text Moderation guardrail",
     )
+
+    @staticmethod
+    def ui_friendly_name() -> str:
+        return "Azure Content Safety Text Moderation"

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Card, Form, Typography, Select, Input, Switch, Tooltip, Modal, message, Divider, Space, Tag, Image, Steps } from 'antd';
 import { Button, TextInput } from '@tremor/react';
 import type { FormInstance } from 'antd';
-import { GuardrailProviders, guardrail_provider_map, shouldRenderPIIConfigSettings, guardrailLogoMap } from './guardrail_info_helpers';
+import { GuardrailProviders, guardrail_provider_map, shouldRenderPIIConfigSettings, guardrailLogoMap, populateGuardrailProviders, populateGuardrailProviderMap, getGuardrailProviders } from './guardrail_info_helpers';
 import { createGuardrailCall, getGuardrailUISettings, getGuardrailProviderSpecificParams } from '../networking';
 import PiiConfiguration from './pii_configuration';
 import GuardrailProviderFields from './guardrail_provider_fields';
@@ -95,6 +95,10 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
 
         setGuardrailSettings(uiSettings);
         setProviderParams(providerParamsResp);
+        
+        // Populate dynamic providers from API response
+        populateGuardrailProviders(providerParamsResp);
+        populateGuardrailProviderMap(providerParamsResp);
       } catch (error) {
         console.error('Error fetching guardrail data:', error);
         message.error('Failed to load guardrail configuration');
@@ -288,6 +292,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
       // Use pre-fetched provider params to copy recognised params
       if (providerParams && selectedProvider) {
         const providerKey = guardrail_provider_map[selectedProvider]?.toLowerCase();
+        console.log("providerKey: ", providerKey);
         const providerSpecificParams = providerParams[providerKey] || {};
         
         const allowedParams = new Set<string>();
@@ -368,7 +373,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
             dropdownRender={menu => menu}
             showSearch={true}
           >
-            {Object.entries(GuardrailProviders).map(([key, value]) => (
+            {Object.entries(getGuardrailProviders()).map(([key, value]) => (
               <Option 
                 key={key} 
                 value={key}
@@ -510,6 +515,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
   const renderOptionalParams = () => {
     if (!selectedProvider || !providerParams) return null;
     
+    console.log("guardrail_provider_map: ", guardrail_provider_map);
+    console.log("selectedProvider: ", selectedProvider);
     const providerKey = guardrail_provider_map[selectedProvider]?.toLowerCase();
     const providerFields = providerParams && providerParams[providerKey];
     

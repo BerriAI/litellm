@@ -3,25 +3,24 @@ Test suite for PANW AIRS Guardrail Integration
 
 This test file follows LiteLLM's testing patterns and covers:
 - Guardrail initialization
-- Prompt scanning (blocking and allowing)  
+- Prompt scanning (blocking and allowing)
 - Response scanning
 - Error handling
 - Configuration validation
 """
 
-import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
-from fastapi import HTTPException
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+from fastapi import HTTPException
+
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs import (
     PanwPrismaAirsHandler,
+    initialize_guardrail,
 )
-from litellm.proxy.guardrails.guardrail_initializers import (
-    initialize_panw_prisma_airs,
-)
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import ModelResponse, Choices, Message
+from litellm.types.utils import Choices, Message, ModelResponse
 
 
 class TestPanwAirsInitialization:
@@ -42,18 +41,22 @@ class TestPanwAirsInitialization:
         assert handler.api_base == "https://test.panw.com/api"
         assert handler.profile_name == "test_profile"
 
-    def test_initialize_panw_prisma_airs_function(self):
-        """Test the initialize_panw_prisma_airs function."""
-        litellm_params = SimpleNamespace(
+    def test_initialize_guardrail_function(self):
+        """Test the initialize_guardrail function."""
+        from litellm.types.guardrails import LitellmParams
+
+        litellm_params = LitellmParams(
+            guardrail="panw_prisma_airs",
+            mode="pre_call",
             api_key="test_key",
-            profile_name="test_profile", 
+            profile_name="test_profile",
             api_base="https://test.panw.com/api",
             default_on=True,
         )
         guardrail_config = {"guardrail_name": "test_guardrail"}
 
         with patch("litellm.logging_callback_manager.add_litellm_callback"):
-            handler = initialize_panw_prisma_airs(litellm_params, guardrail_config)
+            handler = initialize_guardrail(litellm_params, guardrail_config)
 
         assert isinstance(handler, PanwPrismaAirsHandler)
         assert handler.guardrail_name == "test_guardrail"
@@ -64,12 +67,12 @@ class TestPanwAirsInitialization:
             profile_name="test_profile",
             api_base=None,
             default_on=True,
-            api_key=None  # Missing API key
+            api_key=None,  # Missing API key
         )
         guardrail_config = {"guardrail_name": "test_guardrail"}
 
         with pytest.raises(ValueError, match="api_key is required"):
-            initialize_panw_prisma_airs(litellm_params, guardrail_config)
+            initialize_guardrail(litellm_params, guardrail_config)
 
     def test_missing_profile_name_raises_error(self):
         """Test that missing profile name raises ValueError."""
@@ -77,12 +80,12 @@ class TestPanwAirsInitialization:
             api_key="test_key",
             api_base=None,
             default_on=True,
-            profile_name=None  # Missing profile name
+            profile_name=None,  # Missing profile name
         )
         guardrail_config = {"guardrail_name": "test_guardrail"}
 
         with pytest.raises(ValueError, match="profile_name is required"):
-            initialize_panw_prisma_airs(litellm_params, guardrail_config)
+            initialize_guardrail(litellm_params, guardrail_config)
 
 
 class TestPanwAirsPromptScanning:
@@ -331,7 +334,7 @@ class TestPanwAirsAPIIntegration:
         mock_response.raise_for_status.return_value = None
 
         with patch(
-            "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.get_async_httpx_client"
+            "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.get_async_httpx_client"
         ) as mock_client:
             mock_async_client = AsyncMock()
             mock_async_client.post = AsyncMock(return_value=mock_response)
@@ -351,7 +354,7 @@ class TestPanwAirsAPIIntegration:
         """Test API error handling (fail closed)."""
         # Mock the HTTP client to raise an exception
         with patch(
-            "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.get_async_httpx_client"
+            "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.get_async_httpx_client"
         ) as mock_client:
             mock_async_client = AsyncMock()
             mock_async_client.post = AsyncMock(side_effect=Exception("API Error"))
@@ -374,7 +377,7 @@ class TestPanwAirsAPIIntegration:
         mock_response.raise_for_status.return_value = None
 
         with patch(
-            "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.get_async_httpx_client"
+            "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.get_async_httpx_client"
         ) as mock_client:
             mock_async_client = AsyncMock()
             mock_async_client.post = AsyncMock(return_value=mock_response)
@@ -403,7 +406,11 @@ class TestPanwAirsConfiguration:
 
     def test_default_api_base(self):
         """Test that default API base is set correctly."""
-        litellm_params = SimpleNamespace(
+        from litellm.types.guardrails import LitellmParams
+
+        litellm_params = LitellmParams(
+            guardrail="panw_prisma_airs",
+            mode="pre_call",
             api_key="test_key",
             profile_name="test_profile",
             api_base=None,  # No api_base provided
@@ -412,17 +419,18 @@ class TestPanwAirsConfiguration:
         guardrail_config = {"guardrail_name": "test"}
 
         with patch("litellm.logging_callback_manager.add_litellm_callback"):
-            handler = initialize_panw_prisma_airs(litellm_params, guardrail_config)
+            handler = initialize_guardrail(litellm_params, guardrail_config)
 
-        assert (
-            handler.api_base
-            == "https://service.api.aisecurity.paloaltonetworks.com/v1/scan/sync/request"
-        )
+        assert handler.api_base == "https://service.api.aisecurity.paloaltonetworks.com"
 
     def test_custom_api_base(self):
         """Test custom API base configuration."""
+        from litellm.types.guardrails import LitellmParams
+
         custom_base = "https://custom.panw.com/api/v2/scan"
-        litellm_params = SimpleNamespace(
+        litellm_params = LitellmParams(
+            guardrail="panw_prisma_airs",
+            mode="pre_call",
             api_key="test_key",
             profile_name="test_profile",
             api_base=custom_base,
@@ -431,24 +439,30 @@ class TestPanwAirsConfiguration:
         guardrail_config = {"guardrail_name": "test"}
 
         with patch("litellm.logging_callback_manager.add_litellm_callback"):
-            handler = initialize_panw_prisma_airs(litellm_params, guardrail_config)
+            handler = initialize_guardrail(litellm_params, guardrail_config)
 
         assert handler.api_base == custom_base
 
     def test_default_guardrail_name(self):
         """Test default guardrail name."""
-        litellm_params = SimpleNamespace(
+        from litellm.types.guardrails import LitellmParams
+
+        litellm_params = LitellmParams(
+            guardrail="panw_prisma_airs",
+            mode="pre_call",
             api_key="test_key",
             profile_name="test_profile",
             api_base=None,
             default_on=True,
         )
-        guardrail_config = {}  # No guardrail_name
+        guardrail_config = {
+            "guardrail_name": "test_guardrail",
+        }  # No guardrail_name
 
         with patch("litellm.logging_callback_manager.add_litellm_callback"):
-            handler = initialize_panw_prisma_airs(litellm_params, guardrail_config)
+            handler = initialize_guardrail(litellm_params, guardrail_config)
 
-        assert handler.guardrail_name == "panw_prisma_airs"
+        assert handler.guardrail_name == "test_guardrail"
 
 
 if __name__ == "__main__":

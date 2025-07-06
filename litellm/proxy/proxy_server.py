@@ -2828,7 +2828,7 @@ class ProxyConfig:
             )
             for guardrail in guardrails_in_db:
                 IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
-                    guardrail=dict(guardrail),
+                    guardrail=cast(Guardrail, guardrail),
                 )
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -2978,6 +2978,7 @@ async def initialize(  # noqa: PLR0915
 ):
     global user_model, user_api_base, user_debug, user_detailed_debug, user_user_max_tokens, user_request_timeout, user_temperature, user_telemetry, user_headers, experimental, llm_model_list, llm_router, general_settings, master_key, user_custom_auth, prisma_client
     from litellm.proxy.common_utils.banner import show_banner
+
     show_banner()
     if os.getenv("LITELLM_DONT_SHOW_FEEDBACK_BOX", "").lower() != "true":
         generate_feedback_box()

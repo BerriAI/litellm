@@ -7,7 +7,7 @@
 import asyncio
 import json
 import os
-from typing import Any, AsyncGenerator, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Literal, Optional, Type, Union
 
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -22,7 +22,6 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.proxy_server import StreamingCallbackError
 from litellm.types.utils import (
     Choices,
     EmbeddingResponse,
@@ -30,6 +29,9 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
 )
+
+if TYPE_CHECKING:
+    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
 class AimGuardrailMissingSecrets(Exception):
@@ -313,6 +315,8 @@ class AimGuardrail(CustomGuardrail):
                     if result.get("done"):
                         return
                     if blocking_message := result.get("blocking_message"):
+                        from litellm.proxy.proxy_server import StreamingCallbackError
+
                         raise StreamingCallbackError(blocking_message)
                     verbose_proxy_logger.error(
                         f"Unknown message received from AIM: {result}"
@@ -334,3 +338,11 @@ class AimGuardrail(CustomGuardrail):
 
     def _set_dlp_entities(self, entities: list[dict]) -> None:
         self.dlp_entities = entities[: self._max_dlp_entities]
+
+    @staticmethod
+    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+        from litellm.types.proxy.guardrails.guardrail_hooks.aim import (
+            AimGuardrailConfigModel,
+        )
+
+        return AimGuardrailConfigModel

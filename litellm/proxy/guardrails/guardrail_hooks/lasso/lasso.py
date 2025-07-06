@@ -6,7 +6,7 @@
 # +-------------------------------------------------------------+
 
 import os
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Union
 
 from fastapi import HTTPException
 
@@ -21,6 +21,9 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+
+if TYPE_CHECKING:
+    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
 class LassoGuardrailMissingSecrets(Exception):
@@ -37,6 +40,7 @@ class LassoGuardrail(CustomGuardrail):
     def __init__(
         self,
         lasso_api_key: Optional[str] = None,
+        api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         user_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
@@ -45,7 +49,7 @@ class LassoGuardrail(CustomGuardrail):
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
-        self.lasso_api_key = lasso_api_key or os.environ.get("LASSO_API_KEY")
+        self.lasso_api_key = lasso_api_key or api_key or os.environ.get("LASSO_API_KEY")
         self.user_id = user_id or os.environ.get("LASSO_USER_ID")
         self.conversation_id = conversation_id or os.environ.get(
             "LASSO_CONVERSATION_ID"
@@ -58,7 +62,9 @@ class LassoGuardrail(CustomGuardrail):
             )
             raise LassoGuardrailMissingSecrets(msg)
 
-        self.api_base = api_base or "https://server.lasso.security/gateway/v2/classify"
+        self.api_base = (
+            api_base or os.getenv("LASSO_API_BASE") or "https://server.lasso.security"
+        )
         super().__init__(**kwargs)
 
     @log_guardrail_information
@@ -169,7 +175,7 @@ class LassoGuardrail(CustomGuardrail):
         """Call the Lasso API and return the response."""
         verbose_proxy_logger.debug(f"Sending request to Lasso API: {payload}")
         response = await self.async_handler.post(
-            url=self.api_base,
+            url=f"{self.api_base}/gateway/v2/classify",
             headers=headers,
             json=payload,
             timeout=10.0,
@@ -203,3 +209,11 @@ class LassoGuardrail(CustomGuardrail):
                 if is_violated:
                     violated_deputies.append(deputy)
         return violated_deputies
+
+    @staticmethod
+    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+        from litellm.types.proxy.guardrails.guardrail_hooks.lasso import (
+            LassoGuardrailConfigModel,
+        )
+
+        return LassoGuardrailConfigModel

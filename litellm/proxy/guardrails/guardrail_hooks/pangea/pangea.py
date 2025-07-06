@@ -1,6 +1,6 @@
 # litellm/proxy/guardrails/guardrail_hooks/pangea.py
 import os
-from typing import Any, Optional, Protocol
+from typing import TYPE_CHECKING, Any, Optional, Protocol, Type
 
 from fastapi import HTTPException
 
@@ -10,7 +10,6 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -22,6 +21,9 @@ from litellm.proxy.common_utils.callback_utils import (
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import LLMResponseTypes, ModelResponse, TextCompletionResponse
 
+if TYPE_CHECKING:
+    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+
 
 class PangeaGuardrailMissingSecrets(Exception):
     """Custom exception for missing Pangea secrets."""
@@ -30,10 +32,10 @@ class PangeaGuardrailMissingSecrets(Exception):
 
 
 class _Transformer(Protocol):
-    def get_messages(self) -> list[dict]:
+    def get_messages(self) -> list[dict]:  # noqa: E704
         ...
 
-    def update_original_body(self, prompt_messages: list[dict]) -> Any:
+    def update_original_body(self, prompt_messages: list[dict]) -> Any:  # noqa: E704
         ...
 
 
@@ -397,3 +399,11 @@ class PangeaHandler(CustomGuardrail):
                     "exceptions": str(e),
                 },
             ) from e
+
+    @staticmethod
+    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+        from litellm.types.proxy.guardrails.guardrail_hooks.pangea import (
+            PangeaGuardrailConfigModel,
+        )
+
+        return PangeaGuardrailConfigModel
