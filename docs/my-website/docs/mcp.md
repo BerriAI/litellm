@@ -180,8 +180,7 @@ You can choose to access specific MCP servers and only list their tools using th
 - Limit tool access to one or more specific MCP servers
 - Control which tools are available in different environments or use cases
 
-The header accepts either:
-1. A comma-separated list of server names: `"Zapier_Gmail,Server2,Server3"`
+The header accepts a comma-separated list of server names: `"Zapier_Gmail,Server2,Server3"`
 
 Notes:
 - Server names with spaces should be replaced with underscores
