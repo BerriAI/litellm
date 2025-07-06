@@ -311,7 +311,7 @@ class GuardrailRegistry:
 
             guardrails: List[Guardrail] = []
             for guardrail in guardrails_from_db:
-                guardrails.append(Guardrail(**(dict(guardrail))))
+                guardrails.append(Guardrail(**(dict(guardrail))))  # type: ignore
 
             return guardrails
         except Exception as e:
@@ -331,7 +331,7 @@ class GuardrailRegistry:
             if not guardrail:
                 return None
 
-            return Guardrail(**(dict(guardrail)))
+            return Guardrail(**(dict(guardrail)))  # type: ignore
         except Exception as e:
             raise Exception(f"Error getting guardrail from DB: {str(e)}")
 
@@ -349,7 +349,7 @@ class GuardrailRegistry:
             if not guardrail:
                 return None
 
-            return Guardrail(**(dict(guardrail)))
+            return Guardrail(**(dict(guardrail)))  # type: ignore
         except Exception as e:
             raise Exception(f"Error getting guardrail from DB: {str(e)}")
 
