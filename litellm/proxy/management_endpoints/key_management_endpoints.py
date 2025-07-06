@@ -665,6 +665,7 @@ async def generate_service_account_key_fn(
 
     Why use a service account key?
     - Prevent key from being deleted when user is deleted.
+    - Apply team limits, not team member limits to key.
 
     Docs: https://docs.litellm.ai/docs/proxy/virtual_keys
 
