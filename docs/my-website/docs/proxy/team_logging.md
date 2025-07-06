@@ -22,7 +22,7 @@ Team 3 -> Disabled Logging (for GDPR compliance)
 - `arize`
 
 
-## [BETA] Team Logging via API 
+## [BETA] Team Logging
 
 :::info
 
@@ -30,7 +30,54 @@ Team 3 -> Disabled Logging (for GDPR compliance)
 
 :::
 
+### UI Usage
 
+1. Create a Team with Logging Settings
+
+Create a team called "AI Agents"
+<Image 
+  img={require('../../img/team_logging1.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+<br />
+
+
+2. Create a Key for the Team
+
+We will create a key for the team "AI Agents". The team logging settings will be used for all keys created for the team.
+
+<Image 
+  img={require('../../img/team_logging2.png')}
+  style={{width: '80%', display: 'block', margin: '2rem auto', border: '1px solid #E5E7EB'}}
+/>
+
+<br />
+
+
+3. Make a test LLM API Request 
+
+Use the new key to make a test LLM API Request, we expect to see the logs on your logging provider configured in step 1.
+
+<Image 
+  img={require('../../img/team_logging3.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+<br />
+
+4. Check Logs on your Logging Provider 
+
+Navigate to your configured logging provider and check if you received the logs from step 2.
+
+<Image 
+  img={require('../../img/team_logging4.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+<br />
+
+### API Usage
 ### Set Callbacks Per Team
 
 #### 1. Set callback for team 
@@ -205,10 +252,50 @@ Use the `/key/generate` or `/key/update` endpoints to add logging callbacks to a
 
 :::
 
-### How key based logging works:
+**How key based logging works:**
 
 - If **Key has no callbacks** configured, it will use the default callbacks specified in the config.yaml file
 - If **Key has callbacks** configured, it will use the callbacks specified in the key
+
+
+### UI Usage 
+
+1. Create a Key with Logging Settings
+
+When creating a key, you can configure the specific logging settings for the key. These logging settings will be used for all requests made with this key.
+
+<Image 
+  img={require('../../img/key_logging.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+<br />
+
+
+2. Make a test LLM API Request 
+
+Use the new key to make a test LLM API Request, we expect to see the logs on your logging provider configured in step 1.
+
+<Image 
+  img={require('../../img/key_logging2.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+<br />
+
+3. Check Logs on your Logging Provider 
+
+Navigate to your configured logging provider and check if you received the logs from step 2.
+
+<Image 
+  img={require('../../img/key_logging_arize.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+<br />
+
+### API Usage
+
+
 
 <Tabs>
 <TabItem label="Langfuse" value="langfuse">
