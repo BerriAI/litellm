@@ -381,6 +381,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_DELETE,
         KeyManagementRoutes.KEY_INFO,
         KeyManagementRoutes.KEY_REGENERATE,
+        KeyManagementRoutes.KEY_GENERATE_SERVICE_ACCOUNT,
         KeyManagementRoutes.KEY_REGENERATE_WITH_PATH_PARAM,
         KeyManagementRoutes.KEY_LIST,
         KeyManagementRoutes.KEY_BLOCK,
