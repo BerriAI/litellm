@@ -17,9 +17,9 @@ Team 3 -> Disabled Logging (for GDPR compliance)
 
 ## Supported Logging Integrations
 - `langfuse`
+- `arize`
 - `gcs_bucket`
 - `langsmith`
-- `arize`
 
 
 ## [BETA] Team Logging
@@ -34,7 +34,8 @@ Team 3 -> Disabled Logging (for GDPR compliance)
 
 1. Create a Team with Logging Settings
 
-Create a team called "AI Agents"
+Create a team called "AI Agents" on LiteLLM. We will connect this team's Logging settings to the specific Arize project (space) for the AI Agents team.
+
 <Image 
   img={require('../../img/team_logging1.png')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
