@@ -1,4 +1,6 @@
-from typing import Any, Dict, List, TypedDict
+from typing import Any, Dict, List
+
+from typing_extensions import TypedDict
 
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
