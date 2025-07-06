@@ -372,7 +372,7 @@ class InMemoryGuardrailHandler:
 
     def initialize_guardrail(
         self,
-        guardrail: Dict,
+        guardrail: Guardrail,
         config_file_path: Optional[str] = None,
     ) -> Optional[Guardrail]:
         """
@@ -392,7 +392,10 @@ class InMemoryGuardrailHandler:
         litellm_params_data = guardrail["litellm_params"]
         verbose_proxy_logger.debug("litellm_params= %s", litellm_params_data)
 
-        litellm_params = LitellmParams(**litellm_params_data)
+        if isinstance(litellm_params_data, dict):
+            litellm_params = LitellmParams(**litellm_params_data)
+        else:
+            litellm_params = litellm_params_data
 
         if (
             "category_thresholds" in litellm_params_data
@@ -421,7 +424,7 @@ class InMemoryGuardrailHandler:
             custom_guardrail_callback = initializer(litellm_params, guardrail)
         elif isinstance(guardrail_type, str) and "." in guardrail_type:
             custom_guardrail_callback = self.initialize_custom_guardrail(
-                guardrail=guardrail,
+                guardrail=cast(dict, guardrail),
                 guardrail_type=guardrail_type,
                 litellm_params=litellm_params,
                 config_file_path=config_file_path,
