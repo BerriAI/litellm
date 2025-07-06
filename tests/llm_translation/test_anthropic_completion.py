@@ -30,7 +30,6 @@ from litellm import (
     Router,
     adapter_completion,
 )
-from litellm.llms.anthropic.completion.transformation import AnthropicTextConfig
 from litellm.types.llms.anthropic import AnthropicResponse
 from litellm.types.utils import GenericStreamingChunk, ChatCompletionToolCallChunk
 from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
@@ -1343,7 +1342,6 @@ def test_anthropic_prefix_prompt():
     print(f"response: {response}")
     assert response is not None
     assert response.choices[0].message.content.startswith("Argentina")
-
 
 
 @pytest.mark.asyncio
