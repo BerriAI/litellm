@@ -85,6 +85,7 @@ const Settings: React.FC<SettingsPageProps> = ({
   const [alerts, setAlerts] = useState<any[]>([]);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [form] = Form.useForm();
+  const [editForm] = Form.useForm();
   const [selectedCallback, setSelectedCallback] = useState<string | null>(null);
   const [catchAllWebhookURL, setCatchAllWebhookURL] = useState<string>("");
   const [alertToWebhooks, setAlertToWebhooks] = useState<
@@ -155,7 +156,7 @@ const Settings: React.FC<SettingsPageProps> = ({
   };
 
   const updateCallbackCall = async (formValues: Record<string, any>) => {
-    if (!accessToken) {
+    if (!accessToken || !selectedEditCallback) {
       return;
     }
 
@@ -166,18 +167,28 @@ const Settings: React.FC<SettingsPageProps> = ({
         env_vars[key] = value;
       }
     });
+    
+    // Include the callback in the litellm_settings
     let payload = {
       environment_variables: env_vars,
+      litellm_settings: {
+        success_callback: [selectedEditCallback.name],
+      },
     };
 
     try {
       await setCallbacksCall(accessToken, payload);
-      message.success(`Callback added successfully`);
-      setIsModalVisible(false);
-      form.resetFields();
-      setSelectedCallback(null);
+      message.success(`Callback ${selectedEditCallback.name} updated successfully`);
+      setShowEditCallback(false);
+      editForm.resetFields();
+      
+      // Refresh the callbacks list
+      if (userID && userRole) {
+        const data = await getCallbacksCall(accessToken, userID, userRole);
+        setCallbacks(data.callbacks);
+      }
     } catch (error) {
-      message.error("Failed to add callback: " + error, 20);
+      message.error("Failed to update callback: " + error, 20);
     }
   };
 
@@ -438,6 +449,10 @@ const Settings: React.FC<SettingsPageProps> = ({
                                 size="sm"
                                 onClick={() => {
                                   setSelectedEditCallback(callback);
+                                  // Set form values when opening the edit modal
+                                  if (callback.variables) {
+                                    editForm.setFieldsValue(callback.variables);
+                                  }
                                   setShowEditCallback(true);
                                 }}
                               />
@@ -674,25 +689,50 @@ const Settings: React.FC<SettingsPageProps> = ({
         visible={showEditCallback}
         width={800}
         title={`Edit ${selectedEditCallback?.name} Settings`}
-        onCancel={() => setShowEditCallback(false)}
+        onCancel={() => {
+          setShowEditCallback(false);
+          editForm.resetFields();
+          setSelectedEditCallback(null);
+        }}
         footer={null}
       >
         <Form
-          form={form}
+          form={editForm}
           onFinish={updateCallbackCall}
           labelCol={{ span: 8 }}
           wrapperCol={{ span: 16 }}
           labelAlign="left"
+          initialValues={selectedEditCallback?.variables || {}}
         >
           <>
             {selectedEditCallback &&
               selectedEditCallback.variables &&
               Object.entries(selectedEditCallback.variables).map(
-                ([param, value]) => (
-                  <FormItem label={param} name={param} key={param}>
-                    <TextInput type="password" defaultValue={value as string} />
-                  </FormItem>
-                )
+                ([param, value]) => {
+                  // Format the label to be more user-friendly
+                  const formattedLabel = param
+                    .replace(/_/g, ' ')
+                    .replace(/\b\w/g, (l) => l.toUpperCase());
+                  
+                  return (
+                    <FormItem 
+                      label={formattedLabel} 
+                      name={param} 
+                      key={param}
+                      rules={[
+                        {
+                          required: true,
+                          message: `Please enter the value for ${formattedLabel}`,
+                        },
+                      ]}
+                    >
+                      <TextInput 
+                        type={param.toLowerCase().includes('key') || param.toLowerCase().includes('secret') ? 'password' : 'text'} 
+                        placeholder={`Enter ${formattedLabel}`}
+                      />
+                    </FormItem>
+                  );
+                }
               )}
           </>
 
