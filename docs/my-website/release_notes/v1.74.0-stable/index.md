@@ -48,6 +48,18 @@ pip install litellm==1.74.0.post1
 
 ### Azure Content Safety Guardrails
 
+<Image 
+  img={require('../../img/azure_content_safety_guardrails.jpg')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+<br />
+
+
+LiteLLM now supports **Azure Content Safety Guardrails** for Prompt Injection and Text Moderation. This is **great for internal chat-ui** use cases, as you can now create guardrails with detection for Azure’s Harm Categories, specify custom severity thresholds and run them across 100+ LLMs for just that use-case (or across all your calls). 
+
+[Get Started](../../docs/proxy/guardrails/azure_content_guardrail)
+
 ### MCP Gateway: Segregate MCP tools
 
 MCP Server Segregation is now supported on LiteLLM. This means you can specify the `x-mcp-servers` header to specify which servers to list tools from. This is useful when you want to request tools from only a subset of configured servers — enabling curated toolsets and cleaner control.
