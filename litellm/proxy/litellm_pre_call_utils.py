@@ -800,6 +800,48 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     ### END-USER SPECIFIC PARAMS ###
     if user_api_key_dict.allowed_model_region is not None:
         data["allowed_model_region"] = user_api_key_dict.allowed_model_region
+
+    # Required headers validation - User level
+    user_metadata = getattr(user_api_key_dict, 'user_metadata', None) or {}
+    if "required_headers" in user_metadata and user_metadata["required_headers"] is not None:
+        required_headers = user_metadata["required_headers"]
+        request_headers = dict(request.headers)
+
+        for header_name, required_value in required_headers.items():
+            actual_value = request_headers.get(header_name.lower())
+            if isinstance(required_value, list):
+                if actual_value not in required_value:
+                    raise ProxyException(
+                        message=f"Request blocked: Header '{header_name}' with value '{actual_value}' is not in allowed values, expected one of: {required_value}",
+                        type="authentication_error",
+                        code=403,
+                        param=header_name,
+                    )
+            elif isinstance(required_value, str):
+                if "*" in required_value:
+                    if not fnmatch.fnmatch(actual_value or "", required_value):
+                        raise ProxyException(
+                            message=f"Request blocked: Header '{header_name}' with value '{actual_value}' does not match pattern '{required_value}'",
+                            type="authentication_error",
+                            code=403,
+                            param=header_name,
+                        )
+                elif actual_value != required_value:
+                    raise ProxyException(
+                        message=f"Request blocked: Header '{header_name}' with value '{actual_value}' does not match required value '{required_value}'",
+                        type="authentication_error",
+                        code=403,
+                        param=header_name,
+                    )
+            else:
+                if actual_value != required_value:
+                    raise ProxyException(
+                        message=f"Request blocked: Header '{header_name}' with value '{actual_value}' does not match required value '{required_value}'",
+                        type="authentication_error",
+                        code=403,
+                        param=header_name,
+                    )
+
     start_time = time.time()
     ## [Enterprise Only]
     # Add User-IP Address
@@ -834,6 +876,30 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     if tags is not None:
         data[_metadata_variable_name]["tags"] = tags
+
+    # Tag-based request blocking
+    if llm_router is not None and hasattr(llm_router, 'required_tags') and llm_router.required_tags is not None:
+        required_tags = llm_router.required_tags
+        if isinstance(required_tags, str):
+            required_tags = [required_tags]
+        
+        request_tags = tags or []
+        
+        # Check if request has at least one of the required tags
+        has_required_tag = False
+        if request_tags:
+            for tag in request_tags:
+                if tag in required_tags:
+                    has_required_tag = True
+                    break
+        
+        if not has_required_tag:
+            raise ProxyException(
+                message=f"Request blocked: Missing required tag. Request tags: {request_tags}, Required tags: {required_tags}",
+                type="authentication_error",
+                code=403,
+                param="tags",
+            )
 
     # Team Callbacks controls
     callback_settings_obj = _get_dynamic_logging_metadata(

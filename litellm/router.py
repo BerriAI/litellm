@@ -224,6 +224,7 @@ class Router:
         ] = {},
         enable_pre_call_checks: bool = False,
         enable_tag_filtering: bool = False,
+        required_tags: Optional[Union[str, List[str]]] = None,
         retry_after: int = 0,  # min time to wait before retrying a failed request
         retry_policy: Optional[
             Union[RetryPolicy, dict]
@@ -334,6 +335,7 @@ class Router:
         self.debug_level = debug_level
         self.enable_pre_call_checks = enable_pre_call_checks
         self.enable_tag_filtering = enable_tag_filtering
+        self.required_tags = required_tags
         litellm.suppress_debug_info = True  # prevents 'Give Feedback/Get help' message from being emitted on Router - Relevant Issue: https://github.com/BerriAI/litellm/issues/5942
         if self.set_verbose is True:
             if debug_level == "INFO":
