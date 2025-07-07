@@ -519,7 +519,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                           index="date"
                           categories={["metrics.spend"]}
                           colors={["cyan"]}
-                          valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
+                          valueFormatter={valueFormatterSpend}
                           yAxisWidth={100}
                           showLegend={false}
                           customTooltip={({ payload, active }) => {
