@@ -17,10 +17,14 @@ import {
   getPossibleUserRoles,
   userListCall,
   UserListResponse,
+  invitationCreateCall,
+  getProxyBaseUrl,
 } from "./networking";
 import { Button } from "@tremor/react";
 import CreateUser from "./create_user_button";
 import EditUserModal from "./edit_user";
+import OnboardingModal from "./onboarding_link";
+import { InvitationLink } from "./onboarding_link";
 
 import { userDeleteCall } from "./networking";
 import { columns } from "./view_users/columns";
@@ -88,6 +92,12 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const [filters, setFilters] = useState<FilterState>(initialFilters);
   const [debouncedFilters, setDebouncedFilters, debouncer] = useDebouncedState(filters, { wait: 300 })
   const [showFilters, setShowFilters] = useState(false);
+  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] =
+    useState(false);
+  const [invitationLinkData, setInvitationLinkData] =
+    useState<InvitationLink | null>(null);
+  const [baseUrl, setBaseUrl] = useState<string | null>(null);
+
   const handleDelete = (userId: string) => {
     setUserToDelete(userId);
     setIsDeleteModalOpen(true);
@@ -98,6 +108,10 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       debouncer.cancel()
     }
   }, [debouncer])
+
+  useEffect(() => {
+    setBaseUrl(getProxyBaseUrl());
+  }, []);
 
   const updateFilters = (update: Partial<FilterState>) => {
     setFilters((previousFilters) => {
@@ -111,6 +125,20 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     updateFilters({ sort_by: sortBy, sort_order: sortOrder });
   };
 
+  const handleResetPassword = async (userId: string) => {
+    if (!accessToken) {
+      message.error("Access token not found");
+      return;
+    }
+    try {
+      message.success("Generating password reset link...");
+      const data = await invitationCreateCall(accessToken, userId);
+      setInvitationLinkData(data);
+      setIsInvitationLinkModalVisible(true);
+    } catch (error) {
+      message.error("Failed to generate password reset link");
+    }
+  };
 
   const confirmDelete = async () => {
     if (userToDelete && accessToken) {
@@ -226,7 +254,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       setSelectedUser(user);
       setEditModalVisible(true);
     },
-    handleDelete
+    handleDelete,
+    handleResetPassword,
+    () => {} // placeholder function, will be overridden in UserDataTable
   );
 
   return (
@@ -456,6 +486,12 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                   sortOrder: filters.sort_order
                 }}
                 possibleUIRoles={possibleUIRoles}
+                handleEdit={(user) => {
+                  setSelectedUser(user);
+                  setEditModalVisible(true);
+                }}
+                handleDelete={handleDelete}
+                handleResetPassword={handleResetPassword}
               />
             </div>
           </TabPanel>
@@ -523,6 +559,14 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           </div>
         </div>
       )}
+
+      <OnboardingModal
+        isInvitationLinkModalVisible={isInvitationLinkModalVisible}
+        setIsInvitationLinkModalVisible={setIsInvitationLinkModalVisible}
+        baseUrl={baseUrl || ""}
+        invitationLinkData={invitationLinkData}
+        modalType="resetPassword"
+      />
     </div>
   );
 };

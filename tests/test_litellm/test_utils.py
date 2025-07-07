@@ -38,6 +38,45 @@ def test_get_optional_params_image_gen():
     assert optional_params["n"] == 3
 
 
+def test_get_optional_params_image_gen_vertex_ai_size():
+    """Test that Vertex AI image generation properly handles size parameter and maps it to aspectRatio"""
+    # Test with various size parameters
+    test_cases = [
+        ("1024x1024", "1:1"),  # Square aspect ratio
+        ("256x256", "1:1"),  # Square aspect ratio
+        ("512x512", "1:1"),  # Square aspect ratio
+        ("1792x1024", "16:9"),  # Landscape aspect ratio
+        ("1024x1792", "9:16"),  # Portrait aspect ratio
+        ("unsupported", "1:1"),  # Default to square for unsupported sizes
+    ]
+
+    for size_input, expected_aspect_ratio in test_cases:
+        optional_params = get_optional_params_image_gen(
+            model="vertex_ai/imagegeneration@006",
+            size=size_input,
+            n=2,
+            custom_llm_provider="vertex_ai",
+            drop_params=True,
+        )
+        assert optional_params is not None
+        assert optional_params["aspectRatio"] == expected_aspect_ratio
+        assert optional_params["sampleCount"] == 2
+        assert "size" not in optional_params  # size should be converted to aspectRatio
+
+    # Test without size parameter
+    optional_params = get_optional_params_image_gen(
+        model="vertex_ai/imagegeneration@006",
+        n=1,
+        custom_llm_provider="vertex_ai",
+        drop_params=True,
+    )
+    assert optional_params is not None
+    assert (
+        "aspectRatio" not in optional_params
+    )  # aspectRatio should not be set if size is not provided
+    assert optional_params["sampleCount"] == 1
+
+
 def test_all_model_configs():
     from litellm.llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
         VertexAIAi21Config,
@@ -466,6 +505,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     },
                     "additionalProperties": False,
                 },
+                "citation_cost_per_token": {"type": "number"},
                 "supported_modalities": {
                     "type": "array",
                     "items": {
@@ -2008,6 +2048,30 @@ class TestProxyFunctionCalling:
                 ), f"Claude 3 model should support function calling: {model}"
             except Exception as e:
                 print(f"Could not test {model}: {e}")
+
+
+def test_register_model_with_scientific_notation():
+    """
+    Test that the register_model function can handle scientific notation in the model name.
+    """
+    model_cost_dict = {
+        "my-custom-model": {
+            "max_tokens": 8192,
+            "input_cost_per_token": "3e-07",
+            "output_cost_per_token": "6e-07",
+            "litellm_provider": "openai",
+            "mode": "chat",
+        },
+    }
+
+    litellm.register_model(model_cost_dict)
+
+    registered_model = litellm.model_cost["my-custom-model"]
+    print(registered_model)
+    assert registered_model["input_cost_per_token"] == 3e-07
+    assert registered_model["output_cost_per_token"] == 6e-07
+    assert registered_model["litellm_provider"] == "openai"
+    assert registered_model["mode"] == "chat"
 
 
 if __name__ == "__main__":

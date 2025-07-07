@@ -9,6 +9,7 @@ Log Proxy input, output, and exceptions using:
 - Langfuse
 - OpenTelemetry
 - GCS, s3, Azure (Blob) Buckets
+- AWS SQS
 - Lunary
 - MLflow
 - Deepeval
@@ -55,27 +56,6 @@ components in your system, including in logging tools.
 
 
 ## Logging Features
-
-### Conditional Logging by Virtual Keys, Teams
-
-Use this to:
-1. Conditionally enable logging for some virtual keys/teams
-2. Set different logging providers for different virtual keys/teams
-
-[👉 **Get Started** - Team/Key Based Logging](team_logging)
-
-
-### Redacting UserAPIKeyInfo 
-
-Redact information about the user api key (hashed token, user_id, team id, etc.), from logs. 
-
-Currently supported for Langfuse, OpenTelemetry, Logfire, ArizeAI logging.
-
-```yaml
-litellm_settings: 
-  callbacks: ["langfuse"]
-  redact_user_api_key_info: true
-```
 
 
 ### Redact Messages, Response Content
@@ -171,6 +151,18 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 
 <Image img={require('../../img/message_redaction_spend_logs.png')} />
 
+
+### Redacting UserAPIKeyInfo 
+
+Redact information about the user api key (hashed token, user_id, team id, etc.), from logs. 
+
+Currently supported for Langfuse, OpenTelemetry, Logfire, ArizeAI logging.
+
+```yaml
+litellm_settings: 
+  callbacks: ["langfuse"]
+  redact_user_api_key_info: true
+```
 
 ### Disable Message Redaction
 
@@ -268,6 +260,81 @@ print(response)
 ```
 LiteLLM.Info: "no-log request, skipping logging"
 ```
+
+### ✨ Dynamically Disable specific callbacks
+
+:::info
+
+This is an enterprise feature.
+
+[Proceed with LiteLLM Enterprise](https://www.litellm.ai/enterprise)
+
+:::
+
+For some use cases, you may want to disable specific callbacks for a request. You can do this by passing `x-litellm-disable-callbacks: <callback_name>` in the request headers.
+
+Send the list of callbacks to disable in the request header `x-litellm-disable-callbacks`.
+
+<Tabs>
+<TabItem value="Curl" label="Curl Request">
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'x-litellm-disable-callbacks: langfuse' \
+    --data '{
+    "model": "claude-sonnet-4-20250514",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+}'
+```
+
+</TabItem>
+<TabItem value="OpenAI" label="OpenAI Python SDK">
+
+```python
+import openai
+
+client = openai.OpenAI(
+    api_key="sk-1234",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="claude-sonnet-4-20250514",
+    messages=[
+        {
+            "role": "user",
+            "content": "what llm are you"
+        }
+    ],
+    extra_headers={
+        "x-litellm-disable-callbacks": "langfuse"
+    }
+)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
+
+### ✨ Conditional Logging by Virtual Keys, Teams
+
+Use this to:
+1. Conditionally enable logging for some virtual keys/teams
+2. Set different logging providers for different virtual keys/teams
+
+[👉 **Get Started** - Team/Key Based Logging](team_logging)
+
+
+
 
 
 ## What gets logged?
@@ -1317,6 +1384,75 @@ litellm_settings:
 ```
 
 On s3 bucket, you will see the object key as `my-test-path/my-team-alias/...`
+
+## AWS SQS
+
+
+| Property | Details |
+|----------|---------|
+| Description | Log LLM Input/Output to AWS SQS Queue |
+| AWS Docs on SQS | [AWS SQS](https://aws.amazon.com/sqs/) |
+| Fields Logged to SQS | LiteLLM [Standard Logging Payload is logged for each LLM call](../proxy/logging_spec) |
+
+
+Log LLM Logs to [AWS Simple Queue Service (SQS)](https://aws.amazon.com/sqs/)
+
+We will use the litellm `--config` to set 
+
+- `litellm.callbacks = ["aws_sqs"]` 
+
+This will log all successful LLM calls to AWS SQS Queue
+
+**Step 1** Set AWS Credentials in .env
+
+```shell
+AWS_ACCESS_KEY_ID = ""
+AWS_SECRET_ACCESS_KEY = ""
+AWS_REGION_NAME = ""
+```
+
+**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `callbacks`
+
+```yaml
+model_list:
+ - model_name: gpt-4o
+    litellm_params:
+      model: gpt-4o
+litellm_settings:
+  callbacks: ["aws_sqs"]
+  aws_sqs_callback_params:
+    sqs_queue_url: https://sqs.us-west-2.amazonaws.com/123456789012/my-queue   # AWS SQS Queue URL
+    sqs_region_name: us-west-2              # AWS Region Name for SQS
+    sqs_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID  # use os.environ/<variable name> to pass environment variables. This is AWS Access Key ID for SQS
+    sqs_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY  # AWS Secret Access Key for SQS
+    sqs_batch_size: 10  # [OPTIONAL] Number of messages to batch before sending (default: 10)
+    sqs_flush_interval: 30  # [OPTIONAL] Time in seconds to wait before flushing batch (default: 30)
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-4o",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
+```
+
 
 ## Azure Blob Storage
 

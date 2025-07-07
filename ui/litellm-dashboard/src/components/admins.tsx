@@ -44,6 +44,7 @@ import { InvitationLink } from "./onboarding_link";
 import SSOModals from "./SSOModals";
 import { ssoProviderConfigs } from './SSOModals';
 import SCIMConfig from "./SCIM";
+import UIAccessControlForm from "./UIAccessControlForm";
 
 interface AdminPanelProps {
   searchParams: any;
@@ -97,6 +98,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const [isAllowedIPModalVisible, setIsAllowedIPModalVisible] = useState(false);
   const [isAddIPModalVisible, setIsAddIPModalVisible] = useState(false);
   const [isDeleteIPModalVisible, setIsDeleteIPModalVisible] = useState(false);
+  const [isUIAccessControlModalVisible, setIsUIAccessControlModalVisible] = useState(false);
   const [allowedIPs, setAllowedIPs] = useState<string[]>([]);
   const [ipToDelete, setIPToDelete] = useState<string | null>(null);
   const [ssoConfigured, setSsoConfigured] = useState<boolean>(false);
@@ -532,6 +534,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
+  const handleUIAccessControlOk = () => {
+    setIsUIAccessControlModalVisible(false);
+  };
+
+  const handleUIAccessControlCancel = () => {
+    setIsUIAccessControlModalVisible(false);
+  };
+
   console.log(`admins: ${admins?.length}`);
   return (
     <div className="w-full m-2 mt-2 p-8">
@@ -561,6 +571,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                     onClick={handleShowAllowedIPs}
                   >
                     Allowed IPs
+                  </Button>
+                </div>
+                <div>
+                  <Button 
+                    style={{ width: '150px' }}
+                    onClick={() => premiumUser === true ? setIsUIAccessControlModalVisible(true) : message.error("Only premium users can configure UI access control")}
+                  >
+                    UI Access Control
                   </Button>
                 </div>
               </div>
@@ -653,6 +671,24 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
           ]}
         >
           <p>Are you sure you want to delete the IP address: {ipToDelete}?</p>
+        </Modal>
+
+        {/* UI Access Control Modal */}
+        <Modal
+          title="UI Access Control Settings"
+          visible={isUIAccessControlModalVisible}
+          width={600}
+          footer={null}
+          onOk={handleUIAccessControlOk}
+          onCancel={handleUIAccessControlCancel}
+        >
+          <UIAccessControlForm 
+            accessToken={accessToken} 
+            onSuccess={() => {
+              handleUIAccessControlOk();
+              message.success("UI Access Control settings updated successfully");
+            }} 
+          />
         </Modal>
         </div>
         <Callout title="Login without SSO" color="teal">

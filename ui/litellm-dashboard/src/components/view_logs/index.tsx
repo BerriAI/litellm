@@ -29,9 +29,11 @@ import {
   TabPanels,
   TabPanel,
   Text,
+  Switch,
 } from "@tremor/react";
 import AuditLogs from "./audit_logs";
 import { getTimeRangeDisplay } from "./logs_utils";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -80,7 +82,6 @@ export default function SpendLogsTable({
     moment().format("YYYY-MM-DDTHH:mm")
   );
 
-  // Add these new state variables at the top with other useState declarations
   const [isCustomDate, setIsCustomDate] = useState(false);
   const [quickSelectOpen, setQuickSelectOpen] = useState(false);
   const [tempTeamId, setTempTeamId] = useState("");
@@ -100,6 +101,21 @@ export default function SpendLogsTable({
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
   const queryClient = useQueryClient();
+
+  const [isLiveTail, setIsLiveTail] = useState<boolean>(() => {
+    const storedValue = sessionStorage.getItem("isLiveTail");
+    // default to true if nothing is stored
+    return storedValue !== null ? JSON.parse(storedValue) : true;
+  });
+
+  useEffect(() => {
+    sessionStorage.setItem("isLiveTail", JSON.stringify(isLiveTail));
+  }, [isLiveTail]);
+
+  const [selectedTimeInterval, setSelectedTimeInterval] = useState<{ value: number; unit: string }>({ 
+    value: 24, 
+    unit: "hours" 
+  });
 
   useEffect(() => {
     const fetchKeyInfo = async () => {
@@ -151,6 +167,20 @@ export default function SpendLogsTable({
       setFilterByCurrentUser(true);
     }
   }, [userRole]);
+
+  const LiveTailControls = () => {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-sm font-medium text-gray-900">Live Tail</span>
+        <Switch 
+          color="green"
+          checked={isLiveTail}
+          defaultChecked={true}
+          onChange={setIsLiveTail}
+        />
+      </div>
+    );
+  };
 
   const logs = useQuery<PaginatedResponse>({
     queryKey: [
@@ -222,7 +252,7 @@ export default function SpendLogsTable({
       return response;
     },
     enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs",
-    refetchInterval: 5000,
+    refetchInterval: isLiveTail && currentPage === 1 ? 15000 : false,
     refetchIntervalInBackground: true,
   });
 
@@ -348,6 +378,7 @@ export default function SpendLogsTable({
       
     }).map(log => ({
       ...log,
+      duration: (Date.parse(log.endTime) - Date.parse(log.startTime)) / 1000,
       onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
       onSessionClick: (sessionId: string) => {
         if (sessionId) setSelectedSessionId(sessionId);
@@ -440,6 +471,32 @@ export default function SpendLogsTable({
     );
   }
 
+  const formatTimeUnit = (value: number, unit: string) => {
+    if (value === 1) {
+      if (unit === 'minutes') return 'minute';
+      if (unit === 'hours') return 'hour';
+      if (unit === 'days') return 'day';
+    }
+    return unit;
+  };
+
+  const quickSelectOptions = [
+    { label: "Last 15 Minutes", value: 15, unit: "minutes" },
+    { label: "Last Hour", value: 1, unit: "hours" },
+    { label: "Last 4 Hours", value: 4, unit: "hours" },
+    { label: "Last 24 Hours", value: 24, unit: "hours" },
+    { label: "Last 7 Days", value: 7, unit: "days" },
+  ];
+
+  const selectedOption = quickSelectOptions.find(
+    (option) =>
+      option.value === selectedTimeInterval.value && option.unit === selectedTimeInterval.unit
+  );
+
+  const displayLabel = isCustomDate
+    ? getTimeRangeDisplay(isCustomDate, startTime, endTime)
+    : selectedOption?.label;
+
   return (
     <div className="w-full p-6">
       <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "request logs" : "audit logs")}>
@@ -531,23 +588,17 @@ export default function SpendLogsTable({
                                 d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
                               />
                             </svg>
-                            {getTimeRangeDisplay(isCustomDate, startTime, endTime)}
+                            {displayLabel}
                           </button>
 
                           {quickSelectOpen && (
                             <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border p-2 z-50">
                               <div className="space-y-1">
-                                {[
-                                  { label: "Last 15 Minutes", value: 15, unit: "minutes" },
-                                  { label: "Last Hour", value: 1, unit: "hours" },
-                                  { label: "Last 4 Hours", value: 4, unit: "hours" },
-                                  { label: "Last 24 Hours", value: 24, unit: "hours" },
-                                  { label: "Last 7 Days", value: 7, unit: "days" },
-                                ].map((option) => (
+                                {quickSelectOptions.map((option) => (
                                   <button
                                     key={option.label}
                                     className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${
-                                      getTimeRangeDisplay(isCustomDate, startTime, endTime) === option.label ? 'bg-blue-50 text-blue-600' : ''
+                                      displayLabel === option.label ? 'bg-blue-50 text-blue-600' : ''
                                     }`}
                                     onClick={() => {
                                       setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
@@ -556,8 +607,9 @@ export default function SpendLogsTable({
                                           .subtract(option.value, option.unit as any)
                                           .format("YYYY-MM-DDTHH:mm")
                                       );
-                                      setQuickSelectOpen(false);
+                                      setSelectedTimeInterval({ value: option.value, unit: option.unit });
                                       setIsCustomDate(false);
+                                      setQuickSelectOpen(false);
                                     }}
                                   >
                                     {option.label}
@@ -576,6 +628,8 @@ export default function SpendLogsTable({
                             </div>
                           )}
                         </div>
+                        
+                        <LiveTailControls />
                         
                         <button
                           onClick={handleRefresh}
@@ -689,6 +743,21 @@ export default function SpendLogsTable({
                     </div>
                   </div>
                 </div>
+                {isLiveTail && currentPage === 1 && (
+                  <div className="mb-4 px-4 py-2 bg-green-50 border border-greem-200 rounded-md flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-green-700">
+                        Auto-refreshing every 15 seconds
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => setIsLiveTail(false)}
+                      className="text-sm text-green-600 hover:text-green-800"
+                    >
+                      Stop
+                    </button>
+                  </div>
+                )}
                 <DataTable
                   columns={columns}
                   data={filteredData}
@@ -846,7 +915,7 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">Cost:</span>
-              <span>${Number(row.original.spend || 0).toFixed(6)}</span>
+              <span>${formatNumberWithCommas(row.original.spend || 0, 4)}</span>
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">Cache Hit:</span>
@@ -871,6 +940,10 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
             <div className="flex">
               <span className="font-medium w-1/3">End Time:</span>
               <span>{row.original.endTime}</span>
+            </div>
+            <div className="flex">
+              <span className="font-medium w-1/3">Duration:</span>
+              <span>{row.original.duration} s.</span>
             </div>
           </div>
         </div>

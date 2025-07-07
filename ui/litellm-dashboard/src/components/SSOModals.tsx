@@ -132,7 +132,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
               }
             }
 
-            // Set form values with existing data
+            // Set form values with existing data (excluding UI access control fields)
             const formValues = {
               sso_provider: selectedProvider,
               proxy_base_url: ssoData.values.proxy_base_url,

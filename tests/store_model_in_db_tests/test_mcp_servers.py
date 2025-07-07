@@ -9,7 +9,8 @@ import os
 from starlette import status
 
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
-from litellm.proxy._types import MCPAuth, MCPSpecVersion, MCPSpecVersionType, MCPTransportType, MCPTransport, NewMCPServerRequest, LiteLLM_MCPServerTable
+from litellm.proxy._types import MCPSpecVersion, MCPSpecVersionType, MCPTransportType, MCPTransport, NewMCPServerRequest, LiteLLM_MCPServerTable
+from litellm.types.mcp import MCPAuth
 from litellm.proxy.management_endpoints.mcp_management_endpoints import does_mcp_server_exist
 
 TEST_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-1234")

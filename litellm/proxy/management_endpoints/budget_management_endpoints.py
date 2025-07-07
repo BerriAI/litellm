@@ -13,6 +13,7 @@ All /budget management endpoints
 
 #### BUDGET TABLE MANAGEMENT ####
 from datetime import timedelta
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
@@ -44,6 +45,7 @@ async def new_budget(
     - tpm_limit: Optional[int] - The tokens per minute limit for the budget.
     - rpm_limit: Optional[int] - The requests per minute limit for the budget.
     - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
+    - budget_reset_at: Optional[datetime] - Datetime when the initial budget is reset. Default is now.
     """
     from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
@@ -93,6 +95,7 @@ async def update_budget(
     - tpm_limit: Optional[int] - The tokens per minute limit for the budget.
     - rpm_limit: Optional[int] - The requests per minute limit for the budget.
     - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
+    - budget_reset_at: Optional[datetime] - Update the Datetime when the budget was last reset.
     """
     from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
