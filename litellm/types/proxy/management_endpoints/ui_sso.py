@@ -1,9 +1,29 @@
-from typing import List, Literal, Optional, TypedDict
+from typing import List, Literal, Optional, TypedDict, Union
 
 from pydantic import Field
 
-from litellm.proxy._types import LiteLLMPydanticObjectBase, LitellmUserRoles
+from litellm.types.utils import LiteLLMPydanticObjectBase
 
+
+class LiteLLM_UpperboundKeyGenerateParams(LiteLLMPydanticObjectBase):
+    """
+    Set default upperbound to max budget a key called via `/key/generate` can be.
+
+    Args:
+        max_budget (Optional[float], optional): Max budget a key can be. Defaults to None.
+        budget_duration (Optional[str], optional): Duration of the budget. Defaults to None.
+        duration (Optional[str], optional): Duration of the key. Defaults to None.
+        max_parallel_requests (Optional[int], optional): Max number of requests that can be made in parallel. Defaults to None.
+        tpm_limit (Optional[int], optional): Tpm limit. Defaults to None.
+        rpm_limit (Optional[int], optional): Rpm limit. Defaults to None.
+    """
+
+    max_budget: Optional[float] = None
+    budget_duration: Optional[str] = None
+    duration: Optional[str] = None
+    max_parallel_requests: Optional[int] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
 
 class MicrosoftGraphAPIUserGroupDirectoryObject(TypedDict, total=False):
     """Model for Microsoft Graph API directory object"""
@@ -31,6 +51,14 @@ class MicrosoftServicePrincipalTeam(TypedDict, total=False):
     principalId: Optional[str]
 
 
+class AccessControl_UI_AccessMode(LiteLLMPydanticObjectBase):
+    """Model for Controlling UI Access Mode via SSO Groups"""
+
+    type: Literal["restricted_sso_group"]
+    restricted_sso_group: str
+    sso_group_jwt_field: str
+
+
 class SSOConfig(LiteLLMPydanticObjectBase):
     """
     Configuration for SSO environment variables and settings
@@ -45,7 +73,7 @@ class SSOConfig(LiteLLMPydanticObjectBase):
         default=None,
         description="Google OAuth Client Secret for SSO authentication",
     )
-    
+
     # Microsoft SSO
     microsoft_client_id: Optional[str] = Field(
         default=None,
@@ -59,7 +87,7 @@ class SSOConfig(LiteLLMPydanticObjectBase):
         default=None,
         description="Microsoft Azure Tenant ID for SSO authentication",
     )
-    
+
     # Generic/Okta SSO
     generic_client_id: Optional[str] = Field(
         default=None,
@@ -81,7 +109,7 @@ class SSOConfig(LiteLLMPydanticObjectBase):
         default=None,
         description="User info endpoint URL for generic OAuth provider",
     )
-    
+
     # Common settings
     proxy_base_url: Optional[str] = Field(
         default=None,
@@ -90,6 +118,12 @@ class SSOConfig(LiteLLMPydanticObjectBase):
     user_email: Optional[str] = Field(
         default=None,
         description="Email of the proxy admin user",
+    )
+
+    # Access Mode
+    ui_access_mode: Optional[Union[AccessControl_UI_AccessMode, str]] = Field(
+        default=None,
+        description="Access mode for the UI",
     )
 
 

@@ -1,35 +1,30 @@
 import React, { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-
-import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
+import { useQuery } from "@tanstack/react-query";
 
 import {
   Modal,
   Tooltip,
-  Form,
-  Select,
   message,
-  Button as AntdButton,
 } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import {
+  TabPanel,
+  TabPanels,
+  TabGroup,
+  TabList,
+  Tab,
+} from "@tremor/react";
+import { LinkIcon } from "lucide-react";
 
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-  Icon,
-  Button,
   Grid,
   Col,
   Title,
-  TextInput,
+  Text,
 } from "@tremor/react";
+import { DataTable } from "../view_logs/table";
+import { mcpServerColumns } from "./mcp_server_columns";
 
 import {
-  createMCPServer,
   deleteMCPServer,
   fetchMCPServers,
 } from "../networking";
@@ -41,158 +36,8 @@ import {
 } from "./types";
 import { isAdminRole } from "@/utils/roles";
 import { MCPServerView } from "./mcp_server_view";
-
-const displayFriendlyId = (id: string) => {
-  return `${id.slice(0, 7)}...`;
-};
-
-interface CreateMCPServerProps {
-  userRole: string;
-  accessToken: string | null;
-  onCreateSuccess: (newMcpServer: MCPServer) => void;
-}
-
-const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
-  userRole,
-  accessToken,
-  onCreateSuccess,
-}) => {
-  const [form] = Form.useForm();
-
-  const handleCreate = async (formValues: Record<string, any>) => {
-    try {
-      console.log(`formValues: ${JSON.stringify(formValues)}`);
-
-      if (accessToken != null) {
-        const response: MCPServer = await createMCPServer(
-          accessToken,
-          formValues
-        );
-
-        message.success("MCP Server created successfully");
-        form.resetFields();
-        setModalVisible(false);
-        onCreateSuccess(response);
-      }
-    } catch (error) {
-      message.error("Error creating the team: " + error, 20);
-    }
-  };
-
-  // state
-  const [isModalVisible, setModalVisible] = useState(false);
-
-  // rendering
-  if (!isAdminRole(userRole)) {
-    return null;
-  }
-
-  return (
-    <div>
-      <Button className="mx-auto" onClick={() => setModalVisible(true)}>
-        + Create New MCP Server
-      </Button>
-
-      <Modal
-        title="Create New MCP Server"
-        open={isModalVisible}
-        okType="primary"
-        width={800}
-        onCancel={() => setModalVisible(false)}
-        okButtonProps={{ style: { display: "none" } }}
-      >
-        <Form
-          form={form}
-          onFinish={handleCreate}
-          labelCol={{ span: 8 }}
-          wrapperCol={{ span: 16 }}
-          labelAlign="left"
-        >
-          <>
-            <Form.Item
-              label="MCP Server Name"
-              name="alias"
-              rules={[
-                { required: false, message: "Please enter a server name" },
-              ]}
-            >
-              <TextInput placeholder="" />
-            </Form.Item>
-            <Form.Item
-              label="MCP Description"
-              name="description"
-              rules={[
-                {
-                  required: false,
-                  message: "Please enter a server description",
-                },
-              ]}
-            >
-              <TextInput placeholder="" />
-            </Form.Item>
-            <Form.Item
-              label="MCP Server URL"
-              name="url"
-              rules={[{ required: true, message: "Please enter a server url" }]}
-            >
-              <TextInput placeholder="https://" />
-            </Form.Item>
-            <Form.Item
-              label="MCP Server Transport"
-              name="transport"
-              rules={[{ required: true, message: "Please enter a server url" }]}
-            >
-              <Select placeholder="MCP Transport Type">
-                <Select.Option value="sse">sse</Select.Option>
-                <Select.Option value="http">http</Select.Option>
-              </Select>
-            </Form.Item>
-            <Form.Item
-              label="MCP Server Auth Type"
-              name="auth_type"
-              rules={[{ required: true, message: "Please enter an auth type" }]}
-            >
-              <Select placeholder="MCP Auth Type">
-                <Select.Option value="none">None</Select.Option>
-                <Select.Option value="api_key">api_key</Select.Option>
-                <Select.Option value="bearer_token">bearer_token</Select.Option>
-                <Select.Option value="basic">basic</Select.Option>
-              </Select>
-            </Form.Item>
-            <Form.Item
-              label={
-                <span>
-                  MCP Version{" "}
-                  <Tooltip title="Supported MCP Specification Version">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                  </Tooltip>
-                </span>
-              }
-              name="spec_version"
-              rules={[
-                { required: true, message: "Please enter a spec version" },
-              ]}
-            >
-              <Select placeholder="MCP Version">
-                <Select.Option value="2025-03-26">2025-03-26</Select.Option>
-                <Select.Option value="2024-11-05">2024-11-05</Select.Option>
-              </Select>
-            </Form.Item>
-          </>
-          <div
-            style={{
-              textAlign: "right",
-              marginTop: "10px",
-              paddingBottom: "10px",
-            }}
-          >
-            <AntdButton htmlType="submit">Create MCP Server</AntdButton>
-          </div>
-        </Form>
-      </Modal>
-    </div>
-  );
-};
+import CreateMCPServer from "./create_mcp_server";
+import MCPConnect from "./mcp_connect";
 
 interface DeleteModalProps {
   isModalOpen: boolean;
@@ -255,11 +100,25 @@ const MCPServers: React.FC<MCPServerProps> = ({
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
   const [editServer, setEditServer] = useState(false);
 
-  const handleDelete = (server_id: string) => {
+  const columns = React.useMemo(
+    () =>
+      mcpServerColumns(
+        userRole,
+        (serverId: string) => setSelectedServerId(serverId),
+        (serverId: string) => {
+          setSelectedServerId(serverId);
+          setEditServer(true);
+        },
+        handleDelete
+      ),
+    [userRole, handleDelete]
+  );
+
+  function handleDelete(server_id: string) {
     // Set the team to delete and open the confirmation modal
     setServerToDelete(server_id);
     setIsDeleteModalOpen(true);
-  };
+  }
 
   const confirmDelete = async () => {
     if (serverIdToDelete == null || accessToken == null) {
@@ -287,6 +146,8 @@ const MCPServers: React.FC<MCPServerProps> = ({
     setServerToDelete(null);
   };
 
+
+
   if (!accessToken || !userRole || !userID) {
     return (
       <div className="p-6 text-center text-gray-500">
@@ -295,153 +156,81 @@ const MCPServers: React.FC<MCPServerProps> = ({
     );
   }
 
-  return (
-    <div className="w-full mx-4 h-[75vh]">
-      {selectedServerId ? (
-        <MCPServerView
-          mcpServer={
-            mcpServers.find(
-              (server: MCPServer) => server.server_id === selectedServerId
-            ) || {}
-          }
-          onBack={() => setSelectedServerId(null)}
-          isProxyAdmin={isAdminRole(userRole)}
-          isEditing={editServer}
-          accessToken={accessToken}
-          userID={userID}
-          userRole={userRole}
-        />
-      ) : (
-        <div className="w-full p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h1 className="text-xl font-semibold">MCP Servers</h1>
+  const ServersTab = () => (
+    selectedServerId ? (
+      <MCPServerView
+        mcpServer={
+          mcpServers.find(
+            (server: MCPServer) => server.server_id === selectedServerId
+          ) || {}
+        }
+        onBack={() => {
+          setEditServer(false);
+          setSelectedServerId(null);
+          refetch();
+        }}
+        isProxyAdmin={isAdminRole(userRole)}
+        isEditing={editServer}
+        accessToken={accessToken}
+        userID={userID}
+        userRole={userRole}
+      />
+    ) : (
+      <div>
+        <div className="mb-2 mt-4">
+          <div>
+            <Title>MCP Servers</Title>
+            <Text className="text-tremor-content">
+              Configure and manage your MCP servers
+            </Text>
           </div>
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableHeaderCell>Server ID</TableHeaderCell>
-                <TableHeaderCell>Server Name</TableHeaderCell>
-                <TableHeaderCell>Description</TableHeaderCell>
-                <TableHeaderCell>Transport</TableHeaderCell>
-                <TableHeaderCell>Auth Type</TableHeaderCell>
-                <TableHeaderCell>Url</TableHeaderCell>
-                <TableHeaderCell>Created</TableHeaderCell>
-                <TableHeaderCell>Info</TableHeaderCell>
-              </TableRow>
-            </TableHead>
-
-            <TableBody>
-              {!mcpServers || mcpServers.length == 0
-                ? []
-                : mcpServers.map((mcpServer: MCPServer) => (
-                    <TableRow key={mcpServer.server_id}>
-                      <TableCell>
-                        <div className="overflow-hidden">
-                          <Tooltip title={mcpServer.server_id}>
-                            <Button
-                              size="xs"
-                              variant="light"
-                              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
-                              onClick={() => {
-                                // Add click handler
-                                setSelectedServerId(mcpServer.server_id);
-                              }}
-                            >
-                              {displayFriendlyId(mcpServer.server_id)}
-                            </Button>
-                          </Tooltip>
-                        </div>
-                      </TableCell>
-                      <TableCell
-                        style={{
-                          maxWidth: "4px",
-                          whiteSpace: "pre-wrap",
-                          overflow: "hidden",
-                        }}
-                      >
-                        {mcpServer.alias}
-                      </TableCell>
-                      <TableCell
-                        style={{
-                          maxWidth: "4px",
-                          whiteSpace: "pre-wrap",
-                          overflow: "hidden",
-                        }}
-                      >
-                        {mcpServer.description}
-                      </TableCell>
-                      <TableCell
-                        style={{
-                          maxWidth: "4px",
-                          whiteSpace: "pre-wrap",
-                          overflow: "hidden",
-                        }}
-                      >
-                        {handleTransport(mcpServer.transport)}
-                      </TableCell>
-                      <TableCell
-                        style={{
-                          maxWidth: "4px",
-                          whiteSpace: "pre-wrap",
-                          overflow: "hidden",
-                        }}
-                      >
-                        {handleAuth(mcpServer.auth_type)}
-                      </TableCell>
-                      <TableCell>
-                        <div className="overflow-hidden">
-                          <Tooltip title={mcpServer.url}>
-                            {mcpServer.url}
-                          </Tooltip>
-                        </div>
-                      </TableCell>
-                      <TableCell
-                        style={{
-                          maxWidth: "4px",
-                          whiteSpace: "pre-wrap",
-                          overflow: "hidden",
-                        }}
-                      >
-                        {mcpServer.created_at
-                          ? new Date(mcpServer.created_at).toLocaleDateString()
-                          : "N/A"}
-                      </TableCell>
-                      <TableCell>
-                        {isAdminRole(userRole) ? (
-                          <>
-                            <Icon
-                              icon={PencilAltIcon}
-                              size="sm"
-                              onClick={() => {
-                                setSelectedServerId(mcpServer.server_id);
-                                setEditServer(true);
-                              }}
-                            />
-                            <Icon
-                              onClick={() => handleDelete(mcpServer.server_id)}
-                              icon={TrashIcon}
-                              size="sm"
-                            />
-                          </>
-                        ) : null}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-            </TableBody>
-          </Table>
-          <DeleteModal
-            isModalOpen={isDeleteModalOpen}
-            title="Delete MCP Server"
-            confirmDelete={confirmDelete}
-            cancelDelete={cancelDelete}
-          />
-          <CreateMCPServer
-            userRole={userRole}
-            accessToken={accessToken}
-            onCreateSuccess={createMCPServer}
-          />
         </div>
-      )}
+        <CreateMCPServer
+          userRole={userRole}
+          accessToken={accessToken}
+          onCreateSuccess={createMCPServer}
+        />
+        <DataTable
+          columns={columns}
+          data={mcpServers || []}
+          renderSubComponent={() => <></>}
+          getRowCanExpand={() => false}
+          isLoading={isLoadingServers}
+          noDataMessage="No MCP Servers found"
+        />
+        <DeleteModal
+          isModalOpen={isDeleteModalOpen}
+          title="Delete MCP Server"
+          confirmDelete={confirmDelete}
+          cancelDelete={cancelDelete}
+        />
+      </div>
+    )
+  );
+
+  return (
+    <div className="w-full h-[75vh] mt-8 p-6">
+      <TabGroup className="h-full">
+        <TabList>
+          <div className="flex">
+            <Tab>Servers</Tab>
+            <Tab>
+              <span className="flex items-center gap-2">
+                <LinkIcon size={16} />
+                Connect
+              </span>
+            </Tab>
+          </div>
+        </TabList>
+        <TabPanels className="h-full">
+          <TabPanel className="h-full">
+            <ServersTab />
+          </TabPanel>
+          <TabPanel className="h-full">
+            <MCPConnect />
+          </TabPanel>
+        </TabPanels>
+      </TabGroup>
     </div>
   );
 };

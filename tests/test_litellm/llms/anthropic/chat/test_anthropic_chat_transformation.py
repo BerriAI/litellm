@@ -11,6 +11,7 @@ sys.path.insert(
 from unittest.mock import MagicMock, patch
 
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.types.utils import PromptTokensDetailsWrapper, ServerToolUse
 
 
 def test_response_format_transformation_unit_test():
@@ -57,6 +58,83 @@ def test_calculate_usage():
     assert usage._cache_creation_input_tokens == 12304
     assert usage._cache_read_input_tokens == 0
 
+@pytest.mark.parametrize("usage_object,expected_usage", [
+    [
+        {
+            "cache_creation_input_tokens": None,
+            "cache_read_input_tokens": None,
+            "input_tokens": None,
+            "output_tokens": 43,
+            "server_tool_use": None
+        },
+        {
+            "prompt_tokens": 0,
+            "completion_tokens": 43,
+            "total_tokens": 43,
+            "_cache_creation_input_tokens": 0,
+            "_cache_read_input_tokens": 0
+        }
+    ],
+    [
+        {
+            "cache_creation_input_tokens": 100,
+            "cache_read_input_tokens": 200,
+            "input_tokens": 1,
+            "output_tokens": None,
+            "server_tool_use": None
+        },
+        {
+            "prompt_tokens": 1 + 200,
+            "completion_tokens": 0,
+            "total_tokens": 1 + 200,
+            "_cache_creation_input_tokens": 100,
+            "_cache_read_input_tokens": 200,
+        }
+    ],
+    [
+        {
+            "server_tool_use": {
+                "web_search_requests": 10
+            }
+        },
+        {
+            "server_tool_use": ServerToolUse(web_search_requests=10)
+        }
+    ]
+])
+def test_calculate_usage_nulls(usage_object, expected_usage):
+    """
+    Correctly deal with null values in usage object
+
+    Fixes https://github.com/BerriAI/litellm/issues/11920
+    """
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
+    for k, v in expected_usage.items():
+        assert hasattr(usage, k)
+        assert getattr(usage, k) == v
+
+@pytest.mark.parametrize("usage_object", [
+    {
+        "server_tool_use": {
+            "web_search_requests": None
+        }
+    },
+    {
+        "server_tool_use": None
+    }
+])
+def test_calculate_usage_server_tool_null(usage_object):
+    """
+    Correctly deal with null values in usage object
+
+    Fixes https://github.com/BerriAI/litellm/issues/11920
+    """
+    config = AnthropicConfig()
+    
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
+    assert not hasattr(usage, "server_tool_use")
 
 def test_extract_response_content_with_citations():
     config = AnthropicConfig()
@@ -207,3 +285,64 @@ def test_add_code_execution_tool():
     assert tools is not None
     assert len(tools) == 1
     assert tools[0]["type"] == "code_execution_20250522"
+
+
+def test_map_tool_choice():
+    config = AnthropicConfig()
+
+    tool_choice = "none"
+    result = config._map_tool_choice(tool_choice=tool_choice, parallel_tool_use=True)
+    assert result is not None
+    assert result["type"] == "none"
+    print(result)
+
+
+def test_transform_response_with_prefix_prompt():
+    import httpx
+
+    from litellm.types.utils import ModelResponse
+
+    config = AnthropicConfig()
+
+    completion_response = {
+        "id": "msg_01XrAv7gc5tQNDuoADra7vB4",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-3-5-sonnet-20241022",
+        "content": [{"type": "text", "text": " The grass is green."}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 610,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 51,
+        },
+    }
+
+    raw_response = httpx.Response(
+        status_code=200,
+        headers={},
+    )
+
+    model_response = ModelResponse()
+
+    result = config.transform_parsed_response(
+        completion_response=completion_response,
+        raw_response=raw_response,
+        model_response=model_response,
+        json_mode=False,
+        prefix_prompt="You are a helpful assistant.",
+    )
+
+    assert result is not None
+    assert (
+        result.choices[0].message.content
+        == "You are a helpful assistant. The grass is green."
+    )
+
+
+def test_get_supported_params_thinking():
+    config = AnthropicConfig()
+    params = config.get_supported_openai_params(model="claude-sonnet-4-20250514")
+    assert "thinking" in params

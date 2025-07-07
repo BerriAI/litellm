@@ -266,3 +266,62 @@ def test_default_image_cost_calculator(monkeypatch):
     }
     cost = default_image_cost_calculator(**args)
     assert cost == 10485760
+
+
+def test_cost_calculator_with_cache_creation():
+    from litellm import completion_cost
+    from litellm.types.utils import (
+        Choices,
+        CompletionTokensDetailsWrapper,
+        Message,
+        PromptTokensDetailsWrapper,
+        Usage,
+    )
+
+    litellm_model_response = ModelResponse(
+        id="chatcmpl-cc5638bc-fdfe-48e4-8884-57c8f4fb7c63",
+        created=1750733889,
+        model=None,
+        object="chat.completion",
+        system_fingerprint=None,
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="Hello! How can I help you today?",
+                    role="assistant",
+                    tool_calls=None,
+                    function_call=None,
+                    provider_specific_fields=None,
+                ),
+            )
+        ],
+        usage=Usage(
+            **{
+                "total_tokens": 28508,
+                "prompt_tokens": 28495,
+                "completion_tokens": 13,
+                "prompt_tokens_details": {"audio_tokens": None, "cached_tokens": 0},
+                "cache_read_input_tokens": 28491,
+                "completion_tokens_details": {
+                    "audio_tokens": None,
+                    "reasoning_tokens": 0,
+                    "accepted_prediction_tokens": None,
+                    "rejected_prediction_tokens": None,
+                },
+                "cache_creation_input_tokens": 15,
+            }
+        ),
+    )
+    model = "claude-sonnet-4@20250514"
+
+    assert litellm_model_response.usage.prompt_tokens_details.cached_tokens == 28491
+
+    result = completion_cost(
+        completion_response=litellm_model_response,
+        model=model,
+        custom_llm_provider="vertex_ai",
+    )
+
+    print(result)

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import traceback
 import uuid
 from datetime import datetime
 from typing import (
@@ -20,9 +21,13 @@ from fastapi.responses import Response, StreamingResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE
+from litellm.constants import (
+    DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
+    STREAM_SSE_DATA_PREFIX,
+)
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
 from litellm.proxy.common_utils.callback_utils import (
@@ -103,14 +108,26 @@ async def create_streaming_response(
     final_status_code = default_status_code
 
     try:
+
+        # Handle coroutine that returns a generator
+        if asyncio.iscoroutine(generator):
+            generator = await generator
+
+        # Now get the first chunk from the actual generator
         first_chunk_value = await generator.__anext__()
+
         if first_chunk_value is not None:
-            error_code_from_chunk = await _parse_event_data_for_error(first_chunk_value)
-            if error_code_from_chunk is not None:
-                final_status_code = error_code_from_chunk
-                verbose_proxy_logger.debug(
-                    f"Error detected in first stream chunk. Status code set to: {final_status_code}"
+            try:
+                error_code_from_chunk = await _parse_event_data_for_error(
+                    first_chunk_value
                 )
+                if error_code_from_chunk is not None:
+                    final_status_code = error_code_from_chunk
+                    verbose_proxy_logger.debug(
+                        f"Error detected in first stream chunk. Status code set to: {final_status_code}"
+                    )
+            except Exception as e:
+                verbose_proxy_logger.debug(f"Error parsing first chunk value: {e}")
 
     except StopAsyncIteration:
         # Generator was empty. Default status
@@ -147,6 +164,7 @@ async def create_streaming_response(
             with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
                 yield first_chunk_value
         async for chunk in generator:
+
             with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
                 yield chunk
 
@@ -250,7 +268,11 @@ class ProxyBaseLLMRequestProcessing:
             "acancel_fine_tuning_job",
             "alist_fine_tuning_jobs",
             "aretrieve_fine_tuning_job",
+            "alist_input_items",
             "aimage_edit",
+            "agenerate_content",
+            "agenerate_content_stream",
+            "allm_passthrough_route",
         ],
         version: Optional[str] = None,
         user_model: Optional[str] = None,
@@ -260,6 +282,7 @@ class ProxyBaseLLMRequestProcessing:
         user_api_base: Optional[str] = None,
         model: Optional[str] = None,
     ) -> Tuple[dict, LiteLLMLoggingObj]:
+        start_time = datetime.now()  # start before calling guardrail hooks
         self.data = await add_litellm_data_to_request(
             data=self.data,
             request=request,
@@ -299,6 +322,7 @@ class ProxyBaseLLMRequestProcessing:
             "x-litellm-call-id", str(uuid.uuid4())
         )
         ### CALL HOOKS ### - modify/reject incoming data before calling the model
+
         self.data = await proxy_logging_obj.pre_call_hook(  # type: ignore
             user_api_key_dict=user_api_key_dict, data=self.data, call_type=route_type  # type: ignore
         )
@@ -308,7 +332,7 @@ class ProxyBaseLLMRequestProcessing:
         logging_obj, self.data = litellm.utils.function_setup(
             original_function=route_type,
             rules_obj=litellm.utils.Rules(),
-            start_time=datetime.now(),
+            start_time=start_time,
             **self.data,
         )
 
@@ -329,6 +353,10 @@ class ProxyBaseLLMRequestProcessing:
             "adelete_responses",
             "atext_completion",
             "aimage_edit",
+            "alist_input_items",
+            "agenerate_content",
+            "agenerate_content_stream",
+            "allm_passthrough_route",
         ],
         proxy_logging_obj: ProxyLogging,
         general_settings: dict,
@@ -342,6 +370,7 @@ class ProxyBaseLLMRequestProcessing:
         user_max_tokens: Optional[int] = None,
         user_api_base: Optional[str] = None,
         version: Optional[str] = None,
+        is_streaming_request: Optional[bool] = False,
     ) -> Any:
         """
         Common request processing logic for both chat completions and responses API endpoints
@@ -416,8 +445,10 @@ class ProxyBaseLLMRequestProcessing:
                 litellm_call_id=self.data.get("litellm_call_id", ""), status="success"
             )
         )
-        if (
-            "stream" in self.data and self.data["stream"] is True
+        if self._is_streaming_request(
+            data=self.data, is_streaming_request=is_streaming_request
+        ) or self._is_streaming_response(
+            response
         ):  # use generate_responses to stream responses
             custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
@@ -433,16 +464,40 @@ class ProxyBaseLLMRequestProcessing:
                 hidden_params=hidden_params,
                 **additional_headers,
             )
-            selected_data_generator = select_data_generator(
-                response=response,
-                user_api_key_dict=user_api_key_dict,
-                request_data=self.data,
-            )
-            return await create_streaming_response(
-                generator=selected_data_generator,
-                media_type="text/event-stream",
-                headers=custom_headers,
-            )
+            if route_type == "allm_passthrough_route":
+                # Check if response is an async generator
+                if self._is_streaming_response(response):
+
+                    if asyncio.iscoroutine(response):
+                        generator = await response
+                    else:
+                        generator = response
+
+                    # For passthrough routes, stream directly without error parsing
+                    # since we're dealing with raw binary data (e.g., AWS event streams)
+                    return StreamingResponse(
+                        content=generator,
+                        status_code=status.HTTP_200_OK,
+                        headers=custom_headers,
+                    )
+                else:
+                    # Traditional HTTP response with aiter_bytes
+                    return StreamingResponse(
+                        content=response.aiter_bytes(),
+                        status_code=response.status_code,
+                        headers=custom_headers,
+                    )
+            else:
+                selected_data_generator = select_data_generator(
+                    response=response,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=self.data,
+                )
+                return await create_streaming_response(
+                    generator=selected_data_generator,
+                    media_type="text/event-stream",
+                    headers=custom_headers,
+                )
 
         ### CALL HOOKS ### - modify outgoing data
         response = await proxy_logging_obj.post_call_success_hook(
@@ -473,6 +528,96 @@ class ProxyBaseLLMRequestProcessing:
         await check_response_size_is_safe(response=response)
 
         return response
+
+    async def base_passthrough_process_llm_request(
+        self,
+        request: Request,
+        fastapi_response: Response,
+        user_api_key_dict: UserAPIKeyAuth,
+        proxy_logging_obj: ProxyLogging,
+        general_settings: dict,
+        proxy_config: ProxyConfig,
+        select_data_generator: Callable,
+        llm_router: Optional[Router] = None,
+        model: Optional[str] = None,
+        user_model: Optional[str] = None,
+        user_temperature: Optional[float] = None,
+        user_request_timeout: Optional[float] = None,
+        user_max_tokens: Optional[int] = None,
+        user_api_base: Optional[str] = None,
+        version: Optional[str] = None,
+    ):
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+            HttpPassThroughEndpointHelpers,
+        )
+
+        result = await self.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="allm_passthrough_route",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=model,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+
+        # Check if result is actually a streaming response by inspecting its type
+        if isinstance(result, StreamingResponse):
+            return result
+
+        content = await result.aread()
+        return Response(
+            content=content,
+            status_code=result.status_code,
+            headers=HttpPassThroughEndpointHelpers.get_response_headers(
+                headers=result.headers,
+                custom_headers=None,
+            ),
+        )
+
+    def _is_streaming_response(self, response: Any) -> bool:
+        """
+        Check if the response object is actually a streaming response by inspecting its type.
+
+        This uses standard Python inspection to detect streaming/async iterator objects
+        rather than relying on specific wrapper classes.
+        """
+        import inspect
+        from collections.abc import AsyncGenerator, AsyncIterator
+
+        # Check if it's an async generator (most reliable)
+        if inspect.isasyncgen(response):
+            return True
+
+        # Check if it implements the async iterator protocol
+        if isinstance(response, (AsyncIterator, AsyncGenerator)):
+            return True
+
+        return False
+
+    def _is_streaming_request(
+        self, data: dict, is_streaming_request: Optional[bool] = False
+    ) -> bool:
+        """
+        Check if the request is a streaming request.
+
+        1. is_streaming_request is a dynamic param passed in
+        2. if "stream" in data and data["stream"] is True
+        """
+        if is_streaming_request is True:
+            return True
+        if "stream" in data and data["stream"] is True:
+            return True
+        return False
 
     async def _handle_llm_api_exception(
         self,
@@ -543,3 +688,80 @@ class ProxyBaseLLMRequestProcessing:
             return "completion"
         elif route_type == "aresponses":
             return "responses"
+
+    #########################################################
+    # Proxy Level Streaming Data Generator
+    #########################################################
+
+    @staticmethod
+    def return_sse_chunk(chunk: Any) -> str:
+        """
+        Helper function to format streaming chunks for Anthropic API format
+
+        Args:
+            chunk: A string or dictionary to be returned in SSE format
+
+        Returns:
+            str: A properly formatted SSE chunk string
+        """
+        if isinstance(chunk, dict):
+            # Use safe_dumps for proper JSON serialization with circular reference detection
+            chunk_str = safe_dumps(chunk)
+            return f"{STREAM_SSE_DATA_PREFIX}{chunk_str}\n\n"
+        else:
+            return chunk
+
+    @staticmethod
+    async def async_sse_data_generator(
+        response,
+        user_api_key_dict: UserAPIKeyAuth,
+        request_data: dict,
+        proxy_logging_obj: ProxyLogging,
+    ):
+        """
+        Anthropic /messages and Google /generateContent streaming data generator require SSE events
+        """
+        verbose_proxy_logger.debug("inside generator")
+        try:
+            async for chunk in response:
+                verbose_proxy_logger.debug(
+                    "async_data_generator: received streaming chunk - {}".format(chunk)
+                )
+                ### CALL HOOKS ### - modify outgoing data
+                chunk = await proxy_logging_obj.async_post_call_streaming_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    response=chunk,
+                    data=request_data,
+                )
+
+                # Format chunk using helper function
+                yield ProxyBaseLLMRequestProcessing.return_sse_chunk(chunk)
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
+                    str(e)
+                )
+            )
+            await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=e,
+                request_data=request_data,
+            )
+            verbose_proxy_logger.debug(
+                f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
+            )
+
+            if isinstance(e, HTTPException):
+                raise e
+            else:
+                error_traceback = traceback.format_exc()
+                error_msg = f"{str(e)}\n\n{error_traceback}"
+
+            proxy_exception = ProxyException(
+                message=getattr(e, "message", error_msg),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", 500),
+            )
+            error_returned = json.dumps({"error": proxy_exception.to_dict()})
+            yield f"{STREAM_SSE_DATA_PREFIX}{error_returned}\n\n"

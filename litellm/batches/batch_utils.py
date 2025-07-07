@@ -7,6 +7,28 @@ from litellm.types.llms.openai import Batch
 from litellm.types.utils import CallTypes, Usage
 
 
+async def calculate_batch_cost_and_usage(
+    file_content_dictionary: List[dict],
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai"],
+) -> Tuple[float, Usage, List[str]]:
+    """
+    Calculate the cost and usage of a batch
+    """
+    # Calculate costs and usage
+    batch_cost = _batch_cost_calculator(
+        custom_llm_provider=custom_llm_provider,
+        file_content_dictionary=file_content_dictionary,
+    )
+    batch_usage = _get_batch_job_total_usage_from_file_content(
+        file_content_dictionary=file_content_dictionary,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    batch_models = _get_batch_models_from_file_content(file_content_dictionary)
+
+    return batch_cost, batch_usage, batch_models
+
+
 async def _handle_completed_batch(
     batch: Batch,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"],
@@ -18,7 +40,7 @@ async def _handle_completed_batch(
     )
 
     # Calculate costs and usage
-    batch_cost = await _batch_cost_calculator(
+    batch_cost = _batch_cost_calculator(
         custom_llm_provider=custom_llm_provider,
         file_content_dictionary=file_content_dictionary,
     )
@@ -48,7 +70,7 @@ def _get_batch_models_from_file_content(
     return batch_models
 
 
-async def _batch_cost_calculator(
+def _batch_cost_calculator(
     file_content_dictionary: List[dict],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
 ) -> float:

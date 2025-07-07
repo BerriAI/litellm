@@ -237,6 +237,9 @@ spec:
       containers:
       - name: litellm
         image: ghcr.io/berriai/litellm:main-stable # it is recommended to fix a version generally
+        args:
+          - "--config"
+          - "/app/proxy_server_config.yaml"
         ports:
         - containerPort: 4000
         volumeMounts:
@@ -386,7 +389,8 @@ spec:
             - "/app/proxy_config.yaml"  # Update the path to mount the config file
           volumeMounts:                 # Define volume mount for proxy_config.yaml
             - name: config-volume
-              mountPath: /app
+              mountPath: /app/proxy_config.yaml
+              subPath: config.yaml      # Specify the field under data of the ConfigMap litellm-config
               readOnly: true
           livenessProbe:
             httpGet:
@@ -683,7 +687,29 @@ docker run \
     --run_hypercorn
 ```
 
-### 4. config.yaml file on s3, GCS Bucket Object/url
+### 4. Keepalive Timeout
+
+Defaults to 5 seconds. Between requests, connections must receive new data within this period or be disconnected.
+
+
+Usage Example:
+In this example, we set the keepalive timeout to 75 seconds.
+
+```shell showLineNumbers title="docker run"
+docker run ghcr.io/berriai/litellm:main-stable \
+    --keepalive_timeout 75
+```
+
+Or set via environment variable:
+In this example, we set the keepalive timeout to 75 seconds.
+
+```shell showLineNumbers title="Environment Variable"
+export KEEPALIVE_TIMEOUT=75
+docker run ghcr.io/berriai/litellm:main-stable
+```
+
+
+### 5. config.yaml file on s3, GCS Bucket Object/url
 
 Use this if you cannot mount a config file on your deployment service (example - AWS Fargate, Railway etc)
 
