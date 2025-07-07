@@ -13,6 +13,7 @@ import { DailyData, KeyMetricWithMetadata, EntityMetricWithMetadata } from './us
 import { tagDailyActivityCall, teamDailyActivityCall } from './networking';
 import TopKeyView from "./top_key_view";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { valueFormatterSpend } from "./usage/utils/value_formatters";
 
 interface EntityMetrics {
   metrics: {
@@ -93,6 +94,144 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     from: new Date(Date.now() - 28 * 24 * 60 * 60 * 1000),
     to: new Date(),
   });
+
+  const generateMockData = (): EntitySpendData => {
+    const mockResults: ExtendedDailyData[] = [];
+    const entities: { [key: string]: EntityMetricWithMetadata } = {};
+    const numTags = 50;
+
+    for (let i = 0; i < numTags; i++) {
+      const tagName = `tag-${i}-very-long-name-to-show-truncation`;
+      entities[tagName] = {
+        metrics: {
+          spend: 0,
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          total_tokens: 0,
+          api_requests: 0,
+          successful_requests: 0,
+          failed_requests: 0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
+        metadata: {
+          alias: tagName,
+          id: tagName,
+        },
+      };
+    }
+
+    const today = new Date();
+    for (let i = 0; i < 30; i++) {
+      const date = new Date(today);
+      date.setDate(today.getDate() - i);
+      const dateString = date.toISOString().split("T")[0];
+
+      const dailyEntities: { [key: string]: EntityMetricWithMetadata } = {};
+      Object.keys(entities).forEach((tagName) => {
+        const spend = Math.random() * 5000;
+        entities[tagName].metrics.spend += spend;
+        entities[tagName].metrics.api_requests += Math.floor(
+          Math.random() * 100
+        );
+        entities[tagName].metrics.successful_requests += Math.floor(
+          Math.random() * 90
+        );
+        entities[tagName].metrics.failed_requests += Math.floor(
+          Math.random() * 10
+        );
+        entities[tagName].metrics.total_tokens += Math.floor(
+          Math.random() * 10000
+        );
+
+        dailyEntities[tagName] = {
+          metrics: {
+            spend: spend,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: Math.floor(Math.random() * 10000),
+            api_requests: Math.floor(Math.random() * 100),
+            successful_requests: Math.floor(Math.random() * 90),
+            failed_requests: Math.floor(Math.random() * 10),
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+          },
+          metadata: {
+            alias: tagName,
+            id: tagName,
+          },
+        };
+      });
+
+      mockResults.push({
+        date: dateString,
+        metrics: {
+          spend: Object.values(dailyEntities).reduce(
+            (acc, curr) => acc + curr.metrics.spend,
+            0
+          ),
+          api_requests: Object.values(dailyEntities).reduce(
+            (acc, curr) => acc + curr.metrics.api_requests,
+            0
+          ),
+          successful_requests: Object.values(dailyEntities).reduce(
+            (acc, curr) => acc + curr.metrics.successful_requests,
+            0
+          ),
+          failed_requests: Object.values(dailyEntities).reduce(
+            (acc, curr) => acc + curr.metrics.failed_requests,
+            0
+          ),
+          total_tokens: Object.values(dailyEntities).reduce(
+            (acc, curr) => acc + curr.metrics.total_tokens,
+            0
+          ),
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
+        breakdown: {
+          models: {},
+          providers: {},
+          api_keys: {},
+          entities: dailyEntities,
+        },
+      });
+    }
+
+    const totalSpend = Object.values(entities).reduce(
+      (acc, curr) => acc + curr.metrics.spend,
+      0
+    );
+    const totalRequests = Object.values(entities).reduce(
+      (acc, curr) => acc + curr.metrics.api_requests,
+      0
+    );
+    const totalSuccessfulRequests = Object.values(entities).reduce(
+      (acc, curr) => acc + curr.metrics.successful_requests,
+      0
+    );
+    const totalFailedRequests = Object.values(entities).reduce(
+      (acc, curr) => acc + curr.metrics.failed_requests,
+      0
+    );
+    const totalTokens = Object.values(entities).reduce(
+      (acc, curr) => acc + curr.metrics.total_tokens,
+      0
+    );
+
+    return {
+      results: mockResults,
+      metadata: {
+        total_spend: totalSpend,
+        total_api_requests: totalRequests,
+        total_successful_requests: totalSuccessfulRequests,
+        total_failed_requests: totalFailedRequests,
+        total_tokens: totalTokens,
+      },
+    };
+  };
 
   const fetchSpendData = async () => {
     if (!accessToken || !dateValue.from || !dateValue.to) return;
@@ -284,7 +423,17 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     return filterDataByTags(result);
   };
 
-  
+  const getProcessedEntityBreakdownForChart = () => {
+    const data = getEntityBreakdown();
+    const topEntities = data.slice(0, 5);
+    return topEntities.map(e => ({
+        ...e,
+        metadata: {
+            ...e.metadata,
+            alias_display: e.metadata.alias && e.metadata.alias.length > 15 ? `${e.metadata.alias.slice(0, 15)}...` : e.metadata.alias,
+        },
+    }));
+  };
 
   return (
     <div style={{ width: "100%" }}>
@@ -384,9 +533,17 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                                 <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
                                 <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
                                 <p className="text-gray-600">Total Tokens: {data.metrics.total_tokens}</p>
+                                <p className="text-gray-600">{entityType === 'tag' ? 'Total Tags' : 'Total Teams'}: {Object.keys(data.breakdown.entities || {}).length}</p>
                                 <div className="mt-2 border-t pt-2">
                                   <p className="font-semibold">Spend by {entityType === 'tag' ? 'Tag' : 'Team'}:</p>
-                                  {Object.entries(data.breakdown.entities || {}).map(([entity, entityData]) => {
+                                  {Object.entries(data.breakdown.entities || {})
+                                    .sort(([, a], [, b]) => {
+                                      const spendA = (a as EntityMetrics).metrics.spend;
+                                      const spendB = (b as EntityMetrics).metrics.spend;
+                                      return spendB - spendA;
+                                    })
+                                    .slice(0, 5)
+                                    .map(([entity, entityData]) => {
                                     const metrics = entityData as EntityMetrics;
                                     return (
                                       <p key={entity} className="text-sm text-gray-600">
@@ -409,13 +566,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                     <div className="flex flex-col space-y-2">
                       <Title>Spend Per {entityType === 'tag' ? 'Tag' : 'Team'}</Title>
                       <div className="flex items-center text-sm text-gray-500">
-                        <span>Get Started Tracking cost per {entityType} </span>
+                        <span>Get Started by Tracking cost per {entityType} </span>
                         <a href="https://docs.litellm.ai/docs/proxy/enterprise#spend-tracking" className="text-blue-500 hover:text-blue-700 ml-1">
                           here
                         </a>
                       </div>
                     </div>
-                      <Grid numItems={2}>
+                      <Grid numItems={2} className="gap-6">
                         <Col numColSpan={1}>
                         <BarChart
                           className="mt-4 h-52"
@@ -423,13 +580,28 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                           index="metadata.alias"
                           categories={["metrics.spend"]}
                           colors={["cyan"]}
-                          valueFormatter={(value) => `$${formatNumberWithCommas(value, 4)}`}
+                          valueFormatter={valueFormatterSpend}
                           layout="vertical"
                           showLegend={false}
-                          yAxisWidth={100}
+                          yAxisWidth={150}
+                          customTooltip={({ payload, active }) => {
+                            if (!active || !payload?.[0]) return null;
+                            const data = payload[0].payload;
+                            return (
+                              <div className="bg-white p-4 shadow-lg rounded-lg border">
+                                <p className="font-bold">{data.metadata.alias}</p>
+                                <p className="text-cyan-500">Spend: ${formatNumberWithCommas(data.metrics.spend, 4)}</p>
+                                <p className="text-gray-600">Requests: {data.metrics.api_requests.toLocaleString()}</p>
+                                <p className="text-green-600">Successful: {data.metrics.successful_requests.toLocaleString()}</p>
+                                <p className="text-red-600">Failed: {data.metrics.failed_requests.toLocaleString()}</p>
+                                <p className="text-gray-600">Tokens: {data.metrics.total_tokens.toLocaleString()}</p>
+                              </div>
+                            );
+                          }}
                         />
                       </Col>
                       <Col numColSpan={1}>
+                        <div className="h-52 overflow-y-auto">
                         <Table>
                           <TableHead>
                             <TableRow>
@@ -458,6 +630,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                               ))}
                           </TableBody>
                         </Table>
+                        </div>
                       </Col>
                     </Grid>
                   </div>
