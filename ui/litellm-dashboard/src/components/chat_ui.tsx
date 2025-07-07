@@ -79,25 +79,65 @@ const ChatUI: React.FC<ChatUIProps> = ({
   userID,
   disabledPersonalKeyCreation,
 }) => {
-  const [apiKeySource, setApiKeySource] = useState<'session' | 'custom'>(
-    disabledPersonalKeyCreation ? 'custom' : 'session'
-  );
-  const [apiKey, setApiKey] = useState("");
+  const [apiKeySource, setApiKeySource] = useState<'session' | 'custom'>(() => {
+    const saved = sessionStorage.getItem('apiKeySource');
+    if (saved) {
+      try {
+        return JSON.parse(saved) as 'session' | 'custom';
+      } catch (error) {
+        console.error("Error parsing apiKeySource from sessionStorage", error);
+      }
+    }
+    return disabledPersonalKeyCreation ? 'custom' : 'session';
+  });
+  const [apiKey, setApiKey] = useState<string>(() => sessionStorage.getItem('apiKey') || "");
   const [inputMessage, setInputMessage] = useState("");
-  const [chatHistory, setChatHistory] = useState<MessageType[]>([]);
+  const [chatHistory, setChatHistory] = useState<MessageType[]>(() => {
+    try {
+      const saved = sessionStorage.getItem('chatHistory');
+      return saved ? JSON.parse(saved) : [];
+    } catch (error) {
+      console.error("Error parsing chatHistory from sessionStorage", error);
+      return [];
+    }
+  });
   const [selectedModel, setSelectedModel] = useState<string | undefined>(
-    undefined
+    () => sessionStorage.getItem('selectedModel') || undefined
   );
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const customModelTimeout = useRef<NodeJS.Timeout | null>(null);
-  const [endpointType, setEndpointType] = useState<string>(EndpointType.CHAT);
+  const [endpointType, setEndpointType] = useState<string>(() => sessionStorage.getItem('endpointType') || EndpointType.CHAT);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [selectedVectorStores, setSelectedVectorStores] = useState<string[]>([]);
-  const [selectedGuardrails, setSelectedGuardrails] = useState<string[]>([]);
-  const [messageTraceId, setMessageTraceId] = useState<string | null>(null);
+  const [selectedTags, setSelectedTags] = useState<string[]>(() => {
+    const saved = sessionStorage.getItem('selectedTags');
+    try {
+      return saved ? JSON.parse(saved) : [];
+    } catch (error) {
+      console.error("Error parsing selectedTags from sessionStorage", error);
+      return [];
+    }
+  });
+  const [selectedVectorStores, setSelectedVectorStores] = useState<string[]>(() => {
+    const saved = sessionStorage.getItem('selectedVectorStores');
+    try {
+      return saved ? JSON.parse(saved) : [];
+    } catch (error) {
+      console.error("Error parsing selectedVectorStores from sessionStorage", error);
+      return [];
+    }
+  });
+  const [selectedGuardrails, setSelectedGuardrails] = useState<string[]>(() => {
+    const saved = sessionStorage.getItem('selectedGuardrails');
+    try {
+      return saved ? JSON.parse(saved) : [];
+    } catch (error) {
+      console.error("Error parsing selectedGuardrails from sessionStorage", error);
+      return [];
+    }
+  });
+  const [messageTraceId, setMessageTraceId] = useState<string | null>(() => sessionStorage.getItem('messageTraceId') || null);
   const [uploadedImage, setUploadedImage] = useState<File | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
   const [isGetCodeModalVisible, setIsGetCodeModalVisible] = useState(false);
@@ -126,6 +166,36 @@ const ChatUI: React.FC<ChatUIProps> = ({
   }, [isGetCodeModalVisible, selectedSdk, apiKeySource, accessToken, apiKey, inputMessage, chatHistory, selectedTags, selectedVectorStores, selectedGuardrails, endpointType, selectedModel]);
 
   useEffect(() => {
+    const handler = setTimeout(() => {
+      sessionStorage.setItem('chatHistory', JSON.stringify(chatHistory));
+    }, 500); // Debounce by 500ms
+
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [chatHistory]);
+
+  useEffect(() => {
+    sessionStorage.setItem('apiKeySource', JSON.stringify(apiKeySource));
+    sessionStorage.setItem('apiKey', apiKey);
+    sessionStorage.setItem('endpointType', endpointType);
+    sessionStorage.setItem('selectedTags', JSON.stringify(selectedTags));
+    sessionStorage.setItem('selectedVectorStores', JSON.stringify(selectedVectorStores));
+    sessionStorage.setItem('selectedGuardrails', JSON.stringify(selectedGuardrails));
+
+    if (selectedModel) {
+      sessionStorage.setItem('selectedModel', selectedModel);
+    } else {
+      sessionStorage.removeItem('selectedModel');
+    }
+    if (messageTraceId) {
+      sessionStorage.setItem('messageTraceId', messageTraceId);
+    } else {
+      sessionStorage.removeItem('messageTraceId');
+    }
+  }, [apiKeySource, apiKey, selectedModel, endpointType, selectedTags, selectedVectorStores, selectedGuardrails, messageTraceId]);
+
+  useEffect(() => {
     let userApiKey = apiKeySource === 'session' ? accessToken : apiKey;
     if (!userApiKey || !token || !userRole || !userID) {
       console.log("userApiKey or token or userRole or userID is missing = ", userApiKey, token, userRole, userID);
@@ -147,8 +217,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
   
         if (uniqueModels.length > 0) {
           setModelInfo(uniqueModels);
-          setSelectedModel(uniqueModels[0].model_group);
-        
+          if (!selectedModel) {
+            setSelectedModel(uniqueModels[0].model_group);
+          }
         }
       } catch (error) {
         console.error("Error fetching model info:", error);
@@ -469,6 +540,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
     setChatHistory([]);
     setMessageTraceId(null);
     handleRemoveImage(); // Clear any uploaded images
+    sessionStorage.removeItem('chatHistory');
+    sessionStorage.removeItem('messageTraceId');
     message.success("Chat history cleared.");
   };
 
@@ -507,7 +580,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 </Text>
                 <Select
                   disabled={disabledPersonalKeyCreation}
-                  defaultValue="session"
+                  value={apiKeySource}
                   style={{ width: "100%" }}
                   onChange={(value) => setApiKeySource(value as "session" | "custom")}
                   options={[
@@ -533,6 +606,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   <RobotOutlined className="mr-2" /> Select Model
                 </Text>
                 <Select
+                  value={selectedModel}
                   placeholder="Select a Model"
                   onChange={onModelChange}
                   options={[
