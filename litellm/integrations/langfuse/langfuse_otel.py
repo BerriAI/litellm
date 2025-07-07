@@ -1,12 +1,14 @@
 import base64
 import os
-from enum import Enum
 from typing import TYPE_CHECKING, Any, Union
 from urllib.parse import quote
 
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
-from litellm.types.integrations.langfuse_otel import LangfuseOtelConfig
+from litellm.types.integrations.langfuse_otel import (
+    LangfuseOtelConfig,
+    LangfuseSpanAttributes,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -28,8 +30,7 @@ else:
 LANGFUSE_CLOUD_EU_ENDPOINT = "https://cloud.langfuse.com/api/public/otel"
 LANGFUSE_CLOUD_US_ENDPOINT = "https://us.cloud.langfuse.com/api/public/otel"
 
-class LangfuseSpanAttributes(Enum):
-    LANGFUSE_ENVIRONMENT = "langfuse.environment"
+
 
 class LangfuseOtelLogger:
     @staticmethod
