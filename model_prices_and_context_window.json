@@ -15244,7 +15244,8 @@
         "litellm_provider": "gradient_ai",
         "mode": "chat",
         "supported_endpoints": ["/v1/chat/completions"],
-        "supported_modalities": ["text"]
+        "supported_modalities": ["text"],
+        "supports_tool_choice": true
     },
     "gradient_ai/llama-3.1-8b": {
         "input_cost_per_token": 2e-07,
@@ -15252,7 +15253,8 @@
         "litellm_provider": "gradient_ai",
         "mode": "chat",
         "supported_endpoints": ["/v1/chat/completions"],
-        "supported_modalities": ["text"]
+        "supported_modalities": ["text"],
+        "supports_tool_choice": true
     },
     "gradient_ai/llama-3.1-70b": {
         "input_cost_per_token": 7e-07,
@@ -15260,7 +15262,8 @@
         "litellm_provider": "gradient_ai",
         "mode": "chat",
         "supported_endpoints": ["/v1/chat/completions"],
-        "supported_modalities": ["text"]
+        "supported_modalities": ["text"],
+        "supports_tool_choice": true
     },
     "gradient_ai/llama-3.3-70b": {
         "input_cost_per_token": 65e-08,
@@ -15268,7 +15271,8 @@
         "litellm_provider": "gradient_ai",
         "mode": "chat",
         "supported_endpoints": ["/v1/chat/completions"],
-        "supported_modalities": ["text"]
+        "supported_modalities": ["text"],
+        "supports_tool_choice": true
     },
     "gradient_ai/mistral-nemo": {
         "input_cost_per_token": 3e-07,
@@ -15276,7 +15280,8 @@
         "litellm_provider": "gradient_ai",
         "mode": "chat",
         "supported_endpoints": ["/v1/chat/completions"],
-        "supported_modalities": ["text"]
+        "supported_modalities": ["text"],
+        "supports_tool_choice": true
     },
     "nscale/meta-llama/Llama-4-Scout-17B-16E-Instruct": {
         "input_cost_per_token": 9e-08,
