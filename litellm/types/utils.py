@@ -1846,6 +1846,11 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
     (this is to render the logo on the logs page on litellm ui)
     """
 
+    input_cost_per_query: Optional[float]
+    """
+    Cost per query for the MCP server tool call
+    """
+
 
 class StandardLoggingVectorStoreRequest(TypedDict, total=False):
     """
