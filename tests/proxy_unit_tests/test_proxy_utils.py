@@ -1916,3 +1916,110 @@ async def test_get_admin_team_ids(
         )
     else:
         mock_prisma_client.db.litellm_teamtable.find_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_auth_error_key_info_route():
+    """
+    Test that post_call_failure_hook does NOT call _handle_logging_proxy_only_error
+    when we get an auth error from /key/info route (since it's not an LLM API route).
+    """
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.proxy._types import ProxyErrorTypes
+    from litellm.caching.caching import DualCache
+    from fastapi import HTTPException
+    from unittest.mock import Mock, patch, AsyncMock
+    
+    # Setup
+    cache = DualCache()
+    proxy_logging = ProxyLogging(user_api_key_cache=cache)
+    
+    # Mock the _handle_logging_proxy_only_error method
+    with patch.object(proxy_logging, '_handle_logging_proxy_only_error', new_callable=AsyncMock) as mock_handle_logging:
+        # Create an auth error (HTTPException)
+        auth_error = HTTPException(
+            status_code=401,
+            detail="Authentication Error: invalid user key"
+        )
+        
+        # Create request data for /key/info route
+        request_data = {
+            "route": "/key/info",
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "test"}],
+            "litellm_call_id": "test_call_id_123"
+        }
+        
+        # Create user API key dict
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test_key",
+            user_id="test_user",
+            token="test_token"
+        )
+        
+        # Call post_call_failure_hook with auth error from /key/info route
+        await proxy_logging.post_call_failure_hook(
+            request_data=request_data,
+            original_exception=auth_error,
+            user_api_key_dict=user_api_key_dict,
+            error_type=ProxyErrorTypes.auth_error,
+            route="/key/info"
+        )
+        
+        # Assert that _handle_logging_proxy_only_error was NOT called
+        # because /key/info is not an LLM API route
+        mock_handle_logging.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_auth_error_llm_api_route():
+    """
+    Test that post_call_failure_hook DOES call _handle_logging_proxy_only_error
+    when we get an auth error from /v1/chat/completions route (since it is an LLM API route).
+    """
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.proxy._types import ProxyErrorTypes
+    from litellm.caching.caching import DualCache
+    from fastapi import HTTPException
+    from unittest.mock import Mock, patch, AsyncMock
+    
+    # Setup
+    cache = DualCache()
+    proxy_logging = ProxyLogging(user_api_key_cache=cache)
+    
+    # Mock the _handle_logging_proxy_only_error method
+    with patch.object(proxy_logging, '_handle_logging_proxy_only_error', new_callable=AsyncMock) as mock_handle_logging:
+        # Create an auth error (HTTPException)
+        auth_error = HTTPException(
+            status_code=401,
+            detail="Authentication Error: invalid user key"
+        )
+        
+        # Create request data for /v1/chat/completions route
+        request_data = {
+            "route": "/v1/chat/completions",
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "test"}],
+            "litellm_call_id": "test_call_id_123"
+        }
+        
+        # Create user API key dict
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test_key",
+            user_id="test_user",
+            token="test_token",
+            request_route="/v1/chat/completions"
+        )
+        
+        # Call post_call_failure_hook with auth error from /v1/chat/completions route
+        await proxy_logging.post_call_failure_hook(
+            request_data=request_data,
+            original_exception=auth_error,
+            user_api_key_dict=user_api_key_dict,
+            error_type=ProxyErrorTypes.auth_error,
+            route="/v1/chat/completions"
+        )
+        
+        # Assert that _handle_logging_proxy_only_error WAS called
+        # because /v1/chat/completions is an LLM API route
+        mock_handle_logging.assert_called_once()

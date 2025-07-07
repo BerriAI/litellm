@@ -23,6 +23,9 @@ import { KeyEditView } from "./key_edit_view";
 import { RegenerateKeyModal } from "./regenerate_key_modal";
 import { rolesWithWriteAccess } from '../utils/roles';
 import ObjectPermissionsView from "./object_permissions_view";
+import LoggingSettingsView from "./logging_settings_view";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { extractLoggingSettings, formatMetadataForDisplay } from "./key_info_utils";
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -103,6 +106,7 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
           formValues.metadata = {
             ...parsedMetadata,
             ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
+            ...(formValues.logging_settings ? { logging: formValues.logging_settings } : {})
           };
         } catch (error) {
           console.error("Error parsing metadata JSON:", error);
@@ -113,8 +117,11 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
         formValues.metadata = {
           ...(formValues.metadata || {}),
           ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
+          ...(formValues.logging_settings ? { logging: formValues.logging_settings } : {})
         };
       }
+
+      delete formValues.logging_settings;
 
       // Convert budget_duration to API format
       if (formValues.budget_duration) {
@@ -260,8 +267,8 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
               <Card>
                 <Text>Spend</Text>
                 <div className="mt-2">
-                  <Title>${Number(keyData.spend).toFixed(4)}</Title>
-                  <Text>of {keyData.max_budget !== null ? `$${keyData.max_budget}` : "Unlimited"}</Text>
+                  <Title>${formatNumberWithCommas(keyData.spend, 4)}</Title>
+                  <Text>of {keyData.max_budget !== null ? `$${formatNumberWithCommas(keyData.max_budget)}` : "Unlimited"}</Text>
                 </div>
               </Card>
 
@@ -289,12 +296,17 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
               </Card>
 
               <Card>
-                <ObjectPermissionsView 
-                  objectPermission={keyData.object_permission} 
+                <ObjectPermissionsView
+                  objectPermission={keyData.object_permission}
                   variant="inline"
                   accessToken={accessToken}
                 />
               </Card>
+
+              <LoggingSettingsView
+                loggingConfigs={extractLoggingSettings(keyData.metadata)}
+                variant="card"
+              />
             </Grid>
           </TabPanel>
 
@@ -359,12 +371,16 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
 
                   <div>
                     <Text className="font-medium">Spend</Text>
-                    <Text>${Number(keyData.spend).toFixed(4)} USD</Text>
+                    <Text>${formatNumberWithCommas(keyData.spend, 4)} USD</Text>
                   </div>
 
                   <div>
                     <Text className="font-medium">Budget</Text>
-                    <Text>{keyData.max_budget !== null ? `$${keyData.max_budget} USD` : "Unlimited"}</Text>
+                    <Text>
+                      {keyData.max_budget !== null
+                        ? `$${formatNumberWithCommas(keyData.max_budget, 2)}`
+                        : "Unlimited"}
+                    </Text>
                   </div>
 
                   <div>
@@ -397,15 +413,21 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
                   <div>
                     <Text className="font-medium">Metadata</Text>
                     <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
-                      {JSON.stringify(keyData.metadata, null, 2)}
+                      {formatMetadataForDisplay(keyData.metadata)}
                     </pre>
                   </div>
 
-                  <ObjectPermissionsView 
-                    objectPermission={keyData.object_permission} 
+                  <ObjectPermissionsView
+                    objectPermission={keyData.object_permission}
                     variant="inline"
                     className="pt-4 border-t border-gray-200"
                     accessToken={accessToken}
+                  />
+
+                  <LoggingSettingsView
+                    loggingConfigs={extractLoggingSettings(keyData.metadata)}
+                    variant="inline"
+                    className="pt-4 border-t border-gray-200"
                   />
                 </div>
               )}

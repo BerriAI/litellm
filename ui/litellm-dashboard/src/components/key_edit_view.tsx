@@ -7,6 +7,8 @@ import { modelAvailableCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
+import EditLoggingSettings from "./team/EditLoggingSettings";
+import { extractLoggingSettings, formatMetadataForDisplay } from "./key_info_utils";
 
 interface KeyEditViewProps {
   keyData: KeyResponse;
@@ -97,12 +99,13 @@ export function KeyEditView({
   const initialValues = {
     ...keyData,
     budget_duration: getBudgetDuration(keyData.budget_duration),
-    metadata: keyData.metadata ? JSON.stringify(keyData.metadata, null, 2) : "",
+    metadata: formatMetadataForDisplay(keyData.metadata),
     guardrails: keyData.metadata?.guardrails || [],
     vector_stores: keyData.object_permission?.vector_stores || [],
     mcp_servers: keyData.object_permission?.mcp_servers || [],
     permissions: keyData.permissions ? JSON.stringify(keyData.permissions, null, 2) : "",
-    soft_budget: keyData.litellm_budget_table?.soft_budget || null
+    soft_budget: keyData.litellm_budget_table?.soft_budget || null,
+    logging_settings: extractLoggingSettings(keyData.metadata)
   };
 
   return (
@@ -205,10 +208,6 @@ export function KeyEditView({
         />
       </Form.Item>
 
-      <Form.Item label="Metadata" name="metadata">
-        <Input.TextArea rows={10} />
-      </Form.Item>
-
       <Form.Item label="Team ID" name="team_id">
         <Select
           placeholder="Select team"
@@ -222,6 +221,18 @@ export function KeyEditView({
           ))}
         </Select>
       </Form.Item>
+      <Form.Item label="Logging Settings" name="logging_settings">
+        <EditLoggingSettings
+          value={form.getFieldValue('logging_settings')}
+          onChange={(values) => form.setFieldValue('logging_settings', values)}
+        />
+      </Form.Item>
+
+
+      <Form.Item label="Metadata" name="metadata">
+        <Input.TextArea rows={10} />
+      </Form.Item>
+
 
       {/* Hidden form field for token */}
       <Form.Item name="token" hidden>

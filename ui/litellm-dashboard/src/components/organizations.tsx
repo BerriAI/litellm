@@ -31,6 +31,7 @@ import OrganizationInfoView from './organization/organization_view';
 import { Organization, organizationListCall, organizationCreateCall, organizationDeleteCall } from './networking';
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
+import { formatNumberWithCommas } from "../utils/dataUtils";
 
 interface OrganizationsTableProps {
   organizations: Organization[];
@@ -351,7 +352,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                               <TableCell>
                                 {org.created_at ? new Date(org.created_at).toLocaleDateString() : "N/A"}
                               </TableCell>
-                              <TableCell>{org.spend}</TableCell>
+                              <TableCell>{formatNumberWithCommas(org.spend, 4)}</TableCell>
                               <TableCell>
                                 {org.litellm_budget_table?.max_budget !== null && org.litellm_budget_table?.max_budget !== undefined ? org.litellm_budget_table?.max_budget : "No limit"}
                               </TableCell>
