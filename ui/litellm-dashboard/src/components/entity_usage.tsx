@@ -144,7 +144,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         try {
           modelSpend[model].spend += metrics.metrics.spend;
         } catch (e) {
-          console.log(`Error adding spend for ${model}: ${e}, got metrics: ${JSON.stringify(metrics)}`);
+          console.error(`Error adding spend for ${model}: ${e}, got metrics: ${JSON.stringify(metrics)}`);
         }
         modelSpend[model].requests += metrics.metrics.api_requests;
         modelSpend[model].successful_requests += metrics.metrics.successful_requests;
@@ -227,7 +227,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           providerSpend[provider].failed_requests += metrics.metrics.failed_requests;
           providerSpend[provider].tokens += metrics.metrics.total_tokens;
         } catch (e) {
-          console.log(`Error processing provider ${provider}: ${e}`);
+          console.error(`Error processing provider ${provider}: ${e}`);
         }
       });
     });
