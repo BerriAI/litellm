@@ -501,6 +501,145 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 }'
 ```
 
+## [BETA] Sync User Roles and Teams with IDP
+
+Automatically sync user roles and team memberships from your Identity Provider (IDP) to LiteLLM's database. This ensures that user permissions and team memberships in LiteLLM stay in sync with your IDP.
+
+**Note:** This is in beta and might change unexpectedly.
+
+### Use Cases
+
+- **Role Synchronization**: Automatically update user roles in LiteLLM when they change in your IDP
+- **Team Membership Sync**: Keep team memberships in sync between your IDP and LiteLLM
+- **Centralized Access Management**: Manage all user permissions through your IDP while maintaining LiteLLM functionality
+
+### Setup
+
+#### 1. Configure JWT Role Mapping
+
+Map roles from your JWT token to LiteLLM user roles:
+
+```yaml
+general_settings:
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    user_id_jwt_field: "sub"
+    team_ids_jwt_field: "groups"
+    roles_jwt_field: "roles"
+    user_id_upsert: true
+    sync_user_role_and_teams: true # 👈 Enable sync functionality
+    jwt_litellm_role_map: # 👈 Map JWT roles to LiteLLM roles
+      - jwt_role: "ADMIN"
+        litellm_role: "proxy_admin"
+      - jwt_role: "USER"
+        litellm_role: "internal_user"
+      - jwt_role: "VIEWER"
+        litellm_role: "internal_user"
+```
+
+#### 2. JWT Role Mapping Spec
+
+- `jwt_role`: The role name as it appears in your JWT token. Supports wildcard patterns using `fnmatch` (e.g., `"ADMIN_*"` matches `"ADMIN_READ"`, `"ADMIN_WRITE"`, etc.)
+- `litellm_role`: The corresponding LiteLLM user role
+
+**Supported LiteLLM Roles:**
+- `proxy_admin`: Full administrative access
+- `internal_user`: Standard user access
+- `internal_user_view_only`: Read-only access
+
+#### 3. Example JWT Token
+
+```json
+{
+  "sub": "user-123",
+  "roles": ["ADMIN"],
+  "groups": ["team-alpha", "team-beta"],
+  "iat": 1234567890,
+  "exp": 1234567890
+}
+```
+
+### How It Works
+
+When a user makes a request with a JWT token:
+
+1. **Role Sync**: 
+   - LiteLLM checks if the user's role in the JWT matches their role in the database
+   - If different, the user's role is updated in LiteLLM's database
+   - Uses the `jwt_litellm_role_map` to convert JWT roles to LiteLLM roles
+
+2. **Team Membership Sync**:
+   - Compares team memberships from the JWT token with the user's current teams in LiteLLM
+   - Adds the user to new teams found in the JWT
+   - Removes the user from teams not present in the JWT
+
+3. **Database Updates**:
+   - Updates happen automatically during the authentication process
+   - No manual intervention required
+
+### Configuration Options
+
+```yaml
+general_settings:
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    # Required fields
+    user_id_jwt_field: "sub"
+    team_ids_jwt_field: "groups"
+    roles_jwt_field: "roles"
+    
+    # Sync configuration
+    sync_user_role_and_teams: true
+    user_id_upsert: true
+    
+    # Role mapping
+    jwt_litellm_role_map:
+      - jwt_role: "AI_ADMIN_*"  # Wildcard pattern
+        litellm_role: "proxy_admin"
+      - jwt_role: "AI_USER"
+        litellm_role: "internal_user"
+```
+
+### Important Notes
+
+- **Performance**: Sync operations happen during authentication, which may add slight latency
+- **Database Access**: Requires database access for user and team updates
+- **Team Creation**: Teams mentioned in JWT tokens must exist in LiteLLM before sync can assign users to them
+- **Wildcard Support**: JWT role patterns support wildcard matching using `fnmatch`
+
+### Testing the Sync Feature
+
+1. **Create a test user with initial role**:
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/user/new' \
+-H 'Authorization: Bearer <PROXY_MASTER_KEY>' \
+-H 'Content-Type: application/json' \
+-d '{
+    "user_id": "user-123",
+    "user_role": "internal_user"
+}'
+```
+
+2. **Make a request with JWT containing different role**:
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer <JWT_WITH_ADMIN_ROLE>' \
+-d '{
+  "model": "claude-sonnet-4-20250514",
+  "messages": [{"role": "user", "content": "Hello"}]
+}'
+```
+
+3. **Verify the role was updated**:
+
+```bash
+curl -X GET 'http://0.0.0.0:4000/user/info?user_id=user-123' \
+-H 'Authorization: Bearer <PROXY_MASTER_KEY>'
+```
+
 ## All JWT Params
 
 [**See Code**](https://github.com/BerriAI/litellm/blob/b204f0c01c703317d812a1553363ab0cb989d5b6/litellm/proxy/_types.py#L95)

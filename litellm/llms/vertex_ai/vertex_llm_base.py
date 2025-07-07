@@ -187,7 +187,7 @@ class VertexBase:
 
         api_base = api_base or f"https://{vertex_location}-aiplatform.googleapis.com"
         if partner == VertexPartnerProvider.llama:
-            return f"{api_base}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi/chat/completions"
+            return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi/chat/completions"
         elif partner == VertexPartnerProvider.mistralai:
             if stream:
                 return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:streamRawPredict"
