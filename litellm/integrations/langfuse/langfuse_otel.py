@@ -1,5 +1,6 @@
 import base64
 import os
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Union
 from urllib.parse import quote
 
@@ -27,6 +28,8 @@ else:
 LANGFUSE_CLOUD_EU_ENDPOINT = "https://cloud.langfuse.com/api/public/otel"
 LANGFUSE_CLOUD_US_ENDPOINT = "https://us.cloud.langfuse.com/api/public/otel"
 
+class LangfuseSpanAttributes(Enum):
+    LANGFUSE_ENVIRONMENT = "langfuse.environment"
 
 class LangfuseOtelLogger:
     @staticmethod
@@ -36,7 +39,29 @@ class LangfuseOtelLogger:
         Uses the same attribute setting logic as Arize Phoenix for consistency.
         """
         _utils.set_attributes(span, kwargs, response_obj)
+
+        #########################################################
+        # Set Langfuse specific attributes eg Langfuse Environment
+        #########################################################
+        LangfuseOtelLogger._set_langfuse_specific_attributes(
+            span=span,
+            kwargs=kwargs
+        )
         return
+    
+    @staticmethod
+    def _set_langfuse_specific_attributes(span: Span, kwargs):
+        """
+        Sets Langfuse specific attributes to the span.
+        """
+        from litellm.integrations.arize._utils import safe_set_attribute
+        langfuse_environment = os.environ.get("LANGFUSE_TRACING_ENVIRONMENT", None)
+        if langfuse_environment:
+            safe_set_attribute(
+                span=span,
+                key=LangfuseSpanAttributes.LANGFUSE_ENVIRONMENT.value, 
+                value=langfuse_environment
+            )
 
     @staticmethod
     def get_langfuse_otel_config() -> LangfuseOtelConfig:
