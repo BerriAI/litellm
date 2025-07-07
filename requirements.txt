@@ -16,7 +16,7 @@ pynacl==1.5.0 # for encrypting keys
 google-cloud-aiplatform==1.47.0 # for vertex ai calls
 google-genai==1.22.0
 anthropic[vertex]==0.54.0
-mcp==1.9.3    # for MCP server
+mcp==1.10.1    # for MCP server
 google-generativeai==0.5.0 # for vertex ai calls
 async_generator==1.10.0 # for async ollama calls
 langfuse==2.59.7 # for langfuse self-hosted logging
