@@ -137,9 +137,9 @@ class BedrockVectorStore(BaseVectorStore, BaseAWSLLM):
                     )
                 )
 
-            litellm_logging_obj.model_call_details["vector_store_request_metadata"] = (
-                vector_store_request_metadata
-            )
+            litellm_logging_obj.model_call_details[
+                "vector_store_request_metadata"
+            ] = vector_store_request_metadata
 
         return model, messages, non_default_params
 
@@ -151,9 +151,9 @@ class BedrockVectorStore(BaseVectorStore, BaseAWSLLM):
         """
         Transform a BedrockKBResponse to a VectorStoreSearchResponse
         """
-        retrieval_results: Optional[List[BedrockKBRetrievalResult]] = (
-            bedrock_kb_response.get("retrievalResults", None)
-        )
+        retrieval_results: Optional[
+            List[BedrockKBRetrievalResult]
+        ] = bedrock_kb_response.get("retrievalResults", None)
         vector_store_search_response: VectorStoreSearchResponse = (
             VectorStoreSearchResponse(search_query=query, data=[])
         )
@@ -400,8 +400,8 @@ class BedrockVectorStore(BaseVectorStore, BaseAWSLLM):
         # string to combine the context from the knowledge base
         context_string: str = BedrockVectorStore.CONTENT_PREFIX_STRING
         for retrieval_result in retrieval_results:
-            retrieval_result_content: Optional[BedrockKBContent] = (
-                retrieval_result.get("content", None)
+            retrieval_result_content: Optional[BedrockKBContent] = retrieval_result.get(
+                "content", None
             )
             if retrieval_result_content is None:
                 continue
@@ -423,17 +423,21 @@ class BedrockVectorStore(BaseVectorStore, BaseAWSLLM):
                     for k, v in retrieval_result_metadata.items()
                     if not k.startswith("x-amz")
                 }
-                str_metadata = BedrockVectorStore.CONTENT_SECTION_METADATA_PREFIX_STRING + \
-                json.dumps(retrieval_result_metadata, indent=4, default=str) + \
-                BedrockVectorStore.CONTENT_SECTION_METADATA_SUFFIX_STRING
+                str_metadata = (
+                    BedrockVectorStore.CONTENT_SECTION_METADATA_PREFIX_STRING
+                    + json.dumps(retrieval_result_metadata, indent=4, default=str)
+                    + BedrockVectorStore.CONTENT_SECTION_METADATA_SUFFIX_STRING
+                )
 
-            context_string += BedrockVectorStore.CONTENT_SECTION_PREFIX_STRING + \
-                BedrockVectorStore.CONTENT_SECTION_TEXT_PREFIX_STRING + \
-                retrieval_result_text + \
-                BedrockVectorStore.CONTENT_SECTION_TEXT_SUFFIX_STRING + \
-                str_metadata + \
-                BedrockVectorStore.CONTENT_SECTION_SUFFIX_STRING
-        
+            context_string += (
+                BedrockVectorStore.CONTENT_SECTION_PREFIX_STRING
+                + BedrockVectorStore.CONTENT_SECTION_TEXT_PREFIX_STRING
+                + retrieval_result_text
+                + BedrockVectorStore.CONTENT_SECTION_TEXT_SUFFIX_STRING
+                + str_metadata
+                + BedrockVectorStore.CONTENT_SECTION_SUFFIX_STRING
+            )
+
         context_string += BedrockVectorStore.CONTENT_SUFFIX_STRING
         message = ChatCompletionUserMessage(
             role="user",
