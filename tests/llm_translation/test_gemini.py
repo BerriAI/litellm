@@ -34,6 +34,8 @@ class TestGoogleAIStudioGemini(BaseLLMChatTest):
         result = convert_to_gemini_tool_call_invoke(tool_call_no_arguments)
         print(result)
 
+
+    @pytest.mark.flaky(retries=3, delay=2)
     def test_url_context(self):
         from litellm.utils import supports_url_context
 
@@ -211,7 +213,7 @@ def test_gemini_url_context():
     {url}
     """
     response = completion(
-        model="gemini/gemini-2.0-flash",
+        model="gemini/gemini-2.5-flash",
         messages=[{"role": "user", "content": prompt}],
         tools=[{"urlContext": {}}],
     )
@@ -250,6 +252,7 @@ def test_gemini_with_grounding():
     )
     chunks = []
     for chunk in response:
+        print(f"received chunk: {chunk}")
         chunks.append(chunk)
     print(f"chunks before stream_chunk_builder: {chunks}")
     assert len(chunks) > 0

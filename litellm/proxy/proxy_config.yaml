@@ -6,16 +6,3 @@ model_list:
     litellm_params:
       model: openai/*
 
-
-litellm_settings:
-  callbacks: ["prometheus"]
-  prometheus_metrics_config:
-    - group: totals
-      metrics:
-        - litellm_spend_metric
-        - litellm_total_tokens
-        - litellm_input_tokens_metric
-        - litellm_output_tokens_metric
-      include_labels:
-        - requested_modela
-        - model

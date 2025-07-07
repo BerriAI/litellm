@@ -2,7 +2,7 @@
 s3 Bucket Logging Integration
 
 async_log_success_event: Processes the event, stores it in memory for DEFAULT_S3_FLUSH_INTERVAL_SECONDS seconds or until DEFAULT_S3_BATCH_SIZE and then flushes to s3 
-
+async_log_failure_event: Processes the event, stores it in memory for DEFAULT_S3_FLUSH_INTERVAL_SECONDS seconds or until DEFAULT_S3_BATCH_SIZE and then flushes to s3 
 NOTE 1: S3 does not provide a BATCH PUT API endpoint, so we create tasks to upload each element individually
 """
 
@@ -197,6 +197,24 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         return
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        await self._async_log_event_base(
+            kwargs=kwargs,
+            response_obj=response_obj,
+            start_time=start_time,
+            end_time=end_time,
+        )
+    
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        await self._async_log_event_base(
+            kwargs=kwargs,
+            response_obj=response_obj,
+            start_time=start_time,
+            end_time=end_time,
+        )
+        pass
+    
+
+    async def _async_log_event_base(self, kwargs, response_obj, start_time, end_time):
         try:
             verbose_logger.debug(
                 f"s3 Logging - Enters logging function for model {kwargs}"
@@ -223,6 +241,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         except Exception as e:
             verbose_logger.exception(f"s3 Layer Error - {str(e)}")
             pass
+
 
     async def async_upload_data_to_s3(
         self, batch_logging_element: s3BatchLoggingElement

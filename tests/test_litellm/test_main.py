@@ -271,7 +271,9 @@ def test_bedrock_latency_optimized_inference():
 def test_custom_provider_with_extra_headers():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    with patch.object(litellm.llms.custom_httpx.http_handler.HTTPHandler, "post") as mock_post:
+    with patch.object(
+        litellm.llms.custom_httpx.http_handler.HTTPHandler, "post"
+    ) as mock_post:
         response = litellm.completion(
             model="custom/custom",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
@@ -282,34 +284,42 @@ def test_custom_provider_with_extra_headers():
         mock_post.assert_called_once()
         assert mock_post.call_args[1]["headers"]["X-Custom-Header"] == "custom-value"
 
+
 def test_custom_provider_with_extra_body():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
-    
-    with patch.object(litellm.llms.custom_httpx.http_handler.HTTPHandler, "post") as mock_post:
+
+    with patch.object(
+        litellm.llms.custom_httpx.http_handler.HTTPHandler, "post"
+    ) as mock_post:
         response = litellm.completion(
             model="custom/custom",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
-            extra_body={"X-Custom-BodyValue": "custom-value", "X-Custom-BodyValue2": "custom-value2"},
+            extra_body={
+                "X-Custom-BodyValue": "custom-value",
+                "X-Custom-BodyValue2": "custom-value2",
+            },
             api_base="https://example.com/api/v1",
         )
         mock_post.assert_called_once()
 
         assert mock_post.call_args[1]["json"]["X-Custom-BodyValue"] == "custom-value"
         assert mock_post.call_args[1]["json"] == {
-            'model': 'custom',
-            'params': {
-                'prompt': ['Hello, how are you?'],
-                'max_tokens': None,
-                'temperature': None,
-                'top_p': None,
-                'top_k': None
+            "model": "custom",
+            "params": {
+                "prompt": ["Hello, how are you?"],
+                "max_tokens": None,
+                "temperature": None,
+                "top_p": None,
+                "top_k": None,
             },
-            'X-Custom-BodyValue': 'custom-value',
-            'X-Custom-BodyValue2': 'custom-value2'
+            "X-Custom-BodyValue": "custom-value",
+            "X-Custom-BodyValue2": "custom-value2",
         }
 
     # test that extra_body is not passed if not provided
-    with patch.object(litellm.llms.custom_httpx.http_handler.HTTPHandler, "post") as mock_post:
+    with patch.object(
+        litellm.llms.custom_httpx.http_handler.HTTPHandler, "post"
+    ) as mock_post:
         response = litellm.completion(
             model="custom/custom",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
@@ -317,14 +327,14 @@ def test_custom_provider_with_extra_body():
         )
         mock_post.assert_called_once()
         assert mock_post.call_args[1]["json"] == {
-            'model': 'custom',
-            'params': {
-                'prompt': ['Hello, how are you?'],
-                'max_tokens': None,
-                'temperature': None,
-                'top_p': None,
-                'top_k': None
-            }
+            "model": "custom",
+            "params": {
+                "prompt": ["Hello, how are you?"],
+                "max_tokens": None,
+                "temperature": None,
+                "top_p": None,
+                "top_k": None,
+            },
         }
 
 
@@ -487,3 +497,53 @@ def test_bedrock_llama():
         request["raw_request_body"]["prompt"]
         == "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\nhi<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
     )
+
+
+def test_responses_api_bridge_check_strips_responses_prefix():
+    """Test that responses_api_bridge_check strips 'responses/' prefix and sets mode."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 4096}
+
+        model_info, model = responses_api_bridge_check(
+            model="responses/gpt-4-responses",
+            custom_llm_provider="openai",
+        )
+
+        assert model == "gpt-4-responses"
+        assert model_info["mode"] == "responses"
+
+
+def test_responses_api_bridge_check_handles_exception():
+    """Test that responses_api_bridge_check handles exceptions and still processes responses/ models."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.side_effect = Exception("Model not found")
+
+        model_info, model = responses_api_bridge_check(
+            model="responses/custom-model", custom_llm_provider="custom"
+        )
+
+        assert model == "custom-model"
+        assert model_info["mode"] == "responses"
+
+
+@pytest.mark.asyncio
+async def test_async_mock_delay():
+    """Use asyncio await for mock delay on acompletion"""
+    import time
+
+    from litellm import acompletion
+
+    start_time = time.time()
+    result = await acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        mock_delay=0.01,
+        mock_response="Hello world",
+    )
+    end_time = time.time()
+    delay = end_time - start_time
+    assert delay >= 0.01

@@ -18,6 +18,7 @@ def initialize_standard_callback_dynamic_params(
         _supported_callback_params = (
             StandardCallbackDynamicParams.__annotations__.keys()
         )
+
         for param in _supported_callback_params:
             if param in kwargs:
                 _param_value = kwargs.pop(param)

@@ -39,3 +39,37 @@ def test_empty_choices():
     from litellm.types.utils import Choices
 
     Choices()
+
+
+def test_usage_dump():
+    from litellm.types.utils import (
+        CompletionTokensDetailsWrapper,
+        PromptTokensDetailsWrapper,
+        Usage,
+    )
+
+    current_usage = Usage(
+        completion_tokens=37,
+        prompt_tokens=7,
+        total_tokens=44,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            accepted_prediction_tokens=None,
+            audio_tokens=None,
+            reasoning_tokens=0,
+            rejected_prediction_tokens=None,
+            text_tokens=None,
+        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=None,
+            cached_tokens=None,
+            text_tokens=7,
+            image_tokens=None,
+            web_search_requests=1,
+        ),
+        web_search_requests=None,
+    )
+
+    assert current_usage.prompt_tokens_details.web_search_requests == 1
+
+    new_usage = Usage(**current_usage.model_dump())
+    assert new_usage.prompt_tokens_details.web_search_requests == 1

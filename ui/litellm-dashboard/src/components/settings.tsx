@@ -46,7 +46,7 @@ import AlertingSettings from "./alerting/alerting_settings";
 import FormItem from "antd/es/form/FormItem";
 import {
   callback_map,
-  callbackLogoMap,
+  callbackInfo,
   Callbacks,
 } from "./callback_info_helpers";
 interface SettingsPageProps {
@@ -620,28 +620,16 @@ const Settings: React.FC<SettingsPageProps> = ({
                       value={callback_map[callbackEnum]}
                     >
                       <div className="flex items-center space-x-2">
-                        {callbackLogoMap[callbackDisplayName] ? (
+                        {callbackInfo[callbackDisplayName]?.logo ? (
                           <div className="w-5 h-5 flex items-center justify-center">
                             <img
-                              src={callbackLogoMap[callbackDisplayName]}
+                              src={callbackInfo[callbackDisplayName].logo}
                               alt={`${callbackEnum} logo`}
                               className="w-5 h-5"
-                              onError={() => {
-                                if (callbackLogoMap[callbackDisplayName]) {
-                                  delete callbackLogoMap[callbackDisplayName];
-                                }
-                              }}
-                              style={{
-                                display: callbackLogoMap[callbackDisplayName]
-                                  ? "block"
-                                  : "none",
+                              onError={(e) => {
+                                e.currentTarget.style.display = 'none';
                               }}
                             />
-                            {!callbackLogoMap[callbackDisplayName] && (
-                              <div className="w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs">
-                                {callbackDisplayName.charAt(0).toUpperCase()}
-                              </div>
-                            )}
                           </div>
                         ) : (
                           <div className="w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs">

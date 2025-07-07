@@ -2,7 +2,7 @@
 import warnings
 
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
-### INIT VARIABLES ############
+### INIT VARIABLES ################
 import threading
 import os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
@@ -214,6 +214,7 @@ use_litellm_proxy: bool = (
 )
 use_client: bool = False
 ssl_verify: Union[str, bool] = True
+ssl_security_level: Optional[str] = None
 ssl_certificate: Optional[str] = None
 disable_streaming_logging: bool = False
 disable_token_counter: bool = False
@@ -1058,7 +1059,7 @@ from .llms.groq.chat.transformation import GroqChatConfig
 from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
 from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig
 from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
-from .llms.mistral.mistral_chat_transformation import MistralConfig
+from .llms.mistral.chat.transformation import MistralConfig
 from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from .llms.openai.chat.o_series_transformation import (
@@ -1130,6 +1131,7 @@ from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
 from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig
 from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
 from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
+from .llms.github_copilot.chat.transformation import GithubCopilotConfig
 from .llms.nebius.chat.transformation import NebiusConfig
 from .main import *  # type: ignore
 from .integrations import *
