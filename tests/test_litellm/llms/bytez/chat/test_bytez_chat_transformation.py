@@ -90,8 +90,6 @@ class TestBytezChatConfig:
     def test_bytez_completion_mock(self, respx_mock):
         import litellm
 
-        # need to mock out the bytez chat config from the litellm module so it has the co
-
         mock_validate_model_is_suported(litellm.main.bytez_transformation, True)
 
         output_content = "Hello, how can I help you today?"
