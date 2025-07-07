@@ -10,6 +10,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 import litellm
+from litellm.types.utils import StandardLoggingPayload
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._experimental.mcp_server.server import (
    mcp_server_tool_call,
@@ -63,7 +64,9 @@ async def test_mcp_cost_tracking():
             mcp_servers_config={
                 "zapier_gmail_server": {
                     "url": os.getenv("ZAPIER_MCP_HTTPS_SERVER_URL"),
-                    "input_cost_per_request": 1.2
+                    "mcp_server_cost_info": {
+                        "default_cost_per_query": 1.2,
+                    }
                 }
             }
         )
@@ -92,7 +95,7 @@ async def test_mcp_cost_tracking():
             # wait 1-2 seconds for logging to be processed
             await asyncio.sleep(2)
 
-            logged_standard_logging_payload = test_logger.standard_logging_payload
+            logged_standard_logging_payload: StandardLoggingPayload = test_logger.standard_logging_payload
             print("logged_standard_logging_payload", json.dumps(logged_standard_logging_payload, indent=4))
             
             # Add assertions
@@ -105,3 +108,7 @@ async def test_mcp_cost_tracking():
             # Verify client methods were called
             mock_client.__aenter__.assert_called()
             mock_client.call_tool.assert_called_once()
+
+            ######
+            # verify response cost is 1.2 as set on default_cost_per_query
+            assert logged_standard_logging_payload["response_cost"] == 1.2
