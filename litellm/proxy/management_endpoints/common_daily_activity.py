@@ -296,14 +296,13 @@ async def get_daily_activity(
         )
 
         # for 50% of the records, set the mcp_server_id to a random value
+        mcp_server_dict = {"Zapier_Gmail_MCP", "Stripe_MCP"}
         import random
 
         for idx, record in enumerate(daily_spend_data):
             record = LiteLLM_DailyUserSpend(**record.model_dump())
             if random.random() < 0.5:
-                record.mcp_server_id = "random_mcp_server_id_" + str(
-                    random.randint(1, 1000000)
-                )
+                record.mcp_server_id = random.choice(list(mcp_server_dict))
                 record.model = None
                 record.model_group = None
                 record.prompt_tokens = 0
