@@ -1841,6 +1841,13 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
     (this is to render the logo on the logs page on litellm ui)
     """
 
+    namespaced_server_name: Optional[str]
+    """
+    Namespaced server name of the MCP server that the tool call was made to
+
+    Includes the server name prefix if it exists
+    """
+
 
 class StandardLoggingVectorStoreRequest(TypedDict, total=False):
     """

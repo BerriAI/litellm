@@ -775,6 +775,8 @@ class DBSpendUpdateWriter:
                         e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                     )
 
+    # fmt: off
+
     @overload
     @staticmethod
     async def _update_daily_spend(
@@ -786,7 +788,7 @@ class DBSpendUpdateWriter:
         entity_id_field: str,
         table_name: str,
         unique_constraint_name: str,
-    ) -> None:
+    ) -> None: 
         ...
 
     @overload
@@ -814,8 +816,9 @@ class DBSpendUpdateWriter:
         entity_id_field: str,
         table_name: str,
         unique_constraint_name: str,
-    ) -> None:
+    ) -> None: 
         ...
+    # fmt: on
 
     @staticmethod
     async def _update_daily_spend(
@@ -898,13 +901,13 @@ class DBSpendUpdateWriter:
 
                             # Add cache-related fields if they exist
                             if "cache_read_input_tokens" in transaction:
-                                common_data[
-                                    "cache_read_input_tokens"
-                                ] = transaction.get("cache_read_input_tokens", 0)
+                                common_data["cache_read_input_tokens"] = (
+                                    transaction.get("cache_read_input_tokens", 0)
+                                )
                             if "cache_creation_input_tokens" in transaction:
-                                common_data[
-                                    "cache_creation_input_tokens"
-                                ] = transaction.get("cache_creation_input_tokens", 0)
+                                common_data["cache_creation_input_tokens"] = (
+                                    transaction.get("cache_creation_input_tokens", 0)
+                                )
 
                             # Create update data structure
                             update_data = {
