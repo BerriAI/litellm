@@ -5,7 +5,7 @@ import type { CustomTooltipProps } from '@tremor/react';
 import { SpendMetrics, DailyData, ModelActivityData, MetricWithMetadata, KeyMetricWithMetadata } from './usage/types';
 import { Collapse } from 'antd';
 import { formatNumberWithCommas } from '@/utils/dataUtils';
-import { valueFormatter } from '../components/usage/utils/value_formatters';
+import { valueFormatter, valueFormatterSpend } from '../components/usage/utils/value_formatters';
 
 interface ActivityMetricsProps {
   modelMetrics: Record<string, ModelActivityData>;
@@ -178,7 +178,7 @@ const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: Mode
             index="date"
             categories={["metrics.spend"]}
             colors={["green"]}
-            valueFormatter={(value: number) => `$${formatNumberWithCommas(value, 2)}`}
+            valueFormatter={valueFormatterSpend}
             customTooltip={CustomTooltip}
             showLegend={false}
           />

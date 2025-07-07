@@ -29,6 +29,7 @@ import { old_admin_roles, v2_admin_role_names, all_admin_roles, rolesAllowedToSe
 import { Team } from "./key_team_helpers/key_list";
 import { EntityList } from "./entity_usage";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { valueFormatterSpend } from "./usage/utils/value_formatters";
 
 interface NewUsagePageProps {
   accessToken: string | null;
@@ -367,7 +368,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                           index="date"
                           categories={["metrics.spend"]}
                           colors={["cyan"]}
-                          valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
+                          valueFormatter={valueFormatterSpend}
                           yAxisWidth={100}
                           showLegend={false}
                           customTooltip={({ payload, active }) => {
@@ -414,7 +415,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                           index="key"
                           categories={["spend"]}
                           colors={["cyan"]}
-                          valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
+                          valueFormatter={valueFormatterSpend}
                           layout="vertical"
                           yAxisWidth={200}
                           showLegend={false}
