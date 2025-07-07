@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import fnmatch
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
@@ -14,6 +15,7 @@ from litellm.proxy._types import (
     AddTeamCallback,
     CommonProxyErrors,
     LitellmDataForBackendLLMCall,
+    ProxyException,
     SpecialHeaders,
     TeamCallbackMetadata,
     UserAPIKeyAuth,
@@ -656,8 +658,89 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         data=data,
         _metadata_variable_name=_metadata_variable_name,
     )
+
+    # Required headers validation - Key level
+    if "required_headers" in key_metadata and key_metadata["required_headers"] is not None:
+        required_headers = key_metadata["required_headers"]
+        request_headers = dict(request.headers)
+
+        for header_name, required_value in required_headers.items():
+            actual_value = request_headers.get(header_name.lower())
+            if isinstance(required_value, list):
+                if actual_value not in required_value:
+                    raise ProxyException(
+                        message=f"Request blocked: Header '{header_name}' with value '{actual_value}' is not in allowed values, expected one of: {required_value}",
+                        type="authentication_error",
+                        code=403,
+                        param=header_name,
+                    )
+            elif isinstance(required_value, str):
+                if "*" in required_value:
+                    if not fnmatch.fnmatch(actual_value or "", required_value):
+                        raise ProxyException(
+                            message=f"Request blocked: Header '{header_name}' with value '{actual_value}' does not match pattern '{required_value}'",
+                            type="authentication_error",
+                            code=403,
+                            param=header_name,
+                        )
+                elif actual_value != required_value:
+                    raise ProxyException(
+                        message=f"Request blocked: Header '{header_name}' with value '{actual_value}' does not match required value '{required_value}'",
+                        type="authentication_error",
+                        code=403,
+                        param=header_name,
+                    )
+            else:
+                if actual_value != required_value:
+                    raise ProxyException(
+                        message=f"Request blocked: Header '{header_name}' with value '{actual_value}' does not match required value '{required_value}'",
+                        type="authentication_error",
+                        code=403,
+                        param=header_name,
+                    )
+
     ## TEAM-LEVEL SPEND LOGS/TAGS
     team_metadata = user_api_key_dict.team_metadata or {}
+
+    # Required headers validation - Team level
+    if "required_headers" in team_metadata and team_metadata["required_headers"] is not None:
+        required_headers = team_metadata["required_headers"]
+        request_headers = dict(request.headers)
+
+        for header_name, required_value in required_headers.items():
+            actual_value = request_headers.get(header_name.lower())
+            if isinstance(required_value, list):
+                if actual_value not in required_value:
+                    raise ProxyException(
+                        message=f"Request blocked: Header '{header_name}' with value '{actual_value}' is not in allowed values, expected one of: {required_value}",
+                        type="authentication_error",
+                        code=403,
+                        param=header_name,
+                    )
+            elif isinstance(required_value, str):
+                if "*" in required_value:
+                    if not fnmatch.fnmatch(actual_value or "", required_value):
+                        raise ProxyException(
+                            message=f"Request blocked: Header '{header_name}' with value '{actual_value}' does not match pattern '{required_value}'",
+                            type="authentication_error",
+                            code=403,
+                            param=header_name,
+                        )
+                elif actual_value != required_value:
+                    raise ProxyException(
+                        message=f"Request blocked: Header '{header_name}' with value '{actual_value}' does not match required value '{required_value}'",
+                        type="authentication_error",
+                        code=403,
+                        param=header_name,
+                    )
+            else:
+                if actual_value != required_value:
+                    raise ProxyException(
+                        message=f"Request blocked: Header '{header_name}' with value '{actual_value}' does not match required value '{required_value}'",
+                        type="authentication_error",
+                        code=403,
+                        param=header_name,
+                    )
     if "tags" in team_metadata and team_metadata["tags"] is not None:
         data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
             request_tags=data[_metadata_variable_name].get("tags"),
