@@ -75,6 +75,7 @@ class VectorStoreSearchResult(TypedDict, total=False):
 
     score: Optional[float]
     content: Optional[List[VectorStoreResultContent]]
+    metadata: Optional[Dict[str, Any]]
 
 
 class VectorStoreSearchResponse(TypedDict, total=False):
