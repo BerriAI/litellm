@@ -102,6 +102,11 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
     },
   ];
 
+  const processedTopKeys = topKeys.map(k => ({
+    ...k,
+    display_key_alias: k.key_alias && k.key_alias.length > 10 ? `${k.key_alias.slice(0, 10)}...` : (k.key_alias || '-'),
+  }));
+
   return (
     <>
       <div className="mb-4 flex justify-end items-center">
@@ -125,11 +130,11 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
         <div className="relative">
           <BarChart
             className="mt-4 h-40 cursor-pointer hover:opacity-90"
-            data={topKeys}
-            index="key_alias"
+            data={processedTopKeys}
+            index="display_key_alias"
             categories={["spend"]}
             colors={["cyan"]}
-            yAxisWidth={80}
+            yAxisWidth={120}
             tickGap={5}
             layout="vertical"
             showXAxis={false}
@@ -140,11 +145,15 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
             customTooltip={(props) => {
               const item = props.payload?.[0]?.payload;
               return (
-                <div className="p-3 bg-black/90 shadow-lg rounded-lg text-white">
+                <div className="relative z-50 p-3 bg-black/90 shadow-lg rounded-lg text-white max-w-xs">
                   <div className="space-y-1.5">
                     <div className="text-sm">
-                      <span className="text-gray-300">Key: </span>
-                      <span className="font-mono text-gray-100">{item?.api_key?.slice(0, 10)}...</span>
+                      <span className="text-gray-300">Key Alias: </span>
+                      <span className="font-mono text-gray-100 break-all">{item?.key_alias}</span>
+                    </div>
+                    <div className="text-sm">
+                      <span className="text-gray-300">Key ID: </span>
+                      <span className="font-mono text-gray-100 break-all">{item?.api_key}</span>
                     </div>
                     <div className="text-sm">
                       <span className="text-gray-300">Spend: </span>
