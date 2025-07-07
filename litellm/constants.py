@@ -394,7 +394,7 @@ openai_compatible_endpoints: List = [
     "api.featherless.ai/v1",
     "inference.api.nscale.com/v1",
     "api.studio.nebius.ai/v1",
-    "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 ]
 
 
