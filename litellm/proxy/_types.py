@@ -871,7 +871,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     created_by: Optional[str] = None
     updated_at: Optional[datetime] = None
     updated_by: Optional[str] = None
-
+    teams: Optional[List[Dict[str, Optional[str]]]] = Field(default_factory=list)
 
 class NewUserRequestTeam(LiteLLMPydanticObjectBase):
     team_id: str

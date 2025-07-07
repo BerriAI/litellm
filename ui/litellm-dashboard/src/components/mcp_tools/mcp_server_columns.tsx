@@ -1,79 +1,94 @@
-import React from "react";
 import { ColumnDef } from "@tanstack/react-table";
-import { Tooltip } from "antd";
-import { Icon } from "@tremor/react";
-import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
-import { MCPServer, handleAuth, handleTransport } from "./types";
-import { isAdminRole } from "@/utils/roles";
-import { maskUrl } from "./utils";
-
-const displayFriendlyId = (id: string) => `${id.slice(0, 7)}...`;
-
-const displayFriendlyUrl = (url: string) => {
-  if (!url) return "";
-  return url.length > 30 ? `${url.slice(0, 30)}...` : url;
-};
+import { MCPServer, Team } from "./types";
+import { Button, Tooltip } from "antd";
+import { EyeIcon, PencilIcon, TrashIcon, EyeOffIcon } from "lucide-react";
+import { getMaskedAndFullUrl } from "./utils";
+import { useState } from "react";
 
 export const mcpServerColumns = (
-  userRole: string | null,
-  onSelect: (serverId: string) => void,
+  userRole: string,
+  onView: (serverId: string) => void,
   onEdit: (serverId: string) => void,
   onDelete: (serverId: string) => void
 ): ColumnDef<MCPServer>[] => [
   {
-    accessorKey: "server_id",
-    header: "ID",
-    cell: ({ getValue, row }) => (
-      <button
-        onClick={() => onSelect(row.original.server_id)}
-        className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
-      >
-        {displayFriendlyId(getValue() as string)}
-      </button>
-    ),
+    id: "alias",
+    header: "Alias",
+    accessorFn: (row) => row.alias || row.server_id,
   },
   {
-    accessorKey: "alias",
-    header: "Name",
-  },
-  {
-    accessorKey: "url",
+    id: "url",
     header: "URL",
-    cell: ({ getValue }) => (
-      <Tooltip title={getValue() as string}>
-        <span className="font-mono text-gray-600 text-xs">
-          {maskUrl(getValue() as string)}
-        </span>
-      </Tooltip>
-    ),
+    cell: ({ row }) => {
+      const [showFullUrl, setShowFullUrl] = useState(false);
+      const { maskedUrl, hasToken } = getMaskedAndFullUrl(row.original.url);
+      
+      return (
+        <div className="flex items-center gap-2 max-w-[400px]">
+          <span className="font-mono text-sm break-all">
+            {hasToken ? (showFullUrl ? row.original.url : maskedUrl) : row.original.url}
+          </span>
+          {hasToken && (
+            <button
+              onClick={() => setShowFullUrl(!showFullUrl)}
+              className="p-1 hover:bg-gray-100 rounded flex-shrink-0"
+            >
+              {showFullUrl ? (
+                <EyeOffIcon className="h-4 w-4 text-gray-500" />
+              ) : (
+                <EyeIcon className="h-4 w-4 text-gray-500" />
+              )}
+            </button>
+          )}
+        </div>
+      );
+    },
   },
   {
-    accessorKey: "transport",
+    id: "transport",
     header: "Transport",
-    cell: ({ row }) => handleTransport(row.original.transport),
+    accessorFn: (row) => (row.transport || "unknown").toUpperCase(),
   },
   {
-    accessorKey: "auth_type",
-    header: "Auth Type",
-    cell: ({ row }) => handleAuth(row.original.auth_type),
+    id: "teams",
+    header: "Teams",
+    accessorFn: (row) => {
+      if (!row.teams?.length) return "No teams";
+      return row.teams.map((team: Team) => team.team_alias || team.team_id).join(", ");
+    },
   },
   {
     id: "actions",
-    header: "Info",
-    cell: ({ row }) =>
-      isAdminRole(userRole || "") ? (
-        <>
-          <Icon
-            icon={PencilAltIcon}
-            size="sm"
-            onClick={() => onEdit(row.original.server_id)}
+    header: "Actions",
+    cell: ({ row }) => (
+      <div className="flex gap-2">
+        <Tooltip title="View">
+          <Button
+            type="text"
+            icon={<EyeIcon className="h-4 w-4" />}
+            onClick={() => onView(row.original.server_id)}
           />
-          <Icon
-            onClick={() => onDelete(row.original.server_id)}
-            icon={TrashIcon}
-            size="sm"
-          />
-        </>
-      ) : null,
+        </Tooltip>
+        {userRole === "admin" && (
+          <>
+            <Tooltip title="Edit">
+              <Button
+                type="text"
+                icon={<PencilIcon className="h-4 w-4" />}
+                onClick={() => onEdit(row.original.server_id)}
+              />
+            </Tooltip>
+            <Tooltip title="Delete">
+              <Button
+                type="text"
+                danger
+                icon={<TrashIcon className="h-4 w-4" />}
+                onClick={() => onDelete(row.original.server_id)}
+              />
+            </Tooltip>
+          </>
+        )}
+      </div>
+    ),
   },
 ];

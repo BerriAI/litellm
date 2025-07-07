@@ -37,7 +37,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       console.log(`formValues: ${JSON.stringify(formValues)}`);
 
       if (accessToken != null) {
-        const response: MCPServer = await createMCPServer(
+        const response = await createMCPServer(
           accessToken,
           formValues
         );
