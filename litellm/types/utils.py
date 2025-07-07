@@ -273,6 +273,11 @@ class CallTypes(Enum):
     generate_content_stream = "generate_content_stream"
     agenerate_content_stream = "agenerate_content_stream"
 
+    #########################################################
+    # MCP Call Types
+    #########################################################
+    call_mcp_tool = "call_mcp_tool"
+
 
 CallTypesLiteral = Literal[
     "embedding",
