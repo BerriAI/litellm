@@ -310,7 +310,7 @@ if MCP_AVAILABLE:
             )
 
         # Remove prefix from tool name for logging and processing
-        original_tool_name, server_name_from_prefix = get_server_name_prefix_tool_mcp(
+        original_tool_name, _ = get_server_name_prefix_tool_mcp(
             name)
 
         standard_logging_mcp_tool_call: StandardLoggingMCPToolCall = (
@@ -327,7 +327,7 @@ if MCP_AVAILABLE:
                 standard_logging_mcp_tool_call
             )
             litellm_logging_obj.model_call_details["model"] = (
-                f"{MCP_TOOL_NAME_PREFIX}: {standard_logging_mcp_tool_call.get('name') or ''}"
+                f"MCP: {MCP_TOOL_NAME_PREFIX}: {standard_logging_mcp_tool_call.get('name') or ''}"
             )
             litellm_logging_obj.model_call_details["custom_llm_provider"] = (
                 standard_logging_mcp_tool_call.get("mcp_server_name")
