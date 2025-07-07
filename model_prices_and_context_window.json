@@ -15795,5 +15795,33 @@
             "calculation": "$0.22/hour = $0.00366/minute = $0.0000611 per second (enterprise pricing)",
             "notes": "ElevenLabs Scribe v1 experimental - enhanced version of the main Scribe model"
         }
+    },
+    "dashscope/qwen-max": {
+        "max_tokens": 32768,
+        "max_input_tokens": 30720,
+        "max_output_tokens": 8192,
+        "litellm_provider": "dashscope",
+        "mode": "chat"
+    },
+    "dashscope/qwen-plus-latest": {
+        "max_tokens": 131072,
+        "max_input_tokens": 129024,
+        "max_output_tokens": 16384,
+        "litellm_provider": "dashscope",
+        "mode": "chat"
+    },
+    "dashscope/qwen-turbo-latest": {
+        "max_tokens": 131072,
+        "max_input_tokens": 129024,
+        "max_output_tokens": 16384,
+        "litellm_provider": "dashscope",
+        "mode": "chat"
+    },
+    "dashscope/qwen3-30b-a3b": {
+        "max_tokens": 131072,
+        "max_input_tokens": 129024,
+        "max_output_tokens": 16384,
+        "litellm_provider": "dashscope",
+        "mode": "chat"
     }
 }

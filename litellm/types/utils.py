@@ -2278,6 +2278,7 @@ class LlmProviders(str, Enum):
     VOLCENGINE = "volcengine"
     CODESTRAL = "codestral"
     TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
+    DASHSCOPE = "dashscope"
     DEEPSEEK = "deepseek"
     SAMBANOVA = "sambanova"
     MARITALK = "maritalk"
