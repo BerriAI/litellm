@@ -353,29 +353,289 @@ class PrometheusLogger(CustomLogger):
 
         verbose_logger.debug(f"prometheus config: {config}")
 
-        label_filters = {}
+        # Parse and validate all configuration groups
+        parsed_configs = []
         self.enabled_metrics = set()
-
-        # Parse each configuration group
+        
         for group_config in config:
             # Validate configuration using Pydantic
             if isinstance(group_config, dict):
                 parsed_config = PrometheusMetricsConfig(**group_config)
             else:
                 parsed_config = group_config
-
-            # Add enabled metrics to the set
+            
+            parsed_configs.append(parsed_config)
             self.enabled_metrics.update(parsed_config.metrics)
 
-            # Set label filters for each metric in this group
-            for metric_name in parsed_config.metrics:
-                if parsed_config.include_labels:
-                    label_filters[metric_name] = parsed_config.include_labels
+        # Validate all configurations
+        validation_results = self._validate_all_configurations(parsed_configs)
+        
+        if validation_results.has_errors:
+            self._pretty_print_validation_errors(validation_results)
+            error_message = "Configuration validation failed:\n" + "\n".join(validation_results.all_error_messages)
+            raise ValueError(error_message)
 
+        # Build label filters from valid configurations
+        label_filters = self._build_label_filters(parsed_configs)
+        
         # Pretty print the processed configuration
         self._pretty_print_prometheus_config(label_filters)
-
         return label_filters
+ 
+    def _validate_all_configurations(self, parsed_configs: List) -> ValidationResults:
+        """Validate all metric configurations and return collected errors"""
+        metric_errors = []
+        label_errors = []
+        
+        for config in parsed_configs:
+            for metric_name in config.metrics:
+                # Validate metric name
+                metric_error = self._validate_single_metric_name(metric_name)
+                if metric_error:
+                    metric_errors.append(metric_error)
+                    continue  # Skip label validation if metric name is invalid
+                
+                # Validate labels if provided
+                if config.include_labels:
+                    label_error = self._validate_single_metric_labels(metric_name, config.include_labels)
+                    if label_error:
+                        label_errors.append(label_error)
+        
+        return ValidationResults(metric_errors=metric_errors, label_errors=label_errors)
+    
+    def _validate_single_metric_name(self, metric_name: str) -> Optional[MetricValidationError]:
+        """Validate a single metric name"""
+        from typing import get_args
+        if metric_name not in set(get_args(DEFINED_PROMETHEUS_METRICS)):
+            return MetricValidationError(
+                metric_name=metric_name,
+                valid_metrics=get_args(DEFINED_PROMETHEUS_METRICS)
+            )
+        return None
+
+    def _validate_single_metric_labels(self, metric_name: str, labels: List[str]) -> Optional[LabelValidationError]:
+        """Validate labels for a single metric"""
+        from typing import cast
+
+        # Get valid labels for this metric from PrometheusMetricLabels
+        valid_labels = PrometheusMetricLabels.get_labels(cast(DEFINED_PROMETHEUS_METRICS, metric_name))
+        
+        # Find invalid labels
+        invalid_labels = [label for label in labels if label not in valid_labels]
+        
+        if invalid_labels:
+            return LabelValidationError(
+                metric_name=metric_name,
+                invalid_labels=invalid_labels,
+                valid_labels=valid_labels
+            )
+        return None
+    
+    def _build_label_filters(self, parsed_configs: List) -> Dict[str, List[str]]:
+        """Build label filters from validated configurations"""
+        label_filters = {}
+        
+        for config in parsed_configs:
+            for metric_name in config.metrics:
+                if config.include_labels:
+                    # Only add if metric name is valid (validation already passed)
+                    if self._validate_single_metric_name(metric_name) is None:
+                        label_filters[metric_name] = config.include_labels
+        
+        return label_filters
+
+    def _validate_configured_metric_labels(self, metric_name: str, labels: List[str]):
+        """
+        Ensure that all the configured labels are valid for the metric
+
+        Raises ValueError if the metric labels are invalid and pretty prints the error
+        """
+        label_error = self._validate_single_metric_labels(metric_name, labels)
+        if label_error:
+            self._pretty_print_invalid_labels_error(
+                metric_name=label_error.metric_name,
+                invalid_labels=label_error.invalid_labels,
+                valid_labels=label_error.valid_labels
+            )
+            raise ValueError(label_error.message)
+        
+        return True
+    
+    #########################################################
+    # Pretty print functions
+    #########################################################
+
+    def _pretty_print_validation_errors(self, validation_results: ValidationResults) -> None:
+        """Pretty print all validation errors using rich"""
+        try:
+            from rich.console import Console
+            from rich.panel import Panel
+            from rich.table import Table
+            from rich.text import Text
+
+            console = Console()
+
+            # Create error panel title
+            title = Text("🚨🚨 Configuration Validation Errors", style="bold red")
+
+            # Print main error panel
+            console.print("\n")
+            console.print(Panel(title, border_style="red"))
+
+            # Show invalid metric names if any
+            if validation_results.metric_errors:
+                invalid_metrics = [e.metric_name for e in validation_results.metric_errors]
+                valid_metrics = validation_results.metric_errors[0].valid_metrics  # All should have same valid metrics
+                
+                metrics_error_text = Text(
+                    f"Invalid Metric Names: {', '.join(invalid_metrics)}", 
+                    style="bold red"
+                )
+                console.print(Panel(metrics_error_text, border_style="red"))
+                
+                metrics_table = Table(
+                    title="📊 Valid Metric Names",
+                    show_header=True,
+                    header_style="bold green",
+                    title_justify="left",
+                    border_style="green",
+                )
+                metrics_table.add_column("Available Metrics", style="cyan", no_wrap=True)
+
+                for metric in sorted(valid_metrics):
+                    metrics_table.add_row(metric)
+
+                console.print(metrics_table)
+
+            # Show invalid labels if any
+            if validation_results.label_errors:
+                for error in validation_results.label_errors:
+                    labels_error_text = Text(
+                        f"Invalid Labels for '{error.metric_name}': {', '.join(error.invalid_labels)}", 
+                        style="bold red"
+                    )
+                    console.print(Panel(labels_error_text, border_style="red"))
+                    
+                    labels_table = Table(
+                        title=f"🏷️ Valid Labels for '{error.metric_name}'",
+                        show_header=True,
+                        header_style="bold green",
+                        title_justify="left",
+                        border_style="green",
+                    )
+                    labels_table.add_column("Valid Labels", style="cyan", no_wrap=True)
+
+                    for label in sorted(error.valid_labels):
+                        labels_table.add_row(label)
+
+                    console.print(labels_table)
+
+            console.print("\n")
+
+        except ImportError:
+            # Fallback to simple logging if rich is not available
+            for metric_error in validation_results.metric_errors:
+                verbose_logger.error(metric_error.message)
+            for label_error in validation_results.label_errors:
+                verbose_logger.error(label_error.message)
+
+    def _pretty_print_invalid_labels_error(
+        self, metric_name: str, invalid_labels: List[str], valid_labels: List[str]
+    ) -> None:
+        """Pretty print error message for invalid labels using rich"""
+        try:
+            from rich.console import Console
+            from rich.panel import Panel
+            from rich.table import Table
+            from rich.text import Text
+
+            console = Console()
+
+            # Create error panel title
+            title = Text(
+                f"🚨🚨 Invalid Labels for Metric: '{metric_name}'\nInvalid labels: {', '.join(invalid_labels)}\nPlease specify only valid labels below", 
+                style="bold red"
+            )
+
+            # Create valid labels table
+            labels_table = Table(
+                title="🏷️ Valid Labels for this Metric",
+                show_header=True,
+                header_style="bold green",
+                title_justify="left",
+                border_style="green",
+            )
+            labels_table.add_column("Valid Labels", style="cyan", no_wrap=True)
+
+            for label in sorted(valid_labels):
+                labels_table.add_row(label)
+
+            # Print everything in a nice panel
+            console.print("\n")
+            console.print(Panel(title, border_style="red"))
+            console.print(labels_table)
+            console.print("\n")
+
+        except ImportError:
+            # Fallback to simple logging if rich is not available
+            verbose_logger.error(
+                f"Invalid labels for metric '{metric_name}': {invalid_labels}. Valid labels: {sorted(valid_labels)}"
+            )
+    
+    def _pretty_print_invalid_metric_error(
+        self, invalid_metric_name: str, valid_metrics: tuple
+    ) -> None:
+        """Pretty print error message for invalid metric name using rich"""
+        try:
+            from rich.console import Console
+            from rich.panel import Panel
+            from rich.table import Table
+            from rich.text import Text
+
+            console = Console()
+
+            # Create error panel title
+            title = Text(f"🚨🚨 Invalid Metric Name: '{invalid_metric_name}'\nPlease specify one of the allowed metrics below", style="bold red")
+
+            # Create valid metrics table
+            metrics_table = Table(
+                title="📊 Valid Metric Names",
+                show_header=True,
+                header_style="bold green",
+                title_justify="left",
+                border_style="green",
+            )
+            metrics_table.add_column("Available Metrics", style="cyan", no_wrap=True)
+
+            for metric in sorted(valid_metrics):
+                metrics_table.add_row(metric)
+
+            # Print everything in a nice panel
+            console.print("\n")
+            console.print(Panel(title, border_style="red"))
+            console.print(metrics_table)
+            console.print("\n")
+
+        except ImportError:
+            # Fallback to simple logging if rich is not available
+            verbose_logger.error(
+                f"Invalid metric name: {invalid_metric_name}. Valid metrics: {sorted(valid_metrics)}"
+            )
+    
+    #########################################################
+    # End of pretty print functions
+    #########################################################
+
+    def _valid_metric_name(self, metric_name: str):
+        """
+        Raises ValueError if the metric name is invalid and pretty prints the error
+        """
+        error = self._validate_single_metric_name(metric_name)
+        if error:
+            self._pretty_print_invalid_metric_error(
+                invalid_metric_name=error.metric_name, 
+                valid_metrics=error.valid_metrics)
+            raise ValueError(error.message)
 
     def _pretty_print_prometheus_config(
         self, label_filters: Dict[str, List[str]]
@@ -446,6 +706,7 @@ class PrometheusLogger(CustomLogger):
                 f"Enabled metrics: {sorted(self.enabled_metrics) if hasattr(self, 'enabled_metrics') else 'All metrics'}"
             )
             verbose_logger.info(f"Label filters: {label_filters}")
+
 
     def _is_metric_enabled(self, metric_name: str) -> bool:
         """Check if a metric is enabled based on configuration"""

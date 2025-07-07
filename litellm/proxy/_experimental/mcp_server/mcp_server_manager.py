@@ -18,7 +18,7 @@ from mcp.types import Tool as MCPTool
 from litellm._logging import verbose_logger
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
-    UserAPIKeyAuthMCP,
+    MCPRequestHandler,
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -30,6 +30,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
+from litellm.proxy._experimental.mcp_server.utils import add_server_prefix_to_tool_name, normalize_server_name, get_server_name_prefix_tool_mcp, is_tool_name_prefixed
 
 
 class MCPServerManager:
@@ -143,7 +144,7 @@ class MCPServerManager:
         """
         Get the allowed MCP Servers for the user
         """
-        allowed_mcp_servers = await UserAPIKeyAuthMCP.get_allowed_mcp_servers(
+        allowed_mcp_servers = await MCPRequestHandler.get_allowed_mcp_servers(
             user_api_key_auth
         )
         verbose_logger.debug(
@@ -216,56 +217,114 @@ class MCPServerManager:
 
     async def _get_tools_from_server(self, server: MCPServer, mcp_auth_header: Optional[str] = None) -> List[MCPTool]:
         """
-        Helper method to get tools from a single MCP server.
+        Helper method to get tools from a single MCP server with prefixed names.
 
         Args:
             server (MCPServer): The server to query tools from
+            mcp_auth_header: Optional auth header for MCP server
 
         Returns:
-            List[MCPTool]: List of tools available on the server
+            List[MCPTool]: List of tools available on the server with prefixed names
         """
         verbose_logger.debug(f"Connecting to url: {server.url}")
         verbose_logger.info("_get_tools_from_server...")
 
-        client = self._create_mcp_client(
-            server=server,
-            mcp_auth_header=mcp_auth_header,
-        )
-        async with client:
-            tools = await client.list_tools()
-            verbose_logger.debug(f"Tools from {server.name}: {tools}")
+        client = None
+        try:
+            client = self._create_mcp_client(
+                server=server,
+                mcp_auth_header=mcp_auth_header,
+            )
 
-            # Update tool to server mapping
-            for tool in tools:
-                self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
+            # Create a task for the client operations to ensure proper cancellation handling
+            async def _list_tools_task():
+                async with client:
+                    tools = await client.list_tools()
+                    verbose_logger.debug(f"Tools from {server.name}: {tools}")
+                    return tools
 
-            return tools
-    
+            try:
+                tools = await _list_tools_task()
+
+                # Create new tools with prefixed names
+                prefixed_tools = []
+                for tool in tools:
+                    # Create prefixed tool name
+                    prefixed_name = add_server_prefix_to_tool_name(tool.name, server.name)
+
+                    # Create new tool with prefixed name
+                    prefixed_tool = MCPTool(
+                        name=prefixed_name,
+                        description=tool.description,
+                        inputSchema=tool.inputSchema
+                    )
+                    prefixed_tools.append(prefixed_tool)
+
+                    # Update tool to server mapping with both original and prefixed names
+                    self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
+                    self.tool_name_to_mcp_server_name_mapping[prefixed_name] = server.name
+
+                return prefixed_tools
+            except asyncio.CancelledError:
+                verbose_logger.warning(f"Task cancelled while listing tools from {server.name}")
+                raise  # Re-raise the cancellation
+            except Exception as e:
+                verbose_logger.exception(f"Error listing tools from {server.name}: {str(e)}")
+                raise
+        except Exception as e:
+            verbose_logger.exception(f"Failed to get tools from server {server.name}: {str(e)}")
+            return []  # Return empty list on failure
+        finally:
+            if client:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+
     async def call_tool(
-        self, 
-        name: str, 
-        arguments: Dict[str, Any],
-        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-        mcp_auth_header: Optional[str] = None,
+            self,
+            name: str,
+            arguments: Dict[str, Any],
+            user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+            mcp_auth_header: Optional[str] = None,
     ) -> CallToolResult:
         """
-        Call a tool with the given name and arguments
+        Call a tool with the given name and arguments (handles prefixed tool names)
+
+        Args:
+            name: Tool name (can be prefixed with server name)
+            arguments: Tool arguments
+            user_api_key_auth: User authentication
+            mcp_auth_header: MCP auth header
+
+        Returns:
+            CallToolResult from the MCP server
         """
+        # Remove prefix if present to get the original tool name
+        original_tool_name, server_name_from_prefix = get_server_name_prefix_tool_mcp(name)
+
+        # Get the MCP server
         mcp_server = self._get_mcp_server_from_tool_name(name)
         if mcp_server is None:
             raise ValueError(f"Tool {name} not found")
+
+        # Validate that the server from prefix matches the actual server (if prefix was used)
+        if server_name_from_prefix and normalize_server_name(server_name_from_prefix) != normalize_server_name(mcp_server.name):
+            raise ValueError(
+                f"Tool {name} server prefix mismatch: expected {mcp_server.name}, got {server_name_from_prefix}")
 
         client = self._create_mcp_client(
             server=mcp_server,
             mcp_auth_header=mcp_auth_header,
         )
         async with client:
+            # Use the original tool name (without prefix) for the actual call
             call_tool_params = MCPCallToolRequestParams(
-                name=name,
+                name=original_tool_name,
                 arguments=arguments,
             )
             return await client.call_tool(call_tool_params)
-    
+
     #########################################################
     # End of Methods that call the upstream MCP servers
     #########################################################
@@ -288,20 +347,41 @@ class MCPServerManager:
     async def _initialize_tool_name_to_mcp_server_name_mapping(self):
         """
         Call list_tools for each server and update the tool name to MCP server name mapping
+        Note: This now handles prefixed tool names
         """
         for server in self.get_registry().values():
             tools = await self._get_tools_from_server(server)
             for tool in tools:
+                # The tool.name here is already prefixed from _get_tools_from_server
+                # Extract original name for mapping
+                original_name, _ = get_server_name_prefix_tool_mcp(tool.name)
+                self.tool_name_to_mcp_server_name_mapping[original_name] = server.name
                 self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
 
     def _get_mcp_server_from_tool_name(self, tool_name: str) -> Optional[MCPServer]:
         """
-        Get the MCP Server from the tool name
+        Get the MCP Server from the tool name (handles both prefixed and non-prefixed names)
+
+        Args:
+            tool_name: Tool name (can be prefixed or non-prefixed)
+
+        Returns:
+            MCPServer if found, None otherwise
         """
+        # First try with the original tool name
         if tool_name in self.tool_name_to_mcp_server_name_mapping:
+            server_name = self.tool_name_to_mcp_server_name_mapping[tool_name]
             for server in self.get_registry().values():
-                if server.name == self.tool_name_to_mcp_server_name_mapping[tool_name]:
+                if normalize_server_name(server.name) == normalize_server_name(server_name):
                     return server
+
+        # If not found and tool name is prefixed, try extracting server name from prefix
+        if is_tool_name_prefixed(tool_name):
+            _, server_name_from_prefix = get_server_name_prefix_tool_mcp(tool_name)
+            for server in self.get_registry().values():
+                if normalize_server_name(server.name) == normalize_server_name(server_name_from_prefix):
+                    return server
+
         return None
 
     async def _add_mcp_servers_from_db_to_in_memory_registry(self):
