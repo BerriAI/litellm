@@ -22,8 +22,8 @@ class SCIMResource(BaseModel):
 
 
 class SCIMUserName(BaseModel):
-    familyName: str
-    givenName: str
+    familyName: Optional[str] = None
+    givenName: Optional[str] = None
     formatted: Optional[str] = None
     middleName: Optional[str] = None
     honorificPrefix: Optional[str] = None
@@ -43,8 +43,8 @@ class SCIMUserGroup(BaseModel):
 
 
 class SCIMUser(SCIMResource):
-    userName: str
-    name: SCIMUserName
+    userName: Optional[str] = None
+    name: Optional[SCIMUserName] = None
     displayName: Optional[str] = None
     active: bool = True
     emails: Optional[List[SCIMUserEmail]] = None

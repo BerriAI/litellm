@@ -91,6 +91,7 @@ class NvidiaNimConfig(OpenAIGPTConfig):
                 "tools",
                 "tool_choice",
                 "parallel_tool_calls",
+                "response_format",
             ]
 
     def map_openai_params(

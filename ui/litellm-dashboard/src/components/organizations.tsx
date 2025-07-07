@@ -30,6 +30,8 @@ import { message } from 'antd';
 import OrganizationInfoView from './organization/organization_view';
 import { Organization, organizationListCall, organizationCreateCall, organizationDeleteCall } from './networking';
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
+import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
+import { formatNumberWithCommas } from "../utils/dataUtils";
 
 interface OrganizationsTableProps {
   organizations: Organization[];
@@ -117,6 +119,15 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
         delete values.allowed_vector_store_ids;
       }
 
+      // Transform allowed_mcp_server_ids into object_permission
+      if (values.allowed_mcp_server_ids && values.allowed_mcp_server_ids.length > 0) {
+        if (!values.object_permission) {
+          values.object_permission = {};
+        }
+        values.object_permission.mcp_servers = values.allowed_mcp_server_ids;
+        delete values.allowed_mcp_server_ids;
+      }
+
       await organizationCreateCall(accessToken, values);
       setIsOrgModalVisible(false);
       form.resetFields();
@@ -135,7 +146,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
   if (!premiumUser) {
     return (
       <div>
-        <Text>This is a LiteLLM Enterprise feature, and requires a valid key to use. Get a trial key <a href="https://litellm.ai/pricing" target="_blank" rel="noopener noreferrer">here</a>.</Text>
+        <Text>This is a LiteLLM Enterprise feature, and requires a valid key to use. Get a trial key <a href="https://www.litellm.ai/#pricing" target="_blank" rel="noopener noreferrer">here</a>.</Text>
       </div>
     );
   }
@@ -237,13 +248,34 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                     className="mt-4"
                     help="Select vector stores this organization can access. Leave empty for access to all vector stores"
                   >
-                    <VectorStoreSelector
+                  <VectorStoreSelector
                       onChange={(values) => form.setFieldValue('allowed_vector_store_ids', values)}
                       value={form.getFieldValue('allowed_vector_store_ids')}
                       accessToken={accessToken || ''}
                       placeholder="Select vector stores (optional)"
-                    />
-                  </Form.Item>
+                  />
+                </Form.Item>
+
+                <Form.Item
+                  label={
+                    <span>
+                      Allowed MCP Servers{' '}
+                      <Tooltip title="Select which MCP servers this organization can access by default. Leave empty for access to all MCP servers">
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </Tooltip>
+                    </span>
+                  }
+                  name="allowed_mcp_server_ids"
+                  className="mt-4"
+                  help="Select MCP servers this organization can access. Leave empty for access to all MCP servers"
+                >
+                  <MCPServerSelector
+                    onChange={(values) => form.setFieldValue('allowed_mcp_server_ids', values)}
+                    value={form.getFieldValue('allowed_mcp_server_ids')}
+                    accessToken={accessToken || ''}
+                    placeholder="Select MCP servers (optional)"
+                  />
+                </Form.Item>
 
                   <Form.Item label="Metadata" name="metadata">  
                     <Input.TextArea rows={4} />
@@ -320,7 +352,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                               <TableCell>
                                 {org.created_at ? new Date(org.created_at).toLocaleDateString() : "N/A"}
                               </TableCell>
-                              <TableCell>{org.spend}</TableCell>
+                              <TableCell>{formatNumberWithCommas(org.spend, 4)}</TableCell>
                               <TableCell>
                                 {org.litellm_budget_table?.max_budget !== null && org.litellm_budget_table?.max_budget !== undefined ? org.litellm_budget_table?.max_budget : "No limit"}
                               </TableCell>
@@ -527,6 +559,26 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                       help="Select vector stores this organization can access. Leave empty for access to all vector stores"
                     >
                       <VectorStoreSelector
+                        onChange={(values) => form.setFieldValue('allowed_vector_store_ids', values)}
+                        value={form.getFieldValue('allowed_vector_store_ids')}
+                        accessToken={accessToken || ''}
+                        placeholder="Select vector stores (optional)"
+                      />
+                    </Form.Item>
+                    <Form.Item 
+                      label={
+                        <span>
+                          Allowed MCP Servers{' '}
+                          <Tooltip title="Select which MCP servers this organization can access by default. Leave empty for access to all MCP servers">
+                            <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                          </Tooltip>
+                        </span>
+                      }
+                      name="allowed_mcp_server_ids"
+                      className="mt-4"
+                      help="Select MCP servers this organization can access. Leave empty for access to all MCP servers"
+                    >
+                      <MCPServerSelector
                         onChange={(values) => form.setFieldValue('allowed_vector_store_ids', values)}
                         value={form.getFieldValue('allowed_vector_store_ids')}
                         accessToken={accessToken || ''}

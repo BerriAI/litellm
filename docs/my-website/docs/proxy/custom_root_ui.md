@@ -1,3 +1,7 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import Image from '@theme/IdealImage';
+
 # UI - Custom Root Path 
 
 💥 Use this when you want to serve LiteLLM on a custom base url path like `https://localhost:4000/api/v1` 
@@ -7,6 +11,9 @@
 Requires v1.72.3 or higher.
 
 :::
+
+Limitations:
+- This does not work in [litellm non-root](./deploy#non-root---without-internet-connection) images, as it requires write access to the UI files.
 
 ## Usage
 

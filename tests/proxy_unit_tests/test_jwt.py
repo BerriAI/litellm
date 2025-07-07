@@ -677,7 +677,7 @@ async def aaaatest_user_token_output(
 
             request._url = URL(url="/team/new")
             result = await user_api_key_auth(request=request, api_key=bearer_token)
-            await user_info(user_id=user_id)
+            await user_info(request=request, user_id=user_id)
         except Exception as e:
             pytest.fail(f"This should not fail - {str(e)}")
     else:

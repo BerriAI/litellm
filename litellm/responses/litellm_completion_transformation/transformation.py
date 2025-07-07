@@ -2,7 +2,7 @@
 Handles transforming from Responses API -> LiteLLM completion  (Chat Completion API)
 """
 
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
@@ -32,6 +32,8 @@ from litellm.types.llms.openai import (
     ChatCompletionUserMessage,
     GenericChatCompletionMessage,
     OpenAIMcpServerTool,
+    OpenAIWebSearchOptions,
+    OpenAIWebSearchUserLocation,
     Reasoning,
     ResponseAPIUsage,
     ResponseInputParam,
@@ -109,6 +111,9 @@ class LiteLLMCompletionResponsesConfig:
         """
         Transform a Responses API request into a Chat Completion request
         """
+        tools, web_search_options = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            responses_api_request.get("tools") or []  # type: ignore
+        )
         litellm_completion_request: dict = {
             "messages": LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input,
@@ -116,9 +121,7 @@ class LiteLLMCompletionResponsesConfig:
             ),
             "model": model,
             "tool_choice": responses_api_request.get("tool_choice"),
-            "tools": LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-                responses_api_request.get("tools") or []  # type: ignore
-            ),
+            "tools": tools,
             "top_p": responses_api_request.get("top_p"),
             "user": responses_api_request.get("user"),
             "temperature": responses_api_request.get("temperature"),
@@ -127,6 +130,7 @@ class LiteLLMCompletionResponsesConfig:
             "stream": stream,
             "metadata": kwargs.get("metadata"),
             "service_tier": kwargs.get("service_tier"),
+            "web_search_options": web_search_options,
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
         }
@@ -468,32 +472,40 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def transform_responses_api_tools_to_chat_completion_tools(
         tools: Optional[List[Union[FunctionToolParam, OpenAIMcpServerTool]]],
-    ) -> List[Union[ChatCompletionToolParam, OpenAIMcpServerTool]]:
+    ) -> Tuple[List[Union[ChatCompletionToolParam, OpenAIMcpServerTool]], Optional[OpenAIWebSearchOptions]]:
         """
         Transform a Responses API tools into a Chat Completion tools
         """
         if tools is None:
-            return []
+            return [], None
         chat_completion_tools: List[
             Union[ChatCompletionToolParam, OpenAIMcpServerTool]
         ] = []
+        web_search_options: Optional[OpenAIWebSearchOptions] = None
         for tool in tools:
             if tool.get("type") == "mcp":
                 chat_completion_tools.append(cast(OpenAIMcpServerTool, tool))
+            elif tool.get("type") == "web_search_preview" or tool.get("type") == "web_search":
+                _search_context_size: Literal["low", "medium", "high"] = cast(Literal["low", "medium", "high"], tool.get("search_context_size"))
+                _user_location: Optional[OpenAIWebSearchUserLocation] = cast(Optional[OpenAIWebSearchUserLocation], tool.get("user_location") or None)
+                web_search_options = OpenAIWebSearchOptions(
+                    search_context_size=_search_context_size,
+                    user_location=_user_location,
+                )
             else:
                 typed_tool = cast(FunctionToolParam, tool)
                 chat_completion_tools.append(
                     ChatCompletionToolParam(
                         type="function",
                         function=ChatCompletionToolParamFunctionChunk(
-                            name=typed_tool["name"],
+                            name=typed_tool.get("name") or "",
                             description=typed_tool.get("description") or "",
                             parameters=dict(typed_tool.get("parameters", {}) or {}),
                             strict=typed_tool.get("strict", False) or False,
                         ),
                     )
                 )
-        return chat_completion_tools
+        return chat_completion_tools, web_search_options
 
     @staticmethod
     def transform_chat_completion_tools_to_responses_tools(
@@ -587,8 +599,59 @@ class LiteLLMCompletionResponsesConfig:
         responses_output: List[
             Union[GenericResponseOutputItem, OutputFunctionToolCall]
         ] = []
+
+        responses_output.extend(
+            LiteLLMCompletionResponsesConfig._extract_reasoning_output_items(
+                chat_completion_response, choices
+            )
+        )
+        responses_output.extend(
+            LiteLLMCompletionResponsesConfig._extract_message_output_items(
+                chat_completion_response, choices
+            )
+        )
+        responses_output.extend(
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+                chat_completion_response=chat_completion_response
+            )
+        )
+        return responses_output
+
+    @staticmethod
+    def _extract_reasoning_output_items(
+        chat_completion_response: ModelResponse,
+        choices: List[Choices],
+    ) -> List[GenericResponseOutputItem]:
         for choice in choices:
-            responses_output.append(
+            if hasattr(choice, "message") and choice.message:
+                message = choice.message
+                if hasattr(message, "reasoning_content") and message.reasoning_content:
+                    # Only check the first choice for reasoning content
+                    return [
+                        GenericResponseOutputItem(
+                            type="reasoning",
+                            id=f"{chat_completion_response.id}_reasoning",
+                            status=choice.finish_reason,
+                            role="assistant",
+                            content=[
+                                OutputText(
+                                    type="output_text",
+                                    text=message.reasoning_content,
+                                    annotations=[],
+                                )
+                            ],
+                        )
+                    ]
+        return []
+
+    @staticmethod
+    def _extract_message_output_items(
+        chat_completion_response: ModelResponse,
+        choices: List[Choices],
+    ) -> List[GenericResponseOutputItem]:
+        message_output_items = []
+        for choice in choices:
+            message_output_items.append(
                 GenericResponseOutputItem(
                     type="message",
                     id=chat_completion_response.id,
@@ -601,12 +664,7 @@ class LiteLLMCompletionResponsesConfig:
                     ],
                 )
             )
-
-        tool_calls = LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
-            chat_completion_response=chat_completion_response
-        )
-        responses_output.extend(tool_calls)
-        return responses_output
+        return message_output_items
 
     @staticmethod
     def _transform_responses_api_outputs_to_chat_completion_messages(
@@ -699,6 +757,7 @@ class LiteLLMCompletionResponsesConfig:
             # Handle other annotation types here
 
         return response_output_annotations
+
 
     @staticmethod
     def _transform_chat_completion_usage_to_responses_usage(

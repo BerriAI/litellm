@@ -116,7 +116,14 @@ class AzureOpenAIConfig(BaseConfig):
         """
         if "4o" in model:
             return True
-        elif supports_response_schema(model):
+
+        # Normalize model name by replacing dashes between numbers with dots
+        # e.g., gpt-4-1 -> gpt-4.1, gpt-3-5-turbo -> gpt-3.5-turbo
+        import re
+
+        normalized_model = re.sub(r"(\d)-(\d)", r"\1.\2", model)
+
+        if supports_response_schema(normalized_model):
             return True
 
         return False

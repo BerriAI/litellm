@@ -157,7 +157,7 @@ async def test_batch_cost_calculator(sample_file_content_dict):
     so we expect the cost to be 0.5 * 2 = 1.0
     """
     with patch("litellm.completion_cost", return_value=0.5):
-        cost = await _batch_cost_calculator(
+        cost = _batch_cost_calculator(
             file_content_dictionary=sample_file_content_dict,
             custom_llm_provider="openai",
         )

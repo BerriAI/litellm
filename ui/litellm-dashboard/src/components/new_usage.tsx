@@ -15,6 +15,7 @@ import {
   TableHeaderCell, TableBody, TableCell,
   Subtitle, DateRangePicker, DateRangePickerValue
 } from "@tremor/react";
+import UsageDatePicker from "./shared/usage_date_picker";
 import { AreaChart } from "@tremor/react";
 
 import { userDailyActivityCall, tagListCall } from "./networking";
@@ -27,6 +28,7 @@ import EntityUsage from './entity_usage';
 import { old_admin_roles, v2_admin_role_names, all_admin_roles, rolesAllowedToSeeUsage, rolesWithWriteAccess, internalUserRoles } from '../utils/roles';
 import { Team } from "./key_team_helpers/key_list";
 import { EntityList } from "./entity_usage";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 interface NewUsagePageProps {
   accessToken: string | null;
@@ -211,8 +213,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 
   const fetchUserSpendData = async () => {
     if (!accessToken || !dateValue.from || !dateValue.to) return;
-    const startTime = dateValue.from;
-    const endTime = dateValue.to;
+    // Create new Date objects to avoid mutating the original dates
+    const startTime = new Date(dateValue.from);
+    const endTime = new Date(dateValue.to);
     
     try {
       // Get first page
@@ -224,23 +227,31 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
       }
 
       // If only one page, just set the data
-      if (firstPageData.metadata.total_pages === 1) {
+      if (firstPageData.metadata.total_pages <= 1) {
         setUserSpendData(firstPageData);
         return;
       }
 
       // Fetch all pages
       const allResults = [...firstPageData.results];
+      const aggregatedMetadata = { ...firstPageData.metadata };
       
       for (let page = 2; page <= firstPageData.metadata.total_pages; page++) {
         const pageData = await userDailyActivityCall(accessToken, startTime, endTime, page);
         allResults.push(...pageData.results);
+        if (pageData.metadata) {
+            aggregatedMetadata.total_spend += pageData.metadata.total_spend || 0;
+            aggregatedMetadata.total_api_requests += pageData.metadata.total_api_requests || 0;
+            aggregatedMetadata.total_successful_requests += pageData.metadata.total_successful_requests || 0;
+            aggregatedMetadata.total_failed_requests += pageData.metadata.total_failed_requests || 0;
+            aggregatedMetadata.total_tokens += pageData.metadata.total_tokens || 0;
+        }
       }
 
       // Combine all results with the first page's metadata
       setUserSpendData({
         results: allResults,
-        metadata: firstPageData.metadata
+        metadata: aggregatedMetadata
       });
     } catch (error) {
       console.error("Error fetching user spend data:", error);
@@ -273,9 +284,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
           <TabPanel>
             <Grid numItems={2} className="gap-2 w-full mb-4">
               <Col>
-                <Text>Select Time Range</Text>
-                <DateRangePicker
-                  enableSelect={true}
+                <UsageDatePicker
                   value={dateValue}
                   onValueChange={(value) => {
                     setDateValue(value);
@@ -340,7 +349,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                           <Card>
                             <Title>Average Cost per Request</Title>
                             <Text className="text-2xl font-bold mt-2">
-                              ${((totalSpend || 0) / (userSpendData.metadata?.total_api_requests || 1)).toFixed(4)}
+                              ${formatNumberWithCommas(((totalSpend || 0) / (userSpendData.metadata?.total_api_requests || 1)), 4)}
                             </Text>
                           </Card>
                         </Grid>
@@ -358,7 +367,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                           index="date"
                           categories={["metrics.spend"]}
                           colors={["cyan"]}
-                          valueFormatter={(value) => `$${value.toFixed(2)}`}
+                          valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
                           yAxisWidth={100}
                           showLegend={false}
                           customTooltip={({ payload, active }) => {
@@ -367,7 +376,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                             return (
                               <div className="bg-white p-4 shadow-lg rounded-lg border">
                                 <p className="font-bold">{data.date}</p>
-                                <p className="text-cyan-500">Spend: ${data.metrics.spend.toFixed(2)}</p>
+                                <p className="text-cyan-500">Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}</p>
                                 <p className="text-gray-600">Requests: {data.metrics.api_requests}</p>
                                 <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
                                 <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
@@ -405,7 +414,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                           index="key"
                           categories={["spend"]}
                           colors={["cyan"]}
-                          valueFormatter={(value) => `$${value.toFixed(2)}`}
+                          valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
                           layout="vertical"
                           yAxisWidth={200}
                           showLegend={false}
@@ -415,7 +424,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                             return (
                               <div className="bg-white p-4 shadow-lg rounded-lg border">
                                 <p className="font-bold">{data.key}</p>
-                                <p className="text-cyan-500">Spend: ${data.spend.toFixed(2)}</p>
+                                <p className="text-cyan-500">Spend: ${formatNumberWithCommas(data.spend, 2)}</p>
                                 <p className="text-gray-600">Total Requests: {data.requests.toLocaleString()}</p>
                                 <p className="text-green-600">Successful: {data.successful_requests.toLocaleString()}</p>
                                 <p className="text-red-600">Failed: {data.failed_requests.toLocaleString()}</p>
@@ -440,7 +449,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                               data={getProviderSpend()}
                               index="provider"
                               category="spend"
-                              valueFormatter={(value) => `$${value.toFixed(2)}`}
+                              valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
                               colors={["cyan"]}
                             />
                           </Col>
@@ -462,9 +471,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                                     <TableRow key={provider.provider}>
                                       <TableCell>{provider.provider}</TableCell>
                                       <TableCell>
-                                        ${provider.spend < 0.00001
-                                            ? "less than 0.00001" 
-                                            : provider.spend.toFixed(2)}
+                                        ${formatNumberWithCommas(provider.spend, 2)}
                                     </TableCell>
                                     <TableCell className="text-green-600">
                                       {provider.successful_requests.toLocaleString()}
