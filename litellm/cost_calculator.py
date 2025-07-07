@@ -837,6 +837,11 @@ def completion_cost(  # noqa: PLR0915
                         custom_llm_provider=custom_llm_provider,
                         litellm_model_name=model,
                     )
+                elif call_type == CallTypes.call_mcp_tool.value:
+                    from litellm.proxy._experimental.mcp_server.cost_calculator import (
+                        MCPCostCalculator,
+                    )
+                    return MCPCostCalculator.calculate_mcp_tool_call_cost(model=model)
                 # Calculate cost based on prompt_tokens, completion_tokens
                 if (
                     "togethercomputer" in model

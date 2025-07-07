@@ -326,9 +326,9 @@ if MCP_AVAILABLE:
             litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
                 standard_logging_mcp_tool_call
             )
-            litellm_logging_obj.model_call_details["model"] = (
-                f"MCP: {MCP_TOOL_NAME_PREFIX}: {standard_logging_mcp_tool_call.get('name') or ''}"
-            )
+            model_name = f"MCP: {MCP_TOOL_NAME_PREFIX}: {standard_logging_mcp_tool_call.get('name') or ''}"
+            litellm_logging_obj.model = model_name
+            litellm_logging_obj.model_call_details["model"] = model_name
             litellm_logging_obj.model_call_details["custom_llm_provider"] = (
                 standard_logging_mcp_tool_call.get("mcp_server_name")
             )
