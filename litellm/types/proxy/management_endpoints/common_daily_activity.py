@@ -51,6 +51,9 @@ class KeyMetricWithMetadata(MetricBase):
 class BreakdownMetrics(BaseModel):
     """Breakdown of spend by different dimensions"""
 
+    mcp_servers: Dict[str, MetricWithMetadata] = Field(
+        default_factory=dict
+    )  # mcp_server -> {metrics, metadata}
     models: Dict[str, MetricWithMetadata] = Field(
         default_factory=dict
     )  # model -> {metrics, metadata}
@@ -96,7 +99,8 @@ class LiteLLM_DailyUserSpend(BaseModel):
     user_id: str
     date: str
     api_key: str
-    model: str
+    mcp_server_id: Optional[str] = None
+    model: Optional[str] = None
     model_group: Optional[str] = None
     custom_llm_provider: Optional[str] = None
     prompt_tokens: int = 0

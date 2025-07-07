@@ -44,16 +44,27 @@ def update_breakdown_metrics(
     """Updates breakdown metrics for a single record using the existing update_metrics function"""
 
     # Update model breakdown
-    if record.model not in breakdown.models:
+    if record.model and record.model not in breakdown.models:
         breakdown.models[record.model] = MetricWithMetadata(
             metrics=SpendMetrics(),
             metadata=model_metadata.get(
                 record.model, {}
             ),  # Add any model-specific metadata here
         )
-    breakdown.models[record.model].metrics = update_metrics(
-        breakdown.models[record.model].metrics, record
-    )
+    if record.model:
+        breakdown.models[record.model].metrics = update_metrics(
+            breakdown.models[record.model].metrics, record
+        )
+
+    if record.mcp_server_id:
+        if record.mcp_server_id not in breakdown.mcp_servers:
+            breakdown.mcp_servers[record.mcp_server_id] = MetricWithMetadata(
+                metrics=SpendMetrics(),
+                metadata={},
+            )
+        breakdown.mcp_servers[record.mcp_server_id].metrics = update_metrics(
+            breakdown.mcp_servers[record.mcp_server_id].metrics, record
+        )
 
     # Update provider breakdown
     provider = record.custom_llm_provider or "unknown"
@@ -92,9 +103,11 @@ def update_breakdown_metrics(
         if entity_value not in breakdown.entities:
             breakdown.entities[entity_value] = MetricWithMetadata(
                 metrics=SpendMetrics(),
-                metadata=entity_metadata_field.get(entity_value, {})
-                if entity_metadata_field
-                else {},
+                metadata=(
+                    entity_metadata_field.get(entity_value, {})
+                    if entity_metadata_field
+                    else {}
+                ),
             )
         breakdown.entities[entity_value].metrics = update_metrics(
             breakdown.entities[entity_value].metrics, record
@@ -131,6 +144,10 @@ async def get_daily_activity(
     exclude_entity_ids: Optional[List[str]] = None,
 ) -> SpendAnalyticsPaginatedResponse:
     """Common function to get daily activity for any entity type."""
+    from litellm.types.proxy.management_endpoints.common_daily_activity import (
+        LiteLLM_DailyUserSpend,
+    )
+
     if prisma_client is None:
         raise HTTPException(
             status_code=500,
@@ -180,6 +197,23 @@ async def get_daily_activity(
             skip=(page - 1) * page_size,
             take=page_size,
         )
+
+        # for 50% of the records, set the mcp_server_id to a random value
+        import random
+
+        for idx, record in enumerate(daily_spend_data):
+            record = LiteLLM_DailyUserSpend(**record.model_dump())
+            if random.random() < 0.5:
+                record.mcp_server_id = "random_mcp_server_id_" + str(
+                    random.randint(1, 1000000)
+                )
+                record.model = None
+                record.model_group = None
+                record.prompt_tokens = 0
+                record.completion_tokens = 0
+                record.cache_read_input_tokens = 0
+                record.cache_creation_input_tokens = 0
+            daily_spend_data[idx] = record
 
         # Get all unique API keys from the spend data
         api_keys = set()
