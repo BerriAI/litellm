@@ -31,7 +31,7 @@ class VertexAIError(Exception):
 class VertexAIPartnerModels(VertexBase):
     def __init__(self) -> None:
         pass
-    
+
     @staticmethod
     def is_vertex_partner_model(model: str):
         """
@@ -43,6 +43,7 @@ class VertexAIPartnerModels(VertexBase):
         """
         if (
             model.startswith("meta/")
+            or model.startswith("deepseek-ai")
             or model.startswith("mistral")
             or model.startswith("codestral")
             or model.startswith("jamba")
@@ -114,7 +115,7 @@ class VertexAIPartnerModels(VertexBase):
 
             optional_params["stream"] = stream
 
-            if "llama" in model:
+            if "llama" in model or "deepseek-ai" in model:
                 partner = VertexPartnerProvider.llama
             elif "mistral" in model or "codestral" in model:
                 partner = VertexPartnerProvider.mistralai

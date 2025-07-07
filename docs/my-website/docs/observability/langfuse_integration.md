@@ -11,6 +11,13 @@ Example trace in Langfuse using multiple models via LiteLLM:
 <Image img={require('../../img/langfuse-example-trace-multiple-models-min.png')} />
 
 
+:::info
+
+For Langfuse v3, we recommend using the [Langfuse OTEL](./langfuse_otel_integration) integration.
+
+:::
+
+
 ## Usage with LiteLLM Proxy (LLM Gateway)
 
 👉 [**Follow this link to start sending logs to langfuse with LiteLLM Proxy server**](../proxy/logging)

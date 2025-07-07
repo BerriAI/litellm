@@ -217,6 +217,7 @@ def test_get_cloudflare_response_streaming():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="HF Inference API is unstable, this is now the 3rd time it's stopped working")
 async def test_hf_completion_tgi():
     # litellm.set_verbose=True
     try:

@@ -271,7 +271,9 @@ def test_bedrock_latency_optimized_inference():
 def test_custom_provider_with_extra_headers():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    with patch.object(litellm.llms.custom_httpx.http_handler.HTTPHandler, "post") as mock_post:
+    with patch.object(
+        litellm.llms.custom_httpx.http_handler.HTTPHandler, "post"
+    ) as mock_post:
         response = litellm.completion(
             model="custom/custom",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
@@ -282,34 +284,42 @@ def test_custom_provider_with_extra_headers():
         mock_post.assert_called_once()
         assert mock_post.call_args[1]["headers"]["X-Custom-Header"] == "custom-value"
 
+
 def test_custom_provider_with_extra_body():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
-    
-    with patch.object(litellm.llms.custom_httpx.http_handler.HTTPHandler, "post") as mock_post:
+
+    with patch.object(
+        litellm.llms.custom_httpx.http_handler.HTTPHandler, "post"
+    ) as mock_post:
         response = litellm.completion(
             model="custom/custom",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
-            extra_body={"X-Custom-BodyValue": "custom-value", "X-Custom-BodyValue2": "custom-value2"},
+            extra_body={
+                "X-Custom-BodyValue": "custom-value",
+                "X-Custom-BodyValue2": "custom-value2",
+            },
             api_base="https://example.com/api/v1",
         )
         mock_post.assert_called_once()
 
         assert mock_post.call_args[1]["json"]["X-Custom-BodyValue"] == "custom-value"
         assert mock_post.call_args[1]["json"] == {
-            'model': 'custom',
-            'params': {
-                'prompt': ['Hello, how are you?'],
-                'max_tokens': None,
-                'temperature': None,
-                'top_p': None,
-                'top_k': None
+            "model": "custom",
+            "params": {
+                "prompt": ["Hello, how are you?"],
+                "max_tokens": None,
+                "temperature": None,
+                "top_p": None,
+                "top_k": None,
             },
-            'X-Custom-BodyValue': 'custom-value',
-            'X-Custom-BodyValue2': 'custom-value2'
+            "X-Custom-BodyValue": "custom-value",
+            "X-Custom-BodyValue2": "custom-value2",
         }
 
     # test that extra_body is not passed if not provided
-    with patch.object(litellm.llms.custom_httpx.http_handler.HTTPHandler, "post") as mock_post:
+    with patch.object(
+        litellm.llms.custom_httpx.http_handler.HTTPHandler, "post"
+    ) as mock_post:
         response = litellm.completion(
             model="custom/custom",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
@@ -317,14 +327,14 @@ def test_custom_provider_with_extra_body():
         )
         mock_post.assert_called_once()
         assert mock_post.call_args[1]["json"] == {
-            'model': 'custom',
-            'params': {
-                'prompt': ['Hello, how are you?'],
-                'max_tokens': None,
-                'temperature': None,
-                'top_p': None,
-                'top_k': None
-            }
+            "model": "custom",
+            "params": {
+                "prompt": ["Hello, how are you?"],
+                "max_tokens": None,
+                "temperature": None,
+                "top_p": None,
+                "top_k": None,
+            },
         }
 
 
@@ -518,3 +528,22 @@ def test_responses_api_bridge_check_handles_exception():
 
         assert model == "custom-model"
         assert model_info["mode"] == "responses"
+
+
+@pytest.mark.asyncio
+async def test_async_mock_delay():
+    """Use asyncio await for mock delay on acompletion"""
+    import time
+
+    from litellm import acompletion
+
+    start_time = time.time()
+    result = await acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        mock_delay=0.01,
+        mock_response="Hello world",
+    )
+    end_time = time.time()
+    delay = end_time - start_time
+    assert delay >= 0.01

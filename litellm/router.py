@@ -1735,6 +1735,7 @@ class Router:
         kwargs: Dict[str, Any],
     ):
         litellm_logging_object = kwargs.get("litellm_logging_obj", None)
+
         if litellm_logging_object is None:
             litellm_logging_object, kwargs = function_setup(
                 **{
@@ -1770,6 +1771,10 @@ class Router:
             "litellm_params"
         ].get("prompt_label", None)
 
+        prompt_version = kwargs.get(
+            "prompt_version", None
+        ) or prompt_management_deployment["litellm_params"].get("prompt_version", None)
+
         if prompt_id is None or not isinstance(prompt_id, str):
             raise ValueError(
                 f"Prompt ID is not set or not a string. Got={prompt_id}, type={type(prompt_id)}"
@@ -1790,6 +1795,7 @@ class Router:
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
             prompt_label=prompt_label,
+            prompt_version=prompt_version,
         )
 
         kwargs = {**data, **kwargs, **optional_params}

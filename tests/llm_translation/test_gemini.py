@@ -213,7 +213,7 @@ def test_gemini_url_context():
     {url}
     """
     response = completion(
-        model="gemini/gemini-2.0-flash",
+        model="gemini/gemini-2.5-flash",
         messages=[{"role": "user", "content": prompt}],
         tools=[{"urlContext": {}}],
     )

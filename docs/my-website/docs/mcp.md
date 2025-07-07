@@ -83,7 +83,6 @@ mcp_servers:
 </Tabs>
 
 
-
 ## Using your MCP
 
 <Tabs>
@@ -159,7 +158,7 @@ Use tools directly from Cursor IDE with LiteLLM MCP:
 2. **Navigate to MCP Tools**: Go to the "MCP Tools" tab and click "New MCP Server"
 3. **Add Configuration**: Copy and paste the JSON configuration below, then save with `Cmd+S` or `Ctrl+S`
 
-```json title="Cursor MCP Configuration" showLineNumbers
+```json title="Basic Cursor MCP Configuration" showLineNumbers
 {
   "mcpServers": {
     "LiteLLM": {
@@ -173,97 +172,99 @@ Use tools directly from Cursor IDE with LiteLLM MCP:
 ```
 
 </TabItem>
+</Tabs>
 
-<TabItem value="http" label="Streamable HTTP">
+## Segregating MCP Server Access
 
-#### Connect via Streamable HTTP Transport
+You can choose to access specific MCP servers and only list their tools using the `x-mcp-servers` header. This header allows you to:
+- Limit tool access to one or more specific MCP servers
+- Control which tools are available in different environments or use cases
 
-Connect to LiteLLM MCP using HTTP transport. Compatible with any MCP client that supports HTTP streaming:
+The header accepts a comma-separated list of server names: `"Zapier_Gmail,Server2,Server3"`
 
-**Server URL:**
-```text showLineNumbers
-<your-litellm-proxy-base-url>/mcp
+Notes:
+- Server names with spaces should be replaced with underscores
+- If the header is not provided, tools from all available MCP servers will be accessible
+
+<Tabs>
+<TabItem value="openai" label="OpenAI API">
+
+```bash title="cURL Example with Server Segregation" showLineNumbers
+curl --location 'https://api.openai.com/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $OPENAI_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "<your-litellm-proxy-base-url>/mcp",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+                "x-mcp-servers": "Zapier_Gmail"
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
 ```
 
-**Headers:**
-```text showLineNumbers
-x-litellm-api-key: Bearer YOUR_LITELLM_API_KEY
-```
-
-This URL can be used with any MCP client that supports HTTP transport. Refer to your client documentation to determine the appropriate transport method.
+In this example, the request will only have access to tools from the "Zapier_Gmail" MCP server.
 
 </TabItem>
 
-<TabItem value="fastmcp" label="Python FastMCP">
+<TabItem value="litellm" label="LiteLLM Proxy">
 
-#### Connect via Python FastMCP Client
-
-Use the Python FastMCP client to connect to your LiteLLM MCP server:
-
-**Installation:**
-
-```bash title="Install FastMCP" showLineNumbers
-pip install fastmcp
+```bash title="cURL Example with Server Segregation" showLineNumbers
+curl --location '<your-litellm-proxy-base-url>/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $LITELLM_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "<your-litellm-proxy-base-url>/mcp",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+                "x-mcp-servers": "Zapier_Gmail,Server2"
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
 ```
 
-or with uv:
+This configuration restricts the request to only use tools from the specified MCP servers.
 
-```bash title="Install with uv" showLineNumbers
-uv pip install fastmcp
-```
+</TabItem>
 
-**Usage:**
+<TabItem value="cursor" label="Cursor IDE">
 
-```python title="Python FastMCP Example" showLineNumbers
-import asyncio
-import json
-
-from fastmcp import Client
-from fastmcp.client.transports import StreamableHttpTransport
-
-# Create the transport with your LiteLLM MCP server URL
-server_url = "<your-litellm-proxy-base-url>/mcp"
-transport = StreamableHttpTransport(
-    server_url,
-    headers={
-        "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
+```json title="Cursor MCP Configuration with Server Segregation" showLineNumbers
+{
+  "mcpServers": {
+    "LiteLLM": {
+      "url": "<your-litellm-proxy-base-url>/mcp",
+      "headers": {
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
+        "x-mcp-servers": "Zapier_Gmail,Server2"
+      }
     }
-)
-
-# Initialize the client with the transport
-client = Client(transport=transport)
-
-
-async def main():
-    # Connection is established here
-    print("Connecting to LiteLLM MCP server...")
-    async with client:
-        print(f"Client connected: {client.is_connected()}")
-
-        # Make MCP calls within the context
-        print("Fetching available tools...")
-        tools = await client.list_tools()
-
-        print(f"Available tools: {json.dumps([t.name for t in tools], indent=2)}")
-        
-        # Example: Call a tool (replace 'tool_name' with an actual tool name)
-        if tools:
-            tool_name = tools[0].name
-            print(f"Calling tool: {tool_name}")
-            
-            # Call the tool with appropriate arguments
-            result = await client.call_tool(tool_name, arguments={})
-            print(f"Tool result: {result}")
-
-
-# Run the example
-if __name__ == "__main__":
-    asyncio.run(main())
+  }
+}
 ```
+
+This configuration in Cursor IDE settings will limit tool access to only the specified MCP server.
 
 </TabItem>
 </Tabs>
-
 
 ## Using your MCP with client side credentials
 
