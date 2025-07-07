@@ -22,7 +22,7 @@ guardrails:
 class SupportedGuardrailIntegrations(Enum):
     APORIA = "aporia"
     BEDROCK = "bedrock"
-    GURDRAILS_AI = "guardrails_ai"
+    GUARDRAILS_AI = "guardrails_ai"
     LAKERA = "lakera"
     LAKERA_V2 = "lakera_v2"
     PRESIDIO = "presidio"
@@ -339,69 +339,7 @@ class LassoGuardrailConfigModel(BaseModel):
     )
 
 
-class AzureContentSafetyConfigModel(BaseModel):
-    """Configuration parameters for the Azure Content Safety Prompt Shield guardrail"""
-
-    api_key: Optional[str] = Field(
-        default=None,
-        description="API key for the Azure Content Safety Prompt Shield guardrail",
-    )
-
-    api_base: Optional[str] = Field(
-        default=None,
-        description="Base URL for the Azure Content Safety Prompt Shield guardrail",
-    )
-    api_version: Optional[str] = Field(
-        default=None,
-        description="API version for the Azure Content Safety Prompt Shield guardrail",
-    )
-
-
-class AzureContentSafetyPromptShieldConfigModel(AzureContentSafetyConfigModel):
-    """Configuration parameters for the Azure Content Safety Prompt Shield guardrail"""
-
-    pass
-
-
-class AzureContentSafetyTextModerationConfigModel(AzureContentSafetyConfigModel):
-
-    severity_threshold: Optional[int] = Field(
-        default=None,
-        description="Severity threshold for the Azure Content Safety Text Moderation guardrail across all categories",
-    )
-    severity_threshold_by_category: Optional[Dict[str, int]] = Field(
-        default=None,
-        description="Severity threshold by category for the Azure Content Safety Text Moderation guardrail. See list of categories - https://learn.microsoft.com/en-us/azure/ai-services/content-safety/concepts/harm-categories?tabs=warning",
-    )
-
-    categories: Optional[List[str]] = Field(
-        default=None,
-        description="Categories to scan for the Azure Content Safety Text Moderation guardrail. See list of categories - https://learn.microsoft.com/en-us/azure/ai-services/content-safety/concepts/harm-categories?tabs=warning",
-    )
-    blocklistNames: Optional[List[str]] = Field(
-        default=None,
-        description="Blocklist names to scan for the Azure Content Safety Text Moderation guardrail. Learn more - https://learn.microsoft.com/en-us/azure/ai-services/content-safety/quickstart-text",
-    )
-    haltOnBlocklistHit: Optional[bool] = Field(
-        default=None,
-        description="Whether to halt the request if a blocklist hit is detected",
-    )
-    outputType: Optional[Literal["FourSeverityLevels", "EightSeverityLevels"]] = Field(
-        default=None,
-        description="Output type for the Azure Content Safety Text Moderation guardrail. Learn more - https://learn.microsoft.com/en-us/azure/ai-services/content-safety/quickstart-text",
-    )
-
-
-class LitellmParams(
-    PresidioConfigModel,
-    BedrockGuardrailConfigModel,
-    LakeraV2GuardrailConfigModel,
-    LassoGuardrailConfigModel,
-):
-    guardrail: str = Field(description="The type of guardrail integration to use")
-    mode: Union[str, List[str]] = Field(
-        description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
-    )
+class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
     api_key: Optional[str] = Field(
         default=None, description="API key for the guardrail service"
     )
@@ -448,11 +386,46 @@ class LitellmParams(
         default=None, description="Recipe for output (LLM response)"
     )
 
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
+
+
+class LitellmParams(
+    PresidioConfigModel,
+    BedrockGuardrailConfigModel,
+    LakeraV2GuardrailConfigModel,
+    LassoGuardrailConfigModel,
+    BaseLitellmParams,
+):
+    guardrail: str = Field(description="The type of guardrail integration to use")
+    mode: Union[str, List[str]] = Field(
+        description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
+    )
+
+    def __init__(self, **kwargs):
+        default_on = kwargs.pop("default_on", None)
+        if default_on is not None:
+            kwargs["default_on"] = default_on
+        else:
+            kwargs["default_on"] = False
+        super().__init__(**kwargs)
+
+    def __contains__(self, key):
+        # Define custom behavior for the 'in' operator
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
+
 
 class Guardrail(TypedDict, total=False):
     guardrail_id: Optional[str]
-    guardrail_name: str
-    litellm_params: LitellmParams
+    guardrail_name: Required[str]
+    litellm_params: Required[LitellmParams]
     guardrail_info: Optional[Dict]
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
@@ -473,26 +446,10 @@ class DynamicGuardrailParams(TypedDict):
     extra_body: Dict[str, Any]
 
 
-class GuardrailInfoLiteLLMParamsResponse(BaseModel):
-    """The returned LiteLLM Params object for /guardrails/list"""
-
-    guardrail: str
-    mode: Union[str, List[str]]
-    default_on: Optional[bool] = False
-    pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]] = None
-
-    def __init__(self, **kwargs):
-        default_on = kwargs.get("default_on")
-        if default_on is None:
-            default_on = False
-
-        super().__init__(**kwargs)
-
-
 class GuardrailInfoResponse(BaseModel):
     guardrail_id: Optional[str] = None
     guardrail_name: str
-    litellm_params: Optional[GuardrailInfoLiteLLMParamsResponse] = None
+    litellm_params: Optional[BaseLitellmParams] = None
     guardrail_info: Optional[Dict] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -533,12 +490,7 @@ class ApplyGuardrailResponse(BaseModel):
     response_text: str
 
 
-class PatchGuardrailLitellmParams(BaseModel):
-    default_on: Optional[bool] = None
-    pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]] = None
-
-
 class PatchGuardrailRequest(BaseModel):
     guardrail_name: Optional[str] = None
-    litellm_params: Optional[PatchGuardrailLitellmParams] = None
+    litellm_params: Optional[BaseLitellmParams] = None
     guardrail_info: Optional[Dict[str, Any]] = None

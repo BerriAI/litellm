@@ -196,6 +196,7 @@ class KeyManagementRoutes(str, enum.Enum):
     KEY_UPDATE = "/key/update"
     KEY_DELETE = "/key/delete"
     KEY_REGENERATE = "/key/regenerate"
+    KEY_GENERATE_SERVICE_ACCOUNT = "/key/service-account/generate"
     KEY_REGENERATE_WITH_PATH_PARAM = "/key/{key_id}/regenerate"
     KEY_BLOCK = "/key/block"
     KEY_UNBLOCK = "/key/unblock"
@@ -380,6 +381,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_DELETE,
         KeyManagementRoutes.KEY_INFO,
         KeyManagementRoutes.KEY_REGENERATE,
+        KeyManagementRoutes.KEY_GENERATE_SERVICE_ACCOUNT,
         KeyManagementRoutes.KEY_REGENERATE_WITH_PATH_PARAM,
         KeyManagementRoutes.KEY_LIST,
         KeyManagementRoutes.KEY_BLOCK,
@@ -1057,11 +1059,11 @@ class DeleteCustomerRequest(LiteLLMPydanticObjectBase):
 class MemberBase(LiteLLMPydanticObjectBase):
     user_id: Optional[str] = Field(
         default=None,
-        description="The unique ID of the user to add. Either user_id or user_email must be provided"
+        description="The unique ID of the user to add. Either user_id or user_email must be provided",
     )
     user_email: Optional[str] = Field(
         default=None,
-        description="The email address of the user to add. Either user_id or user_email must be provided"
+        description="The email address of the user to add. Either user_id or user_email must be provided",
     )
 
     @model_validator(mode="before")
@@ -2555,7 +2557,7 @@ class MemberUpdateResponse(LiteLLMPydanticObjectBase):
 class TeamMemberAddRequest(MemberAddRequest):
     """
     Request body for adding members to a team.
-    
+
     Example:
     ```json
     {
@@ -2568,10 +2570,11 @@ class TeamMemberAddRequest(MemberAddRequest):
     }
     ```
     """
+
     team_id: str = Field(description="The ID of the team to add the member to")
     max_budget_in_team: Optional[float] = Field(
         default=None,
-        description="Maximum budget allocated to this user within the team. If not set, user has unlimited budget within team limits"
+        description="Maximum budget allocated to this user within the team. If not set, user has unlimited budget within team limits",
     )
 
 
@@ -2872,6 +2875,11 @@ class RoleMapping(BaseModel):
     internal_role: RBAC_ROLES
 
 
+class JWTLiteLLMRoleMap(BaseModel):
+    jwt_role: str
+    litellm_role: LitellmUserRoles
+
+
 class ScopeMapping(OIDCPermissions):
     scope: str
 
@@ -2943,6 +2951,11 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     enforce_scope_based_access: bool = False
     enforce_team_based_model_access: bool = False
     custom_validate: Optional[Callable[..., Literal[True]]] = None
+    #########################################################
+    # Fields for syncing user team membership and roles with IDP provider
+    jwt_litellm_role_map: Optional[List[JWTLiteLLMRoleMap]] = None
+    sync_user_role_and_teams: bool = False
+    #########################################################
 
     def __init__(self, **kwargs: Any) -> None:
         # get the attribute names for this Pydantic model

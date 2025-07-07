@@ -2911,31 +2911,37 @@ def _get_masked_values(
     ]
     return {
         k: (
-            (
-                v[: unmasked_length // 2]
-                + "*" * number_of_asterisks
-                + v[-unmasked_length // 2 :]
-            )
-            if (
-                isinstance(v, str)
-                and len(v) > unmasked_length
-                and number_of_asterisks is not None
+            # If ignore_sensitive_values is True, or if this key doesn't contain sensitive keywords, return original value
+            v
+            if ignore_sensitive_values
+            or not any(
+                sensitive_keyword in k.lower()
+                for sensitive_keyword in sensitive_keywords
             )
             else (
+                # Apply masking to sensitive keys
                 (
                     v[: unmasked_length // 2]
-                    + "*" * (len(v) - unmasked_length)
+                    + "*" * number_of_asterisks
                     + v[-unmasked_length // 2 :]
                 )
-                if (isinstance(v, str) and len(v) > unmasked_length)
-                else "*****"
+                if (
+                    isinstance(v, str)
+                    and len(v) > unmasked_length
+                    and number_of_asterisks is not None
+                )
+                else (
+                    (
+                        v[: unmasked_length // 2]
+                        + "*" * (len(v) - unmasked_length)
+                        + v[-unmasked_length // 2 :]
+                    )
+                    if (isinstance(v, str) and len(v) > unmasked_length)
+                    else ("*****" if isinstance(v, str) else v)
+                )
             )
         )
         for k, v in sensitive_object.items()
-        if not ignore_sensitive_values
-        or not any(
-            sensitive_keyword in k.lower() for sensitive_keyword in sensitive_keywords
-        )
     }
 
 

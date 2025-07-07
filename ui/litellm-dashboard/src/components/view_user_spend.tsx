@@ -23,6 +23,7 @@ import {
 } from "@tremor/react";
 import { Statistic } from "antd"
 import { spendUsersCall, modelAvailableCall }  from "./networking";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 // Define the props type
 interface UserSpendData {
@@ -41,7 +42,7 @@ interface ViewUserSpendProps {
 const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessToken, userSpend, userMaxBudget, selectedTeam }) => {
     console.log(`userSpend: ${userSpend}`)
     let [spend, setSpend] = useState(userSpend !== null ? userSpend : 0.0);
-    const [maxBudget, setMaxBudget] = useState(selectedTeam ? selectedTeam.max_budget : null);
+    const [maxBudget, setMaxBudget] = useState(selectedTeam ? Number(formatNumberWithCommas(selectedTeam.max_budget, 4)) : null);
     useEffect(() => {
       if (selectedTeam) {
           if (selectedTeam.team_alias === "Default Team") {
@@ -132,9 +133,9 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessT
     }
 
 
-    const displayMaxBudget = maxBudget !== null ? `$${maxBudget} limit` : "No limit";
+    const displayMaxBudget = maxBudget !== null ? `$${formatNumberWithCommas(Number(maxBudget), 4)} limit` : "No limit";
 
-    const roundedSpend = spend !== undefined ? spend.toFixed(4) : null;
+    const roundedSpend = spend !== undefined ? formatNumberWithCommas(spend, 4) : null;
 
     console.log(`spend in view user spend: ${spend}`)
     return (

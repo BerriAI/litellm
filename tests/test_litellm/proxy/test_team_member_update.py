@@ -8,7 +8,7 @@ from litellm.proxy.management_endpoints.team_endpoints import team_member_update
 
 
 @pytest.mark.asyncio
-async def test_team_member_update_admin_requires_premium(monkeypatch):
+async def test_ateam_member_update_admin_requires_premium(monkeypatch):
     # Arrange: patch prisma_client and premium_user
     monkeypatch.setattr(proxy_server, "prisma_client", object())
     monkeypatch.setattr(proxy_server, "premium_user", False)
