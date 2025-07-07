@@ -1,5 +1,6 @@
 import json
 import time
+import traceback
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -15,6 +16,7 @@ from functools import lru_cache
 import httpx
 
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
+from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 from litellm.types.utils import LlmProviders
@@ -29,10 +31,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 
 from ..common_utils import validate_environment, API_BASE, BytezError
-from ..openai_to_bytez_param_map import (
-    openai_to_bytez_param_map,
-    map_openai_params_to_bytez_params,
-)
+
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -61,9 +60,37 @@ class BytezChatConfig(BaseConfig):
         # mark the class as using a custom stream wrapper because the default only iterates on lines
         setattr(self.__class__, "has_custom_stream_wrapper", True)
 
+        self.openai_to_bytez_param_map = {
+            "stream": "stream",
+            "max_tokens": "max_new_tokens",
+            "max_completion_tokens": "max_new_tokens",
+            "temperature": "temperature",
+            "top_p": "top_p",
+            "n": "num_return_sequences",
+            "max_retries": "max_retries",
+            "seed": False,  # TODO requires backend changes
+            "stop": False,  # TODO requires backend changes
+            "logit_bias": False,  # TODO requires backend changes
+            "logprobs": False,  # TODO requires backend changes
+            "frequency_penalty": False,
+            "presence_penalty": False,
+            "top_logprobs": False,
+            "modalities": False,
+            "prediction": False,
+            "stream_options": False,
+            "tools": False,
+            "tool_choice": False,
+            "function_call": False,
+            "functions": False,
+            "extra_headers": False,
+            "parallel_tool_calls": False,
+            "audio": False,
+            "web_search_options": False,
+        }
+
     def get_supported_openai_params(self, model: str) -> List[str]:
         supported_params = []
-        for key, value in openai_to_bytez_param_map.items():
+        for key, value in self.openai_to_bytez_param_map.items():
             if value:
                 supported_params.append(key)
 
@@ -76,9 +103,28 @@ class BytezChatConfig(BaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        return map_openai_params_to_bytez_params(
-            {**non_default_params, **optional_params}, drop_params=drop_params
-        )
+
+        adapted_params = {}
+
+        all_params = {**non_default_params, **optional_params}
+
+        for key, value in all_params.items():
+
+            alias = self.openai_to_bytez_param_map.get(key)
+
+            if alias is False:
+                if drop_params:
+                    continue
+
+                raise Exception(f"param `{key}` is not supported on Bytez")
+
+            if alias is None:
+                adapted_params[key] = value
+                continue
+
+            adapted_params[alias] = value
+
+        return adapted_params
 
     def validate_environment(
         self,
@@ -231,7 +277,7 @@ class BytezChatConfig(BaseConfig):
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         json_mode: Optional[bool] = None,
         signed_json_body: Optional[bytes] = None,
-    ) -> CustomStreamWrapper:
+    ) -> "BytezCustomStreamWrapper":
         if client is None or isinstance(client, AsyncHTTPHandler):
             client = _get_httpx_client(params={})
 
@@ -252,9 +298,9 @@ class BytezChatConfig(BaseConfig):
         if response.status_code != 200:
             raise BytezError(status_code=response.status_code, message=response.text)
 
-        completion_stream = response.iter_text(chunk_size=1)
+        completion_stream = response.iter_text()
 
-        streaming_response = CustomStreamWrapper(
+        streaming_response = BytezCustomStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -275,7 +321,7 @@ class BytezChatConfig(BaseConfig):
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         json_mode: Optional[bool] = None,
         signed_json_body: Optional[bytes] = None,
-    ) -> CustomStreamWrapper:
+    ) -> "BytezCustomStreamWrapper":
         if client is None or isinstance(client, HTTPHandler):
             client = get_async_httpx_client(llm_provider=LlmProviders.BYTEZ, params={})
 
@@ -296,9 +342,9 @@ class BytezChatConfig(BaseConfig):
         if response.status_code != 200:
             raise BytezError(status_code=response.status_code, message=response.text)
 
-        completion_stream = response.aiter_text(chunk_size=1)
+        completion_stream = response.aiter_text()
 
-        streaming_response = CustomStreamWrapper(
+        streaming_response = BytezCustomStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -335,6 +381,38 @@ class BytezChatConfig(BaseConfig):
         is_supported = len(models) > 0 and models[0].get("task") == "chat"
 
         return is_supported
+
+
+class BytezCustomStreamWrapper(CustomStreamWrapper):
+    def chunk_creator(self, chunk: Any):
+        try:
+            model_response = self.model_response_creator()
+            response_obj: Dict[str, Any] = {}
+
+            response_obj = {
+                "text": chunk,
+                "is_finished": False,
+                "finish_reason": "",
+            }
+
+            completion_obj: Dict[str, Any] = {"content": chunk}
+
+            return self.return_processed_chunk_logic(
+                completion_obj=completion_obj,
+                model_response=model_response,  # type: ignore
+                response_obj=response_obj,
+            )
+
+        except StopIteration:
+            raise StopIteration
+        except Exception as e:
+            traceback.format_exc()
+            setattr(e, "message", str(e))
+            raise exception_type(
+                model=self.model,
+                custom_llm_provider=self.custom_llm_provider,
+                original_exception=e,
+            )
 
 
 # litellm/types/llms/openai.py is a good reference for what is supported

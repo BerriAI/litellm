@@ -288,19 +288,6 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def handle_bytez_chunk(self, chunk):
-        try:
-            is_finished = False
-            finish_reason = ""
-
-            return {
-                "text": chunk,
-                "is_finished": is_finished,
-                "finish_reason": finish_reason,
-            }
-        except Exception as e:
-            raise e
-
     def handle_ai21_chunk(self, chunk):  # fake streaming
         chunk = chunk.decode("utf-8")
         data_json = json.loads(chunk)
@@ -1005,13 +992,6 @@ class CustomStreamWrapper:
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
-
-            elif self.custom_llm_provider and self.custom_llm_provider == "bytez":
-                response_obj = self.handle_bytez_chunk(chunk)
-                completion_obj["content"] = response_obj["text"]
-                if response_obj["is_finished"]:
-                    self.received_finish_reason = response_obj["finish_reason"]
-                pass
             elif (
                 self.custom_llm_provider and self.custom_llm_provider == "baseten"
             ):  # baseten doesn't provide streaming
