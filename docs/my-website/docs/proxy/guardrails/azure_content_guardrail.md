@@ -71,6 +71,35 @@ curl -i http://localhost:4000/v1/chat/completions \
   }'
 ```
 
+## Supported Params 
+
+### Common Params
+
+- `api_key` - str - Azure Content Safety API key
+- `api_base` - str - Azure Content Safety API base URL
+- `default_on` - bool - Whether to run the guardrail by default. Default is `false`.
+- `mode` - Union[str, list[str]] - Mode to run the guardrail. Either `pre_call` or `post_call`. Default is `pre_call`.
+
+### Azure Text Moderation
+
+- `severity_threshold` - int - Severity threshold for the Azure Content Safety Text Moderation guardrail across all categories
+- `severity_threshold_by_category` - Dict[AzureHarmCategories, int] - Severity threshold by category for the Azure Content Safety Text Moderation guardrail. See list of categories - https://learn.microsoft.com/en-us/azure/ai-services/content-safety/concepts/harm-categories?tabs=warning
+- `categories` - List[AzureHarmCategories] - Categories to scan for the Azure Content Safety Text Moderation guardrail. See list of categories - https://learn.microsoft.com/en-us/azure/ai-services/content-safety/concepts/harm-categories?tabs=warning
+- `blocklistNames` - List[str] - Blocklist names to scan for the Azure Content Safety Text Moderation guardrail. Learn more - https://learn.microsoft.com/en-us/azure/ai-services/content-safety/quickstart-text
+- `haltOnBlocklistHit` - bool - Whether to halt the request if a blocklist hit is detected
+- `outputType` - Literal["FourSeverityLevels", "EightSeverityLevels"] - Output type for the Azure Content Safety Text Moderation guardrail. Learn more - https://learn.microsoft.com/en-us/azure/ai-services/content-safety/quickstart-text
+
+
+AzureHarmCategories:
+- Hate
+- SelfHarm
+- Sexual
+- Violence
+
+### Azure Prompt Shield Only
+
+n/a 
+
 
 ## Further Reading
 
