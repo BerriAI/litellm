@@ -286,6 +286,8 @@ This release brings significant performance improvements to the Python SDK with 
 ## Logging / Guardrail Integrations
 
 #### Features
+- Guardrails 
+  - All guardrails are now supported on the UI - [PR](https://github.com/BerriAI/litellm/pull/12349)
 - **[Azure Content Safety](../../docs/guardrails/azure_content_safety)**
   - Add Azure Content Safety Guardrails to LiteLLM proxy - [PR](https://github.com/BerriAI/litellm/pull/12268)
   - Add azure content safety guardrails to the UI - [PR](https://github.com/BerriAI/litellm/pull/12309)
