@@ -4,7 +4,7 @@ import {
   Grid, Col, DateRangePicker, DateRangePickerValue,
   Table, TableHead, TableRow, TableHeaderCell, TableBody, TableCell,
   DonutChart,
-  TabPanel, TabGroup, TabList, Tab, TabPanels
+  TabPanel, TabGroup, TabList, Tab, TabPanels, Subtitle
 } from "@tremor/react";
 import UsageDatePicker from "./shared/usage_date_picker";
 import { Select } from 'antd';
@@ -525,6 +525,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                           customTooltip={({ payload, active }) => {
                             if (!active || !payload?.[0]) return null;
                             const data = payload[0].payload;
+                            const entityCount = Object.keys(data.breakdown.entities || {}).length;
                             return (
                               <div className="bg-white p-4 shadow-lg rounded-lg border">
                                 <p className="font-bold">{data.date}</p>
@@ -533,7 +534,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                                 <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
                                 <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
                                 <p className="text-gray-600">Total Tokens: {data.metrics.total_tokens}</p>
-                                <p className="text-gray-600">{entityType === 'tag' ? 'Total Tags' : 'Total Teams'}: {Object.keys(data.breakdown.entities || {}).length}</p>
+                                <p className="text-gray-600">{entityType === 'tag' ? 'Total Tags' : 'Total Teams'}: {entityCount}</p>
                                 <div className="mt-2 border-t pt-2">
                                   <p className="font-semibold">Spend by {entityType === 'tag' ? 'Tag' : 'Team'}:</p>
                                   {Object.entries(data.breakdown.entities || {})
@@ -551,6 +552,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                                       </p>
                                     );
                                   })}
+                                  {entityCount > 5 && (
+                                    <p className="text-sm text-gray-500 italic">...and {entityCount - 5} more</p>
+                                  )}
                                 </div>
                               </div>
                             );
@@ -565,6 +569,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                   <div className="flex flex-col space-y-4">
                     <div className="flex flex-col space-y-2">
                       <Title>Spend Per {entityType === 'tag' ? 'Tag' : 'Team'}</Title>
+                      <Subtitle className="text-xs">Showing Top 5 by Spend</Subtitle>
                       <div className="flex items-center text-sm text-gray-500">
                         <span>Get Started by Tracking cost per {entityType} </span>
                         <a href="https://docs.litellm.ai/docs/proxy/enterprise#spend-tracking" className="text-blue-500 hover:text-blue-700 ml-1">
