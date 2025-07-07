@@ -280,6 +280,7 @@ class ProxyBaseLLMRequestProcessing:
         user_api_base: Optional[str] = None,
         model: Optional[str] = None,
     ) -> Tuple[dict, LiteLLMLoggingObj]:
+        start_time = datetime.now()  # start before calling guardrail hooks
         self.data = await add_litellm_data_to_request(
             data=self.data,
             request=request,
@@ -319,6 +320,7 @@ class ProxyBaseLLMRequestProcessing:
             "x-litellm-call-id", str(uuid.uuid4())
         )
         ### CALL HOOKS ### - modify/reject incoming data before calling the model
+
         self.data = await proxy_logging_obj.pre_call_hook(  # type: ignore
             user_api_key_dict=user_api_key_dict, data=self.data, call_type=route_type  # type: ignore
         )
@@ -328,7 +330,7 @@ class ProxyBaseLLMRequestProcessing:
         logging_obj, self.data = litellm.utils.function_setup(
             original_function=route_type,
             rules_obj=litellm.utils.Rules(),
-            start_time=datetime.now(),
+            start_time=start_time,
             **self.data,
         )
 
@@ -724,7 +726,9 @@ class ProxyBaseLLMRequestProcessing:
                 )
                 ### CALL HOOKS ### - modify outgoing data
                 chunk = await proxy_logging_obj.async_post_call_streaming_hook(
-                    user_api_key_dict=user_api_key_dict, response=chunk
+                    user_api_key_dict=user_api_key_dict,
+                    response=chunk,
+                    data=request_data,
                 )
 
                 # Format chunk using helper function

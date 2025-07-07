@@ -83,7 +83,11 @@ class VertexBase:
             if "type" in json_obj and json_obj["type"] == "external_account":
                 # If environment_id key contains "aws" value it corresponds to an AWS config file
                 credential_source = json_obj.get("credential_source", {})
-                environment_id = credential_source.get("environment_id", "") if isinstance(credential_source, dict) else ""
+                environment_id = (
+                    credential_source.get("environment_id", "")
+                    if isinstance(credential_source, dict)
+                    else ""
+                )
                 if isinstance(environment_id, str) and "aws" in environment_id:
                     creds = self._credentials_from_identity_pool_with_aws(json_obj)
                 else:
@@ -130,7 +134,7 @@ class VertexBase:
         from google.auth import identity_pool
 
         return identity_pool.Credentials.from_info(json_obj)
-    
+
     def _credentials_from_identity_pool_with_aws(self, json_obj):
         from google.auth import aws
 
@@ -183,7 +187,7 @@ class VertexBase:
 
         api_base = api_base or f"https://{vertex_location}-aiplatform.googleapis.com"
         if partner == VertexPartnerProvider.llama:
-            return f"{api_base}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi/chat/completions"
+            return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi/chat/completions"
         elif partner == VertexPartnerProvider.mistralai:
             if stream:
                 return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:streamRawPredict"
@@ -490,7 +494,7 @@ class VertexBase:
             headers.update(extra_headers)
 
         return headers
-    
+
     @staticmethod
     def get_vertex_ai_project(litellm_params: dict) -> Optional[str]:
         return (
@@ -499,7 +503,7 @@ class VertexBase:
             or litellm.vertex_project
             or get_secret_str("VERTEXAI_PROJECT")
         )
-    
+
     @staticmethod
     def get_vertex_ai_credentials(litellm_params: dict) -> Optional[str]:
         return (
@@ -507,7 +511,7 @@ class VertexBase:
             or litellm_params.pop("vertex_ai_credentials", None)
             or get_secret_str("VERTEXAI_CREDENTIALS")
         )
-    
+
     @staticmethod
     def get_vertex_ai_location(litellm_params: dict) -> Optional[str]:
         return (

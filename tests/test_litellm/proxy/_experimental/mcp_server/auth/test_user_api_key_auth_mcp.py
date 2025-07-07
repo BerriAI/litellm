@@ -15,7 +15,7 @@ sys.path.insert(
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
-from litellm.proxy._types import UserAPIKeyAuth, SpecialHeaders
+from litellm.proxy._types import SpecialHeaders, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 
@@ -228,7 +228,7 @@ class TestMCPRequestHandler:
                 [
                     (b"x-litellm-api-key", b"test-api-key"),
                     (b"x-mcp-auth", b"test-mcp-auth"),
-                    (b"x-mcp-servers", b'["server1", "server2"]'),
+                    (b"x-mcp-servers", b"server1,server2"),
                 ],
                 {
                     "api_key": "test-api-key",
@@ -245,35 +245,35 @@ class TestMCPRequestHandler:
                     "mcp_servers": None,
                 }
             ),
-            # Test case 3: Invalid JSON in mcp_servers
+            # Test case 3: Invalid format in mcp_servers
             (
                 [
                     (b"x-litellm-api-key", b"test-api-key"),
-                    (b"x-mcp-servers", b'invalid-json'),
+                    (b"x-mcp-servers", b"[invalid,format]"),
                 ],
                 {
                     "api_key": "test-api-key",
                     "mcp_auth": None,
-                    "mcp_servers": None,
+                    "mcp_servers": ["[invalid", "format]"],
                 }
             ),
-            # Test case 4: mcp_servers not a list
+            # Test case 4: Single server
             (
                 [
                     (b"x-litellm-api-key", b"test-api-key"),
-                    (b"x-mcp-servers", b'{"key": "value"}'),
+                    (b"x-mcp-servers", b"server1"),
                 ],
                 {
                     "api_key": "test-api-key",
                     "mcp_auth": None,
-                    "mcp_servers": None,
+                    "mcp_servers": ["server1"],
                 }
             ),
-            # Test case 5: Empty mcp_servers list
+            # Test case 5: Empty server string
             (
                 [
                     (b"x-litellm-api-key", b"test-api-key"),
-                    (b"x-mcp-servers", b'[]'),
+                    (b"x-mcp-servers", b""),
                 ],
                 {
                     "api_key": "test-api-key",
@@ -285,7 +285,7 @@ class TestMCPRequestHandler:
             (
                 [
                     (b"authorization", b"Bearer test-api-key"),
-                    (b"x-mcp-servers", b'["server1"]'),
+                    (b"x-mcp-servers", b"server1"),
                 ],
                 {
                     "api_key": "Bearer test-api-key",
@@ -298,12 +298,24 @@ class TestMCPRequestHandler:
                 [
                     (b"X-LITELLM-API-KEY", b"test-api-key"),
                     (b"X-MCP-AUTH", b"test-mcp-auth"),
-                    (b"X-MCP-SERVERS", b'["server1"]'),
+                    (b"X-MCP-SERVERS", b"server1"),
                 ],
                 {
                     "api_key": "test-api-key",
                     "mcp_auth": "test-mcp-auth",
                     "mcp_servers": ["server1"],
+                }
+            ),
+            # Test case 8: Multiple servers with spaces
+            (
+                [
+                    (b"x-litellm-api-key", b"test-api-key"),
+                    (b"x-mcp-servers", b"server1, server2,  server3"),
+                ],
+                {
+                    "api_key": "test-api-key",
+                    "mcp_auth": None,
+                    "mcp_servers": ["server1", "server2", "server3"],
                 }
             ),
         ]
@@ -332,16 +344,24 @@ class TestMCPRequestHandler:
 
         # Verify MCP servers
         mcp_servers_header = extracted_headers.get(SpecialHeaders.mcp_servers.value)
-        if mcp_servers_header:
+        mcp_servers = None
+        if mcp_servers_header is not None:  # Changed from 'if mcp_servers_header:' to handle empty strings
             try:
-                mcp_servers = json.loads(mcp_servers_header)
-                if not isinstance(mcp_servers, list):
-                    mcp_servers = None
-            except:
+                # First try to parse as JSON array for backward compatibility
+                try:
+                    mcp_servers = json.loads(mcp_servers_header)
+                    if not isinstance(mcp_servers, list):
+                        mcp_servers = None
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    # If JSON parsing fails, treat as comma-separated list
+                    mcp_servers = [s.strip() for s in mcp_servers_header.split(",") if s.strip()]
+            except Exception:
                 mcp_servers = None
-        else:
-            mcp_servers = None
-        
+
+            # If we got an empty string or parsing resulted in no servers, return empty list
+            if mcp_servers_header == "" or (mcp_servers is not None and len(mcp_servers) == 0):
+                mcp_servers = []
+
         assert mcp_servers == expected_result["mcp_servers"]
 
         # Test the full process_mcp_request method
