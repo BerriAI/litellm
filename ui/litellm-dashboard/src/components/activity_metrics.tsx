@@ -252,7 +252,7 @@ const formatKeyLabel = (modelData: KeyMetricWithMetadata, model: string): string
 };
 
 // Process data function
-export const processActivityData = (dailyActivity: { results: DailyData[] }, key: "models" | "api_keys"): Record<string, ModelActivityData> => {
+export const processActivityData = (dailyActivity: { results: DailyData[] }, key: "models" | "api_keys" | "mcp_servers"): Record<string, ModelActivityData> => {
   const modelMetrics: Record<string, ModelActivityData> = {};
 
   dailyActivity.results.forEach((day) => {

@@ -84,6 +84,7 @@ export interface MetricWithMetadata {
 
 export interface BreakdownMetrics {
   models: { [key: string]: MetricWithMetadata };
+  mcp_servers: { [key: string]: MetricWithMetadata };
   providers: { [key: string]: MetricWithMetadata };
   api_keys: { [key: string]: KeyMetricWithMetadata };
 }
