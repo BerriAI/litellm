@@ -705,6 +705,7 @@ ValidUserMessageContentTypes = [
     "text",
     "image_url",
     "input_audio",
+    "audio_url",
     "document",
     "video_url",
     "file",
@@ -1010,7 +1011,7 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
 
 class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     id: str
-    created_at: float
+    created_at: int
     error: Optional[dict]
     incomplete_details: Optional[IncompleteDetails]
     instructions: Optional[str]
@@ -1034,6 +1035,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     truncation: Optional[Literal["auto", "disabled"]]
     usage: Optional[ResponseAPIUsage]
     user: Optional[str]
+    store: Optional[bool] = None
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
@@ -1134,7 +1136,7 @@ class ReasoningSummaryTextDeltaEvent(BaseLiteLLMOpenAIResponseObject):
 class OutputItemAddedEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
     output_index: int
-    item: dict
+    item: Optional[dict]
 
 
 class OutputItemDoneEvent(BaseLiteLLMOpenAIResponseObject):

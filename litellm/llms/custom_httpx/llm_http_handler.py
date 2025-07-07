@@ -1008,12 +1008,12 @@ class BaseLLMHTTPHandler:
         """
         Shared logic for preparing audio transcription requests.
         Returns: (headers, complete_url, data, files)
-        """     
+        """
         # Handle the response based on type
         from litellm.llms.base_llm.audio_transcription.transformation import (
             AudioTranscriptionRequestData,
         )
-        
+
         headers = provider_config.validate_environment(
             api_key=api_key,
             headers=headers or {},
@@ -1038,11 +1038,13 @@ class BaseLLMHTTPHandler:
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        
+
         # All providers now return AudioTranscriptionRequestData
         if not isinstance(transformed_result, AudioTranscriptionRequestData):
-            raise ValueError(f"Provider {provider_config.__class__.__name__} must return AudioTranscriptionRequestData")
-        
+            raise ValueError(
+                f"Provider {provider_config.__class__.__name__} must return AudioTranscriptionRequestData"
+            )
+
         data = transformed_result.data
         files = transformed_result.files
 
@@ -1143,7 +1145,9 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 data=data,
                 files=files,
-                json=data if files is None and isinstance(data, dict) else None,  # Use json param only when no files and data is dict
+                json=(
+                    data if files is None and isinstance(data, dict) else None
+                ),  # Use json param only when no files and data is dict
                 timeout=timeout,
             )
         except Exception as e:
@@ -1214,7 +1218,9 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 data=data,
                 files=files,
-                json=data if files is None and isinstance(data, dict) else None,  # Use json param only when no files and data is dict
+                json=(
+                    data if files is None and isinstance(data, dict) else None
+                ),  # Use json param only when no files and data is dict
                 timeout=timeout,
             )
         except Exception as e:
@@ -1432,6 +1438,7 @@ class BaseLLMHTTPHandler:
         Handles responses API requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
         """
+
         if _is_async:
             # Return the async coroutine if called with _is_async=True
             return self.async_response_api_handler(

@@ -1,10 +1,52 @@
+from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Tuple, Union
 
 from pydantic import BaseModel, Field
 from typing_extensions import Annotated
 
 import litellm
+
+
+@dataclass
+class MetricValidationError:
+    """Error for invalid metric name"""
+    metric_name: str
+    valid_metrics: Tuple[str, ...]
+    
+    @property
+    def message(self) -> str:
+        return f"Invalid metric name: {self.metric_name}"
+
+
+@dataclass 
+class LabelValidationError:
+    """Error for invalid labels on a metric"""
+    metric_name: str
+    invalid_labels: List[str]
+    valid_labels: List[str]
+    
+    @property
+    def message(self) -> str:
+        return f"Invalid labels for metric '{self.metric_name}': {self.invalid_labels}"
+
+
+@dataclass
+class ValidationResults:
+    """Container for all validation results"""
+    metric_errors: List[MetricValidationError]
+    label_errors: List[LabelValidationError]
+    
+    @property
+    def has_errors(self) -> bool:
+        return bool(self.metric_errors or self.label_errors)
+    
+    @property
+    def all_error_messages(self) -> List[str]:
+        messages = [error.message for error in self.metric_errors]
+        messages.extend([error.message for error in self.label_errors])
+        return messages
+
 
 REQUESTED_MODEL = "requested_model"
 EXCEPTION_STATUS = "exception_status"

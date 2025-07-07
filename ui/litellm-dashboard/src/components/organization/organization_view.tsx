@@ -31,6 +31,7 @@ import MemberModal from "../team/edit_membership";
 import ObjectPermissionsView from "../object_permissions_view";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 interface OrganizationInfoProps {
   organizationId: string;
@@ -216,8 +217,8 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
             <Card>
                 <Text>Budget Status</Text>
                 <div className="mt-2">
-                <Title>${orgData.spend.toFixed(6)}</Title>
-                <Text>of {orgData.litellm_budget_table.max_budget === null ? "Unlimited" : `$${orgData.litellm_budget_table.max_budget}`}</Text>
+                <Title>${formatNumberWithCommas(orgData.spend, 4)}</Title>
+                <Text>of {orgData.litellm_budget_table.max_budget === null ? "Unlimited" : `$${formatNumberWithCommas(orgData.litellm_budget_table.max_budget, 4)}`}</Text>
                 {orgData.litellm_budget_table.budget_duration && (
                     <Text className="text-gray-500">Reset: {orgData.litellm_budget_table.budget_duration}</Text>
                 )}
@@ -293,7 +294,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                             <Text className="font-mono">{member.user_role}</Text>
                         </TableCell>
                         <TableCell>
-                            <Text>${member.spend.toFixed(6)}</Text>
+                            <Text>${formatNumberWithCommas(member.spend, 4)}</Text>
                         </TableCell>
                         <TableCell>
                             <Text>{new Date(member.created_at).toLocaleString()}</Text>
@@ -477,7 +478,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                   </div>
                   <div>
                     <Text className="font-medium">Budget</Text>
-                    <div>Max: {orgData.litellm_budget_table.max_budget !== null ? `$${orgData.litellm_budget_table.max_budget}` : 'No Limit'}</div>
+                    <div>Max: {orgData.litellm_budget_table.max_budget !== null ? `$${formatNumberWithCommas(orgData.litellm_budget_table.max_budget, 4)}` : 'No Limit'}</div>
                     <div>Reset: {orgData.litellm_budget_table.budget_duration || 'Never'}</div>
                   </div>
 
