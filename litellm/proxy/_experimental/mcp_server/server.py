@@ -335,6 +335,10 @@ if MCP_AVAILABLE:
 
         # Try managed server tool first (pass the full prefixed name)
         if name in global_mcp_server_manager.tool_name_to_mcp_server_name_mapping:
+            mcp_server = global_mcp_server_manager.get_mcp_server_by_id(name)
+            if mcp_server and mcp_server.mcp_info:
+                standard_logging_mcp_tool_call["mcp_server_cost_info"] = mcp_server.mcp_info.get("mcp_server_cost_info")
+
             return await _handle_managed_mcp_tool(
                 name=name,  # Pass the full name (potentially prefixed)
                 arguments=arguments,
