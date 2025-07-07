@@ -67,13 +67,16 @@ const ModelHub: React.FC<ModelHubProps> = ({
 
         getConfigFieldSetting(accessToken, "enable_public_model_hub")
           .then((data) => {
-            console.log(`data: ${JSON.stringify(data)}`);
-            if (data.field_value == true) {
+            console.log(`enable_public_model_hub data: ${JSON.stringify(data)}`);
+            // Check for truthy value to handle boolean, string "true", etc.
+            if (data.field_value === true || data.field_value === "true") {
               setPublicPageAllowed(true);
             }
           })
           .catch((error) => {
-            // do nothing
+            console.log("Error fetching enable_public_model_hub setting:", error);
+            // Assume false if there's an error (e.g., field not set yet)
+            setPublicPageAllowed(false);
           });
       } catch (error) {
         console.error("There was an error fetching the model data", error);
@@ -96,11 +99,15 @@ const ModelHub: React.FC<ModelHubProps> = ({
     if (!accessToken) {
       return;
     }
-    updateConfigFieldSetting(accessToken, "enable_public_model_hub", true).then(
-      (data) => {
-        setIsPublicPageModalVisible(true);
-      }
-    );
+    try {
+      await updateConfigFieldSetting(accessToken, "enable_public_model_hub", true);
+      setPublicPageAllowed(true);
+      message.success("Model Hub is now publicly accessible!");
+      setIsPublicPageModalVisible(true);
+    } catch (error) {
+      message.error("Failed to enable public Model Hub. Please try again.");
+      console.error("Error enabling public model hub:", error);
+    }
   };
 
   const handleOk = () => {
@@ -131,9 +138,15 @@ const ModelHub: React.FC<ModelHubProps> = ({
             <Title className="ml-8 text-center ">Model Hub</Title>
             {publicPage == false ? (
               premiumUser ? (
-                <Button className="ml-4" onClick={() => handleMakePublicPage()}>
-                  ✨ Make Public
-                </Button>
+                publicPageAllowed ? (
+                  <Button className="ml-4" onClick={() => setIsPublicPageModalVisible(true)}>
+                    🔗 View Public URL
+                  </Button>
+                ) : (
+                  <Button className="ml-4" onClick={() => handleMakePublicPage()}>
+                    ✨ Make Public
+                  </Button>
+                )
               ) : (
                 <Button className="ml-4">
                   <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
@@ -213,20 +226,48 @@ const ModelHub: React.FC<ModelHubProps> = ({
       )}
 
       <Modal
-        title={"Public Model Hub"}
-        width={600}
+        title={"Public Model Hub Access"}
+        width={700}
         visible={isPublicPageModalVisible}
         footer={null}
         onOk={handleOk}
         onCancel={handleCancel}
       >
         <div className="pt-5 pb-5">
-          <div className="flex justify-between mb-4">
-            <Text className="text-base mr-2">Shareable Link:</Text>
-            <Text className="max-w-sm ml-2 bg-gray-200 pr-2 pl-2 pt-1 pb-1 text-center rounded">{`<proxy_base_url>/ui/model_hub?key=<YOUR_API_KEY>`}</Text>
+          <div className="mb-4">
+            <Text className="text-base block mb-2">
+              Your Model Hub is now publicly accessible! Users can view available models using their API key.
+            </Text>
+            <Text className="text-sm text-gray-600 block mb-4">
+              Share this URL format with your users:
+            </Text>
           </div>
-          <div className="flex justify-end">
-            <Button onClick={goToPublicModelPage}>See Page</Button>
+          <div className="mb-6">
+            <div className="flex items-center justify-between bg-gray-100 p-3 rounded">
+              <Text className="font-mono text-sm">
+                {typeof window !== 'undefined' 
+                  ? `${window.location.origin}/ui/model_hub?key=YOUR_API_KEY`
+                  : `<proxy_base_url>/ui/model_hub?key=YOUR_API_KEY`}
+              </Text>
+              <Tooltip title="Copy URL format">
+                <CopyOutlined
+                  onClick={() => {
+                    const url = typeof window !== 'undefined' 
+                      ? `${window.location.origin}/ui/model_hub?key=YOUR_API_KEY`
+                      : `<proxy_base_url>/ui/model_hub?key=YOUR_API_KEY`;
+                    copyToClipboard(url);
+                    message.success("URL format copied to clipboard!");
+                  }}
+                  style={{ cursor: "pointer", fontSize: "16px" }}
+                />
+              </Tooltip>
+            </div>
+          </div>
+          <div className="flex justify-between items-center">
+            <Text className="text-sm text-gray-600">
+              Replace YOUR_API_KEY with the actual API key
+            </Text>
+            <Button onClick={goToPublicModelPage}>Preview Public Page</Button>
           </div>
         </div>
       </Modal>
