@@ -1,8 +1,8 @@
 """
-Unit tests for Nebius AI Studio configuration.
+Unit tests for DashScope configuration.
 
-These tests validate the NebiusConfig class which extends OpenAIGPTConfig.
-Nebius AI Studio is an OpenAI-compatible provider with minor customizations.
+These tests validate the DashScopeConfig class which extends OpenAIGPTConfig.
+DashScope is an OpenAI-compatible provider with minor customizations.
 """
 
 import os
@@ -20,7 +20,7 @@ from litellm.llms.dashscope.chat.transformation import DashScopeChatConfig
 
 
 class TestDashScopeConfig:
-    """Test class for Nebius AI Studio functionality"""
+    """Test class for DashScope functionality"""
 
     def test_default_api_base(self):
         """Test that default API base is used when none is provided"""
@@ -64,7 +64,7 @@ class TestDashScopeConfig:
         model = "dashscope/qwen-turbo"
         model_name = "qwen-turbo"  # The actual model name without provider prefix
 
-        # Mock the HTTP request to the Nebius AI Studio API
+        # Mock the HTTP request to the dashscope API
         respx_mock.post(f"{api_base}/chat/completions").respond(
             json={
                 "id": "chatcmpl-123",
