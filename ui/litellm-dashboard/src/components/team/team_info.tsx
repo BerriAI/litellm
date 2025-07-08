@@ -205,7 +205,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       message.success("Team member updated successfully");
       setIsEditMemberModalVisible(false);
-      fetchTeamInfo();
+      
+      // Fetch updated team info
+      const updatedTeamData = await teamInfoCall(accessToken, teamId);
+      setTeamData(updatedTeamData);
+      
+      // Notify parent component of the update
+      onUpdate(updatedTeamData);
     } catch (error: any) {
       let errMsg = "Failed to update team member";
       if (error?.raw?.detail?.includes("Assigning team admins is a premium feature")) {
