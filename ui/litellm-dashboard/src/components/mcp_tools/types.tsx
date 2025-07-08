@@ -1,3 +1,9 @@
+export interface Team {
+  team_id: string;
+  team_alias?: string;
+  organization_id?: string | null;
+}
+
 // Default no auth value
 export const AUTH_TYPE = {
   NONE: "none",
@@ -118,6 +124,7 @@ export interface MCPServer {
   created_by: string;
   updated_at: string;
   updated_by: string;
+  teams?: Team[];
 }
 
 export interface MCPServerProps {

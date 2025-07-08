@@ -5,6 +5,9 @@ import {
   Modal,
   Tooltip,
   message,
+  Select,
+  Space,
+  Typography
 } from "antd";
 import {
   TabPanel,
@@ -38,6 +41,8 @@ import { isAdminRole } from "@/utils/roles";
 import { MCPServerView } from "./mcp_server_view";
 import CreateMCPServer from "./create_mcp_server";
 import MCPConnect from "./mcp_connect";
+
+const { Option } = Select;
 
 interface DeleteModalProps {
   isModalOpen: boolean;
@@ -90,7 +95,7 @@ const MCPServers: React.FC<MCPServerProps> = ({
     enabled: !!accessToken,
   });
 
-  const createMCPServer = (newMcpServer: MCPServer) => {
+  const createMCPServer = (newMcpServer: any) => {
     refetch();
   };
 
@@ -99,6 +104,53 @@ const MCPServers: React.FC<MCPServerProps> = ({
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
   const [editServer, setEditServer] = useState(false);
+  const [selectedTeam, setSelectedTeam] = useState<string>("all");
+  const [filteredServers, setFilteredServers] = useState<MCPServer[]>([]);
+  const [currentTeam, setCurrentTeam] = useState<string>("personal");
+  const [modelViewMode, setModelViewMode] = useState<string>("all");
+
+  // Get unique teams from all servers
+  const uniqueTeams = React.useMemo(() => {
+    if (!mcpServers) return [];
+    const teamsSet = new Set<string>();
+    const uniqueTeamsArray = [];
+    
+    for (const server of mcpServers) {
+      if (server.teams) {
+        for (const team of server.teams) {
+          const teamKey = team.team_id;
+          if (!teamsSet.has(teamKey)) {
+            teamsSet.add(teamKey);
+            uniqueTeamsArray.push(team);
+          }
+        }
+      }
+    }
+    return uniqueTeamsArray;
+  }, [mcpServers]);
+
+  // Handle team filter change
+  const handleTeamChange = (teamId: string) => {
+    setSelectedTeam(teamId);
+    setCurrentTeam(teamId);
+    
+    if (!mcpServers) return;
+    
+    if (teamId === "all") {
+      setFilteredServers(mcpServers);
+    } else {
+      const filtered = mcpServers.filter(server => 
+        server.teams?.some(team => team.team_id === teamId)
+      );
+      setFilteredServers(filtered);
+    }
+  };
+
+  React.useEffect(() => {
+    if (mcpServers) {
+      setFilteredServers(mcpServers);
+    }
+  }, [mcpServers]);
 
   const columns = React.useMemo(
     () =>
@@ -111,7 +163,7 @@ const MCPServers: React.FC<MCPServerProps> = ({
         },
         handleDelete
       ),
-    [userRole, handleDelete]
+    [userRole]
   );
 
   function handleDelete(server_id: string) {
@@ -146,7 +198,8 @@ const MCPServers: React.FC<MCPServerProps> = ({
     setServerToDelete(null);
   };
 
-
+  // Check if user is internal or admin
+  const canAccessMCPServers = isAdminRole(userRole!) || (userRole && userRole.includes('internal'));
 
   if (!accessToken || !userRole || !userID) {
     return (
@@ -177,56 +230,88 @@ const MCPServers: React.FC<MCPServerProps> = ({
       />
     ) : (
       <div>
-        <div className="mb-2 mt-4">
+        <div className="flex justify-between items-center mb-6">
           <div>
             <Title>MCP Servers</Title>
             <Text className="text-tremor-content">
               Configure and manage your MCP servers
             </Text>
           </div>
+          {isAdminRole(userRole) && (
+            <CreateMCPServer
+              userRole={userRole}
+              accessToken={accessToken}
+              onCreateSuccess={createMCPServer}
+            />
+          )}
         </div>
-        <CreateMCPServer
-          userRole={userRole}
-          accessToken={accessToken}
-          onCreateSuccess={createMCPServer}
-        />
-        <DataTable
-          columns={columns}
-          data={mcpServers || []}
-          renderSubComponent={() => <></>}
-          getRowCanExpand={() => false}
-          isLoading={isLoadingServers}
-          noDataMessage="No MCP Servers found"
-        />
-        <DeleteModal
-          isModalOpen={isDeleteModalOpen}
-          title="Delete MCP Server"
-          confirmDelete={confirmDelete}
-          cancelDelete={cancelDelete}
-        />
+        <div className="border-b px-6 py-4">
+          <div className="flex flex-col space-y-4">
+            <div className="flex items-center justify-between bg-gray-50 rounded-lg p-4 border-2 border-gray-200">
+              <div className="flex items-center gap-4">
+                <Text className="text-lg font-semibold text-gray-900">Current Team:</Text>
+                <Select 
+                  value={currentTeam}
+                  onChange={handleTeamChange}
+                  style={{ width: 300 }}
+                >
+                  <Option value="personal">
+                    <div className="flex items-center gap-2">
+                      <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                      <span className="font-medium">All Servers</span>
+                    </div>
+                  </Option>
+                  {uniqueTeams.map((team) => (
+                    <Option key={team.team_id} value={team.team_id}>
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                        <span className="font-medium">
+                          {team.team_alias || team.team_id}
+                        </span>
+                      </div>
+                    </Option>
+                  ))}
+                </Select>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="mb-4 mt-4 px-6">
+        </div>
+        <div className="px-6">
+          <DataTable
+            data={filteredServers}
+            columns={columns}
+            renderSubComponent={() => <div></div>}
+            getRowCanExpand={() => false}
+            isLoading={isLoadingServers}
+            noDataMessage="No MCP servers configured"
+          />
+        </div>
       </div>
     )
   );
 
   return (
-    <div className="w-full h-[75vh] mt-8 p-6">
-      <TabGroup className="h-full">
-        <TabList>
+    <div>
+      <DeleteModal
+        isModalOpen={isDeleteModalOpen}
+        title="Delete MCP Server"
+        confirmDelete={confirmDelete}
+        cancelDelete={cancelDelete}
+      />
+      <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
+        <TabList className="flex justify-between mt-2 w-full items-center">
           <div className="flex">
-            <Tab>Servers</Tab>
-            <Tab>
-              <span className="flex items-center gap-2">
-                <LinkIcon size={16} />
-                Connect
-              </span>
-            </Tab>
+            <Tab>All Servers</Tab>
+            <Tab>Connect</Tab>
           </div>
         </TabList>
-        <TabPanels className="h-full">
-          <TabPanel className="h-full">
+        <TabPanels>
+          <TabPanel>
             <ServersTab />
           </TabPanel>
-          <TabPanel className="h-full">
+          <TabPanel>
             <MCPConnect />
           </TabPanel>
         </TabPanels>
