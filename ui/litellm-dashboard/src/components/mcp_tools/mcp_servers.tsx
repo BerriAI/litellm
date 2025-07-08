@@ -139,6 +139,9 @@ const MCPServers: React.FC<MCPServerProps> = ({
     
     if (teamId === "all") {
       setFilteredServers(mcpServers);
+    } else if (teamId === "personal") {
+      // For now, show empty list for personal servers
+      setFilteredServers([]);
     } else {
       const filtered = mcpServers.filter(server => 
         server.teams?.some(team => team.team_id === teamId)
@@ -149,7 +152,8 @@ const MCPServers: React.FC<MCPServerProps> = ({
 
   React.useEffect(() => {
     if (mcpServers) {
-      setFilteredServers(mcpServers);
+      // Default to showing empty list for personal servers
+      setFilteredServers([]);
     }
   }, [mcpServers]);
 
@@ -267,10 +271,16 @@ const MCPServers: React.FC<MCPServerProps> = ({
                   onChange={handleTeamChange}
                   style={{ width: 300 }}
                 >
-                  <Option value="personal">
+                  <Option value="all">
                     <div className="flex items-center gap-2">
                       <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
                       <span className="font-medium">All Servers</span>
+                    </div>
+                  </Option>
+                  <Option value="personal">
+                    <div className="flex items-center gap-2">
+                      <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                      <span className="font-medium">Personal</span>
                     </div>
                   </Option>
                   {uniqueTeams.map((team) => (
