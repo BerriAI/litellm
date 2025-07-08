@@ -61,6 +61,7 @@ export interface ModelActivityData {
   completion_tokens: number;
   total_spend: number;
   top_api_keys: TopApiKeyData[];
+  visibleComponents?: string[];
   daily_data: {
     date: string;
     metrics: {
