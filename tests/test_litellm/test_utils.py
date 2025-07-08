@@ -11,9 +11,10 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import Delta, LlmProviders, ModelResponseStream, StreamingChoices
 from litellm.utils import (
     ProviderConfigManager,
+    TextCompletionStreamWrapper,
     get_llm_provider,
     get_optional_params_image_gen,
 )
@@ -2072,6 +2073,41 @@ def test_register_model_with_scientific_notation():
     assert registered_model["output_cost_per_token"] == 6e-07
     assert registered_model["litellm_provider"] == "openai"
     assert registered_model["mode"] == "chat"
+
+
+def test_reasoning_content_preserved_in_text_completion_wrapper():
+    """Ensure reasoning_content is copied from delta to text_choices."""
+    chunk = ModelResponseStream(
+        id="test-id",
+        created=1234567890,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    content="Some answer text",
+                    role="assistant",
+                    reasoning_content="Here's my chain of thought...",
+                ),
+            )
+        ],
+    )
+
+    wrapper = TextCompletionStreamWrapper(
+        completion_stream=None,  # Not used in convert_to_text_completion_object
+        model="test-model",
+        stream_options=None,
+    )
+
+    transformed = wrapper.convert_to_text_completion_object(chunk)
+
+    assert "choices" in transformed
+    assert len(transformed["choices"]) == 1
+    choice = transformed["choices"][0]
+    assert choice["text"] == "Some answer text"
+    assert choice["reasoning_content"] == "Here's my chain of thought..."
 
 
 if __name__ == "__main__":
