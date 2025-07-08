@@ -875,7 +875,8 @@ class DBSpendUpdateWriter:
                                     ),
                                     "mcp_namespaced_tool_name": transaction.get(
                                         "mcp_namespaced_tool_name"
-                                    ),
+                                    )
+                                    or "",
                                 }
                             }
 
@@ -891,7 +892,8 @@ class DBSpendUpdateWriter:
                                 "model_group": transaction.get("model_group"),
                                 "mcp_namespaced_tool_name": transaction.get(
                                     "mcp_namespaced_tool_name"
-                                ),
+                                )
+                                or "",
                                 "custom_llm_provider": transaction.get(
                                     "custom_llm_provider"
                                 ),
@@ -1131,7 +1133,7 @@ class DBSpendUpdateWriter:
         """
         Add a spend log transaction to the `daily_spend_update_queue`
 
-        Key = @@unique([user_id, date, api_key, model, custom_llm_provider])    )
+        Key = @@unique([user_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name])
 
         If key exists, update the transaction with the new spend and usage
         """
@@ -1149,7 +1151,7 @@ class DBSpendUpdateWriter:
         if base_daily_transaction is None:
             return
 
-        daily_transaction_key = f"{payload['user']}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}"
+        daily_transaction_key = f"{payload['user']}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}_{base_daily_transaction['mcp_namespaced_tool_name'] or ''}"
         daily_transaction = DailyUserSpendTransaction(
             user_id=payload["user"], **base_daily_transaction
         )
@@ -1181,7 +1183,7 @@ class DBSpendUpdateWriter:
             )
             return
 
-        daily_transaction_key = f"{payload['team_id']}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}"
+        daily_transaction_key = f"{payload['team_id']}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}_{base_daily_transaction['mcp_namespaced_tool_name'] or ''}"
         daily_transaction = DailyTeamSpendTransaction(
             team_id=payload["team_id"], **base_daily_transaction
         )
@@ -1221,7 +1223,7 @@ class DBSpendUpdateWriter:
         else:
             raise ValueError(f"Invalid request_tags: {payload['request_tags']}")
         for tag in request_tags:
-            daily_transaction_key = f"{tag}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}"
+            daily_transaction_key = f"{tag}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}_{base_daily_transaction['mcp_namespaced_tool_name'] or ''}"
             daily_transaction = DailyTagSpendTransaction(
                 tag=tag, **base_daily_transaction
             )

@@ -1254,9 +1254,9 @@ class WebSearchCallCompletedEvent(BaseLiteLLMOpenAIResponseObject):
 
 class ErrorEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.ERROR]
-    code: Optional[str]
-    message: str
-    param: Optional[str]
+    code: Optional[str] = None
+    message: Optional[str] = None
+    param: Optional[str] = None
 
 
 class GenericEvent(BaseLiteLLMOpenAIResponseObject):

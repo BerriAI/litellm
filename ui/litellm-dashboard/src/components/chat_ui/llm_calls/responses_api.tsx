@@ -59,7 +59,7 @@ export async function makeOpenAIResponsesRequest(
     const tools = selectedMCPTool ? [{
       type: "mcp",
       server_label: "litellm",
-      server_url: `https://69a811fdca5a.ngrok.app/mcp`,
+      server_url: `https://fa7e1e36ab11.ngrok.app/mcp`,
       require_approval: "never",
       headers: {
         "x-litellm-api-key": `Bearer ${accessToken}`

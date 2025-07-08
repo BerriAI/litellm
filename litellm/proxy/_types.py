@@ -332,6 +332,10 @@ class LiteLLMRoutes(enum.Enum):
         "/mcp/tools",
         "/mcp/tools/list",
         "/mcp/tools/call",
+        "/mcp-rest/tools/",
+        "/mcp-rest/tools/{subpath}",
+        "/mcp-rest/tools/list",
+        "/mcp-rest/tools/call",
     ]
 
     google_routes = [
@@ -876,6 +880,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     updated_by: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
     teams: Optional[List[Dict[str, Optional[str]]]] = Field(default_factory=list)
+
 
 class NewUserRequestTeam(LiteLLMPydanticObjectBase):
     team_id: str
