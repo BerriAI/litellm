@@ -40,6 +40,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
     ResponseTextConfig,
+    ChatCompletionImageUrlObject,
 )
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
@@ -72,6 +73,13 @@ class ChatCompletionSession(TypedDict, total=False):
         ]
     ]
     litellm_session_id: Optional[str]
+
+
+class ChatCompletionImageItem(TypedDict):
+    """TypedDict for image items in chat completion content"""
+
+    type: Literal["image"]
+    image_url: ChatCompletionImageUrlObject
 
 
 ########### End of Initialize Classes used for Responses API  ###########
@@ -415,6 +423,21 @@ class LiteLLMCompletionResponsesConfig:
         return new_item
 
     @staticmethod
+    def _transform_input_image_item_to_image_item(item: Dict[str, Any]) -> ChatCompletionImageItem:
+        """
+        Transform a Responses API input_image item to a Chat Completion image item
+        """
+        image_url_obj = ChatCompletionImageUrlObject(
+            url=item.get("image_url") or "",
+            detail=item.get("detail") or "auto"
+        )
+
+        return ChatCompletionImageItem(
+            type="image",
+            image_url=image_url_obj
+        )
+
+    @staticmethod
     def _transform_responses_api_content_to_chat_completion_content(
         content: Any,
     ) -> Union[str, List[Union[str, Dict[str, Any]]]]:
@@ -434,6 +457,14 @@ class LiteLLMCompletionResponsesConfig:
                         content_list.append(
                             LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
                                 item
+                            )
+                        )
+                    elif item.get("type") == "input_image":
+                        content_list.append(
+                            dict(
+                                LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(
+                                    item
+                                )
                             )
                         )
                     else:
