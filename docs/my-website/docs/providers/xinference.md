@@ -1,6 +1,8 @@
 # Xinference [Xorbits Inference]
 https://inference.readthedocs.io/en/latest/index.html
 
+LiteLLM supports Xinference Embedding + Image Generation calls.
+
 ## API Base, Key
 ```python
 # env variable
@@ -9,7 +11,7 @@ os.environ['XINFERENCE_API_KEY'] = "anything" #[optional] no api key required
 ```
 
 ## Sample Usage - Embedding
-```python
+```python showLineNumbers
 from litellm import embedding
 import os
 
@@ -22,7 +24,7 @@ print(response)
 ```
 
 ## Sample Usage `api_base` param
-```python
+```python showLineNumbers
 from litellm import embedding
 import os
 
@@ -30,6 +32,83 @@ response = embedding(
     model="xinference/bge-base-en",
     api_base="http://127.0.0.1:9997/v1",
     input=["good morning from litellm"],
+)
+print(response)
+```
+
+## Image Generation
+
+### Usage - LiteLLM Python SDK
+
+```python showLineNumbers
+from litellm import image_generation
+import os
+
+os.environ['XINFERENCE_API_BASE'] = "http://127.0.0.1:9997/v1"
+
+# xinference image generation call
+response = image_generation(
+    model="xinference/stabilityai/stable-diffusion-3.5-large",
+    prompt="A beautiful sunset over a calm ocean",
+)
+print(response)
+```
+
+### Usage - LiteLLM Proxy Server
+
+#### 1. Setup config.yaml
+
+```yaml showLineNumbers
+model_list:
+  - model_name: xinference-sd
+    litellm_params:
+      model: xinference/stabilityai/stable-diffusion-3.5-large
+      api_base: http://127.0.0.1:9997/v1
+      api_key: anything
+  model_info:
+    mode: image_generation
+
+general_settings:
+  master_key: sk-1234
+```
+
+#### 2. Start the proxy
+
+```bash showLineNumbers
+litellm --config config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+#### 3. Test it
+
+```bash showLineNumbers
+curl --location 'http://0.0.0.0:4000/v1/images/generations' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer sk-1234' \
+--data '{
+    "model": "xinference-sd",
+    "prompt": "A beautiful sunset over a calm ocean",
+    "n": 1,
+    "size": "1024x1024",
+    "response_format": "url"
+}'
+```
+
+### Advanced Usage - With Additional Parameters
+
+```python showLineNumbers
+from litellm import image_generation
+import os
+
+os.environ['XINFERENCE_API_BASE'] = "http://127.0.0.1:9997/v1"
+
+response = image_generation(
+    model="xinference/stabilityai/stable-diffusion-3.5-large",
+    prompt="A beautiful sunset over a calm ocean",
+    n=1,                           # number of images
+    size="1024x1024",             # image size
+    response_format="b64_json",   # return format
 )
 print(response)
 ```
