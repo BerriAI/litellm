@@ -63,6 +63,17 @@ def _get_models_from_access_groups(
     return all_models
 
 
+def get_mcp_server_ids(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> List[str]:
+    """
+    Returns the list of MCP server ids for a given key
+    """
+    if user_api_key_dict.object_permission is None:
+        return []
+    return user_api_key_dict.object_permission.mcp_servers or []
+
+
 def get_key_models(
     user_api_key_dict: UserAPIKeyAuth,
     proxy_model_list: List[str],

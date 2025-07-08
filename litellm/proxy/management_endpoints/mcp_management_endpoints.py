@@ -12,10 +12,11 @@ Endpoints here:
 """
 
 import importlib
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Dict
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -33,6 +34,7 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.db import (
         create_mcp_server,
         delete_mcp_server,
+        get_mcp_servers,
         get_all_mcp_servers,
         get_all_mcp_servers_for_user,
         get_mcp_server,
@@ -77,7 +79,7 @@ if MCP_AVAILABLE:
     ## FastAPI Routes
     @router.get(
         "/server",
-        description="Returns the mcp server list",
+        description="Returns the mcp server list with associated teams",
         dependencies=[Depends(user_api_key_auth)],
         response_model=List[LiteLLM_MCPServerTable],
     )
@@ -85,7 +87,7 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
-        Get all of the configured mcp servers for the user in the db
+        Get all of the configured mcp servers for the user in the db with their associated teams
         ```
         curl --location 'http://localhost:4000/v1/mcp/server' \
         --header 'Authorization: Bearer your_api_key_here'
@@ -97,20 +99,61 @@ if MCP_AVAILABLE:
             "Database not connected. Connect a database to your proxy"
         )
 
-        LIST_MCP_SERVERS: List[LiteLLM_MCPServerTable] = []
-
-        # perform authz check to filter the mcp servers user has access to
-        if _user_has_admin_view(user_api_key_dict):
-            LIST_MCP_SERVERS = await get_all_mcp_servers(prisma_client)
-        else:
-            # Find all mcp servers the user has access to
-            LIST_MCP_SERVERS = await get_all_mcp_servers_for_user(
-                prisma_client, user_api_key_dict
+        # First, get all relevant teams
+        user_teams = []
+        teams = await prisma_client.db.litellm_teamtable.find_many(
+                include={
+                    "object_permission": True
+                }
             )
+        if _user_has_admin_view(user_api_key_dict):
+            # Admin can see all teams
+            user_teams = teams
+        else:
+            for team in teams:
+                if team.members_with_roles:
+                    for member in team.members_with_roles:
+                        if (
+                            "user_id" in member
+                            and member["user_id"] is not None
+                            and member["user_id"] == user_api_key_dict.user_id
+                        ):
+                            user_teams.append(team)
 
-        #########################################################
-        # Allowed MCP Servers from config.yaml
-        #########################################################
+        print("user_teams", user_teams)
+        # Create a mapping of server_id to teams that have access to it
+        server_to_teams_map: Dict[str, List[Dict[str, str]]] = {}
+        for team in user_teams:
+            if team.object_permission and team.object_permission.mcp_servers:
+                for server_id in team.object_permission.mcp_servers:
+                    if server_id not in server_to_teams_map:
+                        server_to_teams_map[server_id] = []
+                    server_to_teams_map[server_id].append({
+                        "team_id": team.team_id,
+                        "team_alias": team.team_alias,
+                        "organization_id": team.organization_id
+                    })
+
+        print("server_to_teams_map", server_to_teams_map)
+        # Get MCP servers
+
+        # get all mcp server_ids from user_teams
+        mcp_server_ids = []
+        for team in user_teams:
+            if team.object_permission and team.object_permission.mcp_servers:
+                mcp_server_ids.extend(team.object_permission.mcp_servers)
+        print("mcp_server_ids", mcp_server_ids)
+
+        LIST_MCP_SERVERS = await get_mcp_servers(prisma_client, mcp_server_ids)
+
+        if _user_has_admin_view(user_api_key_dict):
+            all_mcp_servers = await get_all_mcp_servers(prisma_client)
+            # add all_mcp_servers to LIST_MCP_SERVERS such that there are no duplicates
+            for server in all_mcp_servers:
+                if server.server_id not in mcp_server_ids:
+                    LIST_MCP_SERVERS.append(server)
+
+        # Add config.yaml servers
         ALLOWED_MCP_SERVER_IDS = (
             await global_mcp_server_manager.get_allowed_mcp_servers(
                 user_api_key_auth=user_api_key_dict
@@ -131,7 +174,16 @@ if MCP_AVAILABLE:
                         updated_at=datetime.now(),
                     )
                 )
-        #########################################################
+
+        # Map servers to their teams and return
+        LIST_MCP_SERVERS = [
+            LiteLLM_MCPServerTable(
+                **server.__dict__,  # Or use .model_dump() depending on your Prisma version
+                teams=server_to_teams_map.get(server.server_id, [])
+            )
+            for server in LIST_MCP_SERVERS
+        ]
+
         return LIST_MCP_SERVERS
 
     @router.get(

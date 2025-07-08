@@ -88,7 +88,7 @@ jobs:
             pip install langchain
             pip install lunary==0.2.5
             pip install "azure-identity==1.16.1"
-            pip install "langfuse==2.45.0"
+            pip install "langfuse==2.59.7"
             pip install "logfire==0.29.0"
             pip install numpydoc
             pip install traceloop-sdk==0.21.1
@@ -211,7 +211,7 @@ jobs:
             pip install langchain
             pip install lunary==0.2.5
             pip install "azure-identity==1.16.1"
-            pip install "langfuse==2.45.0"
+            pip install "langfuse==2.59.7"
             pip install "logfire==0.29.0"
             pip install numpydoc
             pip install traceloop-sdk==0.21.1
@@ -318,7 +318,7 @@ jobs:
             pip install langchain
             pip install lunary==0.2.5
             pip install "azure-identity==1.16.1"
-            pip install "langfuse==2.45.0"
+            pip install "langfuse==2.59.7"
             pip install "logfire==0.29.0"
             pip install numpydoc
             pip install traceloop-sdk==0.21.1
@@ -591,7 +591,7 @@ jobs:
             pip install langchain
             pip install lunary==0.2.5
             pip install "azure-identity==1.16.1"
-            pip install "langfuse==2.45.0"
+            pip install "langfuse==2.59.7"
             pip install "logfire==0.29.0"
             pip install numpydoc
             pip install traceloop-sdk==0.21.1
@@ -804,7 +804,7 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
             pip install "pydantic==2.10.2"
-            pip install "mcp==1.9.3"
+            pip install "mcp==1.10.1"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -939,7 +939,7 @@ jobs:
             pip install "respx==0.22.0"
             pip install "hypercorn==0.17.3"
             pip install "pydantic==2.10.2"
-            pip install "mcp==1.9.3"
+            pip install "mcp==1.10.1"
             pip install "requests-mock>=1.12.1"
             pip install "responses==0.25.7"
             pip install "pytest-xdist==3.6.1"
@@ -1257,7 +1257,7 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
             pip install "tomli==2.2.1"
-            pip install "mcp==1.9.3"
+            pip install "mcp==1.10.1"
       - run:
           name: Run tests
           command: |
