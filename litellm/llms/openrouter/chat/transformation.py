@@ -134,11 +134,18 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
                         "reasoning"
                     )
 
-                    if hasattr(delta, "reasoning_details") and delta.reasoning_details:
-                        if hasattr(delta.reasoning_details, "type") and delta.reasoning_details.type == 'reasoning.text':
-                            first_thinking_block = delta.reasoning_details[0]
-                            if 'signature' in first_thinking_block:
-                                choice["delta"]["thinking_blocks"]["signature"] = first_thinking_block['signature']
+                    # Process reasoning_details safely
+                    print(f"Choice: {choice}")
+                    reasoning_details = choice["delta"].get("reasoning_details")
+                    if reasoning_details and isinstance(reasoning_details, list) and len(reasoning_details) > 0:
+                        first_thinking_block = reasoning_details[0]
+                        if (isinstance(first_thinking_block, dict) and 
+                            first_thinking_block.get("type") == "reasoning.text" and
+                            "signature" in first_thinking_block):
+                            # Initialize thinking_blocks if it doesn't exist
+                            if "thinking_blocks" not in choice["delta"]:
+                                choice["delta"]["thinking_blocks"] = {}
+                            choice["delta"]["thinking_blocks"]["signature"] = first_thinking_block["signature"]
 
                     delta = Delta(**choice["delta"])
 
