@@ -116,7 +116,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   is_proxy_admin,
   userModels,
   editTeam,
-  premiumUser = false
+  premiumUser = false,
+  onUpdate
 }) => {
   const [teamData, setTeamData] = useState<TeamData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -163,7 +164,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       message.success("Team member added successfully");
       setIsAddMemberModalVisible(false);
       form.resetFields();
-      fetchTeamInfo();
+      
+      // Fetch updated team info
+      const updatedTeamData = await teamInfoCall(accessToken, teamId);
+      setTeamData(updatedTeamData);
+      
+      // Notify parent component of the update
+      onUpdate(updatedTeamData);
     } catch (error: any) {
       let errMsg = "Failed to add team member";
   
@@ -222,10 +229,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         return;
       }
 
-      const response = await teamMemberDeleteCall(accessToken, teamId, member);
+      await teamMemberDeleteCall(accessToken, teamId, member);
 
       message.success("Team member removed successfully");
-      fetchTeamInfo();
+      
+      // Fetch updated team info
+      const updatedTeamData = await teamInfoCall(accessToken, teamId);
+      setTeamData(updatedTeamData);
+      
+      // Notify parent component of the update
+      onUpdate(updatedTeamData);
     } catch (error) {
       message.error("Failed to remove team member");
       console.error("Error removing team member:", error);
