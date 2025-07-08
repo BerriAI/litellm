@@ -54,7 +54,7 @@ def test_github_copilot_config_get_openai_compatible_provider_info():
         custom_llm_provider="github_copilot",
     )
 
-    assert api_base == "https://api.github.com/copilot/v1"
+    assert api_base == "https://api.githubcopilot.com/"
     assert dynamic_api_key == mock_api_key
     assert custom_llm_provider == "github_copilot"
 
