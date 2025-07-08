@@ -178,7 +178,17 @@ if MCP_AVAILABLE:
         # Map servers to their teams and return
         LIST_MCP_SERVERS = [
             LiteLLM_MCPServerTable(
-                **server.__dict__,  # Or use .model_dump() depending on your Prisma version
+                server_id=server.server_id,
+                alias=server.alias,
+                description=server.description,
+                url=server.url,
+                transport=server.transport,
+                spec_version=server.spec_version,
+                auth_type=server.auth_type,
+                created_at=server.created_at,
+                created_by=server.created_by,
+                updated_at=server.updated_at,
+                updated_by=server.updated_by,
                 teams=server_to_teams_map.get(server.server_id, [])
             )
             for server in LIST_MCP_SERVERS
