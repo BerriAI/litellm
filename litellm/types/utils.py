@@ -1841,11 +1841,11 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
     (this is to render the logo on the logs page on litellm ui)
     """
 
-    namespaced_server_name: Optional[str]
+    namespaced_tool_name: Optional[str]
     """
-    Namespaced server name of the MCP server that the tool call was made to
+    Namespaced tool name of the MCP tool that the tool call was made to
 
-    Includes the server name prefix if it exists
+    Includes the server name prefix if it exists - eg. `deepwiki-mcp/get_page_content`
     """
 
 

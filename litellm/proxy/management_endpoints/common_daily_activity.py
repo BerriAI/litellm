@@ -295,21 +295,21 @@ async def get_daily_activity(
             take=page_size,
         )
 
-        # for 50% of the records, set the mcp_server_id to a random value
-        mcp_server_dict = {"Zapier_Gmail_MCP", "Stripe_MCP"}
-        import random
+        # # for 50% of the records, set the mcp_server_id to a random value
+        # mcp_server_dict = {"Zapier_Gmail_MCP", "Stripe_MCP"}
+        # import random
 
-        for idx, record in enumerate(daily_spend_data):
-            record = LiteLLM_DailyUserSpend(**record.model_dump())
-            if random.random() < 0.5:
-                record.mcp_server_id = random.choice(list(mcp_server_dict))
-                record.model = None
-                record.model_group = None
-                record.prompt_tokens = 0
-                record.completion_tokens = 0
-                record.cache_read_input_tokens = 0
-                record.cache_creation_input_tokens = 0
-            daily_spend_data[idx] = record
+        # for idx, record in enumerate(daily_spend_data):
+        #     record = LiteLLM_DailyUserSpend(**record.model_dump())
+        #     if random.random() < 0.5:
+        #         record.mcp_server_id = random.choice(list(mcp_server_dict))
+        #         record.model = None
+        #         record.model_group = None
+        #         record.prompt_tokens = 0
+        #         record.completion_tokens = 0
+        #         record.cache_read_input_tokens = 0
+        #         record.cache_creation_input_tokens = 0
+        #     daily_spend_data[idx] = record
 
         # Get all unique API keys from the spend data
         api_keys = set()

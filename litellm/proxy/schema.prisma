@@ -261,6 +261,7 @@ model LiteLLM_SpendLogs {
   response            Json?     @default("{}")
   session_id          String?
   status              String?
+  mcp_namespaced_tool_name String? 
   proxy_server_request Json?     @default("{}")
   @@index([startTime])
   @@index([end_user])
@@ -359,9 +360,10 @@ model LiteLLM_DailyUserSpend {
   user_id             String? 
   date                String
   api_key             String   
-  model               String   
+  model               String?
   model_group         String?  
-  custom_llm_provider String?  
+  custom_llm_provider String?
+  mcp_namespaced_tool_name String?
   prompt_tokens       BigInt      @default(0)
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
@@ -373,11 +375,12 @@ model LiteLLM_DailyUserSpend {
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
-  @@unique([user_id, date, api_key, model, custom_llm_provider])
+  @@unique([user_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name])
   @@index([date])
   @@index([user_id])
   @@index([api_key])
   @@index([model])
+  @@index([mcp_namespaced_tool_name])
 }
 
 // Track daily team spend metrics per model and key
@@ -386,9 +389,10 @@ model LiteLLM_DailyTeamSpend {
   team_id             String?
   date                String
   api_key             String   
-  model               String   
+  model               String?
   model_group         String?  
-  custom_llm_provider String?  
+  custom_llm_provider String?
+  mcp_namespaced_tool_name String?
   prompt_tokens       BigInt      @default(0)
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
@@ -400,11 +404,12 @@ model LiteLLM_DailyTeamSpend {
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
-  @@unique([team_id, date, api_key, model, custom_llm_provider])
+  @@unique([team_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name])
   @@index([date])
   @@index([team_id])
   @@index([api_key])
   @@index([model])
+  @@index([mcp_namespaced_tool_name])
 }
 
 // Track daily team spend metrics per model and key
@@ -413,9 +418,10 @@ model LiteLLM_DailyTagSpend {
   tag                 String?   
   date                String
   api_key             String   
-  model               String   
+  model               String?
   model_group         String?  
-  custom_llm_provider String?  
+  custom_llm_provider String?
+  mcp_namespaced_tool_name String?
   prompt_tokens       BigInt      @default(0)
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
@@ -427,11 +433,12 @@ model LiteLLM_DailyTagSpend {
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
-  @@unique([tag, date, api_key, model, custom_llm_provider])
+  @@unique([tag, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name])
   @@index([date])
   @@index([tag])
   @@index([api_key])
   @@index([model])
+  @@index([mcp_namespaced_tool_name])
 }
 
 

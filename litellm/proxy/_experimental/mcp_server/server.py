@@ -362,13 +362,13 @@ if MCP_AVAILABLE:
                 arguments=arguments,
                 mcp_server_name=mcp_info.get("server_name"),
                 mcp_server_logo_url=mcp_info.get("logo_url"),
-                namespaced_server_name=f"{server_name}/{name}" if server_name else name,
+                namespaced_tool_name=f"{server_name}/{name}" if server_name else name,
             )
         else:
             return StandardLoggingMCPToolCall(
                 name=name,
                 arguments=arguments,
-                namespaced_server_name=f"{server_name}/{name}" if server_name else name,
+                namespaced_tool_name=f"{server_name}/{name}" if server_name else name,
             )
 
     async def _handle_managed_mcp_tool(
