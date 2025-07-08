@@ -676,7 +676,7 @@ class BaseAWSLLM:
         api_key: Optional[str] = None,
     ) -> AWSPreparedRequest:
         if api_key is not None:
-            aws_bearer_token = api_key
+            aws_bearer_token: Optional[str] = api_key
         else:
             aws_bearer_token = os.environ.get("AWS_BEARER_TOKEN_BEDROCK")
             
@@ -727,7 +727,7 @@ class BaseAWSLLM:
             Tuple[dict, Optional[str]]: A tuple containing the headers and the json str body of the request
         """
         if api_key is not None:
-            aws_bearer_token = api_key
+            aws_bearer_token: Optional[str] = api_key
         else:
             aws_bearer_token = os.environ.get("AWS_BEARER_TOKEN_BEDROCK")
             

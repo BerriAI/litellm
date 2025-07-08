@@ -105,6 +105,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         model: Optional[str] = None,
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
+        api_key: Optional[str] = None,
     ) -> Tuple[dict, Optional[bytes]]:
         return self._sign_request(
             service_name="bedrock",
@@ -115,6 +116,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             model=model,
             stream=stream,
             fake_stream=fake_stream,
+            api_key=api_key,
         )
 
     def _get_agent_id_and_alias_id(self, model: str) -> tuple[str, str]:
