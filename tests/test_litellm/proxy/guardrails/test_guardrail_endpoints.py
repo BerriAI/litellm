@@ -22,8 +22,9 @@ from litellm.proxy.guardrails.guardrail_registry import (
     InMemoryGuardrailHandler,
 )
 from litellm.types.guardrails import (
-    GuardrailInfoLiteLLMParamsResponse,
+    BaseLitellmParams,
     GuardrailInfoResponse,
+    LitellmParams,
 )
 
 # Mock data for testing
@@ -98,7 +99,7 @@ async def test_list_guardrails_v2_with_db_and_config(
     )
     assert db_guardrail.guardrail_name == "Test DB Guardrail"
     assert db_guardrail.guardrail_definition_location == "db"
-    assert isinstance(db_guardrail.litellm_params, GuardrailInfoLiteLLMParamsResponse)
+    assert isinstance(db_guardrail.litellm_params, BaseLitellmParams)
 
     # Check config guardrail
     config_guardrail = next(
@@ -106,9 +107,7 @@ async def test_list_guardrails_v2_with_db_and_config(
     )
     assert config_guardrail.guardrail_name == "Test Config Guardrail"
     assert config_guardrail.guardrail_definition_location == "config"
-    assert isinstance(
-        config_guardrail.litellm_params, GuardrailInfoLiteLLMParamsResponse
-    )
+    assert isinstance(config_guardrail.litellm_params, BaseLitellmParams)
 
 
 @pytest.mark.asyncio
@@ -120,7 +119,7 @@ async def test_get_guardrail_info_from_db(mocker, mock_prisma_client):
 
     assert response.guardrail_id == "test-db-guardrail"
     assert response.guardrail_name == "Test DB Guardrail"
-    assert isinstance(response.litellm_params, GuardrailInfoLiteLLMParamsResponse)
+    assert isinstance(response.litellm_params, BaseLitellmParams)
     assert response.guardrail_info == {"description": "Test guardrail from DB"}
 
 
@@ -144,7 +143,7 @@ async def test_get_guardrail_info_from_config(
 
     assert response.guardrail_id == "test-config-guardrail"
     assert response.guardrail_name == "Test Config Guardrail"
-    assert isinstance(response.litellm_params, GuardrailInfoLiteLLMParamsResponse)
+    assert isinstance(response.litellm_params, BaseLitellmParams)
     assert response.guardrail_info == {"description": "Test guardrail from config"}
 
 
@@ -170,3 +169,134 @@ async def test_get_guardrail_info_not_found(
 
     assert exc_info.value.status_code == 404
     assert "not found" in str(exc_info.value.detail)
+
+
+def test_get_provider_specific_params():
+    """Test getting provider-specific parameters"""
+    from litellm.proxy.guardrails.guardrail_endpoints import _get_fields_from_model
+    from litellm.proxy.guardrails.guardrail_hooks.azure import (
+        AzureContentSafetyTextModerationGuardrail,
+    )
+
+    config_model = AzureContentSafetyTextModerationGuardrail.get_config_model()
+    if config_model is None:
+        pytest.skip("Azure config model not available")
+
+    fields = _get_fields_from_model(config_model)
+    print("FIELDS", fields)
+
+    # Test that we get the expected nested structure
+    assert isinstance(fields, dict)
+
+    # Check that we have the expected top-level fields
+    assert "api_key" in fields
+    assert "api_base" in fields
+    assert "api_version" in fields
+    assert "optional_params" in fields
+
+    # Check the structure of a simple field
+    assert (
+        fields["api_key"]["description"]
+        == "API key for the Azure Content Safety Prompt Shield guardrail"
+    )
+    assert fields["api_key"]["required"] == False
+    assert fields["api_key"]["type"] == "string"  # Should be string, not None
+
+    # Check the structure of the nested optional_params field
+    assert fields["optional_params"]["type"] == "nested"
+    assert fields["optional_params"]["required"] == True
+    assert "fields" in fields["optional_params"]
+
+    # Check nested fields within optional_params
+    nested_fields = fields["optional_params"]["fields"]
+    assert "severity_threshold" in nested_fields
+    assert "severity_threshold_by_category" in nested_fields
+    assert "categories" in nested_fields
+    assert "blocklistNames" in nested_fields
+    assert "haltOnBlocklistHit" in nested_fields
+    assert "outputType" in nested_fields
+
+    # Check structure of a nested field
+    assert (
+        nested_fields["severity_threshold"]["description"]
+        == "Severity threshold for the Azure Content Safety Text Moderation guardrail across all categories"
+    )
+    assert nested_fields["severity_threshold"]["required"] == False
+    assert (
+        nested_fields["severity_threshold"]["type"] == "number"
+    )  # Should be number, not None
+
+    # Check other field types
+    assert nested_fields["categories"]["type"] == "multiselect"
+    assert nested_fields["blocklistNames"]["type"] == "array"
+    assert nested_fields["haltOnBlocklistHit"]["type"] == "boolean"
+    assert (
+        nested_fields["outputType"]["type"] == "select"
+    )  # Literal type should be select
+
+
+def test_optional_params_not_returned_when_not_overridden():
+    """Test that optional_params is not returned when the config model doesn't override it"""
+    from typing import Optional
+
+    from pydantic import BaseModel, Field
+
+    from litellm.proxy.guardrails.guardrail_endpoints import _get_fields_from_model
+    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+
+    class TestGuardrailConfig(GuardrailConfigModel):
+        api_key: Optional[str] = Field(
+            default=None,
+            description="Test API key",
+        )
+        api_base: Optional[str] = Field(
+            default=None,
+            description="Test API base",
+        )
+
+        @staticmethod
+        def ui_friendly_name() -> str:
+            return "Test Guardrail"
+
+    # Get fields from the model
+    fields = _get_fields_from_model(TestGuardrailConfig)
+    print("FIELDS", fields)
+    assert "optional_params" not in fields
+
+
+def test_optional_params_returned_when_properly_overridden():
+    """Test that optional_params IS returned when the config model properly overrides it"""
+    from typing import Optional
+
+    from pydantic import BaseModel, Field
+
+    from litellm.proxy.guardrails.guardrail_endpoints import _get_fields_from_model
+    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+
+    # Create specific optional params model
+    class SpecificOptionalParams(BaseModel):
+        threshold: Optional[float] = Field(
+            default=0.5, description="Detection threshold"
+        )
+        categories: Optional[List[str]] = Field(
+            default=None, description="Categories to check"
+        )
+
+    # Create a config model that DOES override optional_params with a specific type
+    class TestGuardrailConfigWithOptionalParams(
+        GuardrailConfigModel[SpecificOptionalParams]
+    ):
+        api_key: Optional[str] = Field(
+            default=None,
+            description="Test API key",
+        )
+
+        @staticmethod
+        def ui_friendly_name() -> str:
+            return "Test Guardrail With Optional Params"
+
+    # Get fields from the model
+    fields = _get_fields_from_model(TestGuardrailConfigWithOptionalParams)
+
+    print("FIELDS", fields)
+    assert "optional_params" in fields

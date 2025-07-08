@@ -274,6 +274,7 @@ def validate_redacted_message_span_attributes(span):
         "metadata.user_api_key_org_id",
         "metadata.user_api_key_end_user_id",
         "metadata.user_api_key_user_email",
+        "metadata.user_api_key_request_route",
         "metadata.applied_guardrails",
         "metadata.mcp_tool_call_metadata",
         "metadata.vector_store_request_metadata",

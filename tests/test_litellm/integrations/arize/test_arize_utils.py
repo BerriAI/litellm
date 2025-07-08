@@ -232,3 +232,53 @@ async def test_arize_dynamic_params():
         test_arize_logger.standard_callback_dynamic_params.get("arize_space_key")
         == "test_space_key_dynamic"
     )
+
+
+def test_construct_dynamic_arize_headers():
+    """
+    Test the construct_dynamic_arize_headers method with various input scenarios.
+    Ensures that dynamic Arize headers are properly constructed from callback parameters.
+    """
+    from litellm.types.utils import StandardCallbackDynamicParams
+
+    # Test with all parameters present
+    dynamic_params_full = StandardCallbackDynamicParams(
+        arize_api_key="test_api_key", 
+        arize_space_id="test_space_id"
+    )
+    arize_logger = ArizeLogger()
+    
+    headers = arize_logger.construct_dynamic_otel_headers(dynamic_params_full)
+    expected_headers = {
+        "api_key": "test_api_key",
+        "arize-space-id": "test_space_id"
+    }
+    assert headers == expected_headers
+        
+    # Test with only space_id
+    dynamic_params_space_id_only = StandardCallbackDynamicParams(
+        arize_space_id="test_space_id"
+    )
+    
+    headers = arize_logger.construct_dynamic_otel_headers(dynamic_params_space_id_only)
+    expected_headers = {
+        "arize-space-id": "test_space_id"
+    }
+    assert headers == expected_headers
+    
+    # Test with empty parameters dict
+    dynamic_params_empty = StandardCallbackDynamicParams()
+    
+    headers = arize_logger.construct_dynamic_otel_headers(dynamic_params_empty)
+    assert headers == {}
+
+    # test with space key and api key
+    dynamic_params_space_key_and_api_key = StandardCallbackDynamicParams(
+        arize_space_key="test_space_key",
+        arize_api_key="test_api_key"
+    )
+    headers = arize_logger.construct_dynamic_otel_headers(dynamic_params_space_key_and_api_key)
+    expected_headers = {
+        "arize-space-id": "test_space_key",
+        "api_key": "test_api_key"
+    }

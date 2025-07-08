@@ -1,4 +1,3 @@
-import json
 from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 
 import httpx
@@ -142,25 +141,34 @@ class AmazonAnthropicClaude3MessagesConfig(
             httpx_response.aiter_bytes(chunk_size=aws_decoder.DEFAULT_CHUNK_SIZE)
         )
         # Convert decoded Bedrock events to Server-Sent Events expected by Anthropic clients.
-        return self.bedrock_sse_wrapper(completion_stream)
+        return self.bedrock_sse_wrapper(
+            completion_stream=completion_stream, 
+            litellm_logging_obj=litellm_logging_obj,
+            request_body=request_body,
+        )
 
     async def bedrock_sse_wrapper(
         self,
         completion_stream: AsyncIterator[
             Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]
         ],
+        litellm_logging_obj: LiteLLMLoggingObj,
+        request_body: dict,
     ):
         """
         Bedrock invoke does not return SSE formatted data. This function is a wrapper to ensure litellm chunks are SSE formatted.
         """
-        async for chunk in completion_stream:
-            if isinstance(chunk, dict):
-                event_type: str = str(chunk.get("type", "message"))
-                payload = f"event: {event_type}\n" f"data: {json.dumps(chunk)}\n\n"
-                yield payload.encode()
-            else:
-                # For non-dict chunks, forward the original value unchanged so callers can leverage the richer Python objects if they wish.
-                yield chunk
+        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+            BaseAnthropicMessagesStreamingIterator,
+        )
+        handler = BaseAnthropicMessagesStreamingIterator(
+            litellm_logging_obj=litellm_logging_obj,
+            request_body=request_body,
+        )
+        
+        async for chunk in handler.async_sse_wrapper(completion_stream):
+            yield chunk
+        
 
 
 class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):

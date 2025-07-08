@@ -12,7 +12,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.integrations.vector_stores.base_vector_store import BaseVectorStore
+from litellm.integrations.vector_store_integrations.base_vector_store import (
+    BaseVectorStore,
+)
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -75,6 +77,7 @@ class BedrockVectorStore(BaseVectorStore, BaseAWSLLM):
         litellm_logging_obj: LiteLLMLoggingObj,
         tools: Optional[List[Dict]] = None,
         prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Retrieves the context from the Bedrock Knowledge Base and appends it to the messages.
@@ -127,9 +130,9 @@ class BedrockVectorStore(BaseVectorStore, BaseAWSLLM):
                     )
                 )
 
-            litellm_logging_obj.model_call_details[
-                "vector_store_request_metadata"
-            ] = vector_store_request_metadata
+            litellm_logging_obj.model_call_details["vector_store_request_metadata"] = (
+                vector_store_request_metadata
+            )
 
         return model, messages, non_default_params
 
@@ -141,9 +144,9 @@ class BedrockVectorStore(BaseVectorStore, BaseAWSLLM):
         """
         Transform a BedrockKBResponse to a VectorStoreSearchResponse
         """
-        retrieval_results: Optional[
-            List[BedrockKBRetrievalResult]
-        ] = bedrock_kb_response.get("retrievalResults", None)
+        retrieval_results: Optional[List[BedrockKBRetrievalResult]] = (
+            bedrock_kb_response.get("retrievalResults", None)
+        )
         vector_store_search_response: VectorStoreSearchResponse = (
             VectorStoreSearchResponse(search_query=query, data=[])
         )

@@ -6,6 +6,7 @@ import { uiAuditLogsCall, keyListCall } from "../networking";
 import { AuditLogEntry, auditLogColumns } from "./columns";
 import { Text } from "@tremor/react";
 import { Team } from "../key_team_helpers/key_list";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 interface AuditLogsProps {
   accessToken: string | null;
@@ -16,6 +17,11 @@ interface AuditLogsProps {
   premiumUser: boolean;
   allTeams: Team[];
 }
+
+
+const asset_logos_folder = '../ui/assets/';
+export const auditLogsPreviewImg = `${asset_logos_folder}audit-logs-preview.png`;
+
 
 export default function AuditLogs({
   userID,
@@ -308,8 +314,8 @@ export default function AuditLogs({
             return (
               <div>
                 {changedKeys.includes('token') && <p><strong>Token:</strong> {value.token || 'N/A'}</p>}
-                {changedKeys.includes('spend') && <p><strong>Spend:</strong> {value.spend !== undefined ? `$${Number(value.spend).toFixed(6)}` : 'N/A'}</p>}
-                {changedKeys.includes('max_budget') && <p><strong>Max Budget:</strong> {value.max_budget !== undefined ? `$${Number(value.max_budget).toFixed(6)}` : 'N/A'}</p>}
+                {changedKeys.includes('spend') && <p><strong>Spend:</strong> {value.spend !== undefined ? `$${formatNumberWithCommas(value.spend, 6)}` : 'N/A'}</p>}
+                {changedKeys.includes('max_budget') && <p><strong>Max Budget:</strong> {value.max_budget !== undefined ? `$${formatNumberWithCommas(value.max_budget, 6)}` : 'N/A'}</p>}
               </div>
             );
           } else {
@@ -389,8 +395,32 @@ export default function AuditLogs({
 
   if (!premiumUser) {
     return (
-      <div>
-        <Text>This is a LiteLLM Enterprise feature, and requires a valid key to use. Get a trial key <a href="https://litellm.ai/pricing" target="_blank" rel="noopener noreferrer">here</a>.</Text>
+      <div style={{ textAlign: 'center', marginTop: '20px' }}>
+        <h1 style={{ display: 'block', marginBottom: '10px' }}>
+        ✨ Enterprise Feature.
+        </h1>
+        <Text style={{ display: 'block', marginBottom: '10px' }}>
+          
+          This is a LiteLLM Enterprise feature, and requires a valid key to use. 
+        </Text>
+        <Text style={{ display: 'block', marginBottom: '20px', fontStyle: 'italic' }}>
+          Here&apos;s a preview of what Audit Logs offer:
+        </Text>
+        <img 
+          src={auditLogsPreviewImg}
+          alt="Audit Logs Preview" 
+          style={{ 
+            maxWidth: '100%', 
+            maxHeight: '700px',
+            borderRadius: '8px',
+            boxShadow: '0 4px 8px rgba(0,0,0,0.1)',
+            margin: '0 auto'
+          }} 
+          onError={(e) => {
+            console.error('Failed to load audit logs preview image');
+            (e.target as HTMLImageElement).style.display = 'none';
+          }}
+        />
       </div>
     );
   }

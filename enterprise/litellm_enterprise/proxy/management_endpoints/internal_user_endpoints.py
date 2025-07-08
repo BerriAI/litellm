@@ -1,6 +1,7 @@
 """
 Enterprise internal user management endpoints
 """
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from litellm.proxy._types import UserAPIKeyAuth
@@ -40,13 +41,27 @@ async def available_enterprise_users(
 
     # Count number of rows in LiteLLM_UserTable
     user_count = await prisma_client.db.litellm_usertable.count()
+    team_count = await prisma_client.db.litellm_teamtable.count()
+
+    if (
+        not premium_user_data
+        or premium_user_data is not None
+        and "max_users" not in premium_user_data
+    ):
+        max_users = None
+    else:
+        max_users = premium_user_data.get("max_users")
+
+    if premium_user_data and "max_teams" in premium_user_data:
+        max_teams = premium_user_data.get("max_teams")
+    else:
+        max_teams = None
 
     return {
-        "total_users": premium_user_data.get("max_users")
-        if premium_user_data
-        else None,
+        "total_users": max_users,
+        "total_teams": max_teams,
         "total_users_used": user_count,
-        "total_users_remaining": premium_user_data.get("max_users", 0) - user_count
-        if premium_user_data
-        else None,
+        "total_teams_used": team_count,
+        "total_teams_remaining": (max_teams - team_count if max_teams else None),
+        "total_users_remaining": (max_users - user_count if max_users else None),
     }

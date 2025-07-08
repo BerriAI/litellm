@@ -59,7 +59,10 @@ import { CogIcon } from "@heroicons/react/outline";
 import AvailableTeamsPanel from "@/components/team/available_teams";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import PremiumVectorStoreSelector from "./common_components/PremiumVectorStoreSelector";
+import PremiumMCPSelector from "./common_components/PremiumMCPSelector";
+import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
 import type { KeyResponse, Team } from "./key_team_helpers/key_list";
+import { formatNumberWithCommas } from "../utils/dataUtils";
 
 interface TeamProps {
   teams: Team[] | null;
@@ -180,6 +183,7 @@ const Teams: React.FC<TeamProps> = ({
   // Add this state near the other useState declarations
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
+  const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
 
   useEffect(() => {
     console.log(`currentOrgForCreateTeam: ${currentOrgForCreateTeam}`);
@@ -233,6 +237,7 @@ const Teams: React.FC<TeamProps> = ({
   const handleOk = () => {
     setIsTeamModalVisible(false);
     form.resetFields();
+    setLoggingSettings([]);
   };
 
   const handleMemberOk = () => {
@@ -243,8 +248,8 @@ const Teams: React.FC<TeamProps> = ({
 
   const handleCancel = () => {
     setIsTeamModalVisible(false);
-
     form.resetFields();
+    setLoggingSettings([]);
   };
 
   const handleMemberCancel = () => {
@@ -324,12 +329,42 @@ const Teams: React.FC<TeamProps> = ({
         }
 
         message.info("Creating Team");
-        // Transform allowed_vector_store_ids into object_permission
+        
+        // Handle logging settings in metadata
+        if (loggingSettings.length > 0) {
+          let metadata = {};
+          if (formValues.metadata) {
+            try {
+              metadata = JSON.parse(formValues.metadata);
+            } catch (e) {
+              console.warn("Invalid JSON in metadata field, starting with empty object");
+            }
+          }
+          
+          // Add logging settings to metadata
+          metadata = {
+            ...metadata,
+            logging: loggingSettings.filter(config => config.callback_name) // Only include configs with callback_name
+          };
+          
+          formValues.metadata = JSON.stringify(metadata);
+        }
+        
+        // Transform allowed_vector_store_ids and allowed_mcp_server_ids into object_permission
         if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
           formValues.object_permission = {
             vector_stores: formValues.allowed_vector_store_ids
           };
           delete formValues.allowed_vector_store_ids;
+        }
+
+        // Transform allowed_mcp_server_ids into object_permission
+        if (formValues.allowed_mcp_server_ids && formValues.allowed_mcp_server_ids.length > 0) {
+          if (!formValues.object_permission) {
+            formValues.object_permission = {};
+          }
+          formValues.object_permission.mcp_servers = formValues.allowed_mcp_server_ids;
+          delete formValues.allowed_mcp_server_ids;
         }
         const response: any = await teamCreateCall(accessToken, formValues);
         if (teams !== null) {
@@ -340,6 +375,7 @@ const Teams: React.FC<TeamProps> = ({
         console.log(`response for team create call: ${response}`);
         message.success("Team created");
         form.resetFields();
+        setLoggingSettings([]);
         setIsTeamModalVisible(false);
       }
     } catch (error) {
@@ -690,7 +726,7 @@ const Teams: React.FC<TeamProps> = ({
                             overflow: "hidden",
                           }}
                         >
-                          {Number(team["spend"]).toFixed(4)}
+                          {formatNumberWithCommas(team["spend"], 4)}
                         </TableCell>
                         <TableCell
                           style={{
@@ -901,7 +937,7 @@ const Teams: React.FC<TeamProps> = ({
                 <Modal
                   title="Create Team"
                   visible={isTeamModalVisible}
-                  width={800}
+                  width={1000}
                   footer={null}
                   onOk={handleOk}
                   onCancel={handleCancel}
@@ -1042,6 +1078,25 @@ const Teams: React.FC<TeamProps> = ({
                               }} 
                             />
                           </Form.Item>
+                          <Form.Item 
+                            label="Team Member Budget (USD)" 
+                            name="team_member_budget"
+                            normalize={(value) => value ? Number(value) : undefined}
+                            tooltip="This is the individual budget for a user in the team."
+                          >  
+                            <NumericalInput step={0.01} precision={2} width={200} />
+                          </Form.Item>
+                          <Form.Item 
+                            label="Team Member Key Duration" 
+                            name="team_member_key_duration"
+                            tooltip="Set a limit to the duration of a team member's key."
+                          >  
+                            <Select2 defaultValue={null} placeholder="n/a">
+                              <Select2.Option value="1d">1 day</Select2.Option>
+                              <Select2.Option value="1w">1 week</Select2.Option>
+                              <Select2.Option value="1mo">1 month</Select2.Option>
+                            </Select2>
+                          </Form.Item>
                           <Form.Item label="Metadata" name="metadata" help="Additional team metadata. Enter metadata as JSON object.">
                             <Input.TextArea rows={4} />
                           </Form.Item>
@@ -1093,6 +1148,42 @@ const Teams: React.FC<TeamProps> = ({
                               premiumUser={premiumUser}
                             />
                           </Form.Item>
+                          <Form.Item 
+                            label={
+                              <span>
+                                Allowed MCP Servers{' '}
+                                <Tooltip title="Select which MCP servers this team can access by default. Leave empty for access to all MCP servers">
+                                  <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                                </Tooltip>
+                              </span>
+                            }
+                            name="allowed_mcp_server_ids"
+                            className="mt-8"
+                            help="Select MCP servers this team can access. Leave empty for access to all MCP servers"
+                          >
+                            <PremiumMCPSelector
+                              onChange={(values) => form.setFieldValue('allowed_mcp_server_ids', values)}
+                              value={form.getFieldValue('allowed_mcp_server_ids')}
+                              accessToken={accessToken || ''}
+                              placeholder="Select MCP servers (optional)"
+                              premiumUser={premiumUser}
+                            />
+                          </Form.Item>
+                        </AccordionBody>
+                      </Accordion>
+
+                      <Accordion className="mt-8 mb-8">
+                        <AccordionHeader>
+                          <b>Logging Settings</b>
+                        </AccordionHeader>
+                        <AccordionBody>
+                          <div className="mt-4">
+                            <PremiumLoggingSettings
+                              value={loggingSettings}
+                              onChange={setLoggingSettings}
+                              premiumUser={premiumUser}
+                            />
+                          </div>
                         </AccordionBody>
                       </Accordion>
                     </>

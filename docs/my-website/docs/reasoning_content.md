@@ -19,6 +19,7 @@ Supported Providers:
 - Google AI Studio (`google/`)
 - Vertex AI (`vertex_ai/`)
 - Perplexity (`perplexity/`)
+- Mistral AI (Magistral models) (`mistral/`)
 
 LiteLLM will standardize the `reasoning_content` in the response and `thinking_blocks` in the assistant message.
 

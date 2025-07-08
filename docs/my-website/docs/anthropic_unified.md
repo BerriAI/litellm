@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# /v1/messages [BETA] 
+# /v1/messages
 
 Use LiteLLM to call all your LLM APIs in the Anthropic `v1/messages` format. 
 

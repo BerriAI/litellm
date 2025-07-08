@@ -21,6 +21,7 @@ const EndpointSelector: React.FC<EndpointSelectorProps> = ({
   const endpointOptions = [
     { value: EndpointType.CHAT, label: '/v1/chat/completions' },
     { value: EndpointType.RESPONSES, label: '/v1/responses' },
+    { value: EndpointType.ANTHROPIC_MESSAGES, label: '/v1/messages' },
     { value: EndpointType.IMAGE, label: '/v1/images/generations' },
     { value: EndpointType.IMAGE_EDITS, label: '/v1/images/edits' },
   ];
@@ -29,6 +30,7 @@ const EndpointSelector: React.FC<EndpointSelectorProps> = ({
     <div className={className}>
       <Text>Endpoint Type:</Text>
       <Select
+        showSearch
         value={endpointType}
         style={{ width: "100%" }}
         onChange={onEndpointChange}

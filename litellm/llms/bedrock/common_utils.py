@@ -2,8 +2,9 @@
 Common utilities used across bedrock chat/embedding/image generation
 """
 
+import json
 import os
-from typing import List, Literal, Optional, Union
+from typing import TYPE_CHECKING, List, Literal, Optional, Union
 
 import httpx
 
@@ -11,6 +12,9 @@ import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret
+
+if TYPE_CHECKING:
+    from litellm.types.llms.openai import AllMessageValues
 
 
 class BedrockError(BaseLLMException):
@@ -334,6 +338,37 @@ class BedrockModelInfo(BaseLLMModelInfo):
     all_global_regions = global_config.get_all_regions()
 
     @staticmethod
+    def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
+        """
+        Get the API base for the given model.
+        """
+        return api_base
+
+    @staticmethod
+    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+        """
+        Get the API key for the given model.
+        """
+        return api_key
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List["AllMessageValues"],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        return headers
+
+    def get_models(
+        self, api_key: Optional[str] = None, api_base: Optional[str] = None
+    ) -> List[str]:
+        return []
+
+    @staticmethod
     def extract_model_name_from_arn(model: str) -> str:
         """
         Extract the model name from an AWS Bedrock ARN.
@@ -424,3 +459,68 @@ class BedrockModelInfo(BaseLLMModelInfo):
         ):
             return "converse"
         return "invoke"
+
+
+class BedrockEventStreamDecoderBase:
+    """
+    Base class for event stream decoding for Bedrock
+    """
+
+    _response_stream_shape_cache = None
+
+    def __init__(self):
+        from botocore.parsers import EventStreamJSONParser
+
+        self.parser = EventStreamJSONParser()
+
+    def get_response_stream_shape(self):
+        if self._response_stream_shape_cache is None:
+            from botocore.loaders import Loader
+            from botocore.model import ServiceModel
+
+            loader = Loader()
+            bedrock_service_dict = loader.load_service_model(
+                "bedrock-runtime", "service-2"
+            )
+            bedrock_service_model = ServiceModel(bedrock_service_dict)
+            self._response_stream_shape_cache = bedrock_service_model.shape_for(
+                "ResponseStream"
+            )
+
+        return self._response_stream_shape_cache
+
+    def _parse_message_from_event(self, event) -> Optional[str]:
+        response_dict = event.to_response_dict()
+        parsed_response = self.parser.parse(
+            response_dict, self.get_response_stream_shape()
+        )
+
+        if response_dict["status_code"] != 200:
+            decoded_body = response_dict["body"].decode()
+            if isinstance(decoded_body, dict):
+                error_message = decoded_body.get("message")
+            elif isinstance(decoded_body, str):
+                error_message = decoded_body
+            else:
+                error_message = ""
+            exception_status = response_dict["headers"].get(":exception-type")
+            error_message = exception_status + " " + error_message
+            raise BedrockError(
+                status_code=response_dict["status_code"],
+                message=(
+                    json.dumps(error_message)
+                    if isinstance(error_message, dict)
+                    else error_message
+                ),
+            )
+        if "chunk" in parsed_response:
+            chunk = parsed_response.get("chunk")
+            if not chunk:
+                return None
+            return chunk.get("bytes").decode()  # type: ignore[no-any-return]
+        else:
+            chunk = response_dict.get("body")
+            if not chunk:
+                return None
+
+            return chunk.decode()  # type: ignore[no-any-return]

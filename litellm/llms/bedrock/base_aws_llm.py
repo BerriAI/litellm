@@ -113,7 +113,7 @@ class BaseAWSLLM:
             elif param is None:  # check if uppercase value in env
                 key = self.aws_authentication_params[i]
                 if key.upper() in os.environ:
-                    params_to_check[i] = os.getenv(key)
+                    params_to_check[i] = os.getenv(key.upper())
 
         # Assign updated values back to parameters
         (
@@ -330,9 +330,19 @@ class BaseAWSLLM:
                 and isinstance(standard_aws_region_name, str)
             ):
                 aws_region_name = standard_aws_region_name
-
         if aws_region_name is None:
-            aws_region_name = "us-west-2"
+            try:
+                import boto3
+
+                with tracer.trace("boto3.Session()"):
+                    session = boto3.Session()
+                configured_region = session.region_name
+                if configured_region:
+                    aws_region_name = configured_region
+                else:
+                    aws_region_name = "us-west-2"
+            except Exception:
+                aws_region_name = "us-west-2"
 
         return aws_region_name
 
@@ -700,6 +710,7 @@ class BaseAWSLLM:
         Returns:
             Tuple[dict, Optional[str]]: A tuple containing the headers and the json str body of the request
         """
+
         try:
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
@@ -752,4 +763,5 @@ class BaseAWSLLM:
             headers is not None and "Authorization" in headers
         ):  # prevent sigv4 from overwriting the auth header
             request_headers_dict["Authorization"] = headers["Authorization"]
+
         return request_headers_dict, request.body

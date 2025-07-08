@@ -85,3 +85,83 @@ class VectorStoreSearchResponse(TypedDict, total=False):
     ]  # Always "vector_store.search_results.page"
     search_query: Optional[str]
     data: Optional[List[VectorStoreSearchResult]]
+
+class VectorStoreSearchOptionalRequestParams(TypedDict, total=False):
+    """TypedDict for Optional parameters supported by the vector store search API."""
+    filters: Optional[Dict]
+    max_num_results: Optional[int]  
+    ranking_options: Optional[Dict]
+    rewrite_query: Optional[bool]
+
+class VectorStoreSearchRequest(VectorStoreSearchOptionalRequestParams, total=False):
+    """Request body for searching a vector store"""
+    query: Union[str, List[str]]
+
+
+# Vector Store Creation Types
+class VectorStoreExpirationPolicy(TypedDict, total=False):
+    """The expiration policy for a vector store"""
+    anchor: Literal["last_active_at"]  # Anchor timestamp after which the expiration policy applies
+    days: int  # Number of days after anchor time that the vector store will expire
+
+
+class VectorStoreAutoChunkingStrategy(TypedDict, total=False):
+    """Auto chunking strategy configuration"""
+    type: Literal["auto"]  # Always "auto"
+
+
+class VectorStoreStaticChunkingStrategyConfig(TypedDict, total=False):
+    """Static chunking strategy configuration"""
+    max_chunk_size_tokens: int  # Maximum number of tokens per chunk
+    chunk_overlap_tokens: int  # Number of tokens to overlap between chunks
+
+
+class VectorStoreStaticChunkingStrategy(TypedDict, total=False):
+    """Static chunking strategy"""
+    type: Literal["static"]  # Always "static"
+    static: VectorStoreStaticChunkingStrategyConfig
+
+
+class VectorStoreChunkingStrategy(TypedDict, total=False):
+    """Union type for chunking strategies"""
+    # This can be either auto or static
+    type: Literal["auto", "static"]
+    static: Optional[VectorStoreStaticChunkingStrategyConfig]
+
+
+class VectorStoreFileCounts(TypedDict, total=False):
+    """File counts for a vector store"""
+    in_progress: int
+    completed: int
+    failed: int
+    cancelled: int
+    total: int
+
+
+class VectorStoreCreateOptionalRequestParams(TypedDict, total=False):
+    """TypedDict for Optional parameters supported by the vector store create API."""
+    name: Optional[str]  # Name of the vector store
+    file_ids: Optional[List[str]]  # List of File IDs that the vector store should use
+    expires_after: Optional[VectorStoreExpirationPolicy]  # Expiration policy for the vector store
+    chunking_strategy: Optional[VectorStoreChunkingStrategy]  # Chunking strategy for the files
+    metadata: Optional[Dict[str, str]]  # Set of key-value pairs for metadata
+
+
+class VectorStoreCreateRequest(VectorStoreCreateOptionalRequestParams, total=False):
+    """Request body for creating a vector store"""
+    pass  # All fields are optional for vector store creation
+
+
+class VectorStoreCreateResponse(TypedDict, total=False):
+    """Response after creating a vector store"""
+    id: str  # ID of the vector store
+    object: Literal["vector_store"]  # Always "vector_store"
+    created_at: int  # Unix timestamp of when the vector store was created
+    name: Optional[str]  # Name of the vector store
+    bytes: int  # Size of the vector store in bytes
+    file_counts: VectorStoreFileCounts  # File counts for the vector store
+    status: Literal["expired", "in_progress", "completed"]  # Status of the vector store
+    expires_after: Optional[VectorStoreExpirationPolicy]  # Expiration policy
+    expires_at: Optional[int]  # Unix timestamp of when the vector store expires
+    last_active_at: Optional[int]  # Unix timestamp of when the vector store was last active
+    metadata: Optional[Dict[str, str]]  # Metadata associated with the vector store

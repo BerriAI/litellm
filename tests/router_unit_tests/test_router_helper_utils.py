@@ -446,6 +446,40 @@ async def test_deployment_callback_on_failure(model_list):
     )
 
 
+def test_deployment_callback_respects_cooldown_time(model_list):
+    """Ensure per-model cooldown_time is honored even when exception headers are present."""
+    import httpx
+    import time
+    from unittest.mock import patch
+
+    router = Router(model_list=model_list)
+
+    class FakeException(Exception):
+        def __init__(self):
+            self.status_code = 429
+            self.headers = httpx.Headers({"x-test": "1"})
+
+    kwargs = {
+        "exception": FakeException(),
+        "litellm_params": {
+            "metadata": {"model_group": "gpt-3.5-turbo"},
+            "model_info": {"id": 100},
+            "cooldown_time": 0,
+        },
+    }
+
+    with patch("litellm.router._set_cooldown_deployments") as mock_set:
+        router.deployment_callback_on_failure(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=time.time(),
+            end_time=time.time(),
+        )
+
+        mock_set.assert_called_once()
+        assert mock_set.call_args.kwargs["time_to_cooldown"] == 0
+
+
 def test_log_retry(model_list):
     """Test if the '_log_retry' function is working correctly"""
     import time
@@ -1152,3 +1186,57 @@ def test_init_responses_api_endpoints(model_list):
     assert isinstance(router.aget_responses, Callable)
     assert router.adelete_responses is not None
     assert isinstance(router.adelete_responses, Callable)
+
+
+@pytest.mark.parametrize(
+    "mock_testing_fallbacks, mock_testing_context_fallbacks, mock_testing_content_policy_fallbacks, expected_fallbacks, expected_context, expected_content_policy",
+    [
+        # Test string to bool conversion
+        ("true", "false", "True", True, False, True),
+        ("TRUE", "FALSE", "False", True, False, False),
+        ("false", "true", "false", False, True, False),
+        # Test actual boolean values (should pass through unchanged)
+        (True, False, True, True, False, True),
+        (False, True, False, False, True, False),
+        # Test None values
+        (None, None, None, None, None, None),
+        # Test mixed types
+        ("true", False, None, True, False, None),
+    ],
+)
+def test_mock_router_testing_params_str_to_bool_conversion(
+    mock_testing_fallbacks,
+    mock_testing_context_fallbacks,
+    mock_testing_content_policy_fallbacks,
+    expected_fallbacks,
+    expected_context,
+    expected_content_policy,
+):
+    """Test if MockRouterTestingParams.from_kwargs correctly converts string values to booleans using str_to_bool"""
+    from litellm.types.router import MockRouterTestingParams
+    
+    kwargs = {
+        "mock_testing_fallbacks": mock_testing_fallbacks,
+        "mock_testing_context_fallbacks": mock_testing_context_fallbacks,
+        "mock_testing_content_policy_fallbacks": mock_testing_content_policy_fallbacks,
+        "other_param": "should_remain",  # This should not be affected
+    }
+    
+    # Make a copy to verify kwargs are properly popped
+    original_kwargs = kwargs.copy()
+    
+    mock_params = MockRouterTestingParams.from_kwargs(kwargs)
+    
+    # Verify the converted values
+    assert mock_params.mock_testing_fallbacks == expected_fallbacks
+    assert mock_params.mock_testing_context_fallbacks == expected_context
+    assert mock_params.mock_testing_content_policy_fallbacks == expected_content_policy
+    
+    # Verify that the mock testing params were popped from kwargs
+    assert "mock_testing_fallbacks" not in kwargs
+    assert "mock_testing_context_fallbacks" not in kwargs
+    assert "mock_testing_content_policy_fallbacks" not in kwargs
+    
+    # Verify other params remain unchanged
+    assert kwargs["other_param"] == "should_remain"
+

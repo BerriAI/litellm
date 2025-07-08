@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Dict, List, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Type, Union
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -9,6 +9,7 @@ from litellm.types.guardrails import (
     LitellmParams,
     PiiEntityType,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import StandardLoggingGuardrailInformation
 
 
@@ -46,19 +47,34 @@ class CustomGuardrail(CustomLogger):
         self.mask_response_content: bool = mask_response_content
 
         if supported_event_hooks:
+
             ## validate event_hook is in supported_event_hooks
             self._validate_event_hook(event_hook, supported_event_hooks)
         super().__init__(**kwargs)
+
+    @staticmethod
+    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+        """
+        Returns the config model for the guardrail
+
+        This is used to render the config model in the UI.
+        """
+        return None
 
     def _validate_event_hook(
         self,
         event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]],
         supported_event_hooks: List[GuardrailEventHooks],
     ) -> None:
+
         if event_hook is None:
             return
+        if isinstance(event_hook, str):
+            event_hook = GuardrailEventHooks(event_hook)
         if isinstance(event_hook, list):
             for hook in event_hook:
+                if isinstance(hook, str):
+                    hook = GuardrailEventHooks(hook)
                 if hook not in supported_event_hooks:
                     raise ValueError(
                         f"Event hook {hook} is not in the supported event hooks {supported_event_hooks}"
@@ -86,10 +102,13 @@ class CustomGuardrail(CustomLogger):
         for _guardrail in requested_guardrails:
             if isinstance(_guardrail, dict):
                 if self.guardrail_name in _guardrail:
+
                     return True
             elif isinstance(_guardrail, str):
                 if self.guardrail_name == _guardrail:
+
                     return True
+
         return False
 
     def should_run_guardrail(self, data, event_type: GuardrailEventHooks) -> bool:
@@ -336,14 +355,11 @@ def log_guardrail_information(func):
     import asyncio
     import functools
 
-    start_time = datetime.now()
-
     @functools.wraps(func)
     async def async_wrapper(*args, **kwargs):
+        start_time = datetime.now()  # Move start_time inside the wrapper
         self: CustomGuardrail = args[0]
-        request_data: Optional[dict] = (
-            kwargs.get("data") or kwargs.get("request_data") or {}
-        )
+        request_data: dict = kwargs.get("data") or kwargs.get("request_data") or {}
         try:
             response = await func(*args, **kwargs)
             return self._process_response(
@@ -364,10 +380,9 @@ def log_guardrail_information(func):
 
     @functools.wraps(func)
     def sync_wrapper(*args, **kwargs):
+        start_time = datetime.now()  # Move start_time inside the wrapper
         self: CustomGuardrail = args[0]
-        request_data: Optional[dict] = (
-            kwargs.get("data") or kwargs.get("request_data") or {}
-        )
+        request_data: dict = kwargs.get("data") or kwargs.get("request_data") or {}
         try:
             response = func(*args, **kwargs)
             return self._process_response(

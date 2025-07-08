@@ -8,6 +8,12 @@ DEFAULT_S3_FLUSH_INTERVAL_SECONDS = int(
     os.getenv("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", 10)
 )
 DEFAULT_S3_BATCH_SIZE = int(os.getenv("DEFAULT_S3_BATCH_SIZE", 512))
+DEFAULT_SQS_FLUSH_INTERVAL_SECONDS = int(
+    os.getenv("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10)
+)
+DEFAULT_SQS_BATCH_SIZE = int(os.getenv("DEFAULT_SQS_BATCH_SIZE", 512))
+SQS_SEND_MESSAGE_ACTION = "SendMessage"
+SQS_API_VERSION = "2012-11-05"
 DEFAULT_MAX_RETRIES = int(os.getenv("DEFAULT_MAX_RETRIES", 2))
 DEFAULT_MAX_RECURSE_DEPTH = int(os.getenv("DEFAULT_MAX_RECURSE_DEPTH", 100))
 DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER = int(
@@ -100,6 +106,23 @@ MAX_TILE_WIDTH = int(os.getenv("MAX_TILE_WIDTH", 512))
 MAX_TILE_HEIGHT = int(os.getenv("MAX_TILE_HEIGHT", 512))
 OPENAI_FILE_SEARCH_COST_PER_1K_CALLS = float(
     os.getenv("OPENAI_FILE_SEARCH_COST_PER_1K_CALLS", 2.5 / 1000)
+)
+# Azure OpenAI Assistants feature costs
+# Source: https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/
+AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY = float(
+    os.getenv("AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY", 0.1)  # $0.1 USD per 1 GB/Day
+)
+AZURE_CODE_INTERPRETER_COST_PER_SESSION = float(
+    os.getenv("AZURE_CODE_INTERPRETER_COST_PER_SESSION", 0.03)  # $0.03 USD per 1 Session
+)
+AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS = float(
+    os.getenv("AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS", 3.0)  # $0.003 USD per 1K Tokens
+)
+AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS = float(
+    os.getenv("AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS", 12.0)  # $0.012 USD per 1K Tokens
+)
+AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY = float(
+    os.getenv("AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY", 0.1)  # $0.1 USD per 1 GB/Day (same as file search)
 )
 MIN_NON_ZERO_TEMPERATURE = float(os.getenv("MIN_NON_ZERO_TEMPERATURE", 0.0001))
 #### RELIABILITY ####
@@ -238,6 +261,7 @@ LITELLM_CHAT_PROVIDERS = [
     "llamafile",
     "lm_studio",
     "galadriel",
+    "github_copilot",  # GitHub Copilot Chat API
     "novita",
     "meta_llama",
     "featherless_ai",
@@ -374,7 +398,6 @@ openai_compatible_endpoints: List = [
 
 openai_compatible_providers: List = [
     "anyscale",
-    "mistral",
     "groq",
     "nvidia_nim",
     "cerebras",
@@ -399,6 +422,7 @@ openai_compatible_providers: List = [
     "llamafile",
     "lm_studio",
     "galadriel",
+    "github_copilot",  # GitHub Copilot Chat API
     "novita",
     "meta_llama",
     "featherless_ai",
@@ -693,6 +717,11 @@ PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES = int(
 MCP_TOOL_NAME_PREFIX = "mcp_tool"
 MAXIMUM_TRACEBACK_LINES_TO_LOG = int(os.getenv("MAXIMUM_TRACEBACK_LINES_TO_LOG", 100))
 
+# Headers to control callbacks
+X_LITELLM_DISABLE_CALLBACKS = "x-litellm-disable-callbacks"
+LITELLM_METADATA_FIELD = "litellm_metadata"
+OLD_LITELLM_METADATA_FIELD = "metadata"
+
 ########################### LiteLLM Proxy Specific Constants ###########################
 ########################################################################################
 MAX_SPENDLOG_ROWS_TO_QUERY = int(
@@ -714,6 +743,7 @@ BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES = [
     "generateQuery/",
     "optimize-prompt/",
 ]
+BASE_MCP_ROUTE = "/mcp"
 
 BATCH_STATUS_POLL_INTERVAL_SECONDS = int(
     os.getenv("BATCH_STATUS_POLL_INTERVAL_SECONDS", 3600)
@@ -728,6 +758,10 @@ HEALTH_CHECK_TIMEOUT_SECONDS = int(
 
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
+
+########################### CLI SSO AUTHENTICATION CONSTANTS ###########################
+LITELLM_CLI_SOURCE_IDENTIFIER = "litellm-cli"
+LITELLM_CLI_SESSION_TOKEN_PREFIX = "litellm-session-token"
 
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
@@ -770,3 +804,29 @@ SPECIAL_LITELLM_AUTH_TOKEN = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(
     os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60)
 )
+
+# Sentry Scrubbing Configuration
+SENTRY_DENYLIST = [
+    # API Keys and Tokens
+    "api_key", "token", "key", "secret", "password", "auth", "credential",
+    "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AZURE_API_KEY", "COHERE_API_KEY",
+    "REPLICATE_API_KEY", "HUGGINGFACE_API_KEY", "TOGETHERAI_API_KEY",
+    "CLOUDFLARE_API_KEY", "BASETEN_KEY", "OPENROUTER_KEY", "DATAROBOT_API_TOKEN",
+    "FIREWORKS_API_KEY", "FIREWORKS_AI_API_KEY", "FIREWORKSAI_API_KEY",
+    # Database and Connection Strings
+    "database_url", "redis_url", "connection_string",
+    # Authentication and Security
+    "master_key", "LITELLM_MASTER_KEY", "auth_token", "jwt_token", "private_key",
+    "SLACK_WEBHOOK_URL", "webhook_url", "LANGFUSE_SECRET_KEY",
+    # Email Configuration
+    "SMTP_PASSWORD", "SMTP_USERNAME", "email_password",
+    # Cloud Provider Credentials
+    "aws_access_key", "aws_secret_key", "gcp_credentials",
+    "azure_credentials", "HCP_VAULT_TOKEN", "CIRCLE_OIDC_TOKEN",
+    # Proxy and Environment Settings
+    "proxy_url", "proxy_key", "environment_variables"
+]
+SENTRY_PII_DENYLIST = [
+    "user_id", "email", "phone", "address", "ip_address",
+    "SMTP_SENDER_EMAIL", "TEST_EMAIL_ADDRESS"
+]

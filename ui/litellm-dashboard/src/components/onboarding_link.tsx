@@ -23,6 +23,7 @@ interface OnboardingProps {
   >;
   baseUrl: string;
   invitationLinkData: InvitationLink | null;
+  modalType?: "invitation" | "resetPassword";
 }
 
 export default function OnboardingModal({
@@ -30,6 +31,7 @@ export default function OnboardingModal({
   setIsInvitationLinkModalVisible,
   baseUrl,
   invitationLinkData,
+  modalType = "invitation",
 }: OnboardingProps) {
   const { Title, Paragraph } = Typography;
   const handleInvitationOk = () => {
@@ -41,6 +43,9 @@ export default function OnboardingModal({
   };
 
   const getInvitationUrl = () => {
+    if (!baseUrl) {
+      return "";
+    }
     const baseUrlObj = new URL(baseUrl);
     const basePath = baseUrlObj.pathname; // This will be "/litellm" or ""
     const path = basePath && basePath !== "/" ? `${basePath}/ui` : 'ui';
@@ -48,13 +53,17 @@ export default function OnboardingModal({
     if (invitationLinkData?.has_user_setup_sso) {
         return new URL(path, baseUrl).toString();
     }
-    const url = new URL(`${path}?invitation_id=${invitationLinkData?.id}`, baseUrl).toString();
+    let urlPath = `${path}?invitation_id=${invitationLinkData?.id}`;
+    if (modalType === "resetPassword") {
+      urlPath += "&action=reset_password";
+    }
+    const url = new URL(urlPath, baseUrl).toString();
     return url;
   };
 
   return (
     <Modal
-      title="Invitation Link"
+      title={modalType === "invitation" ? "Invitation Link" : "Reset Password Link"}
       visible={isInvitationLinkModalVisible}
       width={800}
       footer={null}
@@ -62,14 +71,16 @@ export default function OnboardingModal({
       onCancel={handleInvitationCancel}
     >
       <Paragraph>
-        Copy and send the generated link to onboard this user to the proxy.
+        {modalType === "invitation"
+          ? "Copy and send the generated link to onboard this user to the proxy."
+          : "Copy and send the generated link to the user to reset their password."}
       </Paragraph>
       <div className="flex justify-between pt-5 pb-2">
         <Text className="text-base">User ID</Text>
         <Text>{invitationLinkData?.user_id}</Text>
       </div>
       <div className="flex justify-between pt-5 pb-2">
-        <Text>Invitation Link</Text>
+        <Text>{modalType === "invitation" ? "Invitation Link" : "Reset Password Link"}</Text>
         <Text>
           <Text>{getInvitationUrl()}</Text>
         </Text>
@@ -79,7 +90,11 @@ export default function OnboardingModal({
           text={getInvitationUrl()}
           onCopy={() => message.success("Copied!")}
         >
-          <Button variant="primary">Copy invitation link</Button>
+          <Button variant="primary">
+            {modalType === "invitation"
+              ? "Copy invitation link"
+              : "Copy password reset link"}
+          </Button>
         </CopyToClipboard>
       </div>
     </Modal>

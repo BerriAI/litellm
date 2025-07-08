@@ -298,4 +298,97 @@ Contributions are welcome! Please check out our [contributing guidelines](../../
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](../../LICENSE) file for details. 
+This project is licensed under the MIT License - see the [LICENSE](../../LICENSE) file for details.
+
+## CLI Authentication Flow
+
+The LiteLLM CLI supports SSO authentication through a polling-based approach that works with any OAuth-compatible SSO provider.
+
+### How CLI Authentication Works
+
+```mermaid
+sequenceDiagram
+    participant CLI as CLI
+    participant Browser as Browser
+    participant Proxy as LiteLLM Proxy
+    participant SSO as SSO Provider
+    
+    CLI->>CLI: Generate key ID (sk-uuid)
+    CLI->>Browser: Open /sso/key/generate?source=litellm-cli&key=sk-uuid
+    
+    Browser->>Proxy: GET /sso/key/generate?source=litellm-cli&key=sk-uuid
+    Proxy->>Proxy: Set cli_state = litellm-session-token:sk-uuid
+    Proxy->>SSO: Redirect with state=litellm-session-token:sk-uuid
+    
+    SSO->>Browser: Show login page
+    Browser->>SSO: User authenticates
+    SSO->>Proxy: Redirect to /sso/callback?state=litellm-session-token:sk-uuid
+    
+    Proxy->>Proxy: Check if state starts with "litellm-session-token:"
+    Proxy->>Proxy: Generate API key with ID=sk-uuid
+    Proxy->>Browser: Show success page
+    
+    CLI->>Proxy: Poll /sso/cli/poll/sk-uuid
+    Proxy->>CLI: Return {"status": "ready", "key": "sk-uuid"}
+    CLI->>CLI: Save key to ~/.litellm/token.json
+```
+
+### Authentication Commands
+
+The CLI provides three authentication commands:
+
+- **`litellm-proxy login`** - Start SSO authentication flow
+- **`litellm-proxy logout`** - Clear stored authentication token
+- **`litellm-proxy whoami`** - Show current authentication status
+
+### Authentication Flow Steps
+
+1. **Generate Session ID**: CLI generates a unique key ID (`sk-{uuid}`)
+2. **Open Browser**: CLI opens browser to `/sso/key/generate` with CLI source and key parameters
+3. **SSO Redirect**: Proxy sets the formatted state (`litellm-session-token:sk-uuid`) as OAuth state parameter and redirects to SSO provider
+4. **User Authentication**: User completes SSO authentication in browser
+5. **Callback Processing**: SSO provider redirects back to proxy with state parameter
+6. **Key Generation**: Proxy detects CLI login (state starts with "litellm-session-token:") and generates API key with pre-specified ID
+7. **Polling**: CLI polls `/sso/cli/poll/{key_id}` endpoint until key is ready
+8. **Token Storage**: CLI saves the authentication token to `~/.litellm/token.json`
+
+### Benefits of This Approach
+
+- **No Local Server**: No need to run a local callback server
+- **Standard OAuth**: Uses OAuth 2.0 state parameter correctly
+- **Remote Compatible**: Works with remote proxy servers
+- **Secure**: Uses UUID session identifiers
+- **Simple Setup**: No additional OAuth redirect URL configuration needed
+
+### Token Storage
+
+Authentication tokens are stored in `~/.litellm/token.json` with restricted file permissions (600). The stored token includes:
+
+```json
+{
+  "key": "sk-...",
+  "user_id": "cli-user",
+  "user_email": "user@example.com",
+  "user_role": "cli",
+  "auth_header_name": "Authorization",
+  "timestamp": 1234567890
+}
+```
+
+### Usage
+
+Once authenticated, the CLI will automatically use the stored token for all requests. You no longer need to specify `--api-key` for subsequent commands.
+
+```bash
+# Login
+litellm-proxy login
+
+# Use CLI without specifying API key
+litellm-proxy models list
+
+# Check authentication status
+litellm-proxy whoami
+
+# Logout
+litellm-proxy logout
+``` 

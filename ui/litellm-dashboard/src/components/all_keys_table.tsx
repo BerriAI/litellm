@@ -38,6 +38,7 @@ import {
 import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
 import { Badge, Text } from "@tremor/react";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 interface AllKeysTableProps {
   keys: KeyResponse[];
@@ -294,12 +295,15 @@ export function AllKeysTable({
       accessorKey: "user_id",
       header: "User ID",
       cell: (info) => {
-        const userId = info.getValue() as string;
-        return userId ? (
-          <Tooltip title={userId}>
-            <span>{userId.slice(0, 7)}...</span>
-          </Tooltip>
-        ) : "-";
+        const userId = info.getValue() as string | null;
+        if (userId && userId.length > 15) {
+          return (
+            <Tooltip title={userId}>
+              <span>{userId.slice(0, 7)}...</span>
+            </Tooltip>
+          );
+        }
+        return userId ? userId : "-";
       },
     },
     {
@@ -316,8 +320,15 @@ export function AllKeysTable({
       accessorKey: "created_by",
       header: "Created By",
       cell: (info) => {
-        const value = info.getValue();
-        return value ? value : "Unknown";
+        const value = info.getValue() as string | null;
+        if (value && value.length > 15) {
+          return (
+            <Tooltip title={value}>
+              <span>{value.slice(0, 7)}...</span>
+            </Tooltip>
+          );
+        }
+        return value;
       },
     },
     {
@@ -342,16 +353,19 @@ export function AllKeysTable({
       id: "spend",
       accessorKey: "spend",
       header: "Spend (USD)",
-      cell: (info) => Number(info.getValue()).toFixed(4),
+      cell: (info) => formatNumberWithCommas(info.getValue() as number, 4),
     },
     {
       id: "max_budget",
       accessorKey: "max_budget",
       header: "Budget (USD)",
-      cell: (info) =>
-        info.getValue() !== null && info.getValue() !== undefined
-          ? info.getValue()
-          : "Unlimited",
+      cell: (info) => {
+        const maxBudget = info.getValue() as number | null;
+        if (maxBudget === null) {
+          return "Unlimited";
+        }
+        return `$${formatNumberWithCommas(maxBudget)}`;
+      },
     },
     {
       id: "budget_reset_at",

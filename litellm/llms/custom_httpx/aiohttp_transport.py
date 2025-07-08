@@ -1,6 +1,8 @@
 import asyncio
 import contextlib
+import os
 import typing
+import urllib.request
 from typing import Callable, Dict, Union
 
 import aiohttp
@@ -9,7 +11,9 @@ import aiohttp.http_exceptions
 import httpx
 from aiohttp.client import ClientResponse, ClientSession
 
+import litellm
 from litellm._logging import verbose_logger
+from litellm.secret_managers.main import str_to_bool
 
 AIOHTTP_EXC_MAP: Dict = {
     # Order matters here, most specific exception first
@@ -182,7 +186,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 self.client = ClientSession()
 
         return self.client
-
+    
     async def handle_async_request(
         self,
         request: httpx.Request,
@@ -195,6 +199,9 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
 
         # Use helper to ensure we have a valid session for the current event loop
         client_session = self._get_valid_client_session()
+
+        # Resolve proxy settings from environment variables
+        proxy = await self._get_proxy_settings(request)
 
         with map_aiohttp_exceptions():
             try:
@@ -215,6 +222,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                     sock_read=timeout.get("read"),
                     connect=timeout.get("pool"),
                 ),
+                proxy=proxy,
                 server_hostname=sni_hostname,
             ).__aenter__()
 
@@ -224,3 +232,29 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             content=AiohttpResponseStream(response),
             request=request,
         )
+    
+
+    async def _get_proxy_settings(self, request: httpx.Request):
+        proxy = None
+        if not (
+            litellm.disable_aiohttp_trust_env
+            or str_to_bool(os.getenv("DISABLE_AIOHTTP_TRUST_ENV", "False"))
+        ):
+            try:
+                proxy = self._proxy_from_env(request.url)
+            except Exception as e:  # pragma: no cover - best effort
+                verbose_logger.debug(f"Error reading proxy env: {e}")
+
+        return proxy
+    
+
+    def _proxy_from_env(self, url: httpx.URL) -> typing.Optional[str]:
+        """Return proxy URL from env for the given request URL."""
+        proxies = urllib.request.getproxies()
+        if urllib.request.proxy_bypass(url.host):
+            return None
+
+        proxy = proxies.get(url.scheme) or proxies.get("all")
+        if proxy and "://" not in proxy:
+            proxy = f"http://{proxy}"
+        return proxy

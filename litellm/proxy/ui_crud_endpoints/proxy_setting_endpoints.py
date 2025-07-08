@@ -7,7 +7,10 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams, SSOConfig
+from litellm.types.proxy.management_endpoints.ui_sso import (
+    DefaultTeamSSOParams,
+    SSOConfig,
+)
 
 router = APIRouter()
 
@@ -18,26 +21,29 @@ class IPAddress(BaseModel):
 
 class SettingsResponse(BaseModel):
     """Base response model for settings with values and schema information"""
-    
+
     values: Dict[str, Any]
     """The current configuration values"""
-    
+
     field_schema: Dict[str, Any]
     """Schema information including descriptions and property types for UI display"""
 
 
 class SSOSettingsResponse(SettingsResponse):
     """Response model for SSO settings"""
+
     pass
 
 
 class InternalUserSettingsResponse(SettingsResponse):
     """Response model for internal user settings"""
+
     pass
 
 
 class DefaultTeamSettingsResponse(SettingsResponse):
     """Response model for default team settings"""
+
     pass
 
 
@@ -166,7 +172,10 @@ async def _get_settings_with_schema(
     # Add descriptions to the response
     result = {
         "values": settings_dict,
-        "field_schema": {"description": schema.get("description", ""), "properties": {}},
+        "field_schema": {
+            "description": schema.get("description", ""),
+            "properties": {},
+        },
     }
 
     # Add property descriptions
@@ -322,20 +331,21 @@ async def get_sso_settings():
     Returns a structured object with values and descriptions for UI display.
     """
     import os
+
     from litellm.proxy.proxy_server import proxy_config
-    
+
     # Load existing config to get both environment variables and general settings
     config = await proxy_config.get_config()
     general_settings = config.get("general_settings", {}) or {}
     environment_variables = config.get("environment_variables", {}) or {}
-    
+
     # Get user_email from general_settings
     proxy_admin_email = general_settings.get("proxy_admin_email", None)
-    
+
     # Helper function to get env var value (first from config, then from environment)
     def get_env_value(env_var_name: str):
         return environment_variables.get(env_var_name) or os.getenv(env_var_name)
-    
+
     # Get current environment variables for SSO
     sso_config = SSOConfig(
         google_client_id=get_env_value("GOOGLE_CLIENT_ID"),
@@ -351,27 +361,31 @@ async def get_sso_settings():
         proxy_base_url=get_env_value("PROXY_BASE_URL"),
         user_email=proxy_admin_email,  # Get from config instead of environment
     )
-    
+
     # Get the schema for UI display
     from pydantic import TypeAdapter
+
     schema = TypeAdapter(SSOConfig).json_schema(by_alias=True)
-    
+
     # Convert to dict for response
     sso_dict = sso_config.model_dump()
-    
+
     # Add descriptions to the response
     result = {
         "values": sso_dict,
-        "field_schema": {"description": schema.get("description", ""), "properties": {}},
+        "field_schema": {
+            "description": schema.get("description", ""),
+            "properties": {},
+        },
     }
-    
+
     # Add property descriptions
     for field_name, field_info in schema["properties"].items():
         result["field_schema"]["properties"][field_name] = {
             "description": field_info.get("description", ""),
             "type": field_info.get("type", "string"),
         }
-    
+
     return result
 
 
@@ -384,51 +398,56 @@ async def update_sso_settings(sso_config: SSOConfig):
     """
     Update SSO configuration by saving to both environment variables and config file.
     """
-    from litellm.proxy.proxy_server import proxy_config
     import os
-    
+
+    from litellm.proxy.proxy_server import proxy_config
+
     # Update environment variables
     env_var_mapping = {
-        'google_client_id': 'GOOGLE_CLIENT_ID',
-        'google_client_secret': 'GOOGLE_CLIENT_SECRET',
-        'microsoft_client_id': 'MICROSOFT_CLIENT_ID',
-        'microsoft_client_secret': 'MICROSOFT_CLIENT_SECRET',
-        'microsoft_tenant': 'MICROSOFT_TENANT',
-        'generic_client_id': 'GENERIC_CLIENT_ID',
-        'generic_client_secret': 'GENERIC_CLIENT_SECRET',
-        'generic_authorization_endpoint': 'GENERIC_AUTHORIZATION_ENDPOINT',
-        'generic_token_endpoint': 'GENERIC_TOKEN_ENDPOINT',
-        'generic_userinfo_endpoint': 'GENERIC_USERINFO_ENDPOINT',
-        'proxy_base_url': 'PROXY_BASE_URL',
+        "google_client_id": "GOOGLE_CLIENT_ID",
+        "google_client_secret": "GOOGLE_CLIENT_SECRET",
+        "microsoft_client_id": "MICROSOFT_CLIENT_ID",
+        "microsoft_client_secret": "MICROSOFT_CLIENT_SECRET",
+        "microsoft_tenant": "MICROSOFT_TENANT",
+        "generic_client_id": "GENERIC_CLIENT_ID",
+        "generic_client_secret": "GENERIC_CLIENT_SECRET",
+        "generic_authorization_endpoint": "GENERIC_AUTHORIZATION_ENDPOINT",
+        "generic_token_endpoint": "GENERIC_TOKEN_ENDPOINT",
+        "generic_userinfo_endpoint": "GENERIC_USERINFO_ENDPOINT",
+        "proxy_base_url": "PROXY_BASE_URL",
     }
-    
+
     # Load existing config
     config = await proxy_config.get_config()
-    
+
     # Update config with new environment variables
     if "environment_variables" not in config:
         config["environment_variables"] = {}
-    
+
     # Update general_settings for user_email (admin email)
     if "general_settings" not in config:
         config["general_settings"] = {}
-    
+
     # Update environment variables in config and in memory
     sso_data = sso_config.model_dump(exclude_none=True)
     for field_name, value in sso_data.items():
-        if field_name == 'user_email' and value is not None:
+
+        if field_name == "user_email" and value is not None:
             # Store user_email in general_settings instead of environment variables
             config["general_settings"]["proxy_admin_email"] = value
+        elif field_name == "ui_access_mode" and value is not None:
+
+            config["general_settings"]["ui_access_mode"] = value
         elif field_name in env_var_mapping and value is not None:
             env_var_name = env_var_mapping[field_name]
             # Update in config
             config["environment_variables"][env_var_name] = value
             # Update in runtime environment
             os.environ[env_var_name] = value
-    
+
     # Save the updated config
     await proxy_config.save_config(new_config=config)
-    
+
     return {
         "message": "SSO settings updated successfully",
         "status": "success",

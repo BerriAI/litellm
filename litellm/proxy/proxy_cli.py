@@ -5,13 +5,14 @@ import os
 import random
 import subprocess
 import sys
+import urllib.parse
 import urllib.parse as urlparse
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 import click
 import httpx
 from dotenv import load_dotenv
-import urllib.parse
+
 if TYPE_CHECKING:
     from fastapi import FastAPI
 else:
@@ -147,6 +148,7 @@ class ProxyInitializationHelpers:
         port: int,
         ssl_certfile_path: str,
         ssl_keyfile_path: str,
+        ciphers: Optional[str] = None,
     ):
         """
         Initialize litellm with `hypercorn`
@@ -168,6 +170,8 @@ class ProxyInitializationHelpers:
             )
             config.certfile = ssl_certfile_path
             config.keyfile = ssl_keyfile_path
+            if ciphers is not None:
+                config.ciphers = ciphers
 
         # hypercorn serve raises a type warning when passing a fast api app - even though fast API is a valid type
         asyncio.run(serve(app, config))  # type: ignore
@@ -456,6 +460,12 @@ class ProxyInitializationHelpers:
     envvar="SSL_CERTFILE_PATH",
 )
 @click.option(
+    "--ciphers",
+    default=None,
+    type=str,
+    help="Ciphers to use for the SSL setup.",
+)
+@click.option(
     "--use_prisma_migrate",
     is_flag=True,
     default=False,
@@ -508,6 +518,7 @@ def run_server(  # noqa: PLR0915
     run_hypercorn,
     ssl_keyfile_path,
     ssl_certfile_path,
+    ciphers,
     log_config,
     use_prisma_migrate,
     skip_server_startup,
@@ -528,6 +539,10 @@ def run_server(  # noqa: PLR0915
                 ProxyConfig,
                 app,
                 save_worker_config,
+            )
+        except ModuleNotFoundError as e:
+            raise ModuleNotFoundError(
+                f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`"
             )
         except ImportError as e:
             if "litellm[proxy]" in str(e):
@@ -778,7 +793,9 @@ def run_server(  # noqa: PLR0915
 
         # Skip server startup if requested (after all setup is done)
         if skip_server_startup:
-            print("LiteLLM: Setup complete. Skipping server startup as requested.")  # noqa
+            print(  # noqa
+                "LiteLLM: Setup complete. Skipping server startup as requested."
+            )
             return
 
         uvicorn_args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
@@ -819,6 +836,7 @@ def run_server(  # noqa: PLR0915
                 port=port,
                 ssl_certfile_path=ssl_certfile_path,
                 ssl_keyfile_path=ssl_keyfile_path,
+                ciphers=ciphers,
             )
 
 

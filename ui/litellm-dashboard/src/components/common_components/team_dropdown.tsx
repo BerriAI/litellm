@@ -17,8 +17,16 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({ teams, value, onChange }) =
       onChange={onChange}
       filterOption={(input, option) => {
         if (!option) return false;
-        const teamAlias = option.children?.[0]?.props?.children || '';
-        return teamAlias.toLowerCase().includes(input.toLowerCase());
+        // Get team data from the option key
+        const team = teams?.find(t => t.team_id === option.key);
+        if (!team) return false;
+        
+        const searchTerm = input.toLowerCase().trim();
+        const teamAlias = (team.team_alias || '').toLowerCase();
+        const teamId = (team.team_id || '').toLowerCase();
+        
+        // Search in both team alias and team ID
+        return teamAlias.includes(searchTerm) || teamId.includes(searchTerm);
       }}
       optionFilterProp="children"
     >

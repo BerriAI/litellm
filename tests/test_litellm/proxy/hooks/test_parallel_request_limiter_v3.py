@@ -5,6 +5,7 @@ import asyncio
 import os
 import sys
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 import pytest
 from fastapi import HTTPException
@@ -17,6 +18,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
+from litellm.types.utils import ModelResponse, Usage
 
 
 @pytest.mark.flaky(reruns=3)
@@ -35,12 +37,13 @@ async def test_sliding_window_rate_limit_v3(monkeypatch):
     )
 
     # Mock the batch_rate_limiter_script to simulate window expiry and use correct key construction
-    window_starts = {}
+    window_starts: Dict[str, int] = {}
 
     async def mock_batch_rate_limiter(*args, **kwargs):
-        keys = kwargs.get("keys") if "keys" in kwargs else args[0]
-        now = kwargs.get("args")[0] if "args" in kwargs else args[1][0]
-        window_size = kwargs.get("args")[1] if "args" in kwargs else args[1][1]
+        keys = kwargs.get("keys") if kwargs else args[0]
+        args_list = kwargs.get("args") if kwargs else args[1]
+        now = args_list[0]
+        window_size = args_list[1]
         results = []
         for i in range(0, len(keys), 3):
             window_key = keys[i]
@@ -118,12 +121,13 @@ async def test_rate_limiter_script_return_values_v3(monkeypatch):
     )
 
     # Mock the batch_rate_limiter_script to simulate window expiry and use correct key construction
-    window_starts = {}
+    window_starts: Dict[str, int] = {}
 
     async def mock_batch_rate_limiter(*args, **kwargs):
-        keys = kwargs.get("keys") if "keys" in kwargs else args[0]
-        now = kwargs.get("args")[0] if "args" in kwargs else args[1][0]
-        window_size = kwargs.get("args")[1] if "args" in kwargs else args[1][1]
+        keys = kwargs.get("keys") if kwargs else args[0]
+        args_list = kwargs.get("args") if kwargs else args[1]
+        now = args_list[0]
+        window_size = args_list[1]
         results = []
         for i in range(0, len(keys), 3):
             window_key = keys[i]
@@ -264,12 +268,14 @@ async def test_normal_router_call_tpm_v3(monkeypatch, rate_limit_object):
     )
 
     # Mock the batch_rate_limiter_script to simulate window expiry and use correct key construction
-    window_starts = {}
+    window_starts: Dict[str, int] = {}
 
     async def mock_batch_rate_limiter(*args, **kwargs):
-        keys = kwargs.get("keys") if "keys" in kwargs else args[0]
-        now = kwargs.get("args")[0] if "args" in kwargs else args[1][0]
-        window_size = kwargs.get("args")[1] if "args" in kwargs else args[1][1]
+        print(f"args: {args}, kwargs: {kwargs}")
+        keys = kwargs.get("keys") if kwargs else args[0]
+        args_list = kwargs.get("args") if kwargs else args[1]
+        now = args_list[0]
+        window_size = args_list[1]
         results = []
         for i in range(0, len(keys), 3):
             window_key = keys[i]
@@ -372,3 +378,140 @@ async def test_normal_router_call_tpm_v3(monkeypatch, rate_limit_object):
     final_counter_value = await local_cache.async_get_cache(key=counter_key)
 
     assert final_counter_value == 1, "Counter should reset to 1 after window expiry"
+
+
+@pytest.mark.parametrize(
+    "token_rate_limit_type",
+    ["input", "output", "total"],
+)
+@pytest.mark.asyncio
+async def test_token_rate_limit_type_respected_v3(monkeypatch, token_rate_limit_type):
+    """
+    Test that the token_rate_limit_type setting is respected when incrementing usage
+    """
+    # Set up environment and mock general_settings
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+
+    _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, tpm_limit=100)
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    # Mock the get_rate_limit_type method directly since it imports general_settings internally
+    def mock_get_rate_limit_type():
+        return token_rate_limit_type
+
+    monkeypatch.setattr(
+        parallel_request_handler, "get_rate_limit_type", mock_get_rate_limit_type
+    )
+
+    # Create a mock response with different token counts
+    mock_usage = Usage(prompt_tokens=20, completion_tokens=30, total_tokens=50)
+    mock_response = ModelResponse(
+        id="mock-response",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model="gpt-3.5-turbo",
+        usage=mock_usage,
+        choices=[],
+    )
+
+    # Create mock kwargs for the success event
+    mock_kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": _api_key,
+                "user_api_key_user_id": None,
+                "user_api_key_team_id": None,
+                "user_api_key_end_user_id": None,
+            }
+        },
+        "model": "gpt-3.5-turbo",
+    }
+
+    # Mock the pipeline increment method to capture the operations
+    captured_operations = []
+
+    async def mock_increment_pipeline(increment_list, **kwargs):
+        captured_operations.extend(increment_list)
+        return True
+
+    monkeypatch.setattr(
+        parallel_request_handler.internal_usage_cache.dual_cache,
+        "async_increment_cache_pipeline",
+        mock_increment_pipeline,
+    )
+
+    # Call the success event handler
+    await parallel_request_handler.async_log_success_event(
+        kwargs=mock_kwargs,
+        response_obj=mock_response,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    # Verify that the correct token count was used based on the rate limit type
+    assert (
+        len(captured_operations) == 2
+    ), "Should have 2 operations: max_parallel_requests decrement and TPM increment"
+
+    # Find the TPM increment operation (not the max_parallel_requests decrement)
+    tpm_operation = None
+    for op in captured_operations:
+        if op["key"].endswith(":tokens"):
+            tpm_operation = op
+            break
+
+    assert tpm_operation is not None, "Should have a TPM increment operation"
+
+    # Check that the correct token count was used
+    expected_tokens = {
+        "input": mock_usage.prompt_tokens,  # 20
+        "output": mock_usage.completion_tokens,  # 50 (Note: implementation uses total_tokens for output, which might be a bug)
+        "total": mock_usage.total_tokens,  # 50
+    }
+
+    assert (
+        tpm_operation["increment_value"] == expected_tokens[token_rate_limit_type]
+    ), f"Expected {expected_tokens[token_rate_limit_type]} tokens for type '{token_rate_limit_type}', got {tpm_operation['increment_value']}"
+
+
+@pytest.mark.asyncio
+async def test_async_log_failure_event_v3():
+    """
+    Simple test for async_log_failure_event - should decrement max_parallel_requests by 1
+    """
+    _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    # Mock kwargs with user_api_key
+    mock_kwargs = {"litellm_params": {"metadata": {"user_api_key": _api_key}}}
+
+    # Capture pipeline operations
+    captured_ops = []
+
+    async def mock_pipeline(increment_list, **kwargs):
+        captured_ops.extend(increment_list)
+
+    parallel_request_handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = (
+        mock_pipeline
+    )
+
+    # Call async_log_failure_event
+    await parallel_request_handler.async_log_failure_event(
+        kwargs=mock_kwargs, response_obj=None, start_time=None, end_time=None
+    )
+
+    # Verify correct operation was created
+    assert len(captured_ops) == 1
+    op = captured_ops[0]
+    assert op["key"] == f"{{api_key:{_api_key}}}:max_parallel_requests"
+    assert op["increment_value"] == -1
+    assert op["ttl"] == 60  # default window size

@@ -4,6 +4,7 @@ import { DataTable } from './table';
 import { columns } from './columns';
 import { Card, Title, Text, Metric, AreaChart } from '@tremor/react';
 import { RequestViewer } from './index';
+import { formatNumberWithCommas } from '@/utils/dataUtils';
 
 interface SessionViewProps {
   sessionId: string;
@@ -71,7 +72,7 @@ export const SessionView: React.FC<SessionViewProps> = ({ sessionId, logs, onBac
         </Card>
         <Card>
           <Text>Total Cost</Text>
-          <Metric>${totalCost.toFixed(4)}</Metric>
+          <Metric>${formatNumberWithCommas(totalCost, 4)}</Metric>
         </Card>
         <Card>
           <Text>Total Tokens</Text>
