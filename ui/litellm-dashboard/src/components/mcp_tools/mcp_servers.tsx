@@ -321,7 +321,7 @@ const MCPServers: React.FC<MCPServerProps> = ({
         cancelDelete={cancelDelete}
       />
       <TabGroup className="w-full h-full">
-        <TabList className="flex justify-between mt-2 w-full items-center">
+        <TabList className="flex justify-between mt-2 w-full items-center px-6">
           <div className="flex">
             <Tab>All Servers</Tab>
             <Tab>Connect</Tab>
