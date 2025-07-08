@@ -1,15 +1,14 @@
 """
 MCP Server Utilities
 """
-from typing import Tuple
-
 import importlib
+from typing import Tuple
 
 # Constants
 LITELLM_MCP_SERVER_NAME = "litellm-mcp-server"
 LITELLM_MCP_SERVER_VERSION = "1.0.0"
 LITELLM_MCP_SERVER_DESCRIPTION = "MCP Server for LiteLLM"
-MCP_TOOL_PREFIX_SEPARATOR = "/"
+MCP_TOOL_PREFIX_SEPARATOR = "__"
 MCP_TOOL_PREFIX_FORMAT = "{server_name}{separator}{tool_name}"
 
 def is_mcp_available() -> bool:
