@@ -2,7 +2,6 @@
 LiteLLM MCP Server Routes
 """
 
-import asyncio
 import contextlib
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 
