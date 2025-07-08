@@ -91,16 +91,48 @@ if MCP_AVAILABLE:
         --header 'Authorization: Bearer your_api_key_here'
         ```
         """
+        from datetime import datetime
+
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy"
         )
 
+        LIST_MCP_SERVERS: List[LiteLLM_MCPServerTable] = []
+
         # perform authz check to filter the mcp servers user has access to
         if _user_has_admin_view(user_api_key_dict):
-            return await get_all_mcp_servers(prisma_client)
+            LIST_MCP_SERVERS = await get_all_mcp_servers(prisma_client)
+        else:
+            # Find all mcp servers the user has access to
+            LIST_MCP_SERVERS = await get_all_mcp_servers_for_user(
+                prisma_client, user_api_key_dict
+            )
 
-        # Find all mcp servers the user has access to
-        return await get_all_mcp_servers_for_user(prisma_client, user_api_key_dict)
+        #########################################################
+        # Allowed MCP Servers from config.yaml
+        #########################################################
+        ALLOWED_MCP_SERVER_IDS = (
+            await global_mcp_server_manager.get_allowed_mcp_servers(
+                user_api_key_auth=user_api_key_dict
+            )
+        )
+        ALL_CONFIG_MCP_SERVERS = global_mcp_server_manager.config_mcp_servers
+        for _server_id, _server_config in ALL_CONFIG_MCP_SERVERS.items():
+            if _server_id in ALLOWED_MCP_SERVER_IDS:
+                LIST_MCP_SERVERS.append(
+                    LiteLLM_MCPServerTable(
+                        server_id=_server_id,
+                        alias=_server_config.name,
+                        url=_server_config.url,
+                        transport=_server_config.transport,
+                        spec_version=_server_config.spec_version,
+                        auth_type=_server_config.auth_type,
+                        created_at=datetime.now(),
+                        updated_at=datetime.now(),
+                    )
+                )
+        #########################################################
+        return LIST_MCP_SERVERS
 
     @router.get(
         "/server/{server_id}",

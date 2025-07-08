@@ -1037,6 +1037,7 @@ async def test_create_team_member_add(prisma_client, new_member_method):
             return_value=LiteLLM_TeamTableCachedObj(team_id="1234")
         )
 
+        print(f"team_member_add_request={team_member_add_request}")
         await team_member_add(
             data=team_member_add_request,
             user_api_key_dict=UserAPIKeyAuth(user_role="proxy_admin"),
@@ -2207,7 +2208,9 @@ async def test_run_background_health_check_reflects_llm_model_list(monkeypatch):
 
     monkeypatch.setattr(proxy_server, "health_check_interval", 1)
     monkeypatch.setattr(proxy_server, "health_check_details", None)
-    monkeypatch.setattr(proxy_server, "llm_model_list", copy.deepcopy(test_model_list_1))
+    monkeypatch.setattr(
+        proxy_server, "llm_model_list", copy.deepcopy(test_model_list_1)
+    )
     monkeypatch.setattr(proxy_server, "perform_health_check", fake_perform_health_check)
     monkeypatch.setattr(proxy_server, "health_check_results", {})
 
@@ -2221,7 +2224,9 @@ async def test_run_background_health_check_reflects_llm_model_list(monkeypatch):
     except asyncio.CancelledError:
         pass
 
-    monkeypatch.setattr(proxy_server, "llm_model_list", copy.deepcopy(test_model_list_2))
+    monkeypatch.setattr(
+        proxy_server, "llm_model_list", copy.deepcopy(test_model_list_2)
+    )
 
     try:
         await proxy_server._run_background_health_check()

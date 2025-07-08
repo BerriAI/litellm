@@ -121,7 +121,7 @@ class TestProxyInitializationHelpers:
 
         # Execute
         ProxyInitializationHelpers._init_hypercorn_server(
-            mock_app, "localhost", 8000, None, None
+            mock_app, "localhost", 8000, None, None, None
         )
 
         # Assert
@@ -129,7 +129,7 @@ class TestProxyInitializationHelpers:
 
         # Test with SSL
         ProxyInitializationHelpers._init_hypercorn_server(
-            mock_app, "localhost", 8000, "cert.pem", "key.pem"
+            mock_app, "localhost", 8000, "cert.pem", "key.pem", "ECDHE"
         )
 
     @patch("subprocess.Popen")

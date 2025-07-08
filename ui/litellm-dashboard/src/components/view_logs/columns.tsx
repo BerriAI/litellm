@@ -5,6 +5,7 @@ import { Tooltip } from "antd";
 import { TimeCell } from "./time_cell";
 import { Button, Badge } from "@tremor/react";
 import { Eye, EyeOff} from "lucide-react"
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 // Helper to get the appropriate logo URL
 const getLogoUrl = (
@@ -46,6 +47,7 @@ export type LogEntry = {
   proxy_server_request?: string | any[] | Record<string, any>;
   session_id?: string;
   status?: string;
+  duration?: number;
   onKeyHashClick?: (keyHash: string) => void;
   onSessionClick?: (sessionId: string) => void;
 };
@@ -157,7 +159,16 @@ export const columns: ColumnDef<LogEntry>[] = [
     header: "Cost",
     accessorKey: "spend",
     cell: (info: any) => (
-      <span>${Number(info.getValue() || 0).toFixed(6)}</span>
+      <span>${formatNumberWithCommas(info.getValue() || 0, 4)}</span>
+    ),
+  },
+  {
+    header: "Duration (s)",
+    accessorKey: "duration",
+    cell: (info: any) => (
+      <Tooltip title={String(info.getValue() || "-")}>
+        <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
+      </Tooltip>
     ),
   },
   {

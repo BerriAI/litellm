@@ -22,7 +22,6 @@ general_settings:
   database_connection_pool_limit: 10 # limit the number of database connections to = MAX Number of DB Connections/Number of instances of litellm proxy (Around 10-20 is good number)
 
   # OPTIONAL Best Practices
-  disable_spend_logs: True # turn off writing each transaction to the db. We recommend doing this is you don't need to see Usage on the LiteLLM UI and are tracking metrics via Prometheus
   disable_error_logs: True # turn off writing LLM Exceptions to DB
   allow_requests_on_db_unavailable: True # Only USE when running LiteLLM on your VPC. Allow requests to still be processed even if the DB is unavailable. We recommend doing this if you're running LiteLLM on VPC that cannot be accessed from the public internet.
 
@@ -49,7 +48,21 @@ Need Help or want dedicated support ? Talk to a founder [here]: (https://calendl
 :::
 
 
-## 2. On Kubernetes - Use 1 Uvicorn worker [Suggested CMD]
+## 2. Recommended Machine Specifications
+
+For optimal performance in production, we recommend the following minimum machine specifications:
+
+| Resource | Recommended Value |
+|----------|------------------|
+| CPU      | 2 vCPU           |
+| Memory   | 4 GB RAM         |
+
+These specifications provide:
+- Sufficient compute power for handling concurrent requests
+- Adequate memory for request processing and caching
+
+
+## 3. On Kubernetes - Use 1 Uvicorn worker [Suggested CMD]
 
 Use this Docker `CMD`. This will start the proxy with 1 Uvicorn Async Worker
 
@@ -59,7 +72,7 @@ CMD ["--port", "4000", "--config", "./proxy_server_config.yaml"]
 ```
 
 
-## 3. Use Redis 'port','host', 'password'. NOT 'redis_url'
+## 4. Use Redis 'port','host', 'password'. NOT 'redis_url'
 
 If you decide to use Redis, DO NOT use 'redis_url'. We recommend using redis port, host, and password params. 
 
@@ -92,13 +105,13 @@ litellm_settings:
     password: os.environ/REDIS_PASSWORD
 ```
 
-## 4. Disable 'load_dotenv'
+## 5. Disable 'load_dotenv'
 
 Set `export LITELLM_MODE="PRODUCTION"`
 
 This disables the load_dotenv() functionality, which will automatically load your environment credentials from the local `.env`. 
 
-## 5. If running LiteLLM on VPC, gracefully handle DB unavailability
+## 6. If running LiteLLM on VPC, gracefully handle DB unavailability
 
 When running LiteLLM on a VPC (and inaccessible from the public internet), you can enable graceful degradation so that request processing continues even if the database is temporarily unavailable.
 
@@ -124,20 +137,6 @@ When `allow_requests_on_db_unavailable` is set to `true`, LiteLLM will handle er
 | Health/Readiness Check | ✅ Always returns 200 OK | The /health/readiness endpoint returns a 200 OK status to ensure that pods remain operational even when the database is unavailable.
 | LiteLLM Budget Errors or Model Errors | ❌ Request will be blocked | Triggered when the DB is reachable but the authentication token is invalid, lacks access, or exceeds budget limits. |
 
-
-## 6. Disable spend_logs & error_logs if not using the LiteLLM UI
-
-By default, LiteLLM writes several types of logs to the database:
-- Every LLM API request to the `LiteLLM_SpendLogs` table
-- LLM Exceptions to the `LiteLLM_SpendLogs` table
-
-If you're not viewing these logs on the LiteLLM UI, you can disable them by setting the following flags to `True`:
-
-```yaml
-general_settings:
-  disable_spend_logs: True    # Disable writing spend logs to DB
-  disable_error_logs: True    # Disable writing error logs to DB
-```
 
 [More information about what the Database is used for here](db_info)
 
