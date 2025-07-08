@@ -100,7 +100,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
                 litellm_params=litellm_params,
             )
 
-            if isinstance(data, bytes):
+            if not isinstance(data, dict):
                 raise ValueError("OpenAI transformation route requires a dict")
         else:
             data = {"model": model, "file": audio_file, **optional_params}

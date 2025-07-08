@@ -36,7 +36,6 @@ class XAIChatConfig(OpenAIGPTConfig):
             "presence_penalty",
             "response_format",
             "seed",
-            "stop",
             "stream",
             "stream_options",
             "temperature",
@@ -47,6 +46,9 @@ class XAIChatConfig(OpenAIGPTConfig):
             "user",
             "web_search_options",
         ]
+        # for some reason, grok-3-mini does not support stop tokens
+        if "grok-3-mini" not in model:
+            base_openai_params.append("stop")
         try:
             if litellm.supports_reasoning(
                 model=model, custom_llm_provider=self.custom_llm_provider

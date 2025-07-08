@@ -156,7 +156,6 @@ model LiteLLM_ObjectPermissionTable {
   object_permission_id  String         @id @default(uuid())
   mcp_servers           String[]       @default([])
   vector_stores         String[]       @default([])
-  
   teams                 LiteLLM_TeamTable[]
   verification_tokens   LiteLLM_VerificationToken[]
   organizations         LiteLLM_OrganizationTable[]
@@ -176,6 +175,7 @@ model LiteLLM_MCPServerTable {
   created_by   String?
   updated_at   DateTime?      @default(now()) @updatedAt @map("updated_at")
   updated_by   String?
+  mcp_info     Json?          @default("{}")
 }
 
 // Generate Tokens for Proxy
@@ -453,8 +453,8 @@ enum JobStatus {
 model LiteLLM_ManagedFileTable {
   id String @id @default(uuid())
   unified_file_id String @unique // The base64 encoded unified file ID
-  file_object Json // Stores the OpenAIFileObject
-  model_mappings Json 
+  file_object Json? // Stores the OpenAIFileObject
+  model_mappings Json
   flat_model_file_ids String[]  @default([]) // Flat list of model file id's - for faster querying of model id -> unified file id
   created_at DateTime @default(now())
   created_by String? 
@@ -469,7 +469,8 @@ model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use t
   unified_object_id String @unique // The base64 encoded unified file ID
   model_object_id String @unique // the id returned by the backend API provider 
   file_object Json // Stores the OpenAIFileObject
-  file_purpose String // either 'batch' or 'fine-tune' 
+  file_purpose String // either 'batch' or 'fine-tune'
+  status String? // check if batch cost has been tracked  
   created_at DateTime @default(now())
   created_by String?
   updated_at DateTime @updatedAt
@@ -498,4 +499,24 @@ model LiteLLM_GuardrailsTable {
   guardrail_info Json?
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
+}
+
+model LiteLLM_HealthCheckTable {
+  health_check_id String @id @default(uuid())
+  model_name String
+  model_id String?
+  status String
+  healthy_count Int @default(0)
+  unhealthy_count Int @default(0)
+  error_message String?
+  response_time_ms Float?
+  details Json?
+  checked_by String?
+  checked_at DateTime @default(now())
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([model_name])
+  @@index([checked_at])
+  @@index([status])
 }

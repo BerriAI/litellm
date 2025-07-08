@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -83,10 +83,10 @@ def init_guardrails_v2(
 
     for guardrail in all_guardrails:
         initialized_guardrail = IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
-            guardrail=guardrail,
+            guardrail=cast(Guardrail, guardrail),
             config_file_path=config_file_path,
         )
         if initialized_guardrail:
             guardrail_list.append(initialized_guardrail)
 
-    verbose_proxy_logger.info(f"\nGuardrail List:{guardrail_list}\n")
+    verbose_proxy_logger.debug(f"\nGuardrail List:{guardrail_list}\n")

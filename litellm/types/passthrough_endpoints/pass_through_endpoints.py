@@ -32,3 +32,10 @@ class PassthroughStandardLoggingPayload(TypedDict, total=False):
     """
     The body of the response
     """
+
+    cost_per_request: Optional[float]
+    """
+    The cost per request to the target endpoint
+
+    Optional field, we use this for cost tracking only if it's set.
+    """

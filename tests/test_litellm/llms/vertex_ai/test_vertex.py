@@ -1218,6 +1218,10 @@ def test_get_image_mime_type_from_url():
         _get_image_mime_type_from_url("https://example.com/IMAGE.WEBP") == "image/webp"
     )
 
+    # Test audio formats
+    assert _get_image_mime_type_from_url("https://example.com/audio.ogg") == "audio/ogg"
+    assert _get_image_mime_type_from_url("https://example.com/track.OGG") == "audio/ogg"
+
     # Test unsupported formats
     assert _get_image_mime_type_from_url("https://example.com/image.gif") is None
     assert _get_image_mime_type_from_url("https://example.com/image.bmp") is None

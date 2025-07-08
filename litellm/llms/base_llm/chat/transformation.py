@@ -97,6 +97,7 @@ class BaseConfig(ABC):
                     types.BuiltinFunctionType,
                     classmethod,
                     staticmethod,
+                    property,
                 ),
             )
             and v is not None
