@@ -45,10 +45,17 @@ export interface InputSchemaProperty {
     required?: string[];
   }
   
+  // Define MCPServerCostInfo for cost tracking
+  export interface MCPServerCostInfo {
+    default_cost_per_query?: number | null;
+  }
+
   // Define MCP provider info
   export interface MCPInfo {
     server_name: string;
+    description?: string;
     logo_url?: string;
+    mcp_server_cost_info?: MCPServerCostInfo | null;
   }
   
   // Define the structure for a single MCP tool
@@ -114,6 +121,7 @@ export interface MCPServer {
   transport?: string | null;
   spec_version?: string | null;
   auth_type?: string | null;
+  mcp_info?: MCPInfo | null;
   created_at: string;
   created_by: string;
   updated_at: string;
