@@ -24,6 +24,7 @@ from litellm.types.mcp import (
     MCPTransport,
     MCPTransportType,
 )
+from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
@@ -846,6 +847,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
     auth_type: Optional[MCPAuthType] = None
     url: str
+    mcp_info: Optional[MCPInfo] = None
 
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
@@ -856,6 +858,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
     auth_type: Optional[MCPAuthType] = None
     url: str
+    mcp_info: Optional[MCPInfo] = None
 
 
 class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
@@ -872,7 +875,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     created_by: Optional[str] = None
     updated_at: Optional[datetime] = None
     updated_by: Optional[str] = None
-
+    mcp_info: Optional[MCPInfo] = None
 
 class NewUserRequestTeam(LiteLLMPydanticObjectBase):
     team_id: str
