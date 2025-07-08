@@ -1,10 +1,11 @@
 # What is this?
-## Script to apply initial prisma migration on Docker setup
+## Script to apply prisma migrations on Docker setup
 
 import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 sys.path.insert(
     0, os.path.abspath("./")
@@ -58,6 +59,27 @@ if disable_schema_update is not None and disable_schema_update == "True":
     verbose_proxy_logger.info("Skipping schema update...")
     exit(0)
 
+# Check if migrations directory exists
+schema_path = Path("./schema.prisma")
+migrations_path = Path("./migrations")
+proxy_extras_migrations_path = Path("./litellm-proxy-extras/litellm_proxy_extras/migrations")
+
+# If migrations don't exist next to schema but exist in proxy-extras, create symlink
+if schema_path.exists() and not migrations_path.exists() and proxy_extras_migrations_path.exists():
+    verbose_proxy_logger.info("Creating symlink for migrations directory...")
+    try:
+        migrations_path.symlink_to(proxy_extras_migrations_path.absolute())
+        verbose_proxy_logger.info("Migrations symlink created successfully")
+    except Exception as e:
+        verbose_proxy_logger.warning(f"Could not create migrations symlink: {e}")
+        # If symlink fails, try copying
+        try:
+            import shutil
+            shutil.copytree(proxy_extras_migrations_path, migrations_path)
+            verbose_proxy_logger.info("Migrations directory copied successfully")
+        except Exception as copy_e:
+            verbose_proxy_logger.warning(f"Could not copy migrations directory: {copy_e}")
+
 while retry_count < max_retries and exit_code != 0:
     retry_count += 1
     verbose_proxy_logger.info(f"Attempt {retry_count}...")
@@ -78,29 +100,50 @@ while retry_count < max_retries and exit_code != 0:
             f"'prisma generate' stderr: {result.stderr}"
         )  # Log stderr
 
-    # Run the Prisma db push command
-    verbose_proxy_logger.info("Running 'prisma db push --accept-data-loss'...")
-    result = subprocess.run(
-        ["prisma", "db", "push", "--accept-data-loss"], capture_output=True, text=True
-    )
-    verbose_proxy_logger.info(f"'prisma db push' stdout: {result.stdout}")  # Log stdout
-    exit_code = result.returncode
-
-    if exit_code != 0:
-        verbose_proxy_logger.info(
-            f"'prisma db push' stderr: {result.stderr}"
-        )  # Log stderr
-        verbose_proxy_logger.error(
-            f"'prisma db push' failed with exit code {exit_code}."
+    # Check if migrations exist
+    if migrations_path.exists() and any(migrations_path.iterdir()):
+        # Run the Prisma migrate deploy command
+        verbose_proxy_logger.info("Running 'prisma migrate deploy'...")
+        result = subprocess.run(
+            ["prisma", "migrate", "deploy"], capture_output=True, text=True
         )
-        if retry_count < max_retries:
-            verbose_proxy_logger.info("Retrying in 10 seconds...")
-            time.sleep(10)
+        verbose_proxy_logger.info(f"'prisma migrate deploy' stdout: {result.stdout}")  # Log stdout
+        exit_code = result.returncode
+
+        if exit_code != 0:
+            verbose_proxy_logger.info(
+                f"'prisma migrate deploy' stderr: {result.stderr}"
+            )  # Log stderr
+            verbose_proxy_logger.error(
+                f"'prisma migrate deploy' failed with exit code {exit_code}."
+            )
+            if retry_count < max_retries:
+                verbose_proxy_logger.info("Retrying in 10 seconds...")
+                time.sleep(10)
+    else:
+        # No migrations exist, use db push for initial setup
+        verbose_proxy_logger.info("No migrations found. Running 'prisma db push' for initial setup...")
+        result = subprocess.run(
+            ["prisma", "db", "push"], capture_output=True, text=True
+        )
+        verbose_proxy_logger.info(f"'prisma db push' stdout: {result.stdout}")  # Log stdout
+        exit_code = result.returncode
+
+        if exit_code != 0:
+            verbose_proxy_logger.info(
+                f"'prisma db push' stderr: {result.stderr}"
+            )  # Log stderr
+            verbose_proxy_logger.error(
+                f"'prisma db push' failed with exit code {exit_code}."
+            )
+            if retry_count < max_retries:
+                verbose_proxy_logger.info("Retrying in 10 seconds...")
+                time.sleep(10)
 
 if retry_count == max_retries and exit_code != 0:
     verbose_proxy_logger.error(
-        f"Unable to push database changes after {max_retries} retries."
+        f"Unable to apply database migrations after {max_retries} retries."
     )
     exit(1)
 
-verbose_proxy_logger.info("Database push successful!")
+verbose_proxy_logger.info("Database migrations applied successfully!")
