@@ -1,7 +1,7 @@
 """
 Cost calculator for MCP tools.
 """
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from litellm.types.mcp import MCPServerCostInfo
 from litellm.types.utils import StandardLoggingMCPToolCall
@@ -27,7 +27,7 @@ class MCPCostCalculator:
         #########################################################
         # Unpack the mcp_tool_call_metadata
         #########################################################
-        mcp_tool_call_metadata: StandardLoggingMCPToolCall = litellm_logging_obj.model_call_details.get("mcp_tool_call_metadata", {}) or {}
+        mcp_tool_call_metadata: StandardLoggingMCPToolCall = cast(StandardLoggingMCPToolCall, litellm_logging_obj.model_call_details.get("mcp_tool_call_metadata", {})) or {}
         mcp_server_cost_info: MCPServerCostInfo = mcp_tool_call_metadata.get("mcp_server_cost_info", {}) or {}
         #########################################################
         # User defined cost per query
