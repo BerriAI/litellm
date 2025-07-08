@@ -37,6 +37,7 @@ from litellm.types.llms.base import (
     BaseLiteLLMOpenAIResponseObject,
     LiteLLMPydanticObjectBase,
 )
+from litellm.types.mcp import MCPServerCostInfo
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
 from .guardrails import GuardrailEventHooks
@@ -272,6 +273,11 @@ class CallTypes(Enum):
     agenerate_content = "agenerate_content"
     generate_content_stream = "generate_content_stream"
     agenerate_content_stream = "agenerate_content_stream"
+
+    #########################################################
+    # MCP Call Types
+    #########################################################
+    call_mcp_tool = "call_mcp_tool"
 
 
 CallTypesLiteral = Literal[
@@ -1815,7 +1821,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_request_route: Optional[str]
 
 
-class StandardLoggingMCPToolCall(TypedDict, total=False):
+class StandardLoggingMCPToolCall(TypedDict, total=False):    
     name: str
     """
     Name of the tool to call
@@ -1839,6 +1845,11 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
     Optional logo URL of the MCP server that the tool call was made to
 
     (this is to render the logo on the logs page on litellm ui)
+    """
+
+    mcp_server_cost_info: Optional[MCPServerCostInfo]
+    """
+    Cost per query for the MCP server tool call
     """
 
 
