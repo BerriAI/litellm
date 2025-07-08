@@ -14,7 +14,17 @@ export const mcpServerColumns = (
   {
     id: "alias",
     header: "Alias",
-    accessorFn: (row) => row.alias || row.server_id,
+    cell: ({ row }) => {
+      const alias = row.original.alias || row.original.server_id;
+      return (
+        <button
+          onClick={() => onView(row.original.server_id)}
+          className="text-blue-500 hover:text-blue-700 font-medium"
+        >
+          {alias}
+        </button>
+      );
+    },
   },
   {
     id: "url",
@@ -69,25 +79,21 @@ export const mcpServerColumns = (
             onClick={() => onView(row.original.server_id)}
           />
         </Tooltip>
-        {userRole === "admin" && (
-          <>
-            <Tooltip title="Edit">
-              <Button
-                type="text"
-                icon={<PencilIcon className="h-4 w-4" />}
-                onClick={() => onEdit(row.original.server_id)}
-              />
-            </Tooltip>
-            <Tooltip title="Delete">
-              <Button
-                type="text"
-                danger
-                icon={<TrashIcon className="h-4 w-4" />}
-                onClick={() => onDelete(row.original.server_id)}
-              />
-            </Tooltip>
-          </>
-        )}
+        <Tooltip title="Edit">
+          <Button
+            type="text"
+            icon={<PencilIcon className="h-4 w-4" />}
+            onClick={() => onEdit(row.original.server_id)}
+          />
+        </Tooltip>
+        <Tooltip title="Delete">
+          <Button
+            type="text"
+            danger
+            icon={<TrashIcon className="h-4 w-4" />}
+            onClick={() => onDelete(row.original.server_id)}
+          />
+        </Tooltip>
       </div>
     ),
   },
