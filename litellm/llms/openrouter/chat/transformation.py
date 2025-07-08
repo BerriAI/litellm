@@ -120,12 +120,26 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
             finish_reason = None
             delta = Delta()
             logprobs = None
+            # {"id":"gen-1751968953-WEWmZEtpfjrIpGHVkLxh","provider":"Google",
+            # "model":"anthropic/claude-sonnet-4","object":"chat.completion.chunk",
+            # "created":1751968953,"choices":[{"index":0,
+            # "delta":{"role":"assistant","content":"","reasoning":null,"reasoning_details":
+            # [{"type":"reasoning.text","signature":"VkQnK3sSOCidzuDxlxmd003R3QYAQ==","provider":"google-vertex"}]}
+            # ,"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
             if "choices" in chunk and len(chunk["choices"]) > 0:
                 choice = chunk["choices"][0]
                 if "delta" in choice and choice["delta"] is not None:
                     choice["delta"]["reasoning_content"] = choice["delta"].get(
                         "reasoning"
                     )
+
+                    if hasattr(delta, "reasoning_details") and delta.reasoning_details:
+                        if hasattr(delta.reasoning_details, "type") and delta.reasoning_details.type == 'reasoning.text':
+                            first_thinking_block = delta.reasoning_details[0]
+                            if 'signature' in first_thinking_block:
+                                choice["delta"]["thinking_blocks"]["signature"] = first_thinking_block['signature']
+
                     delta = Delta(**choice["delta"])
 
                 if "finish_reason" in choice:
