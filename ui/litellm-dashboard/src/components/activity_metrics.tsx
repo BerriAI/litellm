@@ -13,29 +13,32 @@ const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: Mode
   return (
     <div className="space-y-2">
       {/* Summary Cards */}
-      <Grid numItems={4} className="gap-4">
-        <Card>
-          <Text>Total Requests</Text>
-          <Title>{metrics.total_requests.toLocaleString()}</Title>
-        </Card>
-        <Card>
-          <Text>Total Successful Requests</Text>
-          <Title>{metrics.total_successful_requests.toLocaleString()}</Title>
-        </Card>
-        <Card>
-          <Text>Total Tokens</Text>
-          <Title>{metrics.total_tokens.toLocaleString()}</Title>
-          <Text>{Math.round(metrics.total_tokens / metrics.total_successful_requests)} avg per successful request</Text>
-        </Card>
-        <Card>
-          <Text>Total Spend</Text>
-          <Title>${formatNumberWithCommas(metrics.total_spend, 2)}</Title>
-          <Text>${formatNumberWithCommas((metrics.total_spend / metrics.total_successful_requests), 3)} per successful request</Text>
-        </Card>
-      </Grid>
+      {(!metrics.visibleComponents || metrics.visibleComponents.includes('summary')) && (
+        <Grid numItems={4} className="gap-4">
+          <Card>
+            <Text>Total Requests</Text>
+            <Title>{metrics.total_requests.toLocaleString()}</Title>
+          </Card>
+          <Card>
+            <Text>Total Successful Requests</Text>
+            <Title>{metrics.total_successful_requests.toLocaleString()}</Title>
+          </Card>
+          <Card>
+            <Text>Total Tokens</Text>
+            <Title>{metrics.total_tokens.toLocaleString()}</Title>
+            <Text>{Math.round(metrics.total_tokens / metrics.total_successful_requests)} avg per successful request</Text>
+          </Card>
+          <Card>
+            <Text>Total Spend</Text>
+            <Title>${formatNumberWithCommas(metrics.total_spend, 2)}</Title>
+            <Text>${formatNumberWithCommas((metrics.total_spend / metrics.total_successful_requests), 3)} per successful request</Text>
+          </Card>
+        </Grid>
+      )}
 
       {/* Top API Keys Section */}
-      {metrics.top_api_keys && metrics.top_api_keys.length > 0 && (
+      {(!metrics.visibleComponents || metrics.visibleComponents.includes('top_api_keys')) && 
+       metrics.top_api_keys && metrics.top_api_keys.length > 0 && (
         <Card className="mt-4">
           <Title>Top API Keys by Spend</Title>
           <div className="mt-3">
@@ -65,65 +68,75 @@ const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: Mode
 
       {/* Charts */}
       <Grid numItems={2} className="gap-4">
-        <Card>
-          <Title>Total Tokens</Title>
-          <AreaChart    
-            data={metrics.daily_data}
-            index="date"
-            categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]}
-            colors={["blue", "cyan", "indigo"]}
-            valueFormatter={(number: number) => number.toLocaleString()}
-          />
-        </Card>
+        {(!metrics.visibleComponents || metrics.visibleComponents.includes('tokens_chart')) && (
+          <Card>
+            <Title>Total Tokens</Title>
+            <AreaChart    
+              data={metrics.daily_data}
+              index="date"
+              categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]}
+              colors={["blue", "cyan", "indigo"]}
+              valueFormatter={(number: number) => number.toLocaleString()}
+            />
+          </Card>
+        )}
 
-        <Card>
-          <Title>Requests per day</Title>
-          <BarChart
-            data={metrics.daily_data}
-            index="date"
-            categories={["metrics.api_requests"]}
-            colors={["blue"]}
-            valueFormatter={(number: number) => number.toLocaleString()}
-          />
-        </Card>
+        {(!metrics.visibleComponents || metrics.visibleComponents.includes('requests_chart')) && (
+          <Card>
+            <Title>Requests per day</Title>
+            <BarChart
+              data={metrics.daily_data}
+              index="date"
+              categories={["metrics.api_requests"]}
+              colors={["blue"]}
+              valueFormatter={(number: number) => number.toLocaleString()}
+            />
+          </Card>
+        )}
 
-        <Card>
-          <Title>Spend per day</Title>
-          <BarChart
-            data={metrics.daily_data}
-            index="date"
-            categories={["metrics.spend"]}
-            colors={["green"]}
-            valueFormatter={(value: number) => `$${formatNumberWithCommas(value, 2)}`}
-          />
-        </Card>
+        {(!metrics.visibleComponents || metrics.visibleComponents.includes('spend_chart')) && (
+          <Card>
+            <Title>Spend per day</Title>
+            <BarChart
+              data={metrics.daily_data}
+              index="date"
+              categories={["metrics.spend"]}
+              colors={["green"]}
+              valueFormatter={(value: number) => `$${formatNumberWithCommas(value, 2)}`}
+            />
+          </Card>
+        )}
 
-        <Card>
-          <Title>Success vs Failed Requests</Title>
-          <AreaChart
-            data={metrics.daily_data}
-            index="date"
-            categories={["metrics.successful_requests", "metrics.failed_requests"]}
-            colors={["emerald", "red"]}
-            valueFormatter={(number: number) => number.toLocaleString()}
-            stack
-          />
-        </Card>
+        {(!metrics.visibleComponents || metrics.visibleComponents.includes('success_failed_chart')) && (
+          <Card>
+            <Title>Success vs Failed Requests</Title>
+            <AreaChart
+              data={metrics.daily_data}
+              index="date"
+              categories={["metrics.successful_requests", "metrics.failed_requests"]}
+              colors={["emerald", "red"]}
+              valueFormatter={(number: number) => number.toLocaleString()}
+              stack
+            />
+          </Card>
+        )}
         
-        <Card>
-          <Title>Prompt Caching Metrics</Title>
-          <div className="mb-2">
-            <Text>Cache Read: {metrics.total_cache_read_input_tokens?.toLocaleString() || 0} tokens</Text>
-            <Text>Cache Creation: {metrics.total_cache_creation_input_tokens?.toLocaleString() || 0} tokens</Text>
-          </div>
-          <AreaChart
-            data={metrics.daily_data}
-            index="date"
-            categories={["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"]}
-            colors={["cyan", "purple"]}
-            valueFormatter={(number: number) => number.toLocaleString()}
-          />
-        </Card>
+        {(!metrics.visibleComponents || metrics.visibleComponents.includes('prompt_caching_chart')) && (
+          <Card>
+            <Title>Prompt Caching Metrics</Title>
+            <div className="mb-2">
+              <Text>Cache Read: {metrics.total_cache_read_input_tokens?.toLocaleString() || 0} tokens</Text>
+              <Text>Cache Creation: {metrics.total_cache_creation_input_tokens?.toLocaleString() || 0} tokens</Text>
+            </div>
+            <AreaChart
+              data={metrics.daily_data}
+              index="date"
+              categories={["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"]}
+              colors={["cyan", "purple"]}
+              valueFormatter={(number: number) => number.toLocaleString()}
+            />
+          </Card>
+        )}
       </Grid>
     </div>
   );
@@ -281,8 +294,19 @@ const formatKeyLabel = (modelData: KeyMetricWithMetadata, model: string): string
 };
 
 // Process data function
-export const processActivityData = (dailyActivity: { results: DailyData[] }, key: "models" | "api_keys" | "mcp_servers"): Record<string, ModelActivityData> => {
+export const processActivityData = (
+  dailyActivity: { results: DailyData[] }, 
+  key: "models" | "api_keys" | "mcp_servers",
+  visibleComponents?: string[]
+): Record<string, ModelActivityData> => {
   const modelMetrics: Record<string, ModelActivityData> = {};
+
+  // Determine which components to show - exclude prompt caching for MCP servers by default
+  const defaultVisibleComponents = key === 'mcp_servers' 
+    ? ['summary', 'top_api_keys', 'tokens_chart', 'requests_chart', 'spend_chart', 'success_failed_chart']
+    : ['summary', 'top_api_keys', 'tokens_chart', 'requests_chart', 'spend_chart', 'success_failed_chart', 'prompt_caching_chart'];
+  
+  const componentsToShow = visibleComponents || defaultVisibleComponents;
 
   dailyActivity.results.forEach((day) => {
     Object.entries(day.breakdown[key] || {}).forEach(([model, modelData]) => {
@@ -301,6 +325,7 @@ export const processActivityData = (dailyActivity: { results: DailyData[] }, key
           total_cache_read_input_tokens: 0,
           total_cache_creation_input_tokens: 0,
           top_api_keys: [],
+          visibleComponents: componentsToShow,
           daily_data: []
         };
       }
