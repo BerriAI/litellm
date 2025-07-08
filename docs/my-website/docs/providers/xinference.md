@@ -53,12 +53,11 @@ print(response)
 from litellm import image_generation
 import os
 
-os.environ['XINFERENCE_API_BASE'] = "http://127.0.0.1:9997/v1"
-
 # xinference image generation call
 response = image_generation(
     model="xinference/stabilityai/stable-diffusion-3.5-large",
     prompt="A beautiful sunset over a calm ocean",
+    api_base="http://127.0.0.1:9997/v1",
 )
 print(response)
 ```
