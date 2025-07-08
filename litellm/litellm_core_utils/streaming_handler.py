@@ -731,6 +731,10 @@ class CustomStreamWrapper:
                 "reasoning_content" in model_response.choices[0].delta
                 and model_response.choices[0].delta.reasoning_content is not None
             )
+            or (
+                "thinking_blocks" in model_response.choices[0].delta
+                and model_response.choices[0].delta.thinking_blocks is not None
+            )
             or (model_response.choices[0].delta.provider_specific_fields is not None)
             or (
                 "provider_specific_fields" in model_response

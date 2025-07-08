@@ -13,6 +13,7 @@ import httpx
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import ChatCompletionThinkingBlock
 from litellm.types.llms.openrouter import OpenRouterErrorMessage
 from litellm.types.utils import Delta, ModelResponse, ModelResponseStream, Usage
 from litellm.utils import StreamingChoices
@@ -144,8 +145,14 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
                             "signature" in first_thinking_block):
                             # Initialize thinking_blocks if it doesn't exist
                             if "thinking_blocks" not in choice["delta"]:
-                                choice["delta"]["thinking_blocks"] = {}
-                            choice["delta"]["thinking_blocks"]["signature"] = first_thinking_block["signature"]
+                                choice["delta"]["thinking_blocks"] = []
+                            choice["delta"]["thinking_blocks"].append(
+                                ChatCompletionThinkingBlock(
+                                    type="thinking",
+                                    thinking="",
+                                    signature=first_thinking_block["signature"],
+                                )
+                            )
 
                     delta = Delta(**choice["delta"])
 
