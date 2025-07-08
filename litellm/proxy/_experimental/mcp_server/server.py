@@ -23,7 +23,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     normalize_server_name,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.mcp_server.mcp_server_manager import MCPInfo
+from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 from litellm.types.utils import StandardLoggingMCPToolCall
 from litellm.utils import client
 
@@ -332,13 +332,14 @@ if MCP_AVAILABLE:
             litellm_logging_obj.model_call_details["custom_llm_provider"] = (
                 standard_logging_mcp_tool_call.get("mcp_server_name")
             )
-
+        #########################################################
+        # Managed MCP Server Tool
         # Try managed server tool first (pass the full prefixed name)
-        if name in global_mcp_server_manager.tool_name_to_mcp_server_name_mapping:
-            mcp_server = global_mcp_server_manager.get_mcp_server_by_id(name)
-            if mcp_server and mcp_server.mcp_info:
-                standard_logging_mcp_tool_call["mcp_server_cost_info"] = mcp_server.mcp_info.get("mcp_server_cost_info")
-
+        # Primary and recommended way to use MCP servers
+        #########################################################
+        mcp_server: Optional[MCPServer] = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+        if mcp_server:
+            standard_logging_mcp_tool_call["mcp_server_cost_info"] = (mcp_server.mcp_info or {}).get("mcp_server_cost_info")
             return await _handle_managed_mcp_tool(
                 name=name,  # Pass the full name (potentially prefixed)
                 arguments=arguments,
@@ -347,6 +348,9 @@ if MCP_AVAILABLE:
             )
 
         # Fall back to local tool registry (use original name)
+        #########################################################
+        # Deprecated: Local MCP Server Tool
+        #########################################################
         return await _handle_local_mcp_tool(original_tool_name, arguments)
 
     def _get_standard_logging_mcp_tool_call(

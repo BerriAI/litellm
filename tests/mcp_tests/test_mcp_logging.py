@@ -64,8 +64,10 @@ async def test_mcp_cost_tracking():
             mcp_servers_config={
                 "zapier_gmail_server": {
                     "url": os.getenv("ZAPIER_MCP_HTTPS_SERVER_URL"),
-                    "mcp_server_cost_info": {
-                        "default_cost_per_query": 1.2,
+                    "mcp_info": {
+                        "mcp_server_cost_info": {
+                            "default_cost_per_query": 1.2,
+                        }
                     }
                 }
             }
