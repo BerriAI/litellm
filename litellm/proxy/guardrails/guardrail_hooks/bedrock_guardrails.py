@@ -287,7 +287,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             for output in outputs:
                 if output.get("text"):
                     bedrock_guardrail_output_text += output.get("text") or ""
-                    bedrock_guardrail_output_text += "\n"
                 
         
         return HTTPException(
