@@ -66,6 +66,7 @@ async def test_transcription(
         api_key=api_key,
         api_base=api_base,
         response_format=response_format,
+        timestamp_granularities=timestamp_granularities,
         drop_params=True,
     )
     print(f"transcript: {transcript.model_dump()}")
