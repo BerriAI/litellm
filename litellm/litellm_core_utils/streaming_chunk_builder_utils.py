@@ -1,6 +1,6 @@
 import base64
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
 from litellm.types.llms.openai import (
     ChatCompletionAssistantContentValue,
@@ -24,6 +24,10 @@ from litellm.utils import print_verbose, token_counter
 if TYPE_CHECKING:
     from litellm.types.litellm_core_utils.streaming_chunk_builder_utils import (
         UsagePerChunk,
+    )
+    from litellm.types.llms.openai import (
+        ChatCompletionRedactedThinkingBlock,
+        ChatCompletionThinkingBlock,
     )
 
 
@@ -216,6 +220,66 @@ class ChunkProcessor:
 
         # Update the "content" field within the response dictionary
         return combined_content
+
+    def get_combined_thinking_content(
+        self, chunks: List[Dict[str, Any]]
+    ) -> Optional[
+        List[
+            Union["ChatCompletionThinkingBlock", "ChatCompletionRedactedThinkingBlock"]
+        ]
+    ]:
+        from litellm.types.llms.openai import (
+            ChatCompletionRedactedThinkingBlock,
+            ChatCompletionThinkingBlock,
+        )
+
+        thinking_blocks: List[
+            Union["ChatCompletionThinkingBlock", "ChatCompletionRedactedThinkingBlock"]
+        ] = []
+        combined_thinking_text: Optional[str] = None
+        data: Optional[str] = None
+        signature: Optional[str] = None
+        type: Literal["thinking", "redacted_thinking"] = "thinking"
+        for chunk in chunks:
+            choices = chunk["choices"]
+            for choice in choices:
+                delta = choice.get("delta", {})
+                thinking = delta.get("thinking_blocks", None)
+                if thinking and isinstance(thinking, list):
+                    for thinking_block in thinking:
+                        thinking_type = thinking_block.get("type", None)
+                        if thinking_type and thinking_type == "redacted_thinking":
+                            type = "redacted_thinking"
+                            data = thinking_block.get("data", None)
+                        else:
+                            type = "thinking"
+                            thinking_text = thinking_block.get("thinking", None)
+                            if thinking_text:
+                                if combined_thinking_text is None:
+                                    combined_thinking_text = ""
+
+                                combined_thinking_text += thinking_text
+                            signature = thinking_block.get("signature", None)
+
+        if combined_thinking_text and type == "thinking" and signature:
+            thinking_blocks.append(
+                ChatCompletionThinkingBlock(
+                    type=type,
+                    thinking=combined_thinking_text,
+                    signature=signature,
+                )
+            )
+        elif data and type == "redacted_thinking":
+            thinking_blocks.append(
+                ChatCompletionRedactedThinkingBlock(
+                    type=type,
+                    data=data,
+                )
+            )
+
+        if len(thinking_blocks) > 0:
+            return thinking_blocks
+        return None
 
     def get_combined_reasoning_content(
         self, chunks: List[Dict[str, Any]]
