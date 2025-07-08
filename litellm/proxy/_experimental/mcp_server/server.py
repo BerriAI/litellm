@@ -39,10 +39,6 @@ except ImportError as e:
     MCP_AVAILABLE = False
 
 
-# Global variables to track initialization
-_SESSION_MANAGERS_INITIALIZED = False
-_SESSION_MANAGER_TASK = None
-
 if MCP_AVAILABLE:
     from mcp.server import Server
 
@@ -93,73 +89,14 @@ if MCP_AVAILABLE:
     )
     sse: SseServerTransport = SseServerTransport("/mcp/sse/messages")
 
-    # Create session managers
-    session_manager = StreamableHTTPSessionManager(
-        app=server,
-        event_store=None,
-        json_response=True,  # Use JSON responses instead of SSE by default
-        stateless=True,
-    )
-
-    # Create SSE session manager
-    sse_session_manager = StreamableHTTPSessionManager(
-        app=server,
-        event_store=None,
-        json_response=False,  # Use SSE responses for this endpoint
-        stateless=True,
-    )
-
-    async def initialize_session_managers():
-        """Initialize the session managers. Can be called from main app lifespan."""
-        global _SESSION_MANAGERS_INITIALIZED, _SESSION_MANAGER_TASK
-
-        if _SESSION_MANAGERS_INITIALIZED:
-            return
-
-        verbose_logger.info("Initializing MCP session managers...")
-
-        # Create a task to run the session managers
-        async def run_session_managers():
-            async with session_manager.run():
-                async with sse_session_manager.run():
-                    verbose_logger.info(
-                        "MCP Server started with StreamableHTTP and SSE session managers!"
-                    )
-                    try:
-                        # Keep running until cancelled
-                        while True:
-                            await asyncio.sleep(1)
-                    except asyncio.CancelledError:
-                        verbose_logger.info("MCP session managers shutting down...")
-                        raise
-
-        _SESSION_MANAGER_TASK = asyncio.create_task(run_session_managers())
-        _SESSION_MANAGERS_INITIALIZED = True
-        verbose_logger.info("MCP session managers initialization completed!")
-
-    async def shutdown_session_managers():
-        """Shutdown the session managers."""
-        global _SESSION_MANAGERS_INITIALIZED, _SESSION_MANAGER_TASK
-
-        if _SESSION_MANAGER_TASK and not _SESSION_MANAGER_TASK.done():
-            verbose_logger.info("Shutting down MCP session managers...")
-            _SESSION_MANAGER_TASK.cancel()
-            try:
-                await _SESSION_MANAGER_TASK
-            except asyncio.CancelledError:
-                pass
-
-        _SESSION_MANAGERS_INITIALIZED = False
-        _SESSION_MANAGER_TASK = None
-
     @contextlib.asynccontextmanager
     async def lifespan(app) -> AsyncIterator[None]:
         """Application lifespan context manager."""
-        await initialize_session_managers()
+        verbose_logger.info("MCP Server lifespan starting...")
         try:
             yield
         finally:
-            await shutdown_session_managers()
+            verbose_logger.info("MCP Server lifespan ending...")
 
     ########################################################
     ############### MCP Server Routes #######################
@@ -405,7 +342,6 @@ if MCP_AVAILABLE:
         except Exception as e:
             return [MCPTextContent(text=f"Error: {str(e)}", type="text")]
 
-
     async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
     ) -> None:
@@ -416,6 +352,7 @@ if MCP_AVAILABLE:
                 await MCPRequestHandler.process_mcp_request(scope)
             )
             verbose_logger.debug(f"MCP request headers - mcp_servers: {mcp_servers}")
+            
             # Set the auth context variable for easy access in MCP functions
             set_auth_context(
                 user_api_key_auth=user_api_key_auth,
@@ -423,13 +360,18 @@ if MCP_AVAILABLE:
                 mcp_servers=mcp_servers,
             )
 
-            # Ensure session managers are initialized
-            if not _SESSION_MANAGERS_INITIALIZED:
-                await initialize_session_managers()
-                # Give it a moment to start up
-                await asyncio.sleep(0.1)
+            # Create a new session manager for this request
+            session_manager = StreamableHTTPSessionManager(
+                app=server,
+                event_store=None,
+                json_response=True,  # Use JSON responses instead of SSE by default
+                stateless=True,
+            )
 
-            await session_manager.handle_request(scope, receive, send)
+            # Handle the request within the session manager's context
+            async with session_manager.run():
+                await session_manager.handle_request(scope, receive, send)
+                
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             raise e
@@ -441,6 +383,7 @@ if MCP_AVAILABLE:
             user_api_key_auth, mcp_auth_header, mcp_servers = (
                 await MCPRequestHandler.process_mcp_request(scope)
             )
+            
             # Set the auth context variable for easy access in MCP functions
             set_auth_context(
                 user_api_key_auth=user_api_key_auth,
@@ -448,13 +391,18 @@ if MCP_AVAILABLE:
                 mcp_servers=mcp_servers,
             )
 
-            # Ensure session managers are initialized
-            if not _SESSION_MANAGERS_INITIALIZED:
-                await initialize_session_managers()
-                # Give it a moment to start up
-                await asyncio.sleep(0.1)
+            # Create a new SSE session manager for this request
+            sse_session_manager = StreamableHTTPSessionManager(
+                app=server,
+                event_store=None,
+                json_response=False,  # Use SSE responses for this endpoint
+                stateless=True,
+            )
 
-            await sse_session_manager.handle_request(scope, receive, send)
+            # Handle the request within the session manager's context
+            async with sse_session_manager.run():
+                await sse_session_manager.handle_request(scope, receive, send)
+                
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             raise e
