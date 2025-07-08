@@ -5980,3 +5980,22 @@ export const deleteCallback = async (
     throw error;
   }
 };
+
+export const mcpToolsCall = async (accessToken: string) => {
+  const proxyBaseUrl = getProxyBaseUrl();
+  const response = await fetch(`${proxyBaseUrl}/mcp/tools`, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+
+
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+
+  return await response.json();
+};

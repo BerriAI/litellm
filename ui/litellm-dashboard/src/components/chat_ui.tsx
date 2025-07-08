@@ -31,6 +31,8 @@ import { makeOpenAIImageEditsRequest } from "./chat_ui/llm_calls/image_edits";
 import { makeOpenAIResponsesRequest } from "./chat_ui/llm_calls/responses_api";
 import { makeAnthropicMessagesRequest } from "./chat_ui/llm_calls/anthropic_messages";
 import { fetchAvailableModels, ModelGroup  } from "./chat_ui/llm_calls/fetch_models";
+import { fetchAvailableMCPTools } from "./chat_ui/llm_calls/fetch_mcp_tools";
+import type { MCPTool } from "./chat_ui/llm_calls/fetch_mcp_tools";
 import { litellmModeMapping, ModelMode, EndpointType, getEndpointType } from "./chat_ui/mode_endpoint_mapping";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -58,7 +60,8 @@ import {
   SafetyOutlined,
   UploadOutlined,
   PictureOutlined,
-  CodeOutlined
+  CodeOutlined,
+  ToolOutlined
 } from "@ant-design/icons";
 
 const { TextArea } = Input;
@@ -79,6 +82,20 @@ const ChatUI: React.FC<ChatUIProps> = ({
   userID,
   disabledPersonalKeyCreation,
 }) => {
+  const [isMCPToolsModalVisible, setIsMCPToolsModalVisible] = useState(false);
+  const [mcpTools, setMCPTools] = useState<MCPTool[]>([]);
+  const [selectedMCPTools, setSelectedMCPTools] = useState<string>(() => {
+    const saved = sessionStorage.getItem('selectedMCPTools');
+    try {
+      const parsed = saved ? JSON.parse(saved) : [];
+      // Convert from array to single string if needed
+      return Array.isArray(parsed) ? (parsed[0] || '') : parsed;
+    } catch (error) {
+      console.error("Error parsing selectedMCPTools from sessionStorage", error);
+      return '';
+    }
+  });
+  const [isLoadingMCPTools, setIsLoadingMCPTools] = useState(false);
   const [apiKeySource, setApiKeySource] = useState<'session' | 'custom'>(() => {
     const saved = sessionStorage.getItem('apiKeySource');
     if (saved) {
@@ -146,6 +163,28 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  // Fetch MCP tools
+  const loadMCPTools = async () => {
+    const userApiKey = apiKeySource === 'session' ? accessToken : apiKey;
+    if (!userApiKey) return;
+    
+    setIsLoadingMCPTools(true);
+    try {
+      const tools = await fetchAvailableMCPTools(userApiKey);
+      setMCPTools(tools);
+    } catch (error) {
+      console.error('Error fetching MCP tools:', error);
+    } finally {
+      setIsLoadingMCPTools(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isMCPToolsModalVisible) {
+      loadMCPTools();
+    }
+  }, [isMCPToolsModalVisible, accessToken, apiKey, apiKeySource]);
+
   useEffect(() => {
     if (isGetCodeModalVisible) {
       const code = generateCodeSnippet({
@@ -182,6 +221,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     sessionStorage.setItem('selectedTags', JSON.stringify(selectedTags));
     sessionStorage.setItem('selectedVectorStores', JSON.stringify(selectedVectorStores));
     sessionStorage.setItem('selectedGuardrails', JSON.stringify(selectedGuardrails));
+    sessionStorage.setItem('selectedMCPTools', JSON.stringify(selectedMCPTools));
 
     if (selectedModel) {
       sessionStorage.setItem('selectedModel', selectedModel);
@@ -193,7 +233,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     } else {
       sessionStorage.removeItem('messageTraceId');
     }
-  }, [apiKeySource, apiKey, selectedModel, endpointType, selectedTags, selectedVectorStores, selectedGuardrails, messageTraceId]);
+  }, [apiKeySource, apiKey, selectedModel, endpointType, selectedTags, selectedVectorStores, selectedGuardrails, messageTraceId, selectedMCPTools]);
 
   useEffect(() => {
     let userApiKey = apiKeySource === 'session' ? accessToken : apiKey;
@@ -227,7 +267,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
     };
   
     loadModels();
-  }, [accessToken, userID, userRole, apiKeySource, apiKey]);
+    loadMCPTools();
+  }, [accessToken, userID, userRole, apiKeySource, apiKey, token]);
   
 
   useEffect(() => {
@@ -439,6 +480,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
     try {
       if (selectedModel) {
+        const mcpToolsArray = selectedMCPTools ? [selectedMCPTools] : undefined;
+        
         if (endpointType === EndpointType.CHAT) {
           // Create chat history for API call - strip out model field and isImage field
           const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
@@ -455,7 +498,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
             updateUsageData,
             traceId,
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
-            selectedGuardrails.length > 0 ? selectedGuardrails : undefined
+            selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
+            mcpToolsArray
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -496,7 +540,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
             updateUsageData,
             traceId,
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
-            selectedGuardrails.length > 0 ? selectedGuardrails : undefined
+            selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
+            mcpToolsArray
           );
         } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
           const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
@@ -513,7 +558,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
             updateUsageData,
             traceId,
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
-            selectedGuardrails.length > 0 ? selectedGuardrails : undefined
+            selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
+            mcpToolsArray
           );
         }
       }
@@ -704,6 +750,42 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   accessToken={accessToken || ""}
                 />
               </div>
+
+              <div>
+                <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                  <ToolOutlined className="mr-2" /> MCP Tool
+                  <Tooltip 
+                    className="ml-1"
+                    title="Select an MCP tool to use in your conversation">
+                    <InfoCircleOutlined />
+                  </Tooltip>
+                </Text>
+                <Select
+                  style={{ width: '100%' }}
+                  placeholder="Select MCP tool"
+                  value={selectedMCPTools}
+                  onChange={(value) => setSelectedMCPTools(value)}
+                  loading={isLoadingMCPTools}
+                  className="mb-4"
+                  allowClear
+                  optionLabelProp="label"
+                >
+                  {Array.isArray(mcpTools) && mcpTools.map((tool) => (
+                    <Select.Option 
+                      key={tool.name} 
+                      value={tool.name}
+                      label={
+                        <div className="font-medium">{tool.name}</div>
+                      }
+                    >
+                      <div className="flex flex-col py-1">
+                        <span className="font-medium">{tool.name}</span>
+                        <span className="text-xs text-gray-500 mt-1">{tool.description}</span>
+                      </div>
+                    </Select.Option>
+                  ))}
+                </Select>
+              </div>
               
               <div className="space-y-2 mt-6">
                 <TremorButton
@@ -721,13 +803,22 @@ const ChatUI: React.FC<ChatUIProps> = ({
         <div className="w-3/4 flex flex-col bg-white">
           <div className="p-4 border-b border-gray-200 flex justify-between items-center">
             <Title className="text-xl font-semibold mb-0">Test Key</Title>
-            <TremorButton
-              onClick={() => setIsGetCodeModalVisible(true)}
-              className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
-              icon={CodeOutlined}
-            >
-              Get Code
-            </TremorButton>
+            <div className="flex gap-2">
+              <TremorButton
+                onClick={() => setIsMCPToolsModalVisible(true)}
+                className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
+                icon={ToolOutlined}
+              >
+                MCP Tools
+              </TremorButton>
+              <TremorButton
+                onClick={() => setIsGetCodeModalVisible(true)}
+                className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
+                icon={CodeOutlined}
+              >
+                Get Code
+              </TremorButton>
+            </div>
           </div>
           <div className="flex-1 overflow-auto p-4 pb-0">
             {chatHistory.length === 0 && (
@@ -965,6 +1056,51 @@ const ChatUI: React.FC<ChatUIProps> = ({
       >
         {generatedCode}
       </SyntaxHighlighter>
+    </Modal>
+    <Modal
+      title="Select MCP Tool"
+      visible={isMCPToolsModalVisible}
+      onCancel={() => setIsMCPToolsModalVisible(false)}
+      onOk={() => {
+        setIsMCPToolsModalVisible(false);
+        message.success('MCP tool selection updated');
+      }}
+      width={800}
+    >
+      {isLoadingMCPTools ? (
+        <div className="flex justify-center items-center py-8">
+          <Spin indicator={<LoadingOutlined style={{ fontSize: 24 }} spin />} />
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <Text className="text-gray-600 block mb-4">
+            Select the MCP tool you want to use in your conversation.
+          </Text>
+          <Select
+            style={{ width: '100%' }}
+            placeholder="Select MCP tool"
+            value={selectedMCPTools}
+            onChange={(value) => setSelectedMCPTools(value)}
+            optionLabelProp="label"
+            allowClear
+          >
+            {mcpTools.map((tool) => (
+              <Select.Option 
+                key={tool.name} 
+                value={tool.name}
+                label={
+                  <div className="font-medium">{tool.name}</div>
+                }
+              >
+                <div className="flex flex-col py-1">
+                  <span className="font-medium">{tool.name}</span>
+                  <span className="text-xs text-gray-500 mt-1">{tool.description}</span>
+                </div>
+              </Select.Option>
+            ))}
+          </Select>
+        </div>
+      )}
     </Modal>
     </div>
   );
