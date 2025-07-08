@@ -265,6 +265,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 
   const modelMetrics = processActivityData(userSpendData, "models");
   const keyMetrics = processActivityData(userSpendData, "api_keys");
+  const mcpServerMetrics = processActivityData(userSpendData, "mcp_servers");
 
   return (
     <div style={{ width: "100%" }} className="p-8">
@@ -297,6 +298,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                 <Tab>Cost</Tab>
                 <Tab>Model Activity</Tab>
                 <Tab>Key Activity</Tab>
+                <Tab>MCP Server Activity</Tab>
               </TabList>
               <TabPanels>
                 {/* Cost Panel */}
@@ -500,6 +502,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                 </TabPanel>
                 <TabPanel>
                   <ActivityMetrics modelMetrics={keyMetrics} />
+                </TabPanel>
+                <TabPanel>
+                  <ActivityMetrics modelMetrics={mcpServerMetrics} />
                 </TabPanel>
               </TabPanels>
             </TabGroup>

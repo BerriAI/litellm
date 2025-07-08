@@ -1,7 +1,7 @@
 import React from 'react';
 import { Card, Grid, Text, Title, Accordion, AccordionHeader, AccordionBody } from '@tremor/react';
 import { AreaChart, BarChart } from '@tremor/react';
-import { SpendMetrics, DailyData, ModelActivityData, MetricWithMetadata, KeyMetricWithMetadata } from './usage/types';
+import { SpendMetrics, DailyData, ModelActivityData, MetricWithMetadata, KeyMetricWithMetadata, TopApiKeyData } from './usage/types';
 import { Collapse } from 'antd';
 import { formatNumberWithCommas } from '@/utils/dataUtils';
 
@@ -33,6 +33,35 @@ const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: Mode
           <Text>${formatNumberWithCommas((metrics.total_spend / metrics.total_successful_requests), 3)} per successful request</Text>
         </Card>
       </Grid>
+
+      {/* Top API Keys Section */}
+      {metrics.top_api_keys && metrics.top_api_keys.length > 0 && (
+        <Card className="mt-4">
+          <Title>Top API Keys by Spend</Title>
+          <div className="mt-3">
+            <div className="grid grid-cols-1 gap-2">
+              {metrics.top_api_keys.map((keyData, index) => (
+                <div key={keyData.api_key} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                  <div>
+                    <Text className="font-medium">
+                      {keyData.key_alias || `${keyData.api_key.substring(0, 10)}...`}
+                    </Text>
+                    {keyData.team_id && (
+                      <Text className="text-xs text-gray-500">Team: {keyData.team_id}</Text>
+                    )}
+                  </div>
+                  <div className="text-right">
+                    <Text className="font-medium">${formatNumberWithCommas(keyData.spend, 2)}</Text>
+                    <Text className="text-xs text-gray-500">
+                      {keyData.requests.toLocaleString()} requests | {keyData.tokens.toLocaleString()} tokens
+                    </Text>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/* Charts */}
       <Grid numItems={2} className="gap-4">
@@ -252,7 +281,7 @@ const formatKeyLabel = (modelData: KeyMetricWithMetadata, model: string): string
 };
 
 // Process data function
-export const processActivityData = (dailyActivity: { results: DailyData[] }, key: "models" | "api_keys"): Record<string, ModelActivityData> => {
+export const processActivityData = (dailyActivity: { results: DailyData[] }, key: "models" | "api_keys" | "mcp_servers"): Record<string, ModelActivityData> => {
   const modelMetrics: Record<string, ModelActivityData> = {};
 
   dailyActivity.results.forEach((day) => {
@@ -271,6 +300,7 @@ export const processActivityData = (dailyActivity: { results: DailyData[] }, key
           total_spend: 0,
           total_cache_read_input_tokens: 0,
           total_cache_creation_input_tokens: 0,
+          top_api_keys: [],
           daily_data: []
         };
       }
@@ -303,6 +333,41 @@ export const processActivityData = (dailyActivity: { results: DailyData[] }, key
       });
     });
   });
+
+  // Process API key breakdowns for each metric (skip if key is 'api_keys' to avoid duplication)
+  if (key !== 'api_keys') {
+    Object.entries(modelMetrics).forEach(([model, _]) => {
+      const apiKeyBreakdown: Record<string, TopApiKeyData> = {};
+      
+      // Aggregate API key data across all days
+      dailyActivity.results.forEach((day) => {
+        const modelData = day.breakdown[key]?.[model];
+        if (modelData && 'api_key_breakdown' in modelData) {
+          Object.entries(modelData.api_key_breakdown || {}).forEach(([apiKey, keyData]) => {
+            if (!apiKeyBreakdown[apiKey]) {
+              apiKeyBreakdown[apiKey] = {
+                api_key: apiKey,
+                key_alias: keyData.metadata.key_alias,
+                team_id: keyData.metadata.team_id,
+                spend: 0,
+                requests: 0,
+                tokens: 0,
+              };
+            }
+            
+            apiKeyBreakdown[apiKey].spend += keyData.metrics.spend;
+            apiKeyBreakdown[apiKey].requests += keyData.metrics.api_requests;
+            apiKeyBreakdown[apiKey].tokens += keyData.metrics.total_tokens;
+          });
+        }
+      });
+
+      // Sort by spend and take top 5
+      modelMetrics[model].top_api_keys = Object.values(apiKeyBreakdown)
+        .sort((a, b) => b.spend - a.spend)
+        .slice(0, 5);
+    });
+  }
 
   // Sort daily data
   Object.values(modelMetrics).forEach(metrics => {
