@@ -34,6 +34,7 @@ import {
 import {
   MCPServer,
   MCPServerProps,
+  Team,
   handleAuth,
   handleTransport,
 } from "./types";
@@ -93,7 +94,7 @@ const MCPServers: React.FC<MCPServerProps> = ({
       return fetchMCPServers(accessToken);
     },
     enabled: !!accessToken,
-  });
+  }) as { data: MCPServer[]; isLoading: boolean; refetch: () => void };
 
   const createMCPServer = (newMcpServer: any) => {
     refetch();
@@ -113,19 +114,19 @@ const MCPServers: React.FC<MCPServerProps> = ({
   const uniqueTeams = React.useMemo(() => {
     if (!mcpServers) return [];
     const teamsSet = new Set<string>();
-    const uniqueTeamsArray = [];
+    const uniqueTeamsArray: Team[] = [];
     
-    for (const server of mcpServers) {
+    mcpServers.forEach((server: MCPServer) => {
       if (server.teams) {
-        for (const team of server.teams) {
+        server.teams.forEach((team: Team) => {
           const teamKey = team.team_id;
           if (!teamsSet.has(teamKey)) {
             teamsSet.add(teamKey);
             uniqueTeamsArray.push(team);
           }
-        }
+        });
       }
-    }
+    });
     return uniqueTeamsArray;
   }, [mcpServers]);
 
@@ -215,7 +216,18 @@ const MCPServers: React.FC<MCPServerProps> = ({
         mcpServer={
           mcpServers.find(
             (server: MCPServer) => server.server_id === selectedServerId
-          ) || {}
+          ) || {
+            server_id: '',
+            alias: '',
+            url: '',
+            transport: '',
+            spec_version: '',
+            auth_type: '',
+            created_at: '',
+            created_by: '',
+            updated_at: '',
+            updated_by: '',
+          }
         }
         onBack={() => {
           setEditServer(false);
@@ -229,8 +241,8 @@ const MCPServers: React.FC<MCPServerProps> = ({
         userRole={userRole}
       />
     ) : (
-      <div>
-        <div className="flex justify-between items-center mb-6">
+      <div className="w-full h-full">
+        <div className="flex justify-between items-center mb-6 px-6">
           <div>
             <Title>MCP Servers</Title>
             <Text className="text-tremor-content">
@@ -245,7 +257,7 @@ const MCPServers: React.FC<MCPServerProps> = ({
             />
           )}
         </div>
-        <div className="border-b px-6 py-4">
+        <div className="w-full px-6">
           <div className="flex flex-col space-y-4">
             <div className="flex items-center justify-between bg-gray-50 rounded-lg p-4 border-2 border-gray-200">
               <div className="flex items-center gap-4">
@@ -276,9 +288,7 @@ const MCPServers: React.FC<MCPServerProps> = ({
             </div>
           </div>
         </div>
-        <div className="mb-4 mt-4 px-6">
-        </div>
-        <div className="px-6">
+        <div className="w-full px-6 mt-6">
           <DataTable
             data={filteredServers}
             columns={columns}
@@ -293,14 +303,14 @@ const MCPServers: React.FC<MCPServerProps> = ({
   );
 
   return (
-    <div>
+    <div className="w-full h-full">
       <DeleteModal
         isModalOpen={isDeleteModalOpen}
         title="Delete MCP Server"
         confirmDelete={confirmDelete}
         cancelDelete={cancelDelete}
       />
-      <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
+      <TabGroup className="w-full h-full">
         <TabList className="flex justify-between mt-2 w-full items-center">
           <div className="flex">
             <Tab>All Servers</Tab>
