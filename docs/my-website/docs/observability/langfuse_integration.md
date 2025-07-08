@@ -28,7 +28,7 @@ For Langfuse v3, we recommend using the [Langfuse OTEL](./langfuse_otel_integrat
 ### Pre-Requisites
 Ensure you have run `pip install langfuse` for this integration
 ```shell
-pip install langfuse==2.45.0 litellm
+pip install langfuse==2.59.7 litellm
 ```
 
 ### Quick Start
