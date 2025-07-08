@@ -74,14 +74,15 @@ def update_breakdown_metrics(
                     ),
                 )
             )
-        breakdown.models[record.model].api_key_breakdown[record.api_key].metrics = (
-            update_metrics(
-                breakdown.models[record.model]
-                .api_key_breakdown[record.api_key]
-                .metrics,
-                record,
+        if record.api_key:
+            breakdown.models[record.model].api_key_breakdown[record.api_key].metrics = (
+                update_metrics(
+                    breakdown.models[record.model]
+                    .api_key_breakdown[record.api_key]
+                    .metrics,
+                    record,
+                )
             )
-        )
 
     if record.mcp_namespaced_tool_name:
         if record.mcp_namespaced_tool_name not in breakdown.mcp_servers:
@@ -114,14 +115,15 @@ def update_breakdown_metrics(
                     ),
                 ),
             )
-        breakdown.mcp_servers[record.mcp_namespaced_tool_name].api_key_breakdown[
-            record.api_key
-        ].metrics = update_metrics(
-            breakdown.mcp_servers[record.mcp_namespaced_tool_name]
-            .api_key_breakdown[record.api_key]
-            .metrics,
-            record,
-        )
+        if record.api_key:
+            breakdown.mcp_servers[record.mcp_namespaced_tool_name].api_key_breakdown[
+                record.api_key
+            ].metrics = update_metrics(
+                breakdown.mcp_servers[record.mcp_namespaced_tool_name]
+                .api_key_breakdown[record.api_key]
+                .metrics,
+                record,
+            )
 
     # Update provider breakdown
     provider = record.custom_llm_provider or "unknown"
@@ -154,12 +156,13 @@ def update_breakdown_metrics(
                 ),
             )
         )
-    breakdown.providers[provider].api_key_breakdown[record.api_key].metrics = (
-        update_metrics(
-            breakdown.providers[provider].api_key_breakdown[record.api_key].metrics,
-            record,
+    if record.api_key:
+        breakdown.providers[provider].api_key_breakdown[record.api_key].metrics = (
+            update_metrics(
+                breakdown.providers[provider].api_key_breakdown[record.api_key].metrics,
+                record,
+            )
         )
-    )
 
     # Update api key breakdown
     if record.api_key not in breakdown.api_keys:
@@ -172,9 +175,10 @@ def update_breakdown_metrics(
                 team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
             ),  # Add any api_key-specific metadata here
         )
-    breakdown.api_keys[record.api_key].metrics = update_metrics(
-        breakdown.api_keys[record.api_key].metrics, record
-    )
+    if record.api_key:
+        breakdown.api_keys[record.api_key].metrics = update_metrics(
+            breakdown.api_keys[record.api_key].metrics, record
+        )
 
     # Update entity-specific metrics if entity_id_field is provided
     if entity_id_field:
@@ -213,14 +217,15 @@ def update_breakdown_metrics(
                     ),
                 )
             )
-        breakdown.entities[entity_value].api_key_breakdown[record.api_key].metrics = (
-            update_metrics(
+        if record.api_key:
+            breakdown.entities[entity_value].api_key_breakdown[
+                record.api_key
+            ].metrics = update_metrics(
                 breakdown.entities[entity_value]
                 .api_key_breakdown[record.api_key]
                 .metrics,
                 record,
             )
-        )
 
     return breakdown
 
@@ -253,9 +258,6 @@ async def get_daily_activity(
     exclude_entity_ids: Optional[List[str]] = None,
 ) -> SpendAnalyticsPaginatedResponse:
     """Common function to get daily activity for any entity type."""
-    from litellm.types.proxy.management_endpoints.common_daily_activity import (
-        LiteLLM_DailyUserSpend,
-    )
 
     if prisma_client is None:
         raise HTTPException(
