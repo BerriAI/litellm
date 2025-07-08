@@ -504,7 +504,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                   <ActivityMetrics modelMetrics={keyMetrics} />
                 </TabPanel>
                 <TabPanel>
-                  <ActivityMetrics modelMetrics={mcpServerMetrics} />
+                  <ActivityMetrics modelMetrics={mcpServerMetrics} dataType="mcp_servers"/>
                 </TabPanel>
               </TabPanels>
             </TabGroup>
