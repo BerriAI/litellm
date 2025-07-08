@@ -2,9 +2,9 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Guardrails.ai
+# Guardrails AI
 
-Use [Guardrails.ai](https://www.guardrailsai.com/) to add checks to LLM output.
+Use Guardrails AI ([guardrailsai.com](https://www.guardrailsai.com/)) to add checks to LLM output.
 
 ## Pre-requisites
 
