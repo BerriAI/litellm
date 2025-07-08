@@ -4,7 +4,6 @@ Handles embedding calls to Bedrock's `/invoke` endpoint
 
 import copy
 import json
-import os
 from typing import Any, Callable, List, Optional, Tuple, Union
 
 import httpx
@@ -159,12 +158,6 @@ class BedrockEmbedding(BaseAWSLLM):
         logging_obj: Any,
         api_key: Optional[str] = None,
     ):
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
-
         responses: List[dict] = []
         for data in batch_data:
             headers = {"Content-Type": "application/json"}
@@ -249,12 +242,6 @@ class BedrockEmbedding(BaseAWSLLM):
         logging_obj: Any,
         api_key: Optional[str] = None,
     ):
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
-
         responses: List[dict] = []
         for data in batch_data:
             headers = {"Content-Type": "application/json"}
@@ -343,12 +330,6 @@ class BedrockEmbedding(BaseAWSLLM):
         litellm_params: dict,
         api_key: Optional[str] = None,
     ) -> EmbeddingResponse:
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
-
         credentials, aws_region_name = self._load_credentials(optional_params)
 
         ### TRANSFORMATION ###

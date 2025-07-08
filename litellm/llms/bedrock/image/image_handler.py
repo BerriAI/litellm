@@ -170,11 +170,6 @@ class BedrockImageGeneration(BaseAWSLLM):
             prepped (httpx.Request): The prepared request object
             body (bytes): The request body
         """
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         boto3_credentials_info = self._get_boto_credentials_from_optional_params(
             optional_params, model
         )
@@ -187,12 +182,6 @@ class BedrockImageGeneration(BaseAWSLLM):
             aws_region_name=boto3_credentials_info.aws_region_name,
         )
         proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke"
-        sigv4 = SigV4Auth(
-            boto3_credentials_info.credentials,
-            "bedrock",
-            boto3_credentials_info.aws_region_name,
-        )
-
         data = self._get_request_body(
             model=model, prompt=prompt, optional_params=optional_params
         )
