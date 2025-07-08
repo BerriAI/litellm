@@ -20,6 +20,13 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 
+:::note
+
+Known issues:
+- Custom root path rendering error
+
+:::
+
 ## Deploy this version
 
 <Tabs>
