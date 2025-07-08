@@ -57,7 +57,10 @@ def update_breakdown_metrics(
         )
 
         # Update API key breakdown for this model
-        if record.api_key not in breakdown.models[record.model].api_key_breakdown:
+        if (
+            record.api_key
+            and record.api_key not in breakdown.models[record.model].api_key_breakdown
+        ):
             breakdown.models[record.model].api_key_breakdown[record.api_key] = (
                 KeyMetricWithMetadata(
                     metrics=SpendMetrics(),
@@ -80,22 +83,25 @@ def update_breakdown_metrics(
             )
         )
 
-    if record.mcp_server_id:
-        if record.mcp_server_id not in breakdown.mcp_servers:
-            breakdown.mcp_servers[record.mcp_server_id] = MetricWithMetadata(
+    if record.mcp_namespaced_tool_name:
+        if record.mcp_namespaced_tool_name not in breakdown.mcp_servers:
+            breakdown.mcp_servers[record.mcp_namespaced_tool_name] = MetricWithMetadata(
                 metrics=SpendMetrics(),
                 metadata={},
             )
-        breakdown.mcp_servers[record.mcp_server_id].metrics = update_metrics(
-            breakdown.mcp_servers[record.mcp_server_id].metrics, record
+        breakdown.mcp_servers[record.mcp_namespaced_tool_name].metrics = update_metrics(
+            breakdown.mcp_servers[record.mcp_namespaced_tool_name].metrics, record
         )
 
         # Update API key breakdown for this MCP server
         if (
             record.api_key
-            not in breakdown.mcp_servers[record.mcp_server_id].api_key_breakdown
+            and record.api_key
+            not in breakdown.mcp_servers[
+                record.mcp_namespaced_tool_name
+            ].api_key_breakdown
         ):
-            breakdown.mcp_servers[record.mcp_server_id].api_key_breakdown[
+            breakdown.mcp_servers[record.mcp_namespaced_tool_name].api_key_breakdown[
                 record.api_key
             ] = KeyMetricWithMetadata(
                 metrics=SpendMetrics(),
@@ -108,10 +114,10 @@ def update_breakdown_metrics(
                     ),
                 ),
             )
-        breakdown.mcp_servers[record.mcp_server_id].api_key_breakdown[
+        breakdown.mcp_servers[record.mcp_namespaced_tool_name].api_key_breakdown[
             record.api_key
         ].metrics = update_metrics(
-            breakdown.mcp_servers[record.mcp_server_id]
+            breakdown.mcp_servers[record.mcp_namespaced_tool_name]
             .api_key_breakdown[record.api_key]
             .metrics,
             record,
@@ -131,7 +137,10 @@ def update_breakdown_metrics(
     )
 
     # Update API key breakdown for this provider
-    if record.api_key not in breakdown.providers[provider].api_key_breakdown:
+    if (
+        record.api_key
+        and record.api_key not in breakdown.providers[provider].api_key_breakdown
+    ):
         breakdown.providers[provider].api_key_breakdown[record.api_key] = (
             KeyMetricWithMetadata(
                 metrics=SpendMetrics(),
@@ -187,7 +196,10 @@ def update_breakdown_metrics(
         )
 
         # Update API key breakdown for this entity
-        if record.api_key not in breakdown.entities[entity_value].api_key_breakdown:
+        if (
+            record.api_key
+            and record.api_key not in breakdown.entities[entity_value].api_key_breakdown
+        ):
             breakdown.entities[entity_value].api_key_breakdown[record.api_key] = (
                 KeyMetricWithMetadata(
                     metrics=SpendMetrics(),
