@@ -199,17 +199,47 @@ if MCP_AVAILABLE:
         Raises:
             HTTPException: If tool not found or arguments missing
         """
+        from fastapi import Request
+
+        from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+        from litellm.proxy.proxy_server import proxy_config
+
         # Validate arguments
         user_api_key_auth, mcp_auth_header, _ = get_auth_context()
+
         verbose_logger.debug(
             f"MCP mcp_server_tool_call - User API Key Auth from context: {user_api_key_auth}"
         )
-        response = await call_mcp_tool(
-            name=name,
-            arguments=arguments,
-            user_api_key_auth=user_api_key_auth,
-            mcp_auth_header=mcp_auth_header,
-        )
+        try:
+            request = Request(
+                scope={
+                    "type": "http",
+                    "method": "POST",
+                    "path": "/mcp/tools/call",
+                    "headers": {},
+                }
+            )
+            if user_api_key_auth is not None:
+                data = await add_litellm_data_to_request(
+                    data={},
+                    request=request,
+                    user_api_key_dict=user_api_key_auth,
+                    proxy_config=proxy_config,
+                )
+            else:
+                data = {}
+
+            response = await call_mcp_tool(
+                name=name,
+                arguments=arguments,
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                **data,  # for logging
+            )
+        except Exception as e:
+            verbose_logger.exception(f"MCP mcp_server_tool_call - error: {e}")
+            raise e
+
         return response
 
     ########################################################
@@ -340,9 +370,14 @@ if MCP_AVAILABLE:
         # Try managed server tool first (pass the full prefixed name)
         # Primary and recommended way to use MCP servers
         #########################################################
-        mcp_server: Optional[MCPServer] = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+        mcp_server: Optional[MCPServer] = (
+            global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+        )
+
         if mcp_server:
-            standard_logging_mcp_tool_call["mcp_server_cost_info"] = (mcp_server.mcp_info or {}).get("mcp_server_cost_info")
+            standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
+                mcp_server.mcp_info or {}
+            ).get("mcp_server_cost_info")
             return await _handle_managed_mcp_tool(
                 name=name,  # Pass the full name (potentially prefixed)
                 arguments=arguments,

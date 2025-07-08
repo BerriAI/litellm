@@ -1740,7 +1740,7 @@ class PrismaClient:
                             detail={"error": f"No token passed in. Token={token}"},
                         )
 
-                    sql_query = f"""
+                    sql_query = """
                         SELECT 
                             v.*,
                             t.spend AS team_spend, 
@@ -1785,7 +1785,9 @@ class PrismaClient:
                         WHERE v.token = $1
                     """
 
-                    print_verbose("sql_query being made={}".format(sql_query))
+                    verbose_proxy_logger.debug(
+                        "sql_query being made={}".format(sql_query)
+                    )
                     response = await self.db.query_first(sql_query, token)
 
                     if response is not None:
@@ -2895,11 +2897,14 @@ async def update_spend(  # noqa: PLR0915
     spend_logs: list,
     """
     n_retry_times = 3
-    await proxy_logging_obj.db_spend_update_writer.db_update_spend_transaction_handler(
-        prisma_client=prisma_client,
-        n_retry_times=n_retry_times,
-        proxy_logging_obj=proxy_logging_obj,
-    )
+    try:
+        await proxy_logging_obj.db_spend_update_writer.db_update_spend_transaction_handler(
+            prisma_client=prisma_client,
+            n_retry_times=n_retry_times,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error updating spend in aggregate tables: {e}")
 
     ### UPDATE SPEND LOGS ###
     verbose_proxy_logger.debug(
