@@ -1,6 +1,15 @@
 # Xinference [Xorbits Inference]
 https://inference.readthedocs.io/en/latest/index.html
 
+## Overview
+
+| Property | Details |
+|-------|-------|
+| Description | Xinference is an open-source platform to run inference with any open-source LLMs, image generation models, and more. |
+| Provider Route on LiteLLM | `xinference/` |
+| Link to Provider Doc | [Xinference ↗](https://inference.readthedocs.io/en/latest/index.html) |
+| Supported Operations | [`/embeddings`](#sample-usage---embedding), [`/images/generations`](#image-generation) |
+
 LiteLLM supports Xinference Embedding + Image Generation calls.
 
 ## API Base, Key
@@ -112,6 +121,18 @@ response = image_generation(
 )
 print(response)
 ```
+
+### Supported Image Generation Models
+
+Xinference supports various stable diffusion models. Here are some examples:
+
+| Model Name                                              | Function Call                                                                                      |
+|---------------------------------------------------------|----------------------------------------------------------------------------------------------------|
+| stabilityai/stable-diffusion-3.5-large                 | `image_generation(model="xinference/stabilityai/stable-diffusion-3.5-large", prompt="...")`      |
+| stabilityai/stable-diffusion-xl-base-1.0               | `image_generation(model="xinference/stabilityai/stable-diffusion-xl-base-1.0", prompt="...")`    |
+| runwayml/stable-diffusion-v1-5                         | `image_generation(model="xinference/runwayml/stable-diffusion-v1-5", prompt="...")`              |
+
+For a complete list of supported image generation models, see: https://inference.readthedocs.io/en/latest/models/builtin/image/index.html
 
 ## Supported Models
 All models listed here https://inference.readthedocs.io/en/latest/models/builtin/embedding/index.html are supported
