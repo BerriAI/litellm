@@ -17,7 +17,7 @@ export async function makeAnthropicMessagesRequest(
   traceId?: string,
   vector_store_ids?: string[],
   guardrails?: string[],
-  mcp_tools?: string[]
+  selectedMCPTool?: string
 ) {
   if (!accessToken) {
     throw new Error("API key is required");
@@ -47,6 +47,17 @@ export async function makeAnthropicMessagesRequest(
     const startTime = Date.now();
     let firstTokenReceived = false;
 
+    // Format MCP tool if selected
+    const tools = selectedMCPTool ? [{
+      type: "mcp",
+      server_label: "litellm",
+      server_url: `${proxyBaseUrl}/mcp`,
+      require_approval: "never",
+      headers: {
+        "x-litellm-api-key": `Bearer ${accessToken}`
+      }
+    }] : undefined;
+
     const requestBody: any = {
       model: selectedModel,
       messages: messages.map((m) => ({ role: m.role, content: m.content })),
@@ -58,7 +69,10 @@ export async function makeAnthropicMessagesRequest(
     
     if (vector_store_ids) requestBody.vector_store_ids = vector_store_ids;
     if (guardrails) requestBody.guardrails = guardrails;
-    if (mcp_tools) requestBody.mcp_tools = mcp_tools;
+    if (tools) {
+      requestBody.tools = tools;
+      requestBody.tool_choice = "auto";
+    }
 
     // Use the streaming helper method for cleaner async iteration
     // @ts-ignore - The SDK types might not include all litellm-specific parameters

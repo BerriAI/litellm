@@ -17,7 +17,7 @@ export async function makeOpenAIChatCompletionRequest(
     traceId?: string,
     vector_store_ids?: string[],
     guardrails?: string[],
-    mcp_tools?: string[]
+    selectedMCPTool?: string
   ) {
     // base url should be the current base_url
     const isLocal = process.env.NODE_ENV === "development";
@@ -47,6 +47,17 @@ export async function makeOpenAIChatCompletionRequest(
       // For collecting complete response text
       let fullResponseContent = "";
       let fullReasoningContent = "";
+
+      // Format MCP tool if selected
+      const tools = selectedMCPTool ? [{
+        type: "mcp",
+        server_label: "litellm",
+        server_url: `${proxyBaseUrl}/mcp`,
+        require_approval: "never",
+        headers: {
+          "x-litellm-api-key": `Bearer ${accessToken}`
+        }
+      }] : undefined;
       
       // @ts-ignore
       const response = await client.chat.completions.create({
@@ -59,7 +70,7 @@ export async function makeOpenAIChatCompletionRequest(
         messages: chatHistory as ChatCompletionMessageParam[],
         ...(vector_store_ids ? { vector_store_ids } : {}),
         ...(guardrails ? { guardrails } : {}),
-        ...(mcp_tools ? { mcp_tools } : {}),
+        ...(tools ? { tools, tool_choice: "auto" } : {}),
       }, { signal });
   
       for await (const chunk of response) {
