@@ -1497,11 +1497,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     ] = None,  # object_permission_id <-> LiteLLM_ObjectPermissionTable
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None,
 ):
-    from litellm.proxy.proxy_server import (
-        litellm_proxy_budget_name,
-        premium_user,
-        prisma_client,
-    )
+    from litellm.proxy.proxy_server import premium_user, prisma_client
 
     if prisma_client is None:
         raise Exception(
