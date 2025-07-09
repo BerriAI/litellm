@@ -78,7 +78,7 @@ async def google_login(request: Request, source: Optional[str] = None, key: Opti
     PROXY_BASE_URL should be the your deployed proxy endpoint, e.g. PROXY_BASE_URL="https://litellm-production-7002.up.railway.app/"
     Example:
     """
-    from litellm.proxy.proxy_server import premium_user
+    from litellm.proxy.proxy_server import general_settings, premium_user
 
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
@@ -122,6 +122,12 @@ async def google_login(request: Request, source: Optional[str] = None, key: Opti
         source=source,
         key=key,
     )
+
+    # check if user defined a custom auth sso sign in handler, if yes, use it
+    if general_settings.get("custom_ui_sso_sign_in_handler") is not None:
+        return await SSOAuthenticationHandler.handle_custom_ui_sso_sign_in(
+            request=request,
+        )
 
     # Check if we should use SSO handler
     if (
@@ -523,14 +529,9 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
         general_settings,
         jwt_handler,
         master_key,
-        premium_user,
         prisma_client,
-        proxy_logging_obj,
         user_api_key_cache,
-        user_custom_sso,
     )
-    from litellm.proxy.utils import get_custom_url
-    from litellm.types.proxy.ui_sso import ReturnedUITokenObject
 
     if prisma_client is None:
         raise HTTPException(
@@ -596,147 +597,15 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
             status_code=401,
             detail="Result not returned by SSO provider.",
         )
-
-    # User is Authe'd in - generate key for the UI to access Proxy
-    verbose_proxy_logger.info(f"SSO callback result: {result}")
-
-    user_email: Optional[str] = getattr(result, "email", None)
-    user_id: Optional[str] = getattr(result, "id", None) if result is not None else None
-
-    if user_email is not None and os.getenv("ALLOWED_EMAIL_DOMAINS") is not None:
-        email_domain = user_email.split("@")[1]
-        allowed_domains = os.getenv("ALLOWED_EMAIL_DOMAINS").split(",")  # type: ignore
-        if email_domain not in allowed_domains:
-            raise HTTPException(
-                status_code=401,
-                detail={
-                    "message": "The email domain={}, is not an allowed email domain={}. Contact your admin to change this.".format(
-                        email_domain, allowed_domains
-                    )
-                },
-            )
-
-    # generic client id
-    if generic_client_id is not None and result is not None:
-        generic_user_role_attribute_name = os.getenv(
-            "GENERIC_USER_ROLE_ATTRIBUTE", "role"
-        )
-        user_id = getattr(result, "id", None)
-        user_email = getattr(result, "email", None)
-        user_role = getattr(result, generic_user_role_attribute_name, None)  # type: ignore
-
-    if user_id is None and result is not None:
-        _first_name = getattr(result, "first_name", "") or ""
-        _last_name = getattr(result, "last_name", "") or ""
-        user_id = _first_name + _last_name
-
-    if user_email is not None and (user_id is None or len(user_id) == 0):
-        user_id = user_email
-
-    user_info = None
-    user_id_models: List = []
-    max_internal_user_budget = litellm.max_internal_user_budget
-    internal_user_budget_duration = litellm.internal_user_budget_duration
-
-    # User might not be already created on first generation of key
-    # But if it is, we want their models preferences
-    default_ui_key_values: Dict[str, Any] = {
-        "duration": "24hr",
-        "key_max_budget": litellm.max_ui_session_budget,
-        "aliases": {},
-        "config": {},
-        "spend": 0,
-        "team_id": "litellm-dashboard",
-    }
-    user_defined_values: Optional[SSOUserDefinedValues] = None
-
-    if user_custom_sso is not None:
-        if asyncio.iscoroutinefunction(user_custom_sso):
-            user_defined_values = await user_custom_sso(result)  # type: ignore
-        else:
-            raise ValueError("user_custom_sso must be a coroutine function")
-    elif user_id is not None:
-        user_defined_values = SSOUserDefinedValues(
-            models=user_id_models,
-            user_id=user_id,
-            user_email=user_email,
-            max_budget=max_internal_user_budget,
-            user_role=None,
-            budget_duration=internal_user_budget_duration,
-        )
-
-    # (IF SET) Verify user is in restricted SSO group
-    SSOAuthenticationHandler.verify_user_in_restricted_sso_group(
-        general_settings=general_settings,
+    
+    return await SSOAuthenticationHandler.get_redirect_response_from_openid(
         result=result,
-        received_response=received_response,
-    )
-
-    user_info = await get_user_info_from_db(
-        result=result,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-        user_email=user_email,
-        user_defined_values=user_defined_values,
-        alternate_user_id=user_id,
-    )
-
-    user_defined_values = apply_user_info_values_to_sso_user_defined_values(
-        user_info=user_info, user_defined_values=user_defined_values
-    )
-
-    if user_defined_values is None:
-        raise Exception(
-            "Unable to map user identity to known values. 'user_defined_values' is None. File an issue - https://github.com/BerriAI/litellm/issues"
-        )
-
-    verbose_proxy_logger.info(
-        f"user_defined_values for creating ui key: {user_defined_values}"
-    )
-
-    default_ui_key_values.update(user_defined_values)
-    default_ui_key_values["request_type"] = "key"
-    response = await generate_key_helper_fn(
-        **default_ui_key_values,  # type: ignore
-        table_name="key",
-    )
-
-    key = response["token"]  # type: ignore
-    user_id = response["user_id"]  # type: ignore
-
-    user_role = (
-        user_defined_values["user_role"]
-        or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
-    )
-    if user_id and isinstance(user_id, str):
-        user_role = await check_and_update_if_proxy_admin_id(
-            user_role=user_role, user_id=user_id, prisma_client=prisma_client
-        )
-
-    verbose_proxy_logger.debug(
-        f"user_role: {user_role}; ui_access_mode: {ui_access_mode}"
-    )
-    ## CHECK IF ROLE ALLOWED TO USE PROXY ##
-    is_admin_only_access = check_is_admin_only_access(ui_access_mode or {})
-    if is_admin_only_access:
-        has_access = has_admin_ui_access(user_role)
-        if not has_access:
-            raise HTTPException(
-                status_code=401,
-                detail={
-                    "error": f"User not allowed to access proxy. User role={user_role}, proxy mode={ui_access_mode}"
-                },
-            )
-
-    return SSOAuthenticationHandler.return_ui_sso_redirect_response_after_sign_in(
-        user_id=user_id,
-        user_email=user_email,
-        user_role=user_role,
-        user_defined_values=user_defined_values,
-        key=key,
         request=request,
+        received_response=received_response,
+        generic_client_id=generic_client_id,
+        ui_access_mode=ui_access_mode,
     )
+
 
     
 
@@ -931,6 +800,26 @@ class SSOAuthenticationHandler:
     """
     Handler for SSO Authentication across all SSO providers
     """
+
+    @staticmethod
+    async def handle_custom_ui_sso_sign_in(
+        request: Request,
+    ) -> RedirectResponse:
+        # 1. call the user defined custom sso sign in handler
+        from fastapi_sso.sso.base import OpenID
+
+        from litellm.integrations.custom_sso_handler import CustomSSOLoginHandler
+        custom_sso_login_handler = CustomSSOLoginHandler()
+        openid_response: OpenID = await custom_sso_login_handler.handle_custom_ui_sso_sign_in(
+            request=request,
+        )
+        return await SSOAuthenticationHandler.get_redirect_response_from_openid(
+            result=openid_response,
+            request=request,
+            received_response=None,
+            generic_client_id=None,
+            ui_access_mode=None,
+        )
 
     @staticmethod
     async def get_sso_login_redirect(
@@ -1299,25 +1188,163 @@ class SSOAuthenticationHandler:
         )
         return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}" if source == LITELLM_CLI_SOURCE_IDENTIFIER and key else None
     
+
     @staticmethod
-    def return_ui_sso_redirect_response_after_sign_in(
-        user_id: Optional[str],
-        user_email: Optional[str],
-        user_role: str,
-        key: str,
-        user_defined_values: Optional[SSOUserDefinedValues],
+    async def get_redirect_response_from_openid(
+        result: Union[OpenID, dict, CustomOpenID],
         request: Request,
+        received_response: Optional[dict] = None,
+        generic_client_id: Optional[str] = None,
+        ui_access_mode: Optional[Dict] = None,
     ) -> RedirectResponse:
         import jwt
 
         from litellm.proxy.proxy_server import (
             general_settings,
+            generate_key_helper_fn,
             master_key,
             premium_user,
+            proxy_logging_obj,
+            user_api_key_cache,
+            user_custom_sso,
         )
-        from litellm.proxy.utils import get_custom_url
+        from litellm.proxy.utils import get_custom_url, get_prisma_client_or_throw
         from litellm.types.proxy.ui_sso import ReturnedUITokenObject
-        
+        prisma_client = get_prisma_client_or_throw("Prisma client is None, connect a database to your proxy")
+
+
+        # User is Authe'd in - generate key for the UI to access Proxy
+        verbose_proxy_logger.info(f"SSO callback result: {result}")
+
+        user_email: Optional[str] = getattr(result, "email", None)
+        user_id: Optional[str] = getattr(result, "id", None) if result is not None else None
+
+        if user_email is not None and os.getenv("ALLOWED_EMAIL_DOMAINS") is not None:
+            email_domain = user_email.split("@")[1]
+            allowed_domains = os.getenv("ALLOWED_EMAIL_DOMAINS").split(",")  # type: ignore
+            if email_domain not in allowed_domains:
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "message": "The email domain={}, is not an allowed email domain={}. Contact your admin to change this.".format(
+                            email_domain, allowed_domains
+                        )
+                    },
+                )
+
+        # generic client id
+        if generic_client_id is not None and result is not None:
+            generic_user_role_attribute_name = os.getenv(
+                "GENERIC_USER_ROLE_ATTRIBUTE", "role"
+            )
+            user_id = getattr(result, "id", None)
+            user_email = getattr(result, "email", None)
+            user_role = getattr(result, generic_user_role_attribute_name, None)  # type: ignore
+
+        if user_id is None and result is not None:
+            _first_name = getattr(result, "first_name", "") or ""
+            _last_name = getattr(result, "last_name", "") or ""
+            user_id = _first_name + _last_name
+
+        if user_email is not None and (user_id is None or len(user_id) == 0):
+            user_id = user_email
+
+        user_info = None
+        user_id_models: List = []
+        max_internal_user_budget = litellm.max_internal_user_budget
+        internal_user_budget_duration = litellm.internal_user_budget_duration
+
+        # User might not be already created on first generation of key
+        # But if it is, we want their models preferences
+        default_ui_key_values: Dict[str, Any] = {
+            "duration": "24hr",
+            "key_max_budget": litellm.max_ui_session_budget,
+            "aliases": {},
+            "config": {},
+            "spend": 0,
+            "team_id": "litellm-dashboard",
+        }
+        user_defined_values: Optional[SSOUserDefinedValues] = None
+
+        if user_custom_sso is not None:
+            if asyncio.iscoroutinefunction(user_custom_sso):
+                user_defined_values = await user_custom_sso(result)  # type: ignore
+            else:
+                raise ValueError("user_custom_sso must be a coroutine function")
+        elif user_id is not None:
+            user_defined_values = SSOUserDefinedValues(
+                models=user_id_models,
+                user_id=user_id,
+                user_email=user_email,
+                max_budget=max_internal_user_budget,
+                user_role=None,
+                budget_duration=internal_user_budget_duration,
+            )
+
+        # (IF SET) Verify user is in restricted SSO group
+        SSOAuthenticationHandler.verify_user_in_restricted_sso_group(
+            general_settings=general_settings,
+            result=result,
+            received_response=received_response,
+        )
+
+        user_info = await get_user_info_from_db(
+            result=result,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            user_email=user_email,
+            user_defined_values=user_defined_values,
+            alternate_user_id=user_id,
+        )
+
+        user_defined_values = apply_user_info_values_to_sso_user_defined_values(
+            user_info=user_info, user_defined_values=user_defined_values
+        )
+
+        if user_defined_values is None:
+            raise Exception(
+                "Unable to map user identity to known values. 'user_defined_values' is None. File an issue - https://github.com/BerriAI/litellm/issues"
+            )
+
+        verbose_proxy_logger.info(
+            f"user_defined_values for creating ui key: {user_defined_values}"
+        )
+
+        default_ui_key_values.update(user_defined_values)
+        default_ui_key_values["request_type"] = "key"
+        response = await generate_key_helper_fn(
+            **default_ui_key_values,  # type: ignore
+            table_name="key",
+        )
+
+        key = response["token"]  # type: ignore
+        user_id = response["user_id"]  # type: ignore
+
+        user_role = (
+            user_defined_values["user_role"]
+            or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
+        )
+        if user_id and isinstance(user_id, str):
+            user_role = await check_and_update_if_proxy_admin_id(
+                user_role=user_role, user_id=user_id, prisma_client=prisma_client
+            )
+
+        verbose_proxy_logger.debug(
+            f"user_role: {user_role}; ui_access_mode: {ui_access_mode}"
+        )
+        ## CHECK IF ROLE ALLOWED TO USE PROXY ##
+        is_admin_only_access = check_is_admin_only_access(ui_access_mode or {})
+        if is_admin_only_access:
+            has_access = has_admin_ui_access(user_role)
+            if not has_access:
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "error": f"User not allowed to access proxy. User role={user_role}, proxy mode={ui_access_mode}"
+                    },
+                )
+
         disabled_non_admin_personal_key_creation = (
             get_disabled_non_admin_personal_key_creation()
         )
@@ -1375,8 +1402,7 @@ class SSOAuthenticationHandler:
         redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
         redirect_response.set_cookie(key="token", value=jwt_token)
         return redirect_response
-
-
+        
 class MicrosoftSSOHandler:
     """
     Handles Microsoft SSO callback response and returns a CustomOpenID object
