@@ -200,13 +200,26 @@ class TestOpenTelemetry(unittest.TestCase):
 
     @patch.dict(os.environ, {}, clear=True)
     @patch("opentelemetry.sdk.resources.Resource.create")
-    def test_get_litellm_resource_with_defaults(self, mock_resource_create):
+    @patch("opentelemetry.sdk.resources.OTELResourceDetector")
+    def test_get_litellm_resource_with_defaults(
+        self, mock_detector_cls, mock_resource_create
+    ):
         """Test _get_litellm_resource with default values when no environment variables are set."""
         from litellm.integrations.opentelemetry import _get_litellm_resource
 
         # Mock the Resource.create method
-        mock_resource = MagicMock()
-        mock_resource_create.return_value = mock_resource
+        mock_base_resource = MagicMock()
+        mock_resource_create.return_value = mock_base_resource
+
+        # Mock the OTELResourceDetector
+        mock_detector = MagicMock()
+        mock_detector_cls.return_value = mock_detector
+        mock_env_resource = MagicMock()
+        mock_detector.detect.return_value = mock_env_resource
+
+        # Mock the merged resource
+        mock_merged_resource = MagicMock()
+        mock_base_resource.merge.return_value = mock_merged_resource
 
         # Call the function
         result = _get_litellm_resource()
@@ -218,7 +231,9 @@ class TestOpenTelemetry(unittest.TestCase):
             "model_id": "litellm",
         }
         mock_resource_create.assert_called_once_with(expected_attributes)
-        self.assertEqual(result, mock_resource)
+        mock_detector.detect.assert_called_once()
+        mock_base_resource.merge.assert_called_once_with(mock_env_resource)
+        self.assertEqual(result, mock_merged_resource)
 
     @patch.dict(
         os.environ,
@@ -230,13 +245,26 @@ class TestOpenTelemetry(unittest.TestCase):
         clear=True,
     )
     @patch("opentelemetry.sdk.resources.Resource.create")
-    def test_get_litellm_resource_with_litellm_env_vars(self, mock_resource_create):
+    @patch("opentelemetry.sdk.resources.OTELResourceDetector")
+    def test_get_litellm_resource_with_litellm_env_vars(
+        self, mock_detector_cls, mock_resource_create
+    ):
         """Test _get_litellm_resource with LiteLLM-specific environment variables."""
         from litellm.integrations.opentelemetry import _get_litellm_resource
 
         # Mock the Resource.create method
-        mock_resource = MagicMock()
-        mock_resource_create.return_value = mock_resource
+        mock_base_resource = MagicMock()
+        mock_resource_create.return_value = mock_base_resource
+
+        # Mock the OTELResourceDetector
+        mock_detector = MagicMock()
+        mock_detector_cls.return_value = mock_detector
+        mock_env_resource = MagicMock()
+        mock_detector.detect.return_value = mock_env_resource
+
+        # Mock the merged resource
+        mock_merged_resource = MagicMock()
+        mock_base_resource.merge.return_value = mock_merged_resource
 
         # Call the function
         result = _get_litellm_resource()
@@ -248,7 +276,9 @@ class TestOpenTelemetry(unittest.TestCase):
             "model_id": "test-model",
         }
         mock_resource_create.assert_called_once_with(expected_attributes)
-        self.assertEqual(result, mock_resource)
+        mock_detector.detect.assert_called_once()
+        mock_base_resource.merge.assert_called_once_with(mock_env_resource)
+        self.assertEqual(result, mock_merged_resource)
 
     @patch.dict(
         os.environ,
@@ -259,16 +289,27 @@ class TestOpenTelemetry(unittest.TestCase):
         clear=True,
     )
     @patch("opentelemetry.sdk.resources.Resource.create")
+    @patch("opentelemetry.sdk.resources.OTELResourceDetector")
     def test_get_litellm_resource_with_otel_resource_attributes(
-        self, mock_resource_create
+        self, mock_detector_cls, mock_resource_create
     ):
         """Test _get_litellm_resource with OTEL_RESOURCE_ATTRIBUTES environment variable."""
         from litellm.integrations.opentelemetry import _get_litellm_resource
 
         # Mock the Resource.create method to simulate the actual behavior
         # In reality, Resource.create() would parse OTEL_RESOURCE_ATTRIBUTES and merge it
-        mock_resource = MagicMock()
-        mock_resource_create.return_value = mock_resource
+        mock_base_resource = MagicMock()
+        mock_resource_create.return_value = mock_base_resource
+
+        # Mock the OTELResourceDetector
+        mock_detector = MagicMock()
+        mock_detector_cls.return_value = mock_detector
+        mock_env_resource = MagicMock()
+        mock_detector.detect.return_value = mock_env_resource
+
+        # Mock the merged resource
+        mock_merged_resource = MagicMock()
+        mock_base_resource.merge.return_value = mock_merged_resource
 
         # Call the function
         result = _get_litellm_resource()
@@ -281,7 +322,9 @@ class TestOpenTelemetry(unittest.TestCase):
             "model_id": "should-be-overridden",
         }
         mock_resource_create.assert_called_once_with(expected_attributes)
-        self.assertEqual(result, mock_resource)
+        mock_detector.detect.assert_called_once()
+        mock_base_resource.merge.assert_called_once_with(mock_env_resource)
+        self.assertEqual(result, mock_merged_resource)
 
     @patch.dict(os.environ, {}, clear=True)
     def test_get_litellm_resource_integration_with_real_resource(self):
@@ -340,7 +383,7 @@ class TestOpenTelemetry(unittest.TestCase):
         clear=True,
     )
     def test_get_litellm_resource_precedence(self):
-        """Test that OTEL_RESOURCE_ATTRIBUTES takes precedence over OTEL_SERVICE_NAME."""
+        """Test that OTEL_SERVICE_NAME takes precedence over OTEL_RESOURCE_ATTRIBUTES according to OpenTelemetry spec."""
         from litellm.integrations.opentelemetry import _get_litellm_resource
 
         # This test verifies the OpenTelemetry standard behavior
@@ -351,7 +394,8 @@ class TestOpenTelemetry(unittest.TestCase):
 
         self.assertIsInstance(result, Resource)
 
-        # According to OpenTelemetry spec, OTEL_RESOURCE_ATTRIBUTES should take precedence
+        # According to OpenTelemetry spec, OTEL_SERVICE_NAME takes precedence over service.name in OTEL_RESOURCE_ATTRIBUTES
         attributes = result.attributes
-        self.assertEqual(attributes.get("service.name"), "otel-override")
+        self.assertEqual(attributes.get("service.name"), "litellm-service")
+        # But other attributes from OTEL_RESOURCE_ATTRIBUTES should still be present
         self.assertEqual(attributes.get("extra.attr"), "extra-value")
