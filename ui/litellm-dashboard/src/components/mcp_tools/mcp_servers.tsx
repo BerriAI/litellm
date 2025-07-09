@@ -160,7 +160,7 @@ const MCPServers: React.FC<MCPServerProps> = ({
   const columns = React.useMemo(
     () =>
       mcpServerColumns(
-        userRole,
+        userRole ?? "",
         (serverId: string) => setSelectedServerId(serverId),
         (serverId: string) => {
           setSelectedServerId(serverId);
