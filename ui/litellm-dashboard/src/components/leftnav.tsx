@@ -67,7 +67,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     { key: "16", page: "model-hub", label: "Model Hub", icon: <AppstoreOutlined /> },
     { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined />},
     { key: "11", page: "guardrails", label: "Guardrails", icon: <SafetyOutlined />, roles: all_admin_roles },
-    { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined />, roles: all_admin_roles },
+    { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined /> },
     { 
       key: "experimental", 
       page: "experimental",
@@ -116,6 +116,8 @@ const Sidebar: React.FC<SidebarProps> = ({
   const filteredMenuItems = menuItems.filter(item => {
     // Check if parent item has roles and user has access
     const hasParentAccess = !item.roles || item.roles.includes(userRole);
+    
+    console.log(`Menu item ${item.label}: roles=${item.roles}, userRole=${userRole}, hasAccess=${hasParentAccess}`);
     
     if (!hasParentAccess) return false;
 

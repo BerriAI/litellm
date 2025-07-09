@@ -63,6 +63,35 @@ def _get_models_from_access_groups(
     return all_models
 
 
+async def get_mcp_server_ids(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> List[str]:
+    """
+    Returns the list of MCP server ids for a given key by querying the object_permission table
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        return []
+
+
+    if user_api_key_dict.object_permission_id is None:
+        return []
+
+
+    # Make a direct SQL query to get just the mcp_servers
+    try:
+
+        result = await prisma_client.db.litellm_objectpermissiontable.find_unique(
+                where={"object_permission_id": user_api_key_dict.object_permission_id},
+        )
+        if result and result.mcp_servers:
+            return result.mcp_servers
+        return []
+    except Exception:
+        return []
+
+
 def get_key_models(
     user_api_key_dict: UserAPIKeyAuth,
     proxy_model_list: List[str],

@@ -49,7 +49,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       console.log(`Payload: ${JSON.stringify(payload)}`);
 
       if (accessToken != null) {
-        const response: MCPServer = await createMCPServer(
+        const response = await createMCPServer(
           accessToken,
           payload
         );

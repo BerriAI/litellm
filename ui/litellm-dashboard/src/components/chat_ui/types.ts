@@ -65,4 +65,5 @@ export interface MessageType {
     totalTokens?: number;
     reasoningTokens?: number;
   };
+  toolName?: string;
 } 

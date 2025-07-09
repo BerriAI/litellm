@@ -6,7 +6,8 @@ import {
   ImportOutlined, 
   ExportOutlined,
   ThunderboltOutlined,
-  BulbOutlined
+  BulbOutlined,
+  ToolOutlined
 } from "@ant-design/icons";
 
 export interface TokenUsage {
@@ -19,11 +20,13 @@ export interface TokenUsage {
 interface ResponseMetricsProps {
   timeToFirstToken?: number; // in milliseconds
   usage?: TokenUsage;
+  toolName?: string;
 }
 
 const ResponseMetrics: React.FC<ResponseMetricsProps> = ({ 
   timeToFirstToken, 
-  usage 
+  usage,
+  toolName
 }) => {
   if (!timeToFirstToken && !usage) return null;
 
@@ -70,6 +73,15 @@ const ResponseMetrics: React.FC<ResponseMetricsProps> = ({
           <div className="flex items-center">
             <NumberOutlined className="mr-1" />
             <span>Total: {usage.totalTokens}</span>
+          </div>
+        </Tooltip>
+      )}
+
+      {toolName && (
+        <Tooltip title="Tool used">
+          <div className="flex items-center">
+            <ToolOutlined className="mr-1" />
+            <span>Tool: {toolName}</span>
           </div>
         </Tooltip>
       )}
