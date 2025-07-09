@@ -249,7 +249,7 @@ def test_get_supported_openai_params():
 
 def test_get_supported_openai_params_bedrock_converse():
     """
-    Test that al documented bedrock converse models have the same set of supported openai params when using 
+    Test that all documented bedrock converse models have the same set of supported openai params when using 
     `bedrock/converse/` or `bedrock/` prefix.
 
     Note: This test is critical for routing, if we ever remove `litellm.BEDROCK_CONVERSE_MODELS`, 
