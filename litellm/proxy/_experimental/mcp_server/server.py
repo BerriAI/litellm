@@ -129,7 +129,9 @@ if MCP_AVAILABLE:
         await _sse_session_manager_cm.__aenter__()
 
         _SESSION_MANAGERS_INITIALIZED = True
-        verbose_logger.info("MCP Server started with StreamableHTTP and SSE session managers!")
+        verbose_logger.info(
+            "MCP Server started with StreamableHTTP and SSE session managers!"
+        )
 
     async def shutdown_session_managers():
         """Shutdown the session managers."""
@@ -228,7 +230,7 @@ if MCP_AVAILABLE:
                     proxy_config=proxy_config,
                 )
             else:
-                data = {}
+                data = body_data
 
             response = await call_mcp_tool(
                 user_api_key_auth=user_api_key_auth,
@@ -368,9 +370,13 @@ if MCP_AVAILABLE:
         # Try managed server tool first (pass the full prefixed name)
         # Primary and recommended way to use MCP servers
         #########################################################
-        mcp_server: Optional[MCPServer] = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+        mcp_server: Optional[MCPServer] = (
+            global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+        )
         if mcp_server:
-            standard_logging_mcp_tool_call["mcp_server_cost_info"] = (mcp_server.mcp_info or {}).get("mcp_server_cost_info")
+            standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
+                mcp_server.mcp_info or {}
+            ).get("mcp_server_cost_info")
             return await _handle_managed_mcp_tool(
                 name=name,  # Pass the full name (potentially prefixed)
                 arguments=arguments,
