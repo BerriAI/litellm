@@ -6542,7 +6542,7 @@ async def get_mcp_tools(
     for server_id in server_ids:
         tools.extend(await global_mcp_server_manager.get_tools_for_server(server_id)) 
     
-    verbose_logger.debug(f"Available tools: {tools}")
+    verbose_proxy_logger.debug(f"Available tools: {tools}")
 
     return {"tools": tools}
 

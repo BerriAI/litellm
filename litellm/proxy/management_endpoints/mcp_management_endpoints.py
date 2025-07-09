@@ -12,7 +12,7 @@ Endpoints here:
 """
 
 import importlib
-from typing import Iterable, List, Optional, Dict
+from typing import Iterable, List, Optional, Dict, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from fastapi.responses import JSONResponse
@@ -185,7 +185,7 @@ if MCP_AVAILABLE:
                 created_by=server.created_by,
                 updated_at=server.updated_at,
                 updated_by=server.updated_by,
-                teams=server_to_teams_map.get(server.server_id, [])
+                teams=cast(List[Dict[str, str | None]], server_to_teams_map.get(server.server_id, []))
             )
             for server in LIST_MCP_SERVERS
         ]
