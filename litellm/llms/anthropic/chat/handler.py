@@ -490,6 +490,8 @@ class ModelResponseIterator:
 
         # Track if we're currently streaming a response_format tool
         self.is_response_format_tool: bool = False
+        # Track if we've converted any response_format tools (affects finish_reason)
+        self.converted_response_format_tool: bool = False
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -686,19 +688,20 @@ class ModelResponseIterator:
                 ContentBlockStop(**chunk)  # type: ignore
                 # check if tool call content block
                 is_empty = self.check_empty_tool_call_args()
-                tool_use = self._handle_content_block_stop(is_empty, tool_use)
+                if is_empty:
+                    tool_use = {
+                        "id": None,
+                        "type": "function",
+                        "function": {
+                            "name": None,
+                            "arguments": "{}",
+                        },
+                        "index": self.tool_index,
+                    }
+                # Reset response_format tool tracking when block stops
+                self.is_response_format_tool = False
             elif type_chunk == "message_delta":
-                """
-                Anthropic
-                chunk = {'type': 'message_delta', 'delta': {'stop_reason': 'max_tokens', 'stop_sequence': None}, 'usage': {'output_tokens': 10}}
-                """
-                # TODO - get usage from this chunk, set in response
-                message_delta = MessageBlockDelta(**chunk)  # type: ignore
-                finish_reason = map_finish_reason(
-                    finish_reason=message_delta["delta"].get("stop_reason", "stop")
-                    or "stop"
-                )
-                usage = self._handle_usage(anthropic_usage_chunk=message_delta["usage"])
+                finish_reason, usage = self._handle_message_delta(chunk)
             elif type_chunk == "message_start":
                 """
                 Anthropic
@@ -808,36 +811,31 @@ class ModelResponseIterator:
             if message is not None:
                 text = message.content or ""
                 tool_use = None
+                # Track that we converted a response_format tool
+                self.converted_response_format_tool = True
 
         return text, tool_use
 
-    def _handle_content_block_stop(
-        self, is_empty: bool, tool_use: Optional[ChatCompletionToolCallChunk]
-    ) -> Optional[ChatCompletionToolCallChunk]:
+    def _handle_message_delta(self, chunk: dict) -> Tuple[str, Optional[Usage]]:
         """
-        Handle content_block_stop event processing.
+        Handle message_delta event for finish_reason and usage.
 
         Args:
-            is_empty: Whether the tool call has empty arguments
-            tool_use: Current tool_use object (may be None)
+            chunk: The message_delta chunk
 
         Returns:
-            Updated tool_use object for empty tool calls, or original tool_use
+            Tuple of (finish_reason, usage)
         """
-        if is_empty:
-            tool_use = {
-                "id": None,
-                "type": "function",
-                "function": {
-                    "name": None,
-                    "arguments": "{}",
-                },
-                "index": self.tool_index,
-            }
-
-        # Reset response_format tool tracking when block stops
-        self.is_response_format_tool = False
-        return tool_use
+        message_delta = MessageBlockDelta(**chunk)  # type: ignore
+        finish_reason = map_finish_reason(
+            finish_reason=message_delta["delta"].get("stop_reason", "stop") or "stop"
+        )
+        # Override finish_reason to "stop" if we converted response_format tools
+        # (matches OpenAI behavior and non-streaming Anthropic implementation)
+        if self.converted_response_format_tool:
+            finish_reason = "stop"
+        usage = self._handle_usage(anthropic_usage_chunk=message_delta["usage"])
+        return finish_reason, usage
 
     # Sync iterator
     def __iter__(self):

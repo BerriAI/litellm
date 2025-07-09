@@ -191,3 +191,79 @@ def test_handle_json_mode_chunk_streaming_regular_tool():
     assert text2 == ""  # Original text unchanged
     assert tool_use2 is not None  # Tool call preserved
     assert tool_use2["function"]["arguments"] == '{"location": "San Francisco, CA"}'
+
+
+def test_response_format_tool_finish_reason():
+    model_response_iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=True
+    )
+
+    # First chunk: response_format tool
+    response_format_tool = ChatCompletionToolCallChunk(
+        id="tool_123",
+        type="function",
+        function=ChatCompletionToolCallFunctionChunk(
+            name=RESPONSE_FORMAT_TOOL_NAME, arguments='{"answer": "test"}'
+        ),
+        index=0,
+    )
+
+    # Process the tool call (should set converted_response_format_tool flag)
+    text, tool_use = model_response_iterator._handle_json_mode_chunk(
+        "", response_format_tool
+    )
+    print(
+        f"\n\nconverted_response_format_tool flag: {model_response_iterator.converted_response_format_tool}\n\n"
+    )
+
+    # Simulate message_delta chunk with tool_use stop_reason
+    message_delta_chunk = {
+        "type": "message_delta",
+        "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+        "usage": {"output_tokens": 10},
+    }
+
+    # Process the message_delta chunk
+    model_response = model_response_iterator.chunk_parser(message_delta_chunk)
+    print(f"\n\nfinish_reason: {model_response.choices[0].finish_reason}\n\n")
+
+    # Verify that finish_reason is overridden to "stop" for response_format tools
+    assert model_response_iterator.converted_response_format_tool is True
+    assert model_response.choices[0].finish_reason == "stop"
+
+
+def test_regular_tool_finish_reason():
+    model_response_iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=True
+    )
+
+    # First chunk: regular tool (not response_format)
+    regular_tool = ChatCompletionToolCallChunk(
+        id="tool_456",
+        type="function",
+        function=ChatCompletionToolCallFunctionChunk(
+            name="get_weather", arguments='{"location": "San Francisco, CA"}'
+        ),
+        index=0,
+    )
+
+    # Process the tool call (should NOT set converted_response_format_tool flag)
+    text, tool_use = model_response_iterator._handle_json_mode_chunk("", regular_tool)
+    print(
+        f"\n\nconverted_response_format_tool flag: {model_response_iterator.converted_response_format_tool}\n\n"
+    )
+
+    # Simulate message_delta chunk with tool_use stop_reason
+    message_delta_chunk = {
+        "type": "message_delta",
+        "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+        "usage": {"output_tokens": 10},
+    }
+
+    # Process the message_delta chunk
+    model_response = model_response_iterator.chunk_parser(message_delta_chunk)
+    print(f"\n\nfinish_reason: {model_response.choices[0].finish_reason}\n\n")
+
+    # Verify that finish_reason remains "tool_calls" for regular tools
+    assert model_response_iterator.converted_response_format_tool is False
+    assert model_response.choices[0].finish_reason == "tool_calls"
