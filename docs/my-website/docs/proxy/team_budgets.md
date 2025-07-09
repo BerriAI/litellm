@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 💰 Setting Team Budgets
+# Setting Team Budgets
 
 Track spend, set budgets for your Internal Team
 

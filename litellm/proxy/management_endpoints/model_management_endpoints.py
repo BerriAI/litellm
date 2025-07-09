@@ -3,7 +3,7 @@ Allow proxy admin to add/update/delete models in the db
 
 Currently most endpoints are in `proxy_server.py`, but those should  be moved here over time.
 
-Endpoints here: 
+Endpoints here:
 
 model/{model_id}/update - PATCH endpoint for model update.
 """
@@ -219,9 +219,23 @@ async def patch_model(
             where={"model_id": model_id},
             data=update_data,
         )
-        
+
         # Clear cache and reload models
         await clear_cache()
+
+        ## CREATE AUDIT LOG ##
+        asyncio.create_task(
+            create_object_audit_log(
+                object_id=model_id,
+                action="updated",
+                user_api_key_dict=user_api_key_dict,
+                table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
+                before_value=db_model.model_dump_json(exclude_none=True),
+                after_value=updated_model.model_dump_json(exclude_none=True),
+                litellm_changed_by=user_api_key_dict.user_id,
+                litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+            )
+        )
 
         return updated_model
 
@@ -951,23 +965,30 @@ def _deduplicate_litellm_router_models(models: List[Dict]) -> List[Dict]:
             seen_ids.add(model_id)
     return unique_models
 
+
 async def clear_cache():
     """
     Clear router caches and reload models.
     """
     from litellm.proxy.proxy_server import (
-        proxy_config,
         llm_router,
         prisma_client,
+        proxy_config,
         proxy_logging_obj,
         verbose_proxy_logger,
     )
+
+    if llm_router is None or prisma_client is None:
+        verbose_proxy_logger.debug(
+            "llm_router or prisma_client is None, skipping cache clear"
+        )
+        return
+
     try:
         llm_router.model_list.clear()
-        
+
         await proxy_config.add_deployment(
-            prisma_client=prisma_client, 
-            proxy_logging_obj=proxy_logging_obj
+            prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
         )
     except Exception as e:
         verbose_proxy_logger.exception(

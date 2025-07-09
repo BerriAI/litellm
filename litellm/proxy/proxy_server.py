@@ -767,46 +767,49 @@ try:
     current_dir = os.path.dirname(os.path.abspath(__file__))
     ui_path = os.path.join(current_dir, "_experimental", "out")
     litellm_asset_prefix = "/litellm-asset-prefix"
-    # Iterate through files in the UI directory
-    for root, dirs, files in os.walk(ui_path):
-        for filename in files:
-            file_path = os.path.join(root, filename)
-            # Skip binary files and files that don't need path replacement
-            if filename.endswith(
-                (
-                    ".png",
-                    ".jpg",
-                    ".jpeg",
-                    ".gif",
-                    ".ico",
-                    ".woff",
-                    ".woff2",
-                    ".ttf",
-                    ".eot",
-                )
-            ):
-                continue
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    content = f.read()
 
-                # Replace the asset prefix with the server root path
-                modified_content = content.replace(
-                    f"{litellm_asset_prefix}",
-                    f"{server_root_path}",
-                )
+    # Only modify files if a custom server root path is set
+    if server_root_path and server_root_path != "/":
+        # Iterate through files in the UI directory
+        for root, dirs, files in os.walk(ui_path):
+            for filename in files:
+                file_path = os.path.join(root, filename)
+                # Skip binary files and files that don't need path replacement
+                if filename.endswith(
+                    (
+                        ".png",
+                        ".jpg",
+                        ".jpeg",
+                        ".gif",
+                        ".ico",
+                        ".woff",
+                        ".woff2",
+                        ".ttf",
+                        ".eot",
+                    )
+                ):
+                    continue
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        content = f.read()
 
-                # Replace the /.well-known/litellm-ui-config with the server root path
-                modified_content = modified_content.replace(
-                    "/litellm/.well-known/litellm-ui-config",
-                    f"{server_root_path}/.well-known/litellm-ui-config",
-                )
+                    # Replace the asset prefix with the server root path
+                    modified_content = content.replace(
+                        f"{litellm_asset_prefix}",
+                        f"{server_root_path}",
+                    )
 
-                with open(file_path, "w", encoding="utf-8") as f:
-                    f.write(modified_content)
-            except UnicodeDecodeError:
-                # Skip binary files that can't be decoded
-                continue
+                    # Replace the /.well-known/litellm-ui-config with the server root path
+                    modified_content = modified_content.replace(
+                        "/litellm/.well-known/litellm-ui-config",
+                        f"{server_root_path}/.well-known/litellm-ui-config",
+                    )
+
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write(modified_content)
+                except UnicodeDecodeError:
+                    # Skip binary files that can't be decoded
+                    continue
 
     # # Mount the _next directory at the root level
     app.mount(
@@ -2825,7 +2828,7 @@ class ProxyConfig:
             )
             for guardrail in guardrails_in_db:
                 IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
-                    guardrail=dict(guardrail),
+                    guardrail=cast(Guardrail, guardrail),
                 )
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -2974,6 +2977,9 @@ async def initialize(  # noqa: PLR0915
     config=None,
 ):
     global user_model, user_api_base, user_debug, user_detailed_debug, user_user_max_tokens, user_request_timeout, user_temperature, user_telemetry, user_headers, experimental, llm_model_list, llm_router, general_settings, master_key, user_custom_auth, prisma_client
+    from litellm.proxy.common_utils.banner import show_banner
+
+    show_banner()
     if os.getenv("LITELLM_DONT_SHOW_FEEDBACK_BOX", "").lower() != "true":
         generate_feedback_box()
     user_model = model
@@ -3092,7 +3098,9 @@ async def async_assistants_data_generator(
         async with response as chunk:
             ### CALL HOOKS ### - modify outgoing data
             chunk = await proxy_logging_obj.async_post_call_streaming_hook(
-                user_api_key_dict=user_api_key_dict, response=chunk
+                user_api_key_dict=user_api_key_dict,
+                response=chunk,
+                data=request_data,
             )
 
             # chunk = chunk.model_dump_json(exclude_none=True)
@@ -3151,7 +3159,9 @@ async def async_data_generator(
             )
             ### CALL HOOKS ### - modify outgoing data
             chunk = await proxy_logging_obj.async_post_call_streaming_hook(
-                user_api_key_dict=user_api_key_dict, response=chunk
+                user_api_key_dict=user_api_key_dict,
+                response=chunk,
+                data=request_data,
             )
 
             if isinstance(chunk, BaseModel):
@@ -3295,6 +3305,7 @@ class ProxyStartupEvent:
         asyncio.create_task(
             generate_key_helper_fn(  # type: ignore
                 request_type="user",
+                table_name="user",
                 user_id=litellm_proxy_budget_name,
                 duration=None,
                 models=[],

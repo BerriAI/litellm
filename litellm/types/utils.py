@@ -37,6 +37,7 @@ from litellm.types.llms.base import (
     BaseLiteLLMOpenAIResponseObject,
     LiteLLMPydanticObjectBase,
 )
+from litellm.types.mcp import MCPServerCostInfo
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
 from .guardrails import GuardrailEventHooks
@@ -162,7 +163,12 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     litellm_provider: Required[str]
     mode: Required[
         Literal[
-            "completion", "embedding", "image_generation", "chat", "audio_transcription"
+            "completion",
+            "embedding",
+            "image_generation",
+            "chat",
+            "audio_transcription",
+            "responses",
         ]
     ]
     tpm: Optional[int]
@@ -267,6 +273,11 @@ class CallTypes(Enum):
     agenerate_content = "agenerate_content"
     generate_content_stream = "generate_content_stream"
     agenerate_content_stream = "agenerate_content_stream"
+
+    #########################################################
+    # MCP Call Types
+    #########################################################
+    call_mcp_tool = "call_mcp_tool"
 
 
 CallTypesLiteral = Literal[
@@ -910,13 +921,18 @@ class Usage(CompletionUsage):
 
     server_tool_use: Optional[ServerToolUse] = None
 
+    prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+    """Breakdown of tokens used in the prompt."""
+
     def __init__(
         self,
         prompt_tokens: Optional[int] = None,
         completion_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
         reasoning_tokens: Optional[int] = None,
-        prompt_tokens_details: Optional[Union[PromptTokensDetailsWrapper, dict]] = None,
+        prompt_tokens_details: Optional[
+            Union[PromptTokensDetailsWrapper, PromptTokensDetails, dict]
+        ] = None,
         completion_tokens_details: Optional[
             Union[CompletionTokensDetailsWrapper, dict]
         ] = None,
@@ -944,12 +960,17 @@ class Usage(CompletionUsage):
 
         # handle prompt_tokens_details
         _prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+
         if prompt_tokens_details:
             if isinstance(prompt_tokens_details, dict):
                 _prompt_tokens_details = PromptTokensDetailsWrapper(
                     **prompt_tokens_details
                 )
             elif isinstance(prompt_tokens_details, PromptTokensDetails):
+                _prompt_tokens_details = PromptTokensDetailsWrapper(
+                    **prompt_tokens_details.model_dump()
+                )
+            elif isinstance(prompt_tokens_details, PromptTokensDetailsWrapper):
                 _prompt_tokens_details = prompt_tokens_details
 
         ## DEEPSEEK MAPPING ##
@@ -1800,7 +1821,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_request_route: Optional[str]
 
 
-class StandardLoggingMCPToolCall(TypedDict, total=False):
+class StandardLoggingMCPToolCall(TypedDict, total=False):    
     name: str
     """
     Name of the tool to call
@@ -1824,6 +1845,11 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
     Optional logo URL of the MCP server that the tool call was made to
 
     (this is to render the logo on the logs page on litellm ui)
+    """
+
+    mcp_server_cost_info: Optional[MCPServerCostInfo]
+    """
+    Cost per query for the MCP server tool call
     """
 
 
@@ -2057,6 +2083,9 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langfuse_secret_key: Optional[str]
     langfuse_host: Optional[str]
 
+    # Langfuse prompt version
+    langfuse_prompt_version: Optional[int]
+
     # GCS dynamic params
     gcs_bucket_name: Optional[str]
     gcs_path_service_account: Optional[str]
@@ -2072,6 +2101,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     # Arize dynamic params
     arize_api_key: Optional[str]
     arize_space_key: Optional[str]
+    arize_space_id: Optional[str]
 
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
@@ -2096,6 +2126,7 @@ all_litellm_params = [
     "prompt_id",
     "provider_specific_header",
     "prompt_variables",
+    "prompt_version",
     "api_base",
     "force_timeout",
     "logger_fn",
@@ -2290,6 +2321,7 @@ class LlmProviders(str, Enum):
     HUMANLOOP = "humanloop"
     TOPAZ = "topaz"
     ASSEMBLYAI = "assemblyai"
+    GITHUB_COPILOT = "github_copilot"
     SNOWFLAKE = "snowflake"
     LLAMA = "meta_llama"
     NSCALE = "nscale"
