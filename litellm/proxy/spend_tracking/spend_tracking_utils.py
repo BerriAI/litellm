@@ -286,6 +286,13 @@ def get_logging_payload(  # noqa: PLR0915
 
         id = f"{id}_cache_hit{time.time()}"  # SpendLogs does not allow duplicate request_id
 
+    mcp_namespaced_tool_name = None
+    mcp_tool_call_metadata = clean_metadata.get("mcp_tool_call_metadata", {})
+    if mcp_tool_call_metadata is not None:
+        mcp_namespaced_tool_name = mcp_tool_call_metadata.get(
+            "namespaced_tool_name", None
+        )
+
     try:
         payload: SpendLogsPayload = SpendLogsPayload(
             request_id=str(id),
@@ -311,6 +318,7 @@ def get_logging_payload(  # noqa: PLR0915
             api_base=litellm_params.get("api_base", ""),
             model_group=_model_group,
             model_id=_model_id,
+            mcp_namespaced_tool_name=mcp_namespaced_tool_name,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             custom_llm_provider=kwargs.get("custom_llm_provider", ""),
             messages=_get_messages_for_spend_logs_payload(
