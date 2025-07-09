@@ -24,6 +24,7 @@ from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
 )
+from litellm.types.llms.openai import Reasoning
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseInputImageParam
@@ -152,8 +153,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 )
             elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
                 responses_api_request[key] = value  # type: ignore
-            elif key in ("metadata", "previous_response_id", "extra_body"):
-                responses_api_request[key] = value
+            elif key in ("metadata"):
+                responses_api_request["metadata"] = value
+            elif key in ("previous_response_id"):
+                responses_api_request["previous_response_id"] = value
             elif key == "reasoning_effort":
                 responses_api_request["reasoning"] = self._map_reasoning_effort(value)
 
@@ -464,12 +467,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 )
         return cast(List["ALL_RESPONSES_API_TOOL_PARAMS"], responses_tools)
 
-    def _map_reasoning_effort(self, reasoning_effort: str) -> Optional[Dict[str, str]]:
+    def _map_reasoning_effort(self, reasoning_effort: str) -> Optional[Reasoning]:
         if reasoning_effort == "high":
-            return {"effort": "high", "summary": "detailed"}
-        elif reasoning_effort in ["low", "medium"]:
+            return Reasoning(effort="high", summary="detailed")
+        elif reasoning_effort == "medium":
             # docs say "summary": "concise" is also an option, but it was rejected in practice, so defaulting "auto"
-            return {"effort": reasoning_effort, "summary": "auto"}
+            return Reasoning(effort="medium", summary="auto")
+        elif reasoning_effort == "low":
+            return Reasoning(effort="low", summary="auto")
+        return None
 
     def _map_responses_status_to_finish_reason(self, status: Optional[str]) -> str:
         """Map responses API status to chat completion finish_reason"""
