@@ -347,6 +347,19 @@ if MCP_AVAILABLE:
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
             )
+            #########################################################
+            # Post MCP Tool Call Hook
+            # Allow modifying the MCP tool call response before it is returned to the user
+            #########################################################
+            if litellm_logging_obj:
+                end_time = datetime.now()
+                response = await litellm_logging_obj.async_post_mcp_tool_call_hook(
+                    kwargs=litellm_logging_obj.model_call_details,
+                    response_obj=response,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+            return response
 
         # Fall back to local tool registry (use original name)
         #########################################################
