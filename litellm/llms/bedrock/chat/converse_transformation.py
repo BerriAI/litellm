@@ -138,6 +138,7 @@ class AmazonConverseConfig(BaseConfig):
             or base_model.startswith("meta.llama3-1")
             or base_model.startswith("meta.llama3-2")
             or base_model.startswith("meta.llama3-3")
+            or base_model.startswith("meta.llama4")
             or base_model.startswith("amazon.nova")
             or supports_function_calling(
                 model=model, custom_llm_provider=self.custom_llm_provider
@@ -145,8 +146,14 @@ class AmazonConverseConfig(BaseConfig):
         ):
             supported_params.append("tools")
 
-        if litellm.utils.supports_tool_choice(
-            model=model, custom_llm_provider=self.custom_llm_provider
+        if (
+            litellm.utils.supports_tool_choice(
+                model=model, custom_llm_provider=self.custom_llm_provider
+            )
+            or litellm.utils.supports_tool_choice(
+                model=base_model,
+                custom_llm_provider=self.custom_llm_provider
+            )
         ):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
@@ -155,9 +162,14 @@ class AmazonConverseConfig(BaseConfig):
             "claude-3-7" in model
             or "claude-sonnet-4" in model
             or "claude-opus-4" in model
+            or "deepseek.r1" in model
             or supports_reasoning(
                 model=model,
                 custom_llm_provider=self.custom_llm_provider,
+            )
+            or supports_reasoning(
+                model=base_model,
+                custom_llm_provider=self.custom_llm_provider
             )
         ):
             supported_params.append("thinking")
