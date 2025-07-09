@@ -6,7 +6,7 @@ LiteLLM provides two different SSO hooks depending on your authentication setup:
 
 | Hook Type | When to Use | What It Does |
 |-----------|-------------|--------------|
-| **Custom UI SSO Sign-in Handler** | You have an OAuth proxy (oauth2-proxy, Vouch, etc.) in front of LiteLLM | Parses user info from request headers and signs user into UI |
+| **Custom UI SSO Sign-in Handler** | You have an OAuth proxy (oauth2-proxy, Gatekeeper, Vouch, etc.) in front of LiteLLM | Parses user info from request headers and signs user into UI |
 | **Custom SSO Handler** | You use direct SSO providers (Google, Microsoft, SAML) and want custom post-auth logic | Runs custom code after standard OAuth flow to set user permissions/teams |
 
 **Quick Decision Guide:**
@@ -91,6 +91,10 @@ litellm_settings:
 ```shell
 $ litellm --config /path/to/config.yaml 
 ```
+
+#### 4. Navigate to the Admin UI
+
+When a user attempts navigating to the LiteLLM Admin UI, the request will be routed to your custom UI SSO sign-in handler. 
 
 ---
 
