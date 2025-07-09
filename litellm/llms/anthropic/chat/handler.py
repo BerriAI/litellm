@@ -686,20 +686,7 @@ class ModelResponseIterator:
                 ContentBlockStop(**chunk)  # type: ignore
                 # check if tool call content block
                 is_empty = self.check_empty_tool_call_args()
-
-                if is_empty:
-                    tool_use = {
-                        "id": None,
-                        "type": "function",
-                        "function": {
-                            "name": None,
-                            "arguments": "{}",
-                        },
-                        "index": self.tool_index,
-                    }
-
-                # Reset response_format tool tracking when block stops
-                self.is_response_format_tool = False
+                tool_use = self._handle_content_block_stop(is_empty, tool_use)
             elif type_chunk == "message_delta":
                 """
                 Anthropic
@@ -823,6 +810,34 @@ class ModelResponseIterator:
                 tool_use = None
 
         return text, tool_use
+
+    def _handle_content_block_stop(
+        self, is_empty: bool, tool_use: Optional[ChatCompletionToolCallChunk]
+    ) -> Optional[ChatCompletionToolCallChunk]:
+        """
+        Handle content_block_stop event processing.
+
+        Args:
+            is_empty: Whether the tool call has empty arguments
+            tool_use: Current tool_use object (may be None)
+
+        Returns:
+            Updated tool_use object for empty tool calls, or original tool_use
+        """
+        if is_empty:
+            tool_use = {
+                "id": None,
+                "type": "function",
+                "function": {
+                    "name": None,
+                    "arguments": "{}",
+                },
+                "index": self.tool_index,
+            }
+
+        # Reset response_format tool tracking when block stops
+        self.is_response_format_tool = False
+        return tool_use
 
     # Sync iterator
     def __iter__(self):
