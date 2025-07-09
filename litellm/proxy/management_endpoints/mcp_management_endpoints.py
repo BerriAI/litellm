@@ -16,7 +16,6 @@ from typing import Iterable, List, Optional, Dict
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -120,7 +119,6 @@ if MCP_AVAILABLE:
                         ):
                             user_teams.append(team)
 
-        print("user_teams", user_teams)
         # Create a mapping of server_id to teams that have access to it
         server_to_teams_map: Dict[str, List[Dict[str, str]]] = {}
         for team in user_teams:
@@ -134,7 +132,6 @@ if MCP_AVAILABLE:
                         "organization_id": team.organization_id
                     })
 
-        print("server_to_teams_map", server_to_teams_map)
         # Get MCP servers
 
         # get all mcp server_ids from user_teams
@@ -142,7 +139,6 @@ if MCP_AVAILABLE:
         for team in user_teams:
             if team.object_permission and team.object_permission.mcp_servers:
                 mcp_server_ids.extend(team.object_permission.mcp_servers)
-        print("mcp_server_ids", mcp_server_ids)
 
         LIST_MCP_SERVERS = await get_mcp_servers(prisma_client, mcp_server_ids)
 
