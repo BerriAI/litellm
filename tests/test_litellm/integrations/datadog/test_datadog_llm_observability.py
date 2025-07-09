@@ -156,4 +156,21 @@ class TestDataDogLLMObsLogger:
             assert metadata["model_name"] == "gpt-4"
             assert metadata["model_provider"] == "openai"
 
+    def test_get_time_to_first_token_seconds(self, mock_env_vars):
+        """Test the _get_time_to_first_token_seconds method for streaming calls"""
+        with patch('litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client'), \
+             patch('asyncio.create_task'):
+            logger = DataDogLLMObsLogger()
+            
+            # Test streaming case (completion_start_time available)
+            streaming_payload = create_standard_logging_payload_with_cache()
+            # Modify times for testing: start=1000, completion_start=1002, end=1005
+            streaming_payload["startTime"] = 1000.0
+            streaming_payload["completionStartTime"] = 1002.0
+            streaming_payload["endTime"] = 1005.0
+            
+            # Test streaming case: should use completion_start_time - start_time
+            time_to_first_token = logger._get_time_to_first_token_seconds(streaming_payload)
+            assert time_to_first_token == 2.0  # 1002.0 - 1000.0 = 2.0 seconds
+
 
