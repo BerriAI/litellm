@@ -99,6 +99,7 @@ class RouteChecks:
         ):
             pass
         elif _user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value:
+
             if RouteChecks.is_llm_api_route(route=route):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -107,6 +108,7 @@ class RouteChecks:
             if RouteChecks.check_route_access(
                 route=route, allowed_routes=LiteLLMRoutes.management_routes.value
             ):
+
                 # the Admin Viewer is only allowed to call /user/update for their own user_id and can only update
                 if route == "/user/update":
                     # Check the Request params are valid for PROXY_ADMIN_VIEW_ONLY
@@ -123,6 +125,11 @@ class RouteChecks:
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",
                     )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",
+                )
 
         elif (
             _user_role == LitellmUserRoles.INTERNAL_USER.value
@@ -196,8 +203,7 @@ class RouteChecks:
             return True
 
         if RouteChecks.check_route_access(
-            route=route, 
-            allowed_routes=LiteLLMRoutes.mcp_routes.value
+            route=route, allowed_routes=LiteLLMRoutes.mcp_routes.value
         ):
             return True
 
