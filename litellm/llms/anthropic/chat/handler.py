@@ -488,6 +488,9 @@ class ModelResponseIterator:
         self.tool_index = -1
         self.json_mode = json_mode
 
+        # Track if we're currently streaming a response_format tool
+        self.is_response_format_tool: bool = False
+
     def check_empty_tool_call_args(self) -> bool:
         """
         Check if the tool call block so far has been an empty string
@@ -516,7 +519,9 @@ class ModelResponseIterator:
             usage_object=cast(dict, anthropic_usage_chunk), reasoning_content=None
         )
 
-    def _content_block_delta_helper(self, chunk: dict) -> Tuple[
+    def _content_block_delta_helper(
+        self, chunk: dict
+    ) -> Tuple[
         str,
         Optional[ChatCompletionToolCallChunk],
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]],
@@ -692,6 +697,9 @@ class ModelResponseIterator:
                         },
                         "index": self.tool_index,
                     }
+
+                # Reset response_format tool tracking when block stops
+                self.is_response_format_tool = False
             elif type_chunk == "message_delta":
                 """
                 Anthropic
@@ -779,6 +787,13 @@ class ModelResponseIterator:
         Anthropic returns the JSON schema as part of the tool call
         OpenAI returns the JSON schema as part of the content, this handles placing it in the content
 
+        Tool streaming follows Anthropic's fine-grained streaming pattern:
+        - content_block_start: Contains complete tool info (id, name, empty arguments)
+        - content_block_delta: Contains argument deltas (partial_json)
+        - content_block_stop: Signals end of tool
+
+        Reference: https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/fine-grained-tool-streaming
+
         Args:
             text: str
             tool_use: Optional[ChatCompletionToolCallChunk]
@@ -788,11 +803,18 @@ class ModelResponseIterator:
             text: The text to use in the content
             tool_use: The ChatCompletionToolCallChunk to use in the chunk response
         """
-        if (
-            self.json_mode is True 
-            and tool_use is not None 
-            and tool_use.get("function", {}).get("name") == RESPONSE_FORMAT_TOOL_NAME
-        ):
+        if not self.json_mode or tool_use is None:
+            return text, tool_use
+
+        # Check if this is a new tool call (has id)
+        if tool_use.get("id") is not None:
+            # New tool call from content_block_start - tool name is always complete here
+            # (per Anthropic's fine-grained streaming pattern)
+            tool_name = tool_use.get("function", {}).get("name", "")
+            self.is_response_format_tool = tool_name == RESPONSE_FORMAT_TOOL_NAME
+
+        # Convert tool to content if we're tracking a response_format tool
+        if self.is_response_format_tool:
             message = AnthropicConfig._convert_tool_response_to_message(
                 tool_calls=[tool_use]
             )
