@@ -2480,7 +2480,9 @@ class Router:
             kwargs["model"] = model
             kwargs["original_generic_function"] = original_function
             kwargs["original_function"] = self._ageneric_api_call_with_fallbacks_helper
-            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
+            self._update_kwargs_before_fallbacks(
+                model=model, kwargs=kwargs, metadata_variable_name="litellm_metadata"
+            )
             verbose_router_logger.debug(
                 f"Inside ageneric_api_call_with_fallbacks() - model: {model}; kwargs: {kwargs}"
             )
@@ -2507,7 +2509,7 @@ class Router:
         """
 
         passthrough_on_no_deployment = kwargs.pop("passthrough_on_no_deployment", False)
-        function_name = "_ageneric_api_call_with_fallbacks_helper"
+        function_name = "_ageneric_api_call_with_fallbacks"
         try:
 
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
