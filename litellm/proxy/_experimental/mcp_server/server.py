@@ -4,7 +4,6 @@ LiteLLM MCP Server Routes
 
 import asyncio
 import contextlib
-import json
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 
 from fastapi import FastAPI, HTTPException
@@ -12,7 +11,6 @@ from pydantic import ConfigDict
 from starlette.types import Receive, Scope, Send
 
 from litellm._logging import verbose_logger
-from litellm.constants import MCP_TOOL_NAME_PREFIX
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
