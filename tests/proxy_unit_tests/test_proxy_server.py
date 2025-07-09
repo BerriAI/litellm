@@ -2252,3 +2252,39 @@ def test_get_timeout_from_request():
     }
     timeout = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
     assert timeout == 90.5
+
+
+def test_ui_contains_litellm_asset_prefix():
+    from litellm.proxy.proxy_server import ui_path
+
+    contains_litellm_asset_prefix = False
+
+    for root, dirs, files in os.walk(ui_path):
+        for filename in files:
+            file_path = os.path.join(root, filename)
+            # Skip binary files and files that don't need path replacement
+            if filename.endswith(
+                (
+                    ".png",
+                    ".jpg",
+                    ".jpeg",
+                    ".gif",
+                    ".ico",
+                    ".woff",
+                    ".woff2",
+                    ".ttf",
+                    ".eot",
+                )
+            ):
+                continue
+            try:
+                print("FILE PATH", file_path)
+                with open(file_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                    if "litellm-asset-prefix" in content:
+                        print("LITELLM ASSET PREFIX FOUND IN FILE", file_path)
+                        contains_litellm_asset_prefix = True
+            except UnicodeDecodeError:
+                # Skip binary files that can't be decoded
+                continue
+    assert contains_litellm_asset_prefix is True
