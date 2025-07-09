@@ -10,9 +10,6 @@ from typing import (
     Dict,
 )
 
-
-from functools import lru_cache
-
 import httpx
 
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
@@ -144,13 +141,6 @@ class BytezChatConfig(BaseConfig):
                 "user-agent": f"litellm/{version}",
             }
         )
-
-        model_id = model
-
-        is_supported = self.validate_model_is_supported(model_id, headers)
-
-        if not is_supported:
-            raise Exception(f"Model: {model_id} does not support chat")
 
         validate_environment(
             messages=messages,
@@ -356,31 +346,6 @@ class BytezChatConfig(BaseConfig):
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
         return BytezError(status_code=status_code, message=error_message)
-
-    # NOTE begin custom functions
-    def validate_model_is_supported(self, model_id: str, headers: Dict) -> bool:
-        headers_tuple = tuple(headers.items())
-        return self._validate_model_is_supported_cached(model_id, headers_tuple)
-
-    @lru_cache(maxsize=128)
-    def _validate_model_is_supported_cached(
-        self, model_id: str, headers_tuple: tuple
-    ) -> bool:
-        headers = dict(headers_tuple)
-
-        url = f"{API_BASE}/list/models?modelId={model_id}"
-
-        response = httpx.request(method="GET", url=url, headers=headers)
-        response_data = response.json()
-
-        error = response_data.get("error")
-        if error:
-            raise Exception(error)
-
-        models = response_data.get("output", [])
-        is_supported = len(models) > 0 and models[0].get("task") == "chat"
-
-        return is_supported
 
 
 class BytezCustomStreamWrapper(CustomStreamWrapper):
