@@ -1,5 +1,5 @@
 import enum
-from typing import Literal, Optional
+from typing import Dict, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import TypedDict
@@ -27,3 +27,16 @@ MCPSpecVersionType = Literal[MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025]
 MCPAuthType = Optional[
     Literal[MCPAuth.none, MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.basic]
 ]
+
+
+
+class MCPServerCostInfo(TypedDict, total=False):
+    default_cost_per_query: Optional[float]
+    """
+    Default cost per query for the MCP server tool call
+    """
+
+    tool_name_to_cost_per_query: Optional[Dict[str, float]]
+    """
+    Granular, set a custom cost for each tool in the MCP server
+    """

@@ -12,4 +12,4 @@ pydantic==2.10.2
 google-cloud-aiplatform==1.43.0
 fastapi-sso==0.16.0 
 uvloop==0.21.0
-mcp==1.9.3    # for MCP server  
+mcp==1.10.1    # for MCP server  
