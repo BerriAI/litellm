@@ -1,34 +1,24 @@
-import React from "react";
 import { ColumnDef } from "@tanstack/react-table";
-import { Tooltip } from "antd";
+import { MCPServer } from "./types";
 import { Icon } from "@tremor/react";
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
-import { MCPServer, handleAuth, handleTransport } from "./types";
-import { isAdminRole } from "@/utils/roles";
-import { maskUrl } from "./utils";
-
-const displayFriendlyId = (id: string) => `${id.slice(0, 7)}...`;
-
-const displayFriendlyUrl = (url: string) => {
-  if (!url) return "";
-  return url.length > 30 ? `${url.slice(0, 30)}...` : url;
-};
+import { getMaskedAndFullUrl } from "./utils";
 
 export const mcpServerColumns = (
-  userRole: string | null,
-  onSelect: (serverId: string) => void,
+  userRole: string,
+  onView: (serverId: string) => void,
   onEdit: (serverId: string) => void,
   onDelete: (serverId: string) => void
 ): ColumnDef<MCPServer>[] => [
   {
     accessorKey: "server_id",
-    header: "ID",
-    cell: ({ getValue, row }) => (
+    header: "Server ID",
+    cell: ({ row }) => (
       <button
-        onClick={() => onSelect(row.original.server_id)}
-        className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+        onClick={() => onView(row.original.server_id)}
+        className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left w-full truncate whitespace-nowrap cursor-pointer max-w-[15ch]"
       >
-        {displayFriendlyId(getValue() as string)}
+        {row.original.server_id.slice(0, 7)}...
       </button>
     ),
   },
@@ -37,43 +27,53 @@ export const mcpServerColumns = (
     header: "Name",
   },
   {
-    accessorKey: "url",
+    id: "url",
     header: "URL",
-    cell: ({ getValue }) => (
-      <Tooltip title={getValue() as string}>
-        <span className="font-mono text-gray-600 text-xs">
-          {maskUrl(getValue() as string)}
+    cell: ({ row }) => {
+      const { maskedUrl } = getMaskedAndFullUrl(row.original.url);
+      return (
+        <span className="font-mono text-sm">
+          {maskedUrl}
         </span>
-      </Tooltip>
-    ),
+      );
+    },
   },
   {
     accessorKey: "transport",
     header: "Transport",
-    cell: ({ row }) => handleTransport(row.original.transport),
+    cell: ({ getValue }) => (
+      <span>
+        {(getValue() as string || "http").toUpperCase()}
+      </span>
+    ),
   },
   {
     accessorKey: "auth_type",
     header: "Auth Type",
-    cell: ({ row }) => handleAuth(row.original.auth_type),
+    cell: ({ getValue }) => (
+      <span>
+        {getValue() as string || "none"}
+      </span>
+    ),
   },
   {
     id: "actions",
     header: "Info",
-    cell: ({ row }) =>
-      isAdminRole(userRole || "") ? (
-        <>
-          <Icon
-            icon={PencilAltIcon}
-            size="sm"
-            onClick={() => onEdit(row.original.server_id)}
-          />
-          <Icon
-            onClick={() => onDelete(row.original.server_id)}
-            icon={TrashIcon}
-            size="sm"
-          />
-        </>
-      ) : null,
+    cell: ({ row }) => (
+      <div className="flex items-center gap-2">
+        <Icon
+          icon={PencilAltIcon}
+          size="sm"
+          onClick={() => onEdit(row.original.server_id)}
+          className="cursor-pointer"
+        />
+        <Icon
+          icon={TrashIcon}
+          size="sm"
+          onClick={() => onDelete(row.original.server_id)}
+          className="cursor-pointer"
+        />
+      </div>
+    ),
   },
 ];
