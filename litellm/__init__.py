@@ -68,10 +68,14 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
 import httpx
 import dotenv
+from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
 
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     dotenv.load_dotenv()
+
+# Register async client cleanup to prevent resource leaks
+register_async_client_cleanup()
 
 ##################################################
 if set_verbose == True:
@@ -1123,6 +1127,7 @@ from .llms.github_copilot.chat.transformation import GithubCopilotConfig
 from .llms.nebius.chat.transformation import NebiusConfig
 from .main import *  # type: ignore
 from .integrations import *
+from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
 from .exceptions import (
     AuthenticationError,
     InvalidRequestError,
