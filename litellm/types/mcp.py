@@ -1,6 +1,9 @@
 import enum
-from typing import Dict, Literal, Optional
+from typing import Any, Dict, Literal, Optional
 
+from mcp.types import EmbeddedResource as MCPEmbeddedResource
+from mcp.types import ImageContent as MCPImageContent
+from mcp.types import TextContent as MCPTextContent
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import TypedDict
 
@@ -40,3 +43,25 @@ class MCPServerCostInfo(TypedDict, total=False):
     """
     Granular, set a custom cost for each tool in the MCP server
     """
+
+
+########################################################################################
+
+
+class LiteLLM_MCPTextContent(MCPTextContent):
+    type: Literal["text"]
+    text: str
+    _hidden_params: Dict[str, Any] = {}
+
+
+class LiteLLM_MCPImageContent(MCPImageContent):
+    type: Literal["image"]
+    data: str
+    mimeType: str
+    _hidden_params: Dict[str, Any] = {}
+
+class LiteLLM_MCPEmbeddedResource(MCPEmbeddedResource):
+    type: Literal["resource"]
+    data: str
+    mimeType: str
+    _hidden_params: Dict[str, Any] = {}
