@@ -1061,23 +1061,24 @@ class TestCustomUISSO:
         mock_request.base_url = "https://test.example.com/"
         
         # Mock user_custom_ui_sso_sign_in_handler to exist but make enterprise import fail
-        with patch("litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler", MagicMock()):
-            with patch.dict('sys.modules', {'enterprise.litellm_enterprise.proxy.auth.custom_sso_handler': None}):
-                # Temporarily mock the google_login function call to test the import error path
-                async def mock_google_login():
-                    # This mimics the relevant part of google_login that would trigger the import error
-                    try:
-                        from enterprise.litellm_enterprise.proxy.auth.custom_sso_handler import (
-                            EnterpriseCustomSSOHandler,
-                        )
-                        return "success"
-                    except ImportError:
-                        raise ValueError("Enterprise features are not available. Custom UI SSO sign-in requires LiteLLM Enterprise.")
-                
-                # Test that the ValueError is raised with the correct message
-                import pytest
-                with pytest.raises(ValueError, match="Enterprise features are not available"):
-                    asyncio.run(mock_google_login())
+        with patch("litellm.proxy.proxy_server.premium_user", True):
+            with patch("litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler", MagicMock()):
+                with patch.dict('sys.modules', {'enterprise.litellm_enterprise.proxy.auth.custom_sso_handler': None}):
+                    # Temporarily mock the google_login function call to test the import error path
+                    async def mock_google_login():
+                        # This mimics the relevant part of google_login that would trigger the import error
+                        try:
+                            from enterprise.litellm_enterprise.proxy.auth.custom_sso_handler import (
+                                EnterpriseCustomSSOHandler,
+                            )
+                            return "success"
+                        except ImportError:
+                            raise ValueError("Enterprise features are not available. Custom UI SSO sign-in requires LiteLLM Enterprise.")
+                    
+                    # Test that the ValueError is raised with the correct message
+                    import pytest
+                    with pytest.raises(ValueError, match="Enterprise features are not available"):
+                        asyncio.run(mock_google_login())
 
     @pytest.mark.asyncio
     async def test_handle_custom_ui_sso_sign_in_success(self):
@@ -1117,38 +1118,39 @@ class TestCustomUISSO:
         mock_redirect_response = MagicMock()
         mock_redirect_response.status_code = 303
 
-        with patch(
-            "litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler",
-            mock_custom_handler,
-        ):
-            with patch.object(
-                SSOAuthenticationHandler,
-                "get_redirect_response_from_openid",
-                return_value=mock_redirect_response,
-            ) as mock_get_redirect:
-                # Act
-                result = await EnterpriseCustomSSOHandler.handle_custom_ui_sso_sign_in(
-                    request=mock_request
-                )
+        with patch("litellm.proxy.proxy_server.premium_user", True):
+            with patch(
+                "litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler",
+                mock_custom_handler,
+            ):
+                with patch.object(
+                    SSOAuthenticationHandler,
+                    "get_redirect_response_from_openid",
+                    return_value=mock_redirect_response,
+                ) as mock_get_redirect:
+                    # Act
+                    result = await EnterpriseCustomSSOHandler.handle_custom_ui_sso_sign_in(
+                        request=mock_request
+                    )
 
-                # Assert
-                # Verify the custom handler was called with the request
-                mock_custom_handler.handle_custom_ui_sso_sign_in.assert_called_once_with(
-                    request=mock_request
-                )
+                    # Assert
+                    # Verify the custom handler was called with the request
+                    mock_custom_handler.handle_custom_ui_sso_sign_in.assert_called_once_with(
+                        request=mock_request
+                    )
 
-                # Verify the redirect response was generated with correct OpenID
-                mock_get_redirect.assert_called_once_with(
-                    result=expected_openid,
-                    request=mock_request,
-                    received_response=None,
-                    generic_client_id=None,
-                    ui_access_mode=None,
-                )
+                    # Verify the redirect response was generated with correct OpenID
+                    mock_get_redirect.assert_called_once_with(
+                        result=expected_openid,
+                        request=mock_request,
+                        received_response=None,
+                        generic_client_id=None,
+                        ui_access_mode=None,
+                    )
 
-                # Verify the result is the redirect response
-                assert result == mock_redirect_response
-                assert result.status_code == 303
+                    # Verify the result is the redirect response
+                    assert result == mock_redirect_response
+                    assert result.status_code == 303
 
     @pytest.mark.asyncio
     async def test_custom_ui_sso_handler_execution_with_real_class(self):
@@ -1202,43 +1204,44 @@ class TestCustomUISSO:
         mock_redirect_response = MagicMock()
         mock_redirect_response.status_code = 303
 
-        with patch(
-            "litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler",
-            test_handler_instance,
-        ):
-            with patch.object(
-                SSOAuthenticationHandler,
-                "get_redirect_response_from_openid",
-                return_value=mock_redirect_response,
-            ) as mock_get_redirect:
-                # Act
-                result = await EnterpriseCustomSSOHandler.handle_custom_ui_sso_sign_in(
-                    request=mock_request
-                )
+        with patch("litellm.proxy.proxy_server.premium_user", True):
+            with patch(
+                "litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler",
+                test_handler_instance,
+            ):
+                with patch.object(
+                    SSOAuthenticationHandler,
+                    "get_redirect_response_from_openid",
+                    return_value=mock_redirect_response,
+                ) as mock_get_redirect:
+                    # Act
+                    result = await EnterpriseCustomSSOHandler.handle_custom_ui_sso_sign_in(
+                        request=mock_request
+                    )
 
-                # Assert that our custom handler was executed
-                assert test_handler_instance.method_called is True
-                assert test_handler_instance.received_request == mock_request
+                    # Assert that our custom handler was executed
+                    assert test_handler_instance.method_called is True
+                    assert test_handler_instance.received_request == mock_request
 
-                # Verify the redirect response was called with the OpenID from our custom handler
-                mock_get_redirect.assert_called_once()
-                call_args = mock_get_redirect.call_args.kwargs
-                
-                # Verify the OpenID object has the expected values from our custom handler
-                openid_result = call_args["result"]
-                assert openid_result.id == "custom_test_user_456"
-                assert openid_result.email == "custom@example.com"
-                assert openid_result.first_name == "Custom"
-                assert openid_result.last_name == "Handler"
-                assert openid_result.display_name == "Custom Handler Test"
-                assert openid_result.provider == "custom"
+                    # Verify the redirect response was called with the OpenID from our custom handler
+                    mock_get_redirect.assert_called_once()
+                    call_args = mock_get_redirect.call_args.kwargs
+                    
+                    # Verify the OpenID object has the expected values from our custom handler
+                    openid_result = call_args["result"]
+                    assert openid_result.id == "custom_test_user_456"
+                    assert openid_result.email == "custom@example.com"
+                    assert openid_result.first_name == "Custom"
+                    assert openid_result.last_name == "Handler"
+                    assert openid_result.display_name == "Custom Handler Test"
+                    assert openid_result.provider == "custom"
 
-                # Verify the request and other parameters were passed correctly
-                assert call_args["request"] == mock_request
-                assert call_args["received_response"] is None
-                assert call_args["generic_client_id"] is None
-                assert call_args["ui_access_mode"] is None
+                    # Verify the request and other parameters were passed correctly
+                    assert call_args["request"] == mock_request
+                    assert call_args["received_response"] is None
+                    assert call_args["generic_client_id"] is None
+                    assert call_args["ui_access_mode"] is None
 
-                # Verify the result is the redirect response
-                assert result == mock_redirect_response
-                assert result.status_code == 303
+                    # Verify the result is the redirect response
+                    assert result == mock_redirect_response
+                    assert result.status_code == 303
