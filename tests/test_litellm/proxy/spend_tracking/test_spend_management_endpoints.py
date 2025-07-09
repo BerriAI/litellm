@@ -763,6 +763,7 @@ class TestSpendLogsPayload:
                     "response": "{}",
                     "proxy_server_request": "{}",
                     "status": "success",
+                    "mcp_namespaced_tool_name": None,
                 }
             )
 
@@ -855,6 +856,7 @@ class TestSpendLogsPayload:
                     "response": "{}",
                     "proxy_server_request": "{}",
                     "status": "success",
+                    "mcp_namespaced_tool_name": None,
                 }
             )
 
@@ -945,8 +947,12 @@ class TestSpendLogsPayload:
                     "response": "{}",
                     "proxy_server_request": "{}",
                     "status": "success",
+                    "mcp_namespaced_tool_name": None,
                 }
             )
+
+            print(f"payload: {payload}")
+            print(f"expected_payload: {expected_payload}")
 
             differences = _compare_nested_dicts(
                 payload, expected_payload, ignore_keys=ignored_keys
@@ -1085,8 +1091,8 @@ async def test_global_spend_keys_endpoint_limit_validation(client, monkeypatch):
 async def test_view_spend_logs_summarize_parameter(client, monkeypatch):
     """Test the new summarize parameter in the /spend/logs endpoint"""
     import datetime
-    from datetime import timezone, timedelta
-    
+    from datetime import timedelta, timezone
+
     # Mock spend logs data
     mock_spend_logs = [
         {
@@ -1096,7 +1102,9 @@ async def test_view_spend_logs_summarize_parameter(client, monkeypatch):
             "user": "test_user_1",
             "team_id": "team1",
             "spend": 0.05,
-            "startTime": (datetime.datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+            "startTime": (
+                datetime.datetime.now(timezone.utc) - timedelta(days=1)
+            ).isoformat(),
             "model": "gpt-3.5-turbo",
             "prompt_tokens": 100,
             "completion_tokens": 50,
@@ -1109,23 +1117,25 @@ async def test_view_spend_logs_summarize_parameter(client, monkeypatch):
             "user": "test_user_1",
             "team_id": "team1",
             "spend": 0.10,
-            "startTime": (datetime.datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+            "startTime": (
+                datetime.datetime.now(timezone.utc) - timedelta(days=1)
+            ).isoformat(),
             "model": "gpt-4",
             "prompt_tokens": 200,
             "completion_tokens": 100,
             "total_tokens": 300,
         },
     ]
-    
+
     # Mock for unsummarized data (summarize=false)
     class MockDB:
         def __init__(self):
             self.litellm_spendlogs = self
-            
+
         async def find_many(self, *args, **kwargs):
             # Return individual log entries when summarize=false
             return mock_spend_logs
-            
+
         async def group_by(self, *args, **kwargs):
             # Return grouped data when summarize=true
             # Simplified mock response for grouped data
@@ -1134,17 +1144,17 @@ async def test_view_spend_logs_summarize_parameter(client, monkeypatch):
                 {
                     "api_key": "sk-test-key",
                     "user": "test_user_1",
-                    "model": "gpt-3.5-turbo", 
+                    "model": "gpt-3.5-turbo",
                     "startTime": yesterday.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-                    "_sum": {"spend": 0.05}
+                    "_sum": {"spend": 0.05},
                 },
                 {
                     "api_key": "sk-test-key",
-                    "user": "test_user_1", 
+                    "user": "test_user_1",
                     "model": "gpt-4",
                     "startTime": yesterday.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-                    "_sum": {"spend": 0.10}
-                }
+                    "_sum": {"spend": 0.10},
+                },
             ]
 
     class MockPrismaClient:
@@ -1156,7 +1166,9 @@ async def test_view_spend_logs_summarize_parameter(client, monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     # Set up test dates
-    start_date = (datetime.datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+    start_date = (datetime.datetime.now(timezone.utc) - timedelta(days=2)).strftime(
+        "%Y-%m-%d"
+    )
     end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     # Test 1: summarize=false should return individual log entries
@@ -1169,10 +1181,10 @@ async def test_view_spend_logs_summarize_parameter(client, monkeypatch):
         },
         headers={"Authorization": "Bearer sk-test"},
     )
-    
+
     assert response.status_code == 200
     data = response.json()
-    
+
     # Should return the raw log entries
     assert isinstance(data, list)
     assert len(data) == 2
@@ -1180,7 +1192,7 @@ async def test_view_spend_logs_summarize_parameter(client, monkeypatch):
     assert data[1]["id"] == "log2"
     assert data[0]["request_id"] == "req1"
     assert data[1]["request_id"] == "req2"
-    
+
     # Test 2: summarize=true should return grouped data
     response = client.get(
         "/spend/logs",
@@ -1191,10 +1203,10 @@ async def test_view_spend_logs_summarize_parameter(client, monkeypatch):
         },
         headers={"Authorization": "Bearer sk-test"},
     )
-    
+
     assert response.status_code == 200
     data = response.json()
-    
+
     # Should return grouped/summarized data
     assert isinstance(data, list)
     # The structure should be different - grouped by date with aggregated spend
@@ -1202,7 +1214,7 @@ async def test_view_spend_logs_summarize_parameter(client, monkeypatch):
     assert "spend" in data[0]
     assert "users" in data[0]
     assert "models" in data[0]
-    
+
     # Test 3: default behavior (no summarize parameter) should maintain backward compatibility
     response = client.get(
         "/spend/logs",
@@ -1212,10 +1224,10 @@ async def test_view_spend_logs_summarize_parameter(client, monkeypatch):
         },
         headers={"Authorization": "Bearer sk-test"},
     )
-    
+
     assert response.status_code == 200
     data = response.json()
-    
+
     # Should return grouped/summarized data (same as summarize=true)
     assert isinstance(data, list)
     assert "startTime" in data[0]
