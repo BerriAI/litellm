@@ -719,43 +719,43 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 />
               </div>
 
-              {apiKeySource === 'custom' && endpointType === EndpointType.RESPONSES && (
-                <div>
-                  <Text className="font-medium block mb-2 text-gray-700 flex items-center">
-                    <ToolOutlined className="mr-2" /> MCP Tool
-                    <Tooltip 
-                      className="ml-1"
-                      title="Select an MCP tool to use in your conversation">
-                      <InfoCircleOutlined />
-                    </Tooltip>
-                  </Text>
-                  <Select
-                    style={{ width: '100%' }}
-                    placeholder="Select MCP tool"
-                    value={selectedMCPTools}
-                    onChange={(value) => setSelectedMCPTools(value)}
-                    loading={isLoadingMCPTools}
-                    className="mb-4"
-                    allowClear
-                    optionLabelProp="label"
-                  >
-                    {Array.isArray(mcpTools) && mcpTools.map((tool) => (
-                      <Select.Option 
-                        key={tool.name} 
-                        value={tool.name}
-                        label={
-                          <div className="font-medium">{tool.name}</div>
-                        }
-                      >
-                        <div className="flex flex-col py-1">
-                          <span className="font-medium">{tool.name}</span>
-                          <span className="text-xs text-gray-500 mt-1">{tool.description}</span>
-                        </div>
-                      </Select.Option>
-                    ))}
-                  </Select>
-                </div>
-              )}
+              {/* MCP Tool Selection */}
+              <div>
+                <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                  <ToolOutlined className="mr-2" /> MCP Tool
+                  <Tooltip 
+                    className="ml-1"
+                    title="Select an MCP tool to use in your conversation, only available for virtual keys and /v1/responses endpoint">
+                    <InfoCircleOutlined />
+                  </Tooltip>
+                </Text>
+                <Select
+                  style={{ width: '100%' }}
+                  placeholder="Select MCP tool"
+                  value={selectedMCPTools}
+                  onChange={(value) => setSelectedMCPTools(value)}
+                  loading={isLoadingMCPTools}
+                  className="mb-4"
+                  allowClear
+                  optionLabelProp="label"
+                  disabled={!(apiKeySource === 'custom' && endpointType === EndpointType.RESPONSES)}
+                >
+                  {Array.isArray(mcpTools) && mcpTools.map((tool) => (
+                    <Select.Option 
+                      key={tool.name} 
+                      value={tool.name}
+                      label={
+                        <div className="font-medium">{tool.name}</div>
+                      }
+                    >
+                      <div className="flex flex-col py-1">
+                        <span className="font-medium">{tool.name}</span>
+                        <span className="text-xs text-gray-500 mt-1">{tool.description}</span>
+                      </div>
+                    </Select.Option>
+                  ))}
+                </Select>
+              </div>
 
               <div>
                 <Text className="font-medium block mb-2 text-gray-700 flex items-center">

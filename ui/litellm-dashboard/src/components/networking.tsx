@@ -5983,7 +5983,7 @@ export const deleteCallback = async (
 
 export const mcpToolsCall = async (accessToken: string) => {
   const proxyBaseUrl = getProxyBaseUrl();
-  const response = await fetch(`${proxyBaseUrl}/mcp/tools`, {
+  const response = await fetch(`${proxyBaseUrl}/v1/mcp/tools`, {
     method: "GET",
     headers: {
       [globalLitellmHeaderName]: `Bearer ${accessToken}`,

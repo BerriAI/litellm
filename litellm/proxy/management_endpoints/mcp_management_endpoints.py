@@ -9,6 +9,7 @@ Endpoints here:
 - POST `/v1/mcp/server` - Add a new external mcp server.
 - PUT `/v1/mcp/server` -  Edits an existing mcp server.
 - DELETE `/v1/mcp/server/{server_id}` - Deletes the mcp server given `server_id`.
+- GET `/v1/mcp/tools - lists all the tools available for a key
 """
 
 import importlib
@@ -20,6 +21,9 @@ from fastapi.responses import JSONResponse
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.proxy.auth.model_checks import (
+    get_mcp_server_ids,
+)
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 MCP_AVAILABLE: bool = True
@@ -74,6 +78,39 @@ if MCP_AVAILABLE:
             if mcp_server_record.server_id == mcp_server_id:
                 return True
         return False
+
+
+    # Router to fetch all MCP tools available for the current key
+
+    @router.get(
+        "/tools",
+        tags=["mcp"],
+        dependencies=[Depends(user_api_key_auth)],
+    )
+    async def get_mcp_tools(
+            user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """
+        Get all MCP tools available for the current key
+        """
+
+        server_ids = await get_mcp_server_ids(
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        tools = []
+
+        for server_id in server_ids:
+            tools.extend(await global_mcp_server_manager.get_tools_for_server(server_id))
+
+        verbose_proxy_logger.debug(f"Available tools: {tools}")
+
+        return {"tools": tools}
+
 
     ## FastAPI Routes
     @router.get(

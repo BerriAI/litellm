@@ -1740,7 +1740,7 @@ class PrismaClient:
                             detail={"error": f"No token passed in. Token={token}"},
                         )
 
-                    sql_query = """
+                    sql_query = f"""
                         SELECT 
                             v.*,
                             t.spend AS team_spend, 
@@ -1761,32 +1761,17 @@ class PrismaClient:
                             b.tpm_limit AS litellm_budget_table_tpm_limit,
                             b.rpm_limit AS litellm_budget_table_rpm_limit,
                             b.model_max_budget as litellm_budget_table_model_max_budget,
-                            b.soft_budget as litellm_budget_table_soft_budget,
-                            -- Add object permission columns
-                            op.object_permission_id as object_permission_id,
-                            op.mcp_servers as key_object_permission_mcp_servers,
-                            op.vector_stores as key_object_permission_vector_stores,
-                            -- Include full object permission record
-                            CASE 
-                                WHEN op.object_permission_id IS NOT NULL THEN
-                                    jsonb_build_object(
-                                        'object_permission_id', op.object_permission_id,
-                                        'mcp_servers', op.mcp_servers,
-                                        'vector_stores', op.vector_stores
-                                    )
-                                ELSE NULL
-                            END as object_permission
+                            b.soft_budget as litellm_budget_table_soft_budget
                         FROM "LiteLLM_VerificationToken" AS v
                         LEFT JOIN "LiteLLM_TeamTable" AS t ON v.team_id = t.team_id
                         LEFT JOIN "LiteLLM_TeamMembership" AS tm ON v.team_id = tm.team_id AND tm.user_id = v.user_id
                         LEFT JOIN "LiteLLM_ModelTable" m ON t.model_id = m.id
                         LEFT JOIN "LiteLLM_BudgetTable" AS b ON v.budget_id = b.budget_id
-                        LEFT JOIN "LiteLLM_ObjectPermissionTable" op ON v.object_permission_id = op.object_permission_id
-                        WHERE v.token = $1
+                        WHERE v.token = '{token}'
                     """
 
                     print_verbose("sql_query being made={}".format(sql_query))
-                    response = await self.db.query_first(sql_query, token)
+                    response = await self.db.query_first(query=sql_query)
 
                     if response is not None:
                         if response["team_models"] is None:

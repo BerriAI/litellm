@@ -6515,39 +6515,6 @@ def _get_model_group_info(
             model_groups.append(model_group_info)
     return model_groups
 
-
-# Router to fetch all MCP tools available for the current key
-
-@router.get(
-    "/mcp/tools",
-    tags=["mcp"],
-    dependencies=[Depends(user_api_key_auth)],
-)
-async def get_mcp_tools(
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
-    """
-    Get all MCP tools available for the current key
-    """
-    
-    server_ids = get_mcp_server_ids(
-        user_api_key_dict=user_api_key_dict,
-    )
-
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-        global_mcp_server_manager,
-    )
-
-    tools = []
-
-    for server_id in server_ids:
-        tools.extend(await global_mcp_server_manager.get_tools_for_server(server_id)) 
-    
-    verbose_proxy_logger.debug(f"Available tools: {tools}")
-
-    return {"tools": tools}
-
-
 @router.get(
     "/model_group/info",
     tags=["model management"],
