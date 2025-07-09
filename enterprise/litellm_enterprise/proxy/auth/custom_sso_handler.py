@@ -58,8 +58,14 @@ class EnterpriseCustomSSOHandler:
         from fastapi_sso.sso.base import OpenID
 
         from litellm.integrations.custom_sso_handler import CustomSSOLoginHandler
-        from litellm.proxy.proxy_server import user_custom_ui_sso_sign_in_handler
-
+        from litellm.proxy.proxy_server import (
+            CommonProxyErrors,
+            premium_user,
+            user_custom_ui_sso_sign_in_handler,
+        )
+        if premium_user is not True:
+            raise ValueError(CommonProxyErrors.not_premium_user.value)
+        
         if user_custom_ui_sso_sign_in_handler is None:
             raise ValueError("custom_ui_sso_sign_in_handler is not configured. Please set it in general_settings.")
         
