@@ -169,6 +169,7 @@ from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.auth.model_checks import (
     get_complete_model_list,
     get_key_models,
+    get_mcp_server_ids,
     get_team_models,
 )
 from litellm.proxy.auth.user_api_key_auth import (
@@ -6513,7 +6514,6 @@ def _get_model_group_info(
             )
             model_groups.append(model_group_info)
     return model_groups
-
 
 @router.get(
     "/model_group/info",

@@ -165,6 +165,17 @@ class MCPServerManager:
             )
             return list(self.get_registry().keys())
 
+
+    async def get_tools_for_server(self, server_id: str) -> List[MCPTool]:
+        """
+        Get the tools for a given server
+        """
+        server = self.get_mcp_server_by_id(server_id)
+        if server is None:
+            return []
+        return await self._get_tools_from_server(server)
+        
+
     async def list_tools(
         self, 
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
