@@ -32,6 +32,7 @@ import {
   proxyBaseUrl,
   getPossibleUserRoles,
   userFilterUICall,
+  keyCreateServiceAccountCall,
 } from "./networking";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import PremiumVectorStoreSelector from "./common_components/PremiumVectorStoreSelector";
@@ -40,10 +41,12 @@ import { Team } from "./key_team_helpers/key_list";
 import TeamDropdown from "./common_components/team_dropdown";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { Tooltip } from 'antd';
+import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
 import Createuser from "./create_user_button";
 import debounce from 'lodash/debounce';
 import { rolesWithWriteAccess } from '../utils/roles';
 import BudgetDurationDropdown from "./common_components/budget_duration_dropdown";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 
 
@@ -166,6 +169,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [keyOwner, setKeyOwner] = useState("you");
   const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
   const [isCreateUserModalVisible, setIsCreateUserModalVisible] = useState(false);
   const [newlyCreatedUserId, setNewlyCreatedUserId] = useState<string | null>(null);
@@ -178,6 +182,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
+    setLoggingSettings([]);
   };
 
   const handleCancel = () => {
@@ -185,6 +190,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     setApiKey(null);
     setSelectedCreateKeyTeam(null);
     form.resetFields();
+    setLoggingSettings([]);
   };
 
   useEffect(() => {
@@ -257,21 +263,33 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       setIsModalVisible(true);
       
       if(keyOwner === "you"){
-        formValues.user_id = userID 
+        formValues.user_id = userID
       }
+      
+      // Handle metadata for all key types
+      let metadata: Record<string, any> = {};
+      try {
+        metadata = JSON.parse(formValues.metadata || "{}");
+      } catch (error) {
+        console.error("Error parsing metadata:", error);
+      }
+      
       // If it's a service account, add the service_account_id to the metadata
       if (keyOwner === "service_account") {
-        // Parse existing metadata or create an empty object
-        let metadata: Record<string, any> = {};
-        try {
-          metadata = JSON.parse(formValues.metadata || "{}");
-        } catch (error) {
-          console.error("Error parsing metadata:", error);
-        }
         metadata["service_account_id"] = formValues.key_alias;
-        // Update the formValues with the new metadata
-        formValues.metadata = JSON.stringify(metadata);
       }
+
+      // Add logging settings to the metadata
+      if (loggingSettings.length > 0) {
+        metadata = {
+          ...metadata,
+          logging: loggingSettings.filter(config => config.callback_name)
+        };
+      }
+      
+      // Update the formValues with the final metadata
+      formValues.metadata = JSON.stringify(metadata);
+
 
       // Transform allowed_vector_store_ids and allowed_mcp_server_ids into object_permission format
       if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
@@ -291,8 +309,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         // Remove the original field as it's now part of object_permission
         delete formValues.allowed_mcp_server_ids;
       }
-
-      const response = await keyCreateCall(accessToken, userID, formValues);
+      let response;
+      if (keyOwner === "service_account") {
+        response = await keyCreateServiceAccountCall(accessToken, formValues);
+      } else {
+        response = await keyCreateCall(accessToken, userID, formValues);
+      }
 
       console.log("key create Response:", response);
       
@@ -495,7 +517,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           {isFormDisabled && (
             <div className="mb-8 p-4 bg-blue-50 border border-blue-200 rounded-md">
               <Text className="text-blue-800 text-sm">
-                Please select a team to continue configuring your API key.
+                Please select a team to continue configuring your API key. If you do not see any teams, please contact your Proxy Admin to either provide you with access to models or to add you to a team.
               </Text>
             </div>
           )}
@@ -589,7 +611,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                           value > team.max_budget
                         ) {
                           throw new Error(
-                            `Budget cannot exceed team max budget: $${team.max_budget}`
+                            `Budget cannot exceed team max budget: $${formatNumberWithCommas(team.max_budget, 4)}`
                           );
                         }
                       },
@@ -777,7 +799,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     placeholder="Enter metadata as JSON"
                   />
                 </Form.Item>
-                <Form.Item 
+                <Form.Item
                   label={
                     <span>
                       Tags{' '}
@@ -785,9 +807,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         <InfoCircleOutlined style={{ marginLeft: '4px' }} />
                       </Tooltip>
                     </span>
-                  } 
-                  name="tags" 
-                  className="mt-4" 
+                  }
+                  name="tags"
+                  className="mt-4"
                   help={`Tags for tracking spend and/or doing tag-based routing.`}
                 >
                 <Select
@@ -798,6 +820,21 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     options={predefinedTags}
                   />
                 </Form.Item>
+
+                <Accordion className="mt-4 mb-4">
+                  <AccordionHeader>
+                    <b>Logging Settings</b>
+                  </AccordionHeader>
+                  <AccordionBody>
+                    <div className="mt-4">
+                      <PremiumLoggingSettings
+                        value={loggingSettings}
+                        onChange={setLoggingSettings}
+                        premiumUser={premiumUser}
+                      />
+                    </div>
+                  </AccordionBody>
+                </Accordion>
                 <Accordion className="mt-4 mb-4">
                   <AccordionHeader>
                   <div className="flex items-center gap-2">

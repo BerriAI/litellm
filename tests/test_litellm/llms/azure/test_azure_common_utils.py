@@ -12,13 +12,22 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.azure.common_utils import BaseAzureLLM, get_azure_ad_token
-from litellm.types.utils import CallTypes
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import CallTypes
 
 
 # Mock the necessary dependencies
 @pytest.fixture
-def setup_mocks():
+def setup_mocks(monkeypatch):
+    # Clear Azure environment variables that might interfere with tests
+    monkeypatch.delenv("AZURE_USERNAME", raising=False)
+    monkeypatch.delenv("AZURE_PASSWORD", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    monkeypatch.delenv("AZURE_SCOPE", raising=False)
+    monkeypatch.delenv("AZURE_AD_TOKEN", raising=False)
+
     with patch(
         "litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id"
     ) as mock_entra_token, patch(
@@ -418,6 +427,10 @@ def test_select_azure_base_url_called(setup_mocks):
             "afile_list",
             "aimage_edit",
             "image_edit",
+            "agenerate_content_stream",
+            "agenerate_content",
+            "allm_passthrough_route",
+            "llm_passthrough_route",
         ]
     ],
 )
@@ -1022,8 +1035,8 @@ def test_with_existing_azure_ad_token_from_env(setup_mocks):
     # mock get_secret_str("AZURE_AD_TOKEN") to "test-token"
     with patch("litellm.llms.azure.common_utils.get_secret_str") as mock_get_secret_str:
         # Configure the mock to return "test-token" when called with "AZURE_AD_TOKEN"
-        mock_get_secret_str.side_effect = (
-            lambda key: "test-token" if key == "AZURE_AD_TOKEN" else None
+        mock_get_secret_str.side_effect = lambda key: (
+            "test-token" if key == "AZURE_AD_TOKEN" else None
         )
 
         litellm_params = GenericLiteLLMParams()
@@ -1224,10 +1237,15 @@ def test_get_azure_ad_token_with_username_password_from_env(setup_mocks, monkeyp
     assert token == "mock-username-password-token"
 
 
-def test_get_azure_ad_token_with_oidc_token(setup_mocks):
+def test_get_azure_ad_token_with_oidc_token(setup_mocks, monkeypatch):
     """Test get_azure_ad_token with OIDC token."""
     # Reset mocks to ensure clean state
     setup_mocks["oidc_token"].reset_mock()
+
+    # Clear environment variables that might interfere with OIDC token logic
+    monkeypatch.delenv("AZURE_USERNAME", raising=False)
+    monkeypatch.delenv("AZURE_PASSWORD", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
 
     # Create test parameters with OIDC token, client_id, and tenant_id
     litellm_params = GenericLiteLLMParams(
@@ -1237,6 +1255,9 @@ def test_get_azure_ad_token_with_oidc_token(setup_mocks):
         azure_scope="test-azure-scope",
         # Ensure no other auth methods are available
         azure_ad_token_provider=None,
+        client_secret=None,
+        azure_username=None,
+        azure_password=None,
     )
 
     # Call the function
@@ -1257,9 +1278,13 @@ def test_get_azure_ad_token_with_oidc_token(setup_mocks):
     assert token == "mock-oidc-token"
 
 
-def test_get_azure_ad_token_with_token_refresh(setup_mocks):
+def test_get_azure_ad_token_with_token_refresh(setup_mocks, monkeypatch):
     """Test get_azure_ad_token with token refresh enabled."""
     # Reset mocks to ensure clean state
+    monkeypatch.delenv("AZURE_USERNAME", raising=False)
+    monkeypatch.delenv("AZURE_PASSWORD", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+
     setup_mocks["token_provider"].reset_mock()
 
     # Enable token refresh

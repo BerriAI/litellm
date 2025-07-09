@@ -320,7 +320,7 @@ async def test_get_all_team_models():
     # Mock router
     mock_router = MagicMock()
 
-    def mock_get_model_list(model_name):
+    def mock_get_model_list(model_name, team_id=None):
         if model_name == "gpt-4":
             return mock_models_gpt4
         elif model_name == "gpt-3.5-turbo":
@@ -355,10 +355,10 @@ async def test_get_all_team_models():
 
         # Verify router.get_model_list was called for each model
         expected_calls = [
-            mock.call(model_name="gpt-4"),
-            mock.call(model_name="gpt-3.5-turbo"),
-            mock.call(model_name="claude-3"),
-            mock.call(model_name="gpt-4"),  # Called again for team2
+            mock.call(model_name="gpt-4", team_id="team1"),
+            mock.call(model_name="gpt-3.5-turbo", team_id="team1"),
+            mock.call(model_name="claude-3", team_id="team2"),
+            mock.call(model_name="gpt-4", team_id="team2"),
         ]
         mock_router.get_model_list.assert_has_calls(expected_calls, any_order=True)
 
@@ -386,8 +386,8 @@ async def test_get_all_team_models():
 
         # Verify router.get_model_list was called only for team1 models
         expected_calls = [
-            mock.call(model_name="gpt-4"),
-            mock.call(model_name="gpt-3.5-turbo"),
+            mock.call(model_name="gpt-4", team_id="team1"),
+            mock.call(model_name="gpt-3.5-turbo", team_id="team1"),
         ]
         mock_router.get_model_list.assert_has_calls(expected_calls, any_order=True)
 
@@ -413,7 +413,7 @@ async def test_get_all_team_models():
     mock_router.reset_mock()
     mock_litellm_teamtable.find_many.return_value = [mock_team1]
 
-    def mock_get_model_list_with_none(model_name):
+    def mock_get_model_list_with_none(model_name, team_id=None):
         if model_name == "gpt-4":
             return mock_models_gpt4
         # Return None for gpt-3.5-turbo to test None handling
@@ -458,3 +458,206 @@ def test_add_team_models_to_all_models():
         llm_router=llm_router,
     )
     assert result == {"gpt-4-model-2": {"team1"}}
+
+
+@pytest.mark.asyncio
+async def test_delete_deployment_type_mismatch():
+    """
+    Test that the _delete_deployment function handles type mismatches correctly.
+    Specifically test that models 12345678 and 12345679 are NOT deleted when
+    they exist in both combined_id_list (as integers) and router_model_ids (as strings).
+
+    This test reproduces the bug where type mismatch causes valid models to be deleted.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    # Create mock ProxyConfig instance
+    pc = ProxyConfig()
+
+    pc.get_config = MagicMock(
+        return_value={
+            "model_list": [
+                {
+                    "model_name": "openai-gpt-4o",
+                    "litellm_params": {"model": "gpt-4o"},
+                    "model_info": {"id": 12345678},
+                },
+                {
+                    "model_name": "openai-gpt-4o",
+                    "litellm_params": {"model": "gpt-4o"},
+                    "model_info": {"id": 12345679},
+                },
+            ]
+        }
+    )
+
+    # Mock llm_router with string IDs (this is the source of the type mismatch)
+    mock_llm_router = MagicMock()
+    mock_llm_router.get_model_ids.return_value = [
+        "a96e12e76b36a57cfae57a41288eb41567629cac89b4828c6f7074afc3534695",
+        "a40186dd0fdb9b7282380277d7f57044d29de95bfbfcd7f4322b3493702d5cd3",
+        "12345678",  # String ID
+        "12345679",  # String ID
+    ]
+
+    # Track which deployments were deleted
+    deleted_ids = []
+
+    def mock_delete_deployment(id):
+        deleted_ids.append(id)
+        return True  # Simulate successful deletion
+
+    mock_llm_router.delete_deployment = MagicMock(side_effect=mock_delete_deployment)
+
+    # Mock get_config to return empty config (no config models)
+    async def mock_get_config(config_file_path):
+        return {}
+
+    pc.get_config = MagicMock(side_effect=mock_get_config)
+
+    # Patch the global llm_router
+    with patch("litellm.proxy.proxy_server.llm_router", mock_llm_router), patch(
+        "litellm.proxy.proxy_server.user_config_file_path", "test_config.yaml"
+    ):
+
+        # Call the function under test
+        deleted_count = await pc._delete_deployment(db_models=[])
+
+        # Assertions: Models 12345678 and 12345679 should NOT be deleted
+        # because they exist in combined_id_list (as integers) even though
+        # router has them as strings
+
+        # The function should delete the other 2 models that are not in combined_id_list
+        assert deleted_count == 0, f"Expected 0 deletions, got {deleted_count}"
+
+        # Verify that 12345678 and 12345679 were NOT deleted
+        assert (
+            "12345678" not in deleted_ids
+        ), f"Model 12345678 should NOT be deleted. Deleted IDs: {deleted_ids}"
+        assert (
+            "12345679" not in deleted_ids
+        ), f"Model 12345679 should NOT be deleted. Deleted IDs: {deleted_ids}"
+
+
+@pytest.mark.asyncio
+async def test_get_config_from_file(tmp_path, monkeypatch):
+    """
+    Test the _get_config_from_file method of ProxyConfig class.
+    Tests various scenarios: valid file, non-existent file, no file path, None config.
+    """
+    import yaml
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    # Create a ProxyConfig instance
+    proxy_config = ProxyConfig()
+
+    # Test Case 1: Valid YAML config file exists
+    test_config = {
+        "model_list": [{"model_name": "gpt-4", "litellm_params": {"model": "gpt-4"}}],
+        "general_settings": {"master_key": "sk-test"},
+        "router_settings": {"enable_pre_call_checks": True},
+        "litellm_settings": {"drop_params": True},
+    }
+
+    config_file = tmp_path / "test_config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(test_config, f)
+
+    # Clear global user_config_file_path for this test
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_config_file_path", None)
+
+    result = await proxy_config._get_config_from_file(str(config_file))
+    assert result == test_config
+
+    # Verify that user_config_file_path was set
+    from litellm.proxy.proxy_server import user_config_file_path
+
+    assert user_config_file_path == str(config_file)
+
+    # Test Case 2: File path provided but file doesn't exist
+    non_existent_file = tmp_path / "non_existent.yaml"
+
+    with pytest.raises(Exception, match=f"Config file not found: {non_existent_file}"):
+        await proxy_config._get_config_from_file(str(non_existent_file))
+
+    # Test Case 3: No file path provided (should return default config)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_config_file_path", None)
+
+    expected_default = {
+        "model_list": [],
+        "general_settings": {},
+        "router_settings": {},
+        "litellm_settings": {},
+    }
+
+    result = await proxy_config._get_config_from_file(None)
+    assert result == expected_default
+
+    # Test Case 4: Empty YAML file (should raise exception for None config)
+    empty_file = tmp_path / "empty_config.yaml"
+    with open(empty_file, "w") as f:
+        f.write("")  # Write empty content which will result in None when loaded
+
+    with pytest.raises(Exception, match="Config cannot be None or Empty."):
+        await proxy_config._get_config_from_file(str(empty_file))
+
+    # Test Case 5: Using global user_config_file_path when no config_file_path provided
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_config_file_path", str(config_file)
+    )
+
+    result = await proxy_config._get_config_from_file(None)
+    assert result == test_config
+
+
+@pytest.mark.asyncio
+async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
+    """
+    Test that _add_proxy_budget_to_db only creates a user and no keys are added.
+    
+    This validates that generate_key_helper_fn is called with table_name="user" 
+    which should prevent key creation in LiteLLM_VerificationToken table.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    import litellm
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    # Set up required litellm settings
+    litellm.budget_duration = "30d"
+    litellm.max_budget = 100.0
+    
+    litellm_proxy_budget_name = "litellm-proxy-budget"
+
+    # Mock generate_key_helper_fn to capture its call arguments
+    mock_generate_key_helper = AsyncMock(return_value={
+        "user_id": litellm_proxy_budget_name,
+        "max_budget": 100.0,
+        "budget_duration": "30d",
+        "spend": 0,
+        "models": [],
+    })
+    
+    # Patch generate_key_helper_fn in proxy_server where it's being called from
+    with patch("litellm.proxy.proxy_server.generate_key_helper_fn", mock_generate_key_helper):
+        # Call the function under test
+        ProxyStartupEvent._add_proxy_budget_to_db(litellm_proxy_budget_name)
+        
+        # Allow async task to complete
+        import asyncio
+        await asyncio.sleep(0.1)
+        
+        # Verify that generate_key_helper_fn was called
+        mock_generate_key_helper.assert_called_once()
+        call_args = mock_generate_key_helper.call_args
+        
+        # Verify critical parameters that prevent key creation
+        assert call_args.kwargs["request_type"] == "user"
+        assert call_args.kwargs["table_name"] == "user"
+        assert call_args.kwargs["user_id"] == litellm_proxy_budget_name
+        assert call_args.kwargs["max_budget"] == 100.0
+        assert call_args.kwargs["budget_duration"] == "30d"
+        assert call_args.kwargs["query_type"] == "update_data"

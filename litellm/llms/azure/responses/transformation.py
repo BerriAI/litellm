@@ -1,16 +1,11 @@
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 
-import httpx
-
-import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.azure.common_utils import get_azure_ad_token
+from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
-from litellm.utils import _add_path_to_api_base
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -24,26 +19,35 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def validate_environment(
         self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
     ) -> dict:
-        litellm_params = litellm_params or GenericLiteLLMParams()
-        api_key = (
-            litellm_params.api_key
-            or litellm.api_key
-            or litellm.azure_key
-            or get_secret_str("AZURE_OPENAI_API_KEY")
-            or get_secret_str("AZURE_API_KEY")
+        return BaseAzureLLM._base_validate_azure_environment(
+            headers=headers, litellm_params=litellm_params
         )
 
-        if api_key:
-            headers["api-key"] = api_key
-            return headers
+    def get_stripped_model_name(self, model: str) -> str:
+        # if "responses/" is in the model name, remove it
+        if "responses/" in model:
+            model = model.replace("responses/", "")
+        if "o_series" in model:
+            model = model.replace("o_series/", "")
+        return model
 
-        ### Fallback to Azure AD token-based authentication if no API key is available
-        ### Retrieves Azure AD token and adds it to the Authorization header
-        azure_ad_token = get_azure_ad_token(litellm_params)
-        if azure_ad_token:
-            headers["Authorization"] = f"Bearer {azure_ad_token}"
-
-        return headers
+    def transform_responses_api_request(
+        self,
+        model: str,
+        input: Union[str, ResponseInputParam],
+        response_api_optional_request_params: Dict,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Dict:
+        """No transform applied since inputs are in OpenAI spec already"""
+        stripped_model_name = self.get_stripped_model_name(model)
+        return dict(
+            ResponsesAPIRequestParams(
+                model=stripped_model_name,
+                input=input,
+                **response_api_optional_request_params,
+            )
+        )
 
     def get_complete_url(
         self,
@@ -66,47 +70,9 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         - A complete URL string, e.g.,
         "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
         """
-        api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
-        if api_base is None:
-            raise ValueError(
-                f"api_base is required for Azure AI Studio. Please set the api_base parameter. Passed `api_base={api_base}`"
-            )
-        original_url = httpx.URL(api_base)
-
-        # Extract api_version or use default
-        api_version = cast(Optional[str], litellm_params.get("api_version"))
-
-        # Create a new dictionary with existing params
-        query_params = dict(original_url.params)
-
-        # Add api_version if needed
-        if "api-version" not in query_params and api_version:
-            query_params["api-version"] = api_version
-        
-        # Add the path to the base URL
-        if "/openai/responses" not in api_base:
-            new_url = _add_path_to_api_base(
-                api_base=api_base, ending_path="/openai/responses"
-            )
-        else:
-            new_url = api_base
-        
-        if self._is_azure_v1_api_version(api_version):
-            # ensure the request go to /openai/v1 and not just /openai
-            if "/openai/v1" not in new_url:
-                parsed_url = httpx.URL(new_url)
-                new_url = str(parsed_url.copy_with(path=parsed_url.path.replace("/openai", "/openai/v1")))
-
-
-        # Use the new query_params dictionary
-        final_url = httpx.URL(new_url).copy_with(params=query_params)
-
-        return str(final_url)
-    
-    def _is_azure_v1_api_version(self, api_version: Optional[str]) -> bool:
-        if api_version is None:
-            return False
-        return api_version == "preview" or api_version == "latest"
+        return BaseAzureLLM._get_base_azure_url(
+            api_base=api_base, litellm_params=litellm_params, route="/openai/responses"
+        )
 
     #########################################################
     ########## DELETE RESPONSE API TRANSFORMATION ##############

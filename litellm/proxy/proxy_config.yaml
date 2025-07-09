@@ -1,18 +1,8 @@
 model_list:
-  - model_name: gemini/*
+  - model_name: anthropic/*
     litellm_params:
-      model: gemini/*
-      api_key: os.environ/GEMINI_API_KEY
-  - model_name: "anthropic/*"
+      model: anthropic/*
+  - model_name: openai/*
     litellm_params:
-      model: "anthropic/*"
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: openai/*
 
-mcp_servers:
-  deepwiki_mcp:
-    url: "https://mcp.deepwiki.com/mcp"
-    transport: "http"
-
-general_settings:
-  store_model_in_db: true
-  store_prompts_in_spend_logs: true

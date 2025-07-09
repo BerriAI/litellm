@@ -5,6 +5,7 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 import datetime
 import enum
 import uuid
+from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, get_type_hints
 
 import httpx
@@ -730,3 +731,22 @@ class LiteLLM_RouterFileObject(TypedDict, total=False):
 
     litellm_params_sensitive_credential_hash: str
     file_object: OpenAIFileObject
+
+@dataclass
+class MockRouterTestingParams:
+    mock_testing_fallbacks: Optional[bool] = None
+    mock_testing_context_fallbacks: Optional[bool] = None
+    mock_testing_content_policy_fallbacks: Optional[bool] = None
+    
+    @classmethod
+    def from_kwargs(cls, kwargs: dict) -> 'MockRouterTestingParams':
+        from litellm.secret_managers.main import str_to_bool
+        def extract_bool_param(name: str) -> Optional[bool]:
+            value = kwargs.pop(name, None)
+            return str_to_bool(value) if isinstance(value, str) else value
+        
+        return cls(
+            mock_testing_fallbacks=extract_bool_param("mock_testing_fallbacks"),
+            mock_testing_context_fallbacks=extract_bool_param("mock_testing_context_fallbacks"),
+            mock_testing_content_policy_fallbacks=extract_bool_param("mock_testing_content_policy_fallbacks")
+        )

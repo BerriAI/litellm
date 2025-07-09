@@ -34,12 +34,14 @@ const sidebars = {
         ...[
           "proxy/guardrails/aim_security",
           "proxy/guardrails/aporia_api",
+          "proxy/guardrails/azure_content_guardrail",
           "proxy/guardrails/bedrock",
           "proxy/guardrails/lasso_security",
           "proxy/guardrails/guardrails_ai",
           "proxy/guardrails/lakera_ai",
           "proxy/guardrails/pangea",
           "proxy/guardrails/pii_masking_v2",
+          "proxy/guardrails/panw_prisma_airs",
           "proxy/guardrails/secret_detection",
           "proxy/guardrails/custom_guardrail",
           "proxy/guardrails/prompt_injection",
@@ -69,6 +71,7 @@ const sidebars = {
       items: [
         "tutorials/openweb_ui",
         "tutorials/openai_codex",
+        "tutorials/litellm_gemini_cli",
         "tutorials/claude_responses_api",
       ]
     },
@@ -105,7 +108,6 @@ const sidebars = {
             "proxy/model_management",
             "proxy/health",
             "proxy/debugging",
-            "proxy/spending_monitoring",
             "proxy/master_key_rotations",
           ],
         },
@@ -141,6 +143,7 @@ const sidebars = {
             "proxy/token_auth",
             "proxy/service_accounts",
             "proxy/access_control",
+            "proxy/cli_sso",
             "proxy/custom_auth",
             "proxy/ip_address",
             "proxy/email",
@@ -198,7 +201,8 @@ const sidebars = {
           items: [
             "proxy/logging",
             "proxy/logging_spec",
-            "proxy/team_logging"
+            "proxy/team_logging",
+            "proxy/dynamic_logging"
           ],
         },
         
@@ -253,6 +257,7 @@ const sidebars = {
         "embedding/supported_embedding",
         "anthropic_unified",
         "mcp",
+        "generateContent",
         {
           type: "category",
           label: "/images",
@@ -352,12 +357,12 @@ const sidebars = {
           ]
         },
         "providers/azure_ai",
-        "providers/aiml",
         {
           type: "category",
           label: "Vertex AI",
           items: [
             "providers/vertex",
+            "providers/vertex_partner",
             "providers/vertex_image",
           ]
         },
@@ -412,16 +417,19 @@ const sidebars = {
         "providers/galadriel",
         "providers/topaz",
         "providers/groq",
-        "providers/github",
         "providers/deepseek",
+        "providers/elevenlabs",
         "providers/fireworks_ai",
         "providers/clarifai",
         "providers/vllm",
         "providers/llamafile",
         "providers/infinity",
         "providers/xinference",
+        "providers/aiml",
         "providers/cloudflare_workers",
         "providers/deepinfra",
+        "providers/github",
+        "providers/github_copilot",
         "providers/ai21",
         "providers/nlp_cloud",
         "providers/replicate",
@@ -524,6 +532,7 @@ const sidebars = {
         "tutorials/prompt_caching",
         "tutorials/tag_management",
         'tutorials/litellm_proxy_aporia',
+        "tutorials/elasticsearch_logging",
         "tutorials/gemini_realtime_with_audio",
         "tutorials/claude_responses_api",
         {

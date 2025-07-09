@@ -834,16 +834,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _transform_parts(
         parts: List[HttpxPartType],
+        cumulative_tool_call_idx: int,
         is_function_call: Optional[bool],
     ) -> Tuple[
         Optional[ChatCompletionToolCallFunctionChunk],
         Optional[List[ChatCompletionToolCallChunk]],
+        int,
     ]:
         function: Optional[ChatCompletionToolCallFunctionChunk] = None
         _tools: List[ChatCompletionToolCallChunk] = []
-        # in a single chunk, each tool call appears as a separate part
-        # they need to be separate indexes as they are separate tool calls
-        funcCallIndex = 0
         for part in parts:
             if "functionCall" in part:
                 _function_chunk = ChatCompletionToolCallFunctionChunk(
@@ -857,15 +856,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         id=f"call_{str(uuid.uuid4())}",
                         type="function",
                         function=_function_chunk,
-                        index=funcCallIndex,
+                        index=cumulative_tool_call_idx,
                     )
                     _tools.append(_tool_response_chunk)
-                funcCallIndex += 1
+                cumulative_tool_call_idx += 1
         if len(_tools) == 0:
             tools: Optional[List[ChatCompletionToolCallChunk]] = None
         else:
             tools = _tools
-        return function, tools
+        return function, tools, cumulative_tool_call_idx
 
     @staticmethod
     def _transform_logprobs(
@@ -1072,8 +1071,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         elif (
             finish_reason and finish_reason in mapped_finish_reason.keys()
         ):  # vertex ai
+
             return mapped_finish_reason[finish_reason]
         else:
+
             return "stop"
 
     @staticmethod
@@ -1121,6 +1122,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         chat_completion_logprobs: Optional[ChoiceLogprobs] = None
         tools: Optional[List[ChatCompletionToolCallChunk]] = []
         functions: Optional[ChatCompletionToolCallFunctionChunk] = None
+        cumulative_tool_call_index: int = 0
 
         for idx, candidate in enumerate(_candidates):
             if "content" not in candidate:
@@ -1167,8 +1169,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if reasoning_content is not None:
                     chat_completion_message["reasoning_content"] = reasoning_content
 
-                functions, tools = VertexGeminiConfig._transform_parts(
+                functions, tools, cumulative_tool_call_index = VertexGeminiConfig._transform_parts(
                     parts=candidate["content"]["parts"],
+                    cumulative_tool_call_idx=cumulative_tool_call_index,
                     is_function_call=is_function_call(standard_optional_params),
                 )
 
@@ -1256,6 +1259,28 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 status_code=422,
                 headers=raw_response.headers,
             )
+
+        return self._transform_google_generate_content_to_openai_model_response(
+            completion_response=completion_response,
+            model_response=model_response,
+            model=model,
+            logging_obj=logging_obj,
+            raw_response=raw_response,
+        )
+
+    def _transform_google_generate_content_to_openai_model_response(
+        self,
+        completion_response: Union[GenerateContentResponseBody, dict],
+        model_response: ModelResponse,
+        model: str,
+        logging_obj: LoggingClass,
+        raw_response: httpx.Response,
+    ) -> ModelResponse:
+        """
+        Transforms a Google GenAI generate content response to an OpenAI model response.
+        """
+        if isinstance(completion_response, dict):
+            completion_response = GenerateContentResponseBody(**completion_response)  # type: ignore
 
         ## GET MODEL ##
         model_response.model = model

@@ -175,6 +175,7 @@ model LiteLLM_MCPServerTable {
   created_by   String?
   updated_at   DateTime?      @default(now()) @updatedAt @map("updated_at")
   updated_by   String?
+  mcp_info     Json?          @default("{}")
 }
 
 // Generate Tokens for Proxy
@@ -452,8 +453,8 @@ enum JobStatus {
 model LiteLLM_ManagedFileTable {
   id String @id @default(uuid())
   unified_file_id String @unique // The base64 encoded unified file ID
-  file_object Json // Stores the OpenAIFileObject
-  model_mappings Json 
+  file_object Json? // Stores the OpenAIFileObject
+  model_mappings Json
   flat_model_file_ids String[]  @default([]) // Flat list of model file id's - for faster querying of model id -> unified file id
   created_at DateTime @default(now())
   created_by String? 
@@ -468,7 +469,8 @@ model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use t
   unified_object_id String @unique // The base64 encoded unified file ID
   model_object_id String @unique // the id returned by the backend API provider 
   file_object Json // Stores the OpenAIFileObject
-  file_purpose String // either 'batch' or 'fine-tune' 
+  file_purpose String // either 'batch' or 'fine-tune'
+  status String? // check if batch cost has been tracked  
   created_at DateTime @default(now())
   created_by String?
   updated_at DateTime @updatedAt

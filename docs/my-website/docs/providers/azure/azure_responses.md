@@ -233,3 +233,63 @@ for event in response:
 </TabItem>
 </Tabs>
 
+
+## Calling via `/chat/completions`
+
+You can also call the Azure Responses API via the `/chat/completions` endpoint.
+
+
+<Tabs>
+<TabItem value="litellm-sdk" label="LiteLLM SDK">
+
+```python showLineNumbers
+from litellm import completion
+import os 
+
+os.environ["AZURE_API_BASE"] = "https://my-endpoint-sweden-berri992.openai.azure.com/"
+os.environ["AZURE_API_VERSION"] = "2023-03-15-preview"
+os.environ["AZURE_API_KEY"] = "my-api-key"
+
+response = completion(
+    model="azure/responses/my-custom-o1-pro",
+    messages=[{"role": "user", "content": "Hello world"}],
+)
+
+print(response)
+```
+</TabItem>
+<TabItem value="proxy" label="OpenAI SDK with LiteLLM Proxy">
+
+1. Setup config.yaml
+
+```yaml showLineNumbers
+model_list:
+  - model_name: my-custom-o1-pro
+    litellm_params:
+      model: azure/responses/my-custom-o1-pro
+      api_key: os.environ/AZURE_API_KEY
+      api_base: https://my-endpoint-sweden-berri992.openai.azure.com/
+      api_version: 2023-03-15-preview
+```
+
+2. Start LiteLLM proxy
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Test it! 
+
+```bash
+curl http://localhost:4000/v1/chat/completions \
+  -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -d '{
+    "model": "my-custom-o1-pro",
+    "messages": [{"role": "user", "content": "Hello world"}]
+  }'
+```
+</TabItem>
+</Tabs>

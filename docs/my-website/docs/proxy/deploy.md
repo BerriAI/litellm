@@ -237,6 +237,9 @@ spec:
       containers:
       - name: litellm
         image: ghcr.io/berriai/litellm:main-stable # it is recommended to fix a version generally
+        args:
+          - "--config"
+          - "/app/proxy_server_config.yaml"
         ports:
         - containerPort: 4000
         volumeMounts:
@@ -386,7 +389,8 @@ spec:
             - "/app/proxy_config.yaml"  # Update the path to mount the config file
           volumeMounts:                 # Define volume mount for proxy_config.yaml
             - name: config-volume
-              mountPath: /app
+              mountPath: /app/proxy_config.yaml
+              subPath: config.yaml      # Specify the field under data of the ConfigMap litellm-config
               readOnly: true
           livenessProbe:
             httpGet:
