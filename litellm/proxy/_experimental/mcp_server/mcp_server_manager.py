@@ -137,6 +137,7 @@ class MCPServerManager:
                 mcp_info=MCPInfo(
                     server_name=mcp_server.alias or mcp_server.server_id,
                     description=mcp_server.description,
+                    mcp_access_groups=mcp_server.mcp_access_groups or [],
                     mcp_server_cost_info=_mcp_info.get("mcp_server_cost_info", None),
                 ),
             )

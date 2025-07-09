@@ -1,5 +1,7 @@
 import uuid
 from typing import Iterable, List, Optional, Set
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+import json
 
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -19,9 +21,50 @@ async def get_all_mcp_servers(
     """
     Returns all of the mcp servers from the db
     """
-    mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many()
+    try:
+        # Use select to explicitly specify the fields we want
+        mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many(
+            select={
+                "server_id": True,
+                "alias": True,
+                "description": True,
+                "mcp_access_groups": True,
+                "url": True,
+                "transport": True,
+                "spec_version": True,
+                "auth_type": True,
+                "created_at": True,
+                "created_by": True,
+                "updated_at": True,
+                "updated_by": True,
+                "mcp_info": True,
+            }
+        )
 
-    return mcp_servers
+        # Ensure consistent JSON handling
+        for server in mcp_servers:
+            # Handle mcp_access_groups
+            if server.mcp_access_groups is None:
+                server.mcp_access_groups = []
+            elif isinstance(server.mcp_access_groups, str):
+                try:
+                    server.mcp_access_groups = json.loads(server.mcp_access_groups)
+                except json.JSONDecodeError:
+                    server.mcp_access_groups = []
+            
+            # Handle mcp_info
+            if server.mcp_info is None:
+                server.mcp_info = {}
+            elif isinstance(server.mcp_info, str):
+                try:
+                    server.mcp_info = json.loads(server.mcp_info)
+                except json.JSONDecodeError:
+                    server.mcp_info = {}
+
+        return mcp_servers
+    except Exception as e:
+        print(f"Error in get_all_mcp_servers: {str(e)}")
+        raise
 
 
 async def get_mcp_server(
@@ -30,30 +73,107 @@ async def get_mcp_server(
     """
     Returns the matching mcp server from the db iff exists
     """
-    mcp_server: Optional[
-        LiteLLM_MCPServerTable
-    ] = await prisma_client.db.litellm_mcpservertable.find_unique(
-        where={
-            "server_id": server_id,
-        }
-    )
-    return mcp_server
+    try:
+        mcp_server: Optional[
+            LiteLLM_MCPServerTable
+        ] = await prisma_client.db.litellm_mcpservertable.find_unique(
+            where={
+                "server_id": server_id,
+            },
+            select={
+                "server_id": True,
+                "alias": True,
+                "description": True,
+                "mcp_access_groups": True,
+                "url": True,
+                "transport": True,
+                "spec_version": True,
+                "auth_type": True,
+                "created_at": True,
+                "created_by": True,
+                "updated_at": True,
+                "updated_by": True,
+                "mcp_info": True,
+            }
+        )
+
+        if mcp_server:
+            # Handle mcp_access_groups
+            if mcp_server.mcp_access_groups is None:
+                mcp_server.mcp_access_groups = []
+            elif isinstance(mcp_server.mcp_access_groups, str):
+                try:
+                    mcp_server.mcp_access_groups = json.loads(mcp_server.mcp_access_groups)
+                except json.JSONDecodeError:
+                    mcp_server.mcp_access_groups = []
+            
+            # Handle mcp_info
+            if mcp_server.mcp_info is None:
+                mcp_server.mcp_info = {}
+            elif isinstance(mcp_server.mcp_info, str):
+                try:
+                    mcp_server.mcp_info = json.loads(mcp_server.mcp_info)
+                except json.JSONDecodeError:
+                    mcp_server.mcp_info = {}
+
+        return mcp_server
+    except Exception as e:
+        print(f"Error in get_mcp_server: {str(e)}")
+        raise
 
 
 async def get_mcp_servers(
-    prisma_client: PrismaClient, server_ids: Iterable[str]
+    prisma_client: PrismaClient, server_ids: List[str]
 ) -> List[LiteLLM_MCPServerTable]:
     """
-    Returns the matching mcp servers from the db with the server_ids
+    Returns all of the mcp servers from the db
     """
-    mcp_servers: List[
-        LiteLLM_MCPServerTable
-    ] = await prisma_client.db.litellm_mcpservertable.find_many(
-        where={
-            "server_id": {"in": server_ids},
-        }
-    )
-    return mcp_servers
+    try:
+        mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many(
+            where={
+                "server_id": {"in": server_ids},
+            },
+            select={
+                "server_id": True,
+                "alias": True,
+                "description": True,
+                "mcp_access_groups": True,
+                "url": True,
+                "transport": True,
+                "spec_version": True,
+                "auth_type": True,
+                "created_at": True,
+                "created_by": True,
+                "updated_at": True,
+                "updated_by": True,
+                "mcp_info": True,
+            }
+        )
+
+        # Ensure consistent JSON handling
+        for server in mcp_servers:
+            # Handle mcp_access_groups
+            if server.mcp_access_groups is None:
+                server.mcp_access_groups = []
+            elif isinstance(server.mcp_access_groups, str):
+                try:
+                    server.mcp_access_groups = json.loads(server.mcp_access_groups)
+                except json.JSONDecodeError:
+                    server.mcp_access_groups = []
+            
+            # Handle mcp_info
+            if server.mcp_info is None:
+                server.mcp_info = {}
+            elif isinstance(server.mcp_info, str):
+                try:
+                    server.mcp_info = json.loads(server.mcp_info)
+                except json.JSONDecodeError:
+                    server.mcp_info = {}
+
+        return mcp_servers
+    except Exception as e:
+        print(f"Error in get_mcp_servers: {str(e)}")
+        raise
 
 
 async def get_mcp_servers_by_verificationtoken(
@@ -215,22 +335,28 @@ async def create_mcp_server(
     """
     Create a new mcp server record in the db
     """
-    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
     if data.server_id is None:
         data.server_id = str(uuid.uuid4())
     
-    # json dumps mcp_info
+    # json dumps mcp_info and mcp_access_groups
     mcp_info: Optional[str] = None
     if data.mcp_info is not None:
         mcp_info = safe_dumps(data.mcp_info)
         del data.mcp_info
 
+    mcp_access_groups: Optional[str] = None
+    if data.mcp_access_groups is not None:
+        mcp_access_groups = safe_dumps(data.mcp_access_groups)
+        del data.mcp_access_groups
+
+    # Create the server with namespace
     mcp_server_record = await prisma_client.db.litellm_mcpservertable.create(
         data={
             **data.model_dump(),
             "created_by": touched_by,
             "updated_by": touched_by,
             "mcp_info": mcp_info,
+            "mcp_access_groups": mcp_access_groups,
         }
     )
     return mcp_server_record
@@ -242,6 +368,17 @@ async def update_mcp_server(
     """
     Update a new mcp server record in the db
     """
+    # json dumps mcp_info and mcp_access_groups
+    mcp_info: Optional[str] = None
+    if data.mcp_info is not None:
+        mcp_info = safe_dumps(data.mcp_info)
+        del data.mcp_info
+
+    mcp_access_groups: Optional[str] = None
+    if data.mcp_access_groups is not None:
+        mcp_access_groups = safe_dumps(data.mcp_access_groups)
+        del data.mcp_access_groups
+
     mcp_server_record = await prisma_client.db.litellm_mcpservertable.update(
         where={
             "server_id": data.server_id,
@@ -250,6 +387,8 @@ async def update_mcp_server(
             **data.model_dump(),
             "created_by": touched_by,
             "updated_by": touched_by,
+            "mcp_info": mcp_info,
+            "mcp_access_groups": mcp_access_groups,
         },
     )
     return mcp_server_record

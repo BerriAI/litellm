@@ -178,6 +178,7 @@ if MCP_AVAILABLE:
                 alias=server.alias,
                 description=server.description,
                 url=server.url,
+                namespace=server.namespace,
                 transport=server.transport,
                 spec_version=server.spec_version,
                 auth_type=server.auth_type,

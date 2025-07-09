@@ -163,6 +163,38 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
               <Form.Item
                 label={
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    MCP Access Groups
+                    <Tooltip title="Add one or more access groups to organize and filter MCP servers">
+                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                    </Tooltip>
+                  </span>
+                }
+                name="mcp_access_groups"
+                rules={[
+                  { required: false, message: "Please enter access groups" },
+                ]}
+              >
+                <Select 
+                  mode="tags"
+                  placeholder="Enter or select access groups" 
+                  className="rounded-lg"
+                  tokenSeparators={[',']}
+                  allowClear
+                  onChange={(values: string[]) => {
+                    // Convert string values to MCPAccessGroup objects
+                    const groups = values.map((value: string) => ({
+                      group_id: value.toLowerCase().replace(/\s+/g, '-'),
+                      group_name: value,
+                      description: `Access group for ${value}`,
+                    }));
+                    form.setFieldsValue({ mcp_access_groups: groups });
+                  }}
+                />
+              </Form.Item>
+
+              <Form.Item
+                label={
                   <span className="text-sm font-medium text-gray-700">
                     MCP Server URL <span className="text-red-500">*</span>
                   </span>

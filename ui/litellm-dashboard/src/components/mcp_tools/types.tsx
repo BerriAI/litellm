@@ -119,11 +119,19 @@ export interface InputSchemaProperty {
     userID: string | null;
   }
 
+export interface MCPAccessGroup {
+  group_id: string;
+  group_name: string;
+  description?: string;
+  metadata?: Record<string, any>;
+}
+
 export interface MCPServer {
   server_id: string;
   alias?: string | null;
   description?: string | null;
   url: string;
+  mcp_access_groups?: MCPAccessGroup[];
   transport?: string | null;
   spec_version?: string | null;
   auth_type?: string | null;

@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from "react";
-import { Form, Select, Button as AntdButton, message } from "antd";
+import { Form, Select, Button as AntdButton, message, Tooltip } from "antd";
 import { Button, TextInput, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { MCPServer, MCPServerCostInfo } from "./types";
 import { updateMCPServer } from "../networking";
 import MCPServerCostConfig from "./mcp_server_cost_config";
+import { InfoCircleOutlined } from "@ant-design/icons";
 
 interface MCPServerEditProps {
   mcpServer: MCPServer;
@@ -33,6 +34,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
         mcp_info: {
           server_name: values.alias || values.url,
           description: values.description,
+          namespace: values.namespace,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null
         }
       };
@@ -60,6 +62,37 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
             <Form.Item label="Description" name="description">
               <TextInput />
             </Form.Item>
+
+            <Form.Item 
+              label={
+                <span className="flex items-center">
+                  MCP Access Groups
+                  <Tooltip title="Add one or more access groups to organize and filter MCP servers">
+                    <InfoCircleOutlined className="ml-2" />
+                  </Tooltip>
+                </span>
+              } 
+              name="mcp_access_groups"
+            >
+              <Select
+                mode="tags"
+                placeholder="Enter or select access groups"
+                tokenSeparators={[',']}
+                allowClear
+                onChange={(values: string[]) => {
+                  // Convert string values to MCPAccessGroup objects
+                  const groups = values.map((value: string) => ({
+                    group_id: value.toLowerCase().replace(/\s+/g, '-'),
+                    group_name: value,
+                    description: `Access group for ${value}`,
+                  }));
+                  form.setFieldsValue({ mcp_access_groups: groups });
+                }}
+                // Display existing group names in the select
+                value={mcpServer.mcp_access_groups?.map(group => group.group_name) || []}
+              />
+            </Form.Item>
+
             <Form.Item label="MCP Server URL" name="url" rules={[{ required: true, message: "Please enter a server URL" }]}> 
               <TextInput />
             </Form.Item>

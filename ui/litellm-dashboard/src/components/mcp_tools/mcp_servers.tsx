@@ -105,10 +105,26 @@ const MCPServers: React.FC<MCPServerProps> = ({
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
   const [editServer, setEditServer] = useState(false);
-  const [selectedTeam, setSelectedTeam] = useState<string>("all");
+  const [selectedTeam, setSelectedTeam] = useState<string>("personal");
   const [filteredServers, setFilteredServers] = useState<MCPServer[]>([]);
   const [currentTeam, setCurrentTeam] = useState<string>("personal");
   const [modelViewMode, setModelViewMode] = useState<string>("all");
+  const [selectedAccessGroup, setSelectedAccessGroup] = useState<string>("all");
+
+  // Get unique access groups from all servers
+  const uniqueAccessGroups = React.useMemo(() => {
+    if (!mcpServers) return [];
+    const accessGroupsSet = new Set<string>();
+    
+    mcpServers.forEach((server: MCPServer) => {
+      if (server.mcp_access_groups) {
+        server.mcp_access_groups.forEach((group: string) => {
+          accessGroupsSet.add(group);
+        });
+      }
+    });
+    return Array.from(accessGroupsSet);
+  }, [mcpServers]);
 
   // Get unique teams from all servers
   const uniqueTeams = React.useMemo(() => {
@@ -150,12 +166,37 @@ const MCPServers: React.FC<MCPServerProps> = ({
     }
   };
 
+
+
+
+  // Filter servers based on selected team and access group
   React.useEffect(() => {
-    if (mcpServers) {
-      // Default to showing empty list for personal servers
+    if (!mcpServers) {
       setFilteredServers([]);
+      return;
     }
-  }, [mcpServers]);
+
+    let filtered = mcpServers;
+
+    // Filter by team
+    if (selectedTeam === "personal") {
+      // For personal, show empty list for now
+      filtered = [];
+    } else if (selectedTeam !== "all") {
+      filtered = filtered.filter((server: MCPServer) =>
+        server.teams?.some((team: Team) => team.team_id === selectedTeam)
+      );
+    }
+
+    // Filter by access group
+    if (selectedAccessGroup !== "all") {
+      filtered = filtered.filter((server: MCPServer) =>
+        server.mcp_access_groups?.includes(selectedAccessGroup)
+      );
+    }
+
+    setFilteredServers(filtered);
+  }, [mcpServers, selectedTeam, selectedAccessGroup]);
 
   const columns = React.useMemo(
     () =>
@@ -265,32 +306,33 @@ const MCPServers: React.FC<MCPServerProps> = ({
           <div className="flex flex-col space-y-4">
             <div className="flex items-center justify-between bg-gray-50 rounded-lg p-4 border-2 border-gray-200">
               <div className="flex items-center gap-4">
-                <Text className="text-lg font-semibold text-gray-900">Current Team:</Text>
-                <Select 
-                  value={currentTeam}
-                  onChange={handleTeamChange}
-                  style={{ width: 300 }}
+                <Text className="text-lg font-semibold text-gray-900">Access Group:</Text>
+                <Select
+                  value={selectedAccessGroup}
+                  onChange={(value) => setSelectedAccessGroup(value)}
+                  style={{ width: 200 }}
+                  size="large"
                 >
-                  <Option value="all">
-                    <div className="flex items-center gap-2">
-                      <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                      <span className="font-medium">All Servers</span>
-                    </div>
-                  </Option>
-                  <Option value="personal">
-                    <div className="flex items-center gap-2">
-                      <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                      <span className="font-medium">Personal</span>
-                    </div>
-                  </Option>
+                  <Option value="all">All Access Groups</Option>
+                  {uniqueAccessGroups.map((group) => (
+                    <Option key={group} value={group}>
+                      {group}
+                    </Option>
+                  ))}
+                </Select>
+
+                <Text className="text-lg font-semibold text-gray-900 ml-6">Current Team:</Text>
+                <Select
+                  value={selectedTeam}
+                  onChange={handleTeamChange}
+                  style={{ width: 200 }}
+                  size="large"
+                >
+                  <Option value="all">All Teams</Option>
+                  <Option value="personal">Personal</Option>
                   {uniqueTeams.map((team) => (
                     <Option key={team.team_id} value={team.team_id}>
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                        <span className="font-medium">
-                          {team.team_alias || team.team_id}
-                        </span>
-                      </div>
+                      {team.team_alias || team.team_id}
                     </Option>
                   ))}
                 </Select>

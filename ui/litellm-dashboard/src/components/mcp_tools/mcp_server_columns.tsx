@@ -1,5 +1,5 @@
 import { ColumnDef } from "@tanstack/react-table";
-import { MCPServer } from "./types";
+import { MCPServer, MCPAccessGroup } from "./types";
 import { Icon } from "@tremor/react";
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { getMaskedAndFullUrl } from "./utils";
@@ -25,6 +25,26 @@ export const mcpServerColumns = (
   {
     accessorKey: "alias",
     header: "Name",
+  },
+  {
+    accessorKey: "mcp_access_groups",
+    header: "Access Groups",
+    cell: ({ row }) => {
+      const groups = row.original.mcp_access_groups || [];
+      return (
+        <div className="flex flex-wrap gap-1">
+          {groups.map((group: MCPAccessGroup) => (
+            <span
+              key={group.group_id}
+              className="bg-blue-50 text-blue-700 text-xs px-2 py-0.5 rounded flex items-center gap-1"
+              title={group.description || ''}
+            >
+              {group.group_name}
+            </span>
+          ))}
+        </div>
+      );
+    },
   },
   {
     id: "url",

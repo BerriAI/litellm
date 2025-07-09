@@ -837,11 +837,20 @@ class SpecialMCPServerName(str, enum.Enum):
     all_proxy_servers = "all-proxy-mcpservers"
 
 
+class MCPAccessGroup(LiteLLMPydanticObjectBase):
+    """Represents an MCP Access Group"""
+    group_id: str
+    group_name: str
+    description: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+
+
 # MCP Proxy Request Types
 class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: Optional[str] = None
     alias: Optional[str] = None
     description: Optional[str] = None
+    mcp_access_groups: Optional[List[MCPAccessGroup]] = Field(default_factory=list)
     transport: MCPTransportType = MCPTransport.sse
     spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
     auth_type: Optional[MCPAuthType] = None
@@ -853,6 +862,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str
     alias: Optional[str] = None
     description: Optional[str] = None
+    mcp_access_groups: Optional[List[MCPAccessGroup]] = Field(default_factory=list)
     transport: MCPTransportType = MCPTransport.sse
     spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
     auth_type: Optional[MCPAuthType] = None
@@ -866,6 +876,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     server_id: str
     alias: Optional[str] = None
     description: Optional[str] = None
+    mcp_access_groups: Optional[List[MCPAccessGroup]] = Field(default_factory=list)
     url: str
     transport: MCPTransportType
     spec_version: MCPSpecVersionType
