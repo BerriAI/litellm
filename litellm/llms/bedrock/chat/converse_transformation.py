@@ -138,6 +138,7 @@ class AmazonConverseConfig(BaseConfig):
             or base_model.startswith("meta.llama3-1")
             or base_model.startswith("meta.llama3-2")
             or base_model.startswith("meta.llama3-3")
+            or base_model.startswith("meta.llama4")
             or base_model.startswith("amazon.nova")
             or supports_function_calling(
                 model=model, custom_llm_provider=self.custom_llm_provider
@@ -161,9 +162,14 @@ class AmazonConverseConfig(BaseConfig):
             "claude-3-7" in model
             or "claude-sonnet-4" in model
             or "claude-opus-4" in model
+            or "deepseek.r1" in model
             or supports_reasoning(
                 model=model,
                 custom_llm_provider=self.custom_llm_provider,
+            )
+            or supports_reasoning(
+                model=base_model,
+                custom_llm_provider=self.custom_llm_provider
             )
         ):
             supported_params.append("thinking")

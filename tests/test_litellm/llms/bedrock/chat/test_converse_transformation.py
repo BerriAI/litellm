@@ -10,6 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from unittest.mock import MagicMock, patch
 
+import litellm
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from litellm.types.llms.bedrock import ConverseTokenUsageBlock
 
@@ -244,3 +245,23 @@ def test_get_supported_openai_params():
     assert "tool_choice" in supported_params
     assert "thinking" in supported_params
     assert "reasoning_effort" in supported_params
+
+
+def test_get_supported_openai_params_bedrock_converse():
+    """
+    Test that al documented bedrock converse models have the same set of supported openai params when using 
+    `bedrock/converse/` or `bedrock/` prefix.
+    """
+    for model in litellm.BEDROCK_CONVERSE_MODELS:
+        print(f"Testing model: {model}")
+        config = AmazonConverseConfig()
+        supported_params_without_prefix = config.get_supported_openai_params(
+            model=model
+        )
+
+        supported_params_with_prefix = config.get_supported_openai_params(
+            model=f"bedrock/converse/{model}"
+        )
+
+        assert set(supported_params_without_prefix) == set(supported_params_with_prefix), f"Supported params mismatch for model: {model}. Without prefix: {supported_params_without_prefix}, With prefix: {supported_params_with_prefix}"
+        print(f"✅ Passed for model: {model}")
