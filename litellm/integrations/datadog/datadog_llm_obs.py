@@ -161,6 +161,7 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             output_tokens=float(standard_logging_payload.get("completion_tokens", 0)),
             total_tokens=float(standard_logging_payload.get("total_tokens", 0)),
             total_cost=float(standard_logging_payload.get("response_cost", 0)),
+            time_to_first_token=self._get_time_to_first_token_seconds(standard_logging_payload),
         )
 
         return LLMObsPayload(
@@ -176,6 +177,22 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                 self._get_datadog_tags(standard_logging_object=standard_logging_payload)
             ],
         )
+    
+    def _get_time_to_first_token_seconds(self, standard_logging_payload: StandardLoggingPayload) -> float:
+        """
+        Get the time to first token in seconds
+
+        CompletionStartTime - StartTime = Time to first token
+
+        For non streaming calls, CompletionStartTime is time we get the response back
+        """
+        start_time = standard_logging_payload.get("startTime")
+        completion_start_time = standard_logging_payload.get("completionStartTime")
+        end_time = standard_logging_payload.get("endTime")
+        if completion_start_time is not None:
+            return completion_start_time - start_time
+        return end_time - start_time
+
 
     def _get_response_messages(self, response_obj: Any) -> List[Any]:
         """
