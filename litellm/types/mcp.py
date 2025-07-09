@@ -4,7 +4,7 @@ from typing import Any, Dict, Literal, Optional
 from mcp.types import EmbeddedResource as MCPEmbeddedResource
 from mcp.types import ImageContent as MCPImageContent
 from mcp.types import TextContent as MCPTextContent
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
 
 
@@ -51,17 +51,17 @@ class MCPServerCostInfo(TypedDict, total=False):
 class LiteLLM_MCPTextContent(MCPTextContent):
     type: Literal["text"]
     text: str
-    _hidden_params: Dict[str, Any] = {}
+    _hidden_params: Dict[str, Any] = Field(default_factory=dict, exclude=True)
 
 
 class LiteLLM_MCPImageContent(MCPImageContent):
     type: Literal["image"]
     data: str
     mimeType: str
-    _hidden_params: Dict[str, Any] = {}
+    _hidden_params: Dict[str, Any] = Field(default_factory=dict, exclude=True)
 
 class LiteLLM_MCPEmbeddedResource(MCPEmbeddedResource):
     type: Literal["resource"]
     data: str
     mimeType: str
-    _hidden_params: Dict[str, Any] = {}
+    _hidden_params: Dict[str, Any] = Field(default_factory=dict, exclude=True)
