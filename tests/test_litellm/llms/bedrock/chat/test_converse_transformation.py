@@ -234,3 +234,13 @@ def test_transform_tool_call_with_cache_control():
     transformed_cache_msg = result["toolConfig"]["tools"][1]
     assert "cachePoint" in transformed_cache_msg
     assert transformed_cache_msg["cachePoint"]["type"] == "default"
+
+def test_get_supported_openai_params():
+    config = AmazonConverseConfig()
+    supported_params = config.get_supported_openai_params(
+        model="bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0"
+    )
+    assert "tools" in supported_params
+    assert "tool_choice" in supported_params
+    assert "thinking" in supported_params
+    assert "reasoning_effort" in supported_params
