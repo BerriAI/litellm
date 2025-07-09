@@ -22,6 +22,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -787,7 +788,11 @@ class ModelResponseIterator:
             text: The text to use in the content
             tool_use: The ChatCompletionToolCallChunk to use in the chunk response
         """
-        if self.json_mode is True and tool_use is not None:
+        if (
+            self.json_mode is True 
+            and tool_use is not None 
+            and tool_use.get("function", {}).get("name") == RESPONSE_FORMAT_TOOL_NAME
+        ):
             message = AnthropicConfig._convert_tool_response_to_message(
                 tool_calls=[tool_use]
             )

@@ -11,6 +11,8 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+from litellm.types.llms.openai import ChatCompletionToolCallChunk, ChatCompletionToolCallFunctionChunk
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 
 
 def test_redacted_thinking_content_block_delta():
@@ -39,3 +41,48 @@ def test_redacted_thinking_content_block_delta():
 
     assert model_response.choices[0].delta.provider_specific_fields is not None
     assert "thinking_blocks" in model_response.choices[0].delta.provider_specific_fields
+
+
+def test_handle_json_mode_chunk_response_format_tool():
+    model_response_iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=True
+    )
+    response_format_tool = ChatCompletionToolCallChunk(
+        id="tool_123",
+        type="function",
+        function=ChatCompletionToolCallFunctionChunk(
+            name=RESPONSE_FORMAT_TOOL_NAME,
+            arguments='{"question": "What is the weather?", "answer": "It is sunny"}'
+        ),
+        index=0
+    )
+    
+    text, tool_use = model_response_iterator._handle_json_mode_chunk("", response_format_tool)
+    print(f"\n\nresponse_format_tool text: {text}\n\n")
+    print(f"\n\nresponse_format_tool tool_use: {tool_use}\n\n")
+    
+    assert text == '{"question": "What is the weather?", "answer": "It is sunny"}'
+    assert tool_use is None
+
+
+def test_handle_json_mode_chunk_regular_tool():
+    model_response_iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=True
+    )
+    regular_tool = ChatCompletionToolCallChunk(
+        id="tool_456",
+        type="function",
+        function=ChatCompletionToolCallFunctionChunk(
+            name="get_weather",
+            arguments='{"location": "San Francisco, CA"}'
+        ),
+        index=0
+    )
+    
+    text, tool_use = model_response_iterator._handle_json_mode_chunk("", regular_tool)
+    print(f"\n\nregular_tool text: {text}\n\n")
+    print(f"\n\nregular_tool tool_use: {tool_use}\n\n")
+    
+    assert text == ""
+    assert tool_use is not None
+    assert tool_use["function"]["name"] == "get_weather"
