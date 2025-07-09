@@ -415,27 +415,9 @@ class BedrockVectorStore(BaseVectorStore, BaseAWSLLM):
                 "metadata", None
             )
 
-            str_metadata = ""
-            if retrieval_result_metadata is not None:
-                # filter everything that starts with "x-amz" from metadata
-                retrieval_result_metadata = {
-                    k: v
-                    for k, v in retrieval_result_metadata.items()
-                    if not k.startswith("x-amz")
-                }
-                str_metadata = (
-                    BedrockVectorStore.CONTENT_SECTION_METADATA_PREFIX_STRING
-                    + json.dumps(retrieval_result_metadata, indent=4, default=str)
-                    + BedrockVectorStore.CONTENT_SECTION_METADATA_SUFFIX_STRING
-                )
-
-            context_string += (
-                BedrockVectorStore.CONTENT_SECTION_PREFIX_STRING
-                + BedrockVectorStore.CONTENT_SECTION_TEXT_PREFIX_STRING
-                + retrieval_result_text
-                + BedrockVectorStore.CONTENT_SECTION_TEXT_SUFFIX_STRING
-                + str_metadata
-                + BedrockVectorStore.CONTENT_SECTION_SUFFIX_STRING
+            context_string += BedrockVectorStore.construct_retrieval_context(
+                retrieval_result_text=retrieval_result_text,
+                retrieval_result_metadata=retrieval_result_metadata,
             )
 
         context_string += BedrockVectorStore.CONTENT_SUFFIX_STRING
@@ -444,3 +426,30 @@ class BedrockVectorStore(BaseVectorStore, BaseAWSLLM):
             content=context_string,
         )
         return message, context_string
+
+    @staticmethod
+    def construct_retrieval_context(
+        retrieval_result_text: str, retrieval_result_metadata: Optional[Dict[str, Any]]
+    ) -> str:
+        str_metadata = ""
+        if retrieval_result_metadata is not None:
+            # filter everything that starts with "x-amz" from metadata
+            retrieval_result_metadata = {
+                k: v
+                for k, v in retrieval_result_metadata.items()
+                if not k.startswith("x-amz")
+            }
+            str_metadata = (
+                BedrockVectorStore.CONTENT_SECTION_METADATA_PREFIX_STRING
+                + json.dumps(retrieval_result_metadata, indent=4, default=str)
+                + BedrockVectorStore.CONTENT_SECTION_METADATA_SUFFIX_STRING
+            )
+
+        return (
+            BedrockVectorStore.CONTENT_SECTION_PREFIX_STRING
+            + BedrockVectorStore.CONTENT_SECTION_TEXT_PREFIX_STRING
+            + retrieval_result_text
+            + BedrockVectorStore.CONTENT_SECTION_TEXT_SUFFIX_STRING
+            + str_metadata
+            + BedrockVectorStore.CONTENT_SECTION_SUFFIX_STRING
+        )
