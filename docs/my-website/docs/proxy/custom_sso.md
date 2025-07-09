@@ -1,4 +1,10 @@
-# Event Hooks for SSO Login
+# ✨ Event Hooks for SSO Login
+
+:::info
+
+✨ This is an Enterprise only feature [Get Started with Enterprise here](https://www.litellm.ai/enterprise)
+
+:::
 
 ## Overview
 
