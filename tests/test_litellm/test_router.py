@@ -659,3 +659,32 @@ def test_arouter_responses_api_bridge():
             == "https://webhook.site/fba79dae-220a-4bb7-9a3a-8caa49604e55/openai/v1/responses?api-version=preview"
         )
         assert mock_post.call_args.kwargs["json"]["model"] == "webinterface-o3-pro"
+
+
+def test_add_invalid_provider_to_router():
+    """
+    Test that router.add_deployment raises an error if the provider is invalid
+    """
+    from litellm.types.router import Deployment
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+    )
+
+    with pytest.raises(Exception) as e:
+        router.add_deployment(
+            Deployment(
+                model_name="vertex_ai/*",
+                litellm_params={
+                    "model": "vertex_ai/*",
+                    "custom_llm_provider": "vertex_ai_eu",
+                },
+            )
+        )
+
+    assert router.pattern_router.patterns == {}

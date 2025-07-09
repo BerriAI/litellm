@@ -1735,7 +1735,6 @@ class Router:
         kwargs: Dict[str, Any],
     ):
         litellm_logging_object = kwargs.get("litellm_logging_obj", None)
-
         if litellm_logging_object is None:
             litellm_logging_object, kwargs = function_setup(
                 **{
@@ -1771,10 +1770,6 @@ class Router:
             "litellm_params"
         ].get("prompt_label", None)
 
-        prompt_version = kwargs.get(
-            "prompt_version", None
-        ) or prompt_management_deployment["litellm_params"].get("prompt_version", None)
-
         if prompt_id is None or not isinstance(prompt_id, str):
             raise ValueError(
                 f"Prompt ID is not set or not a string. Got={prompt_id}, type={type(prompt_id)}"
@@ -1795,7 +1790,6 @@ class Router:
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
             prompt_label=prompt_label,
-            prompt_version=prompt_version,
         )
 
         kwargs = {**data, **kwargs, **optional_params}
@@ -4723,6 +4717,23 @@ class Router:
     def _add_deployment(self, deployment: Deployment) -> Deployment:
         import os
 
+        #### VALIDATE MODEL ########
+        # check if model provider in supported providers
+        (
+            _model,
+            custom_llm_provider,
+            dynamic_api_key,
+            api_base,
+        ) = litellm.get_llm_provider(
+            model=deployment.litellm_params.model,
+            custom_llm_provider=deployment.litellm_params.get(
+                "custom_llm_provider", None
+            ),
+        )
+        # done reading model["litellm_params"]
+        if custom_llm_provider not in litellm.provider_list:
+            raise Exception(f"Unsupported provider - {custom_llm_provider}")
+
         #### DEPLOYMENT NAMES INIT ########
         self.deployment_names.append(deployment.litellm_params.model)
         ############ Users can either pass tpm/rpm as a litellm_param or a router param ###########
@@ -4739,20 +4750,6 @@ class Router:
             and getattr(deployment, "tpm", None) is not None
         ):
             deployment.litellm_params.tpm = getattr(deployment, "tpm")
-
-        #### VALIDATE MODEL ########
-        # check if model provider in supported providers
-        (
-            _model,
-            custom_llm_provider,
-            dynamic_api_key,
-            api_base,
-        ) = litellm.get_llm_provider(
-            model=deployment.litellm_params.model,
-            custom_llm_provider=deployment.litellm_params.get(
-                "custom_llm_provider", None
-            ),
-        )
 
         # Check if user is trying to use model_name == "*"
         # this is a catch all model for their specific api key
@@ -4783,10 +4780,6 @@ class Router:
                 if param_key in params and params[param_key].startswith("os.environ/"):
                     env_name = params[param_key].replace("os.environ/", "")
                     params[param_key] = os.environ.get(env_name, "")
-
-        # done reading model["litellm_params"]
-        if custom_llm_provider not in litellm.provider_list:
-            raise Exception(f"Unsupported provider - {custom_llm_provider}")
 
         # # init OpenAI, Azure clients
         # InitalizeOpenAISDKClient.set_client(
