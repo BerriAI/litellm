@@ -4,6 +4,7 @@ LiteLLM MCP Server Routes
 
 import asyncio
 import contextlib
+import json
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 
 from fastapi import FastAPI, HTTPException
@@ -211,17 +212,20 @@ if MCP_AVAILABLE:
             f"MCP mcp_server_tool_call - User API Key Auth from context: {user_api_key_auth}"
         )
         try:
+            # Create a body date for logging
+            body_data = {"name": name, "arguments": arguments}
+
             request = Request(
                 scope={
                     "type": "http",
                     "method": "POST",
                     "path": "/mcp/tools/call",
-                    "headers": {},
+                    "headers": [(b"content-type", b"application/json")],
                 }
             )
             if user_api_key_auth is not None:
                 data = await add_litellm_data_to_request(
-                    data={},
+                    data=body_data,
                     request=request,
                     user_api_key_dict=user_api_key_auth,
                     proxy_config=proxy_config,
@@ -230,8 +234,6 @@ if MCP_AVAILABLE:
                 data = {}
 
             response = await call_mcp_tool(
-                name=name,
-                arguments=arguments,
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
                 **data,  # for logging
