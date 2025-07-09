@@ -94,7 +94,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               cache_read_input_tokens: 0,
               cache_creation_input_tokens: 0
             },
-            metadata: {}
+            metadata: {},
+            api_key_breakdown: {}
           };
         }
         modelSpend[model].metrics.spend += metrics.metrics.spend;
@@ -140,7 +141,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               cache_read_input_tokens: 0,
               cache_creation_input_tokens: 0
             },
-            metadata: {}
+            metadata: {},
+            api_key_breakdown: {}
           };
         }
         providerSpend[provider].metrics.spend += metrics.metrics.spend;
@@ -185,7 +187,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               cache_creation_input_tokens: 0
             },
             metadata: {
-              key_alias: metrics.metadata.key_alias
+              key_alias: metrics.metadata.key_alias,
+              team_id: null
             }
           };
         }
