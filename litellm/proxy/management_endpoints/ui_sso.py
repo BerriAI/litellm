@@ -531,9 +531,6 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
     
     from litellm.proxy._types import LiteLLM_JWTAuth
     from litellm.proxy.auth.handle_jwt import JWTHandler
-    from litellm.proxy.management_endpoints.key_management_endpoints import (
-        generate_key_helper_fn,
-    )
     from litellm.proxy.proxy_server import (
         general_settings,
         jwt_handler,
@@ -1180,7 +1177,7 @@ class SSOAuthenticationHandler:
 
 
     @staticmethod
-    async def get_redirect_response_from_openid(
+    async def get_redirect_response_from_openid( # noqa: PLR0915
         result: Union[OpenID, dict, CustomOpenID],
         request: Request,
         received_response: Optional[dict] = None,
