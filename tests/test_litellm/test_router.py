@@ -661,36 +661,39 @@ def test_arouter_responses_api_bridge():
         assert mock_post.call_args.kwargs["json"]["model"] == "webinterface-o3-pro"
 
 
-# @pytest.mark.asyncio
-# async def test_router_v1_messages_fallbacks():
-#     """
-#     Test that router.v1_messages_fallbacks returns the correct response
-#     """
-#     router = litellm.Router(
-#         model_list=[
-#             {
-#                 "model_name": "claude-3-5-sonnet-latest",
-#                 "litellm_params": {
-#                     "model": "anthropic/claude-3-5-sonnet-latest",
-#                     "mock_response": "litellm.InternalServerError",
-#                 },
-#             },
-#             {
-#                 "model_name": "bedrock-claude",
-#                 "litellm_params": {
-#                     "model": "anthropic.claude-3-5-sonnet-20240620-v1:0",
-#                     "mock_response": "Hello, world!",
-#                 },
-#             },
-#         ],
-#         fallbacks=[
-#             {"claude-3-5-sonnet-latest": ["bedrock-claude"]},
-#         ],
-#     )
+@pytest.mark.asyncio
+async def test_router_v1_messages_fallbacks():
+    """
+    Test that router.v1_messages_fallbacks returns the correct response
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude-3-5-sonnet-latest",
+                "litellm_params": {
+                    "model": "anthropic/claude-3-5-sonnet-latest",
+                    "mock_response": "litellm.InternalServerError",
+                },
+            },
+            {
+                "model_name": "bedrock-claude",
+                "litellm_params": {
+                    "model": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "mock_response": "Hello, world I am a fallback!",
+                },
+            },
+        ],
+        fallbacks=[
+            {"claude-3-5-sonnet-latest": ["bedrock-claude"]},
+        ],
+    )
 
-#     result = await router.aanthropic_messages(
-#         model="claude-3-5-sonnet-latest",
-#         messages=[{"role": "user", "content": "Hello, world!"}],
-#         max_tokens=256,
-#     )
-#     assert result is not None
+    result = await router.aanthropic_messages(
+        model="claude-3-5-sonnet-latest",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        max_tokens=256,
+    )
+    assert result is not None
+
+    print(result)
+    assert result["content"][0]["text"] == "Hello, world I am a fallback!"

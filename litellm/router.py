@@ -2470,6 +2470,114 @@ class Router:
                 self.fail_calls[model] += 1
             raise e
 
+    async def ageneric_api_call_with_fallbacks(
+        self, model: str, original_function: Callable, **kwargs
+    ):
+        """
+        Helper function to make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router
+        """
+        try:
+            kwargs["model"] = model
+            kwargs["original_generic_function"] = original_function
+            kwargs["original_function"] = self._ageneric_api_call_with_fallbacks_helper
+            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
+            verbose_router_logger.debug(
+                f"Inside ageneric_api_call_with_fallbacks() - model: {model}; kwargs: {kwargs}"
+            )
+            response = await self.async_function_with_fallbacks(**kwargs)
+            return response
+
+            return response
+        except Exception as e:
+            asyncio.create_task(
+                send_llm_exception_alert(
+                    litellm_router_instance=self,
+                    request_kwargs=kwargs,
+                    error_traceback_str=traceback.format_exc(),
+                    original_exception=e,
+                )
+            )
+            raise e
+
+    async def _ageneric_api_call_with_fallbacks_helper(
+        self, model: str, original_generic_function: Callable, **kwargs
+    ):
+        """
+        Helper function to make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router
+        """
+
+        passthrough_on_no_deployment = kwargs.pop("passthrough_on_no_deployment", False)
+        function_name = "_ageneric_api_call_with_fallbacks_helper"
+        try:
+
+            parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
+            try:
+                deployment = await self.async_get_available_deployment(
+                    model=model,
+                    request_kwargs=kwargs,
+                    messages=kwargs.get("messages", None),
+                    specific_deployment=kwargs.pop("specific_deployment", None),
+                )
+            except Exception as e:
+                if passthrough_on_no_deployment:
+                    return await original_generic_function(model=model, **kwargs)
+                raise e
+
+            self._update_kwargs_with_deployment(
+                deployment=deployment, kwargs=kwargs, function_name=function_name
+            )
+
+            data = deployment["litellm_params"].copy()
+            model_name = data["model"]
+            self.total_calls[model_name] += 1
+
+            ### get custom
+
+            response = original_generic_function(
+                **{
+                    **data,
+                    "caching": self.cache_responses,
+                    **kwargs,
+                }
+            )
+
+            rpm_semaphore = self._get_client(
+                deployment=deployment,
+                kwargs=kwargs,
+                client_type="max_parallel_requests",
+            )
+
+            if rpm_semaphore is not None and isinstance(
+                rpm_semaphore, asyncio.Semaphore
+            ):
+                async with rpm_semaphore:
+                    """
+                    - Check rpm limits before making the call
+                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
+                    """
+                    await self.async_routing_strategy_pre_call_checks(
+                        deployment=deployment, parent_otel_span=parent_otel_span
+                    )
+                    response = await response  # type: ignore
+            else:
+                await self.async_routing_strategy_pre_call_checks(
+                    deployment=deployment, parent_otel_span=parent_otel_span
+                )
+                response = await response  # type: ignore
+
+            self.success_calls[model_name] += 1
+            verbose_router_logger.info(
+                f"ageneric_api_call_with_fallbacks(model={model_name})\033[32m 200 OK\033[0m"
+            )
+            return response
+        except Exception as e:
+            verbose_router_logger.info(
+                f"ageneric_api_call_with_fallbacks(model={model})\033[31m Exception {str(e)}\033[0m"
+            )
+            if model is not None:
+                self.fail_calls[model] += 1
+            raise e
+
     async def _ageneric_api_call_with_fallbacks(
         self, model: str, original_function: Callable, **kwargs
     ):
@@ -3322,12 +3430,16 @@ class Router:
                     client=client,
                     **kwargs,
                 )
+            elif call_type == "anthropic_messages":
+                return await self.ageneric_api_call_with_fallbacks(
+                    original_function=original_function,
+                    **kwargs,
+                )
             elif call_type == "moderation":
                 return await self._pass_through_moderation_endpoint_factory(
                     original_function=original_function, **kwargs
                 )
             elif call_type in (
-                "anthropic_messages",
                 "aresponses",
                 "_arealtime",
                 "acreate_fine_tuning_job",
