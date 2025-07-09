@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.secret_managers.main import get_secret_str
@@ -34,10 +35,7 @@ class VertexBase:
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
         self._credentials: Optional[GoogleCredentialsObject] = None
-        self._credentials_project_mapping: Dict[
-            Tuple[Optional[VERTEX_CREDENTIALS_TYPES], Optional[str]],
-            GoogleCredentialsObject,
-        ] = {}
+        self._credentials_project_mapping: InMemoryCache = InMemoryCache()
         self.project_id: Optional[str] = None
         self.async_handler: Optional[AsyncHTTPHandler] = None
 
@@ -401,11 +399,13 @@ class VertexBase:
             f"Checking cached credentials for project_id: {project_id}"
         )
 
-        if credential_cache_key in self._credentials_project_mapping:
+
+        credential_cached_object: Optional[GoogleCredentialsObject] = self._credentials_project_mapping.get_cache(credential_cache_key)
+        if credential_cached_object:
             verbose_logger.debug(
                 f"Cached credentials found for project_id: {project_id}."
             )
-            _credentials = self._credentials_project_mapping[credential_cache_key]
+            _credentials = credential_cached_object
             verbose_logger.debug("Using cached credentials")
             credential_project_id = _credentials.quota_project_id or getattr(
                 _credentials, "project_id", None
@@ -433,7 +433,10 @@ class VertexBase:
                     )
                 )
 
-            self._credentials_project_mapping[credential_cache_key] = _credentials
+            self._credentials_project_mapping.set_cache(
+                key=credential_cache_key,
+                value=_credentials,
+            )
 
         ## VALIDATE CREDENTIALS
         verbose_logger.debug(f"Validating credentials for project_id: {project_id}")
