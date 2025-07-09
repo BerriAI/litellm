@@ -22,14 +22,10 @@ import {
   Subtitle,
 } from "@tremor/react";
 import UsageDatePicker from "./shared/usage_date_picker";
-import { Select } from "antd";
-import { ActivityMetrics, processActivityData } from "./activity_metrics";
-import {
-  DailyData,
-  KeyMetricWithMetadata,
-  EntityMetricWithMetadata,
-} from "./usage/types";
-import { tagDailyActivityCall, teamDailyActivityCall } from "./networking";
+import { Select } from 'antd';
+import { ActivityMetrics, processActivityData } from './activity_metrics';
+import { DailyData, BreakdownMetrics, KeyMetricWithMetadata, EntityMetricWithMetadata } from './usage/types';
+import { tagDailyActivityCall, teamDailyActivityCall } from './networking';
 import TopKeyView from "./top_key_view";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { valueFormatterSpend } from "./usage/utils/value_formatters";
@@ -47,13 +43,6 @@ interface EntityMetrics {
     api_requests: number;
   };
   metadata: Record<string, any>;
-}
-
-interface BreakdownMetrics {
-  models: Record<string, any>;
-  providers: Record<string, any>;
-  api_keys: Record<string, any>;
-  entities: Record<string, EntityMetrics>;
 }
 
 interface ExtendedDailyData extends DailyData {
@@ -203,7 +192,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
             },
             metadata: {
               key_alias: metrics.metadata.key_alias,
-            },
+              team_id: metrics.metadata.team_id || null
+            }
           };
         }
         keySpend[key].metrics.spend += metrics.metrics.spend;
@@ -297,9 +287,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
               cache_creation_input_tokens: 0,
             },
             metadata: {
-              alias: data.metadata.team_alias || entity,
-              id: entity,
-            },
+              alias: (data.metadata as any).team_alias || entity,
+              id: entity
+            }
           };
         }
         entitySpend[entity].metrics.spend += data.metrics.spend;

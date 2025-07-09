@@ -126,6 +126,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               cache_creation_input_tokens: 0,
             },
             metadata: {},
+            api_key_breakdown: {}
           };
         }
         modelSpend[model].metrics.spend += metrics.metrics.spend;
@@ -162,24 +163,24 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
   // Calculate provider spend from the breakdown data
   const getProviderSpend = () => {
     const providerSpend: { [key: string]: MetricWithMetadata } = {};
-    userSpendData.results.forEach((day) => {
-      Object.entries(day.breakdown.providers || {}).forEach(
-        ([provider, metrics]) => {
-          if (!providerSpend[provider]) {
-            providerSpend[provider] = {
-              metrics: {
-                spend: 0,
-                prompt_tokens: 0,
-                completion_tokens: 0,
-                total_tokens: 0,
-                api_requests: 0,
-                successful_requests: 0,
-                failed_requests: 0,
-                cache_read_input_tokens: 0,
-                cache_creation_input_tokens: 0,
-              },
-              metadata: {},
-            };
+    userSpendData.results.forEach(day => {
+      Object.entries(day.breakdown.providers || {}).forEach(([provider, metrics]) => {
+        if (!providerSpend[provider]) {
+          providerSpend[provider] = {
+            metrics: {
+              spend: 0,
+              prompt_tokens: 0,
+              completion_tokens: 0,
+              total_tokens: 0,
+              api_requests: 0,
+              successful_requests: 0,
+              failed_requests: 0,
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 0
+            },
+            metadata: {},
+            api_key_breakdown: {}
+          };
           }
           providerSpend[provider].metrics.spend += metrics.metrics.spend;
           providerSpend[provider].metrics.prompt_tokens +=
@@ -198,8 +199,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
             metrics.metrics.cache_read_input_tokens || 0;
           providerSpend[provider].metrics.cache_creation_input_tokens +=
             metrics.metrics.cache_creation_input_tokens || 0;
-        }
-      );
+      });
     });
 
     return Object.entries(providerSpend).map(([provider, metrics]) => ({
@@ -232,7 +232,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
             },
             metadata: {
               key_alias: metrics.metadata.key_alias,
-            },
+              team_id: null
+            }
           };
         }
         keySpend[key].metrics.spend += metrics.metrics.spend;
@@ -331,6 +332,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 
   const modelMetrics = processActivityData(userSpendData, "models");
   const keyMetrics = processActivityData(userSpendData, "api_keys");
+  const mcpServerMetrics = processActivityData(userSpendData, "mcp_servers");
 
   return (
     <div style={{ width: "100%" }} className="p-8">
@@ -380,6 +382,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                 <Tab>Cost</Tab>
                 <Tab>Model Activity</Tab>
                 <Tab>Key Activity</Tab>
+                <Tab>MCP Server Activity</Tab>
               </TabList>
               <TabPanels>
                 {/* Cost Panel */}
@@ -643,6 +646,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                 </TabPanel>
                 <TabPanel>
                   <ActivityMetrics modelMetrics={keyMetrics} />
+                </TabPanel>
+                <TabPanel>
+                  <ActivityMetrics modelMetrics={mcpServerMetrics} />
                 </TabPanel>
               </TabPanels>
             </TabGroup>

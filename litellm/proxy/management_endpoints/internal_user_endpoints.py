@@ -1451,16 +1451,17 @@ def update_breakdown_metrics(
     """Updates breakdown metrics for a single record using the existing update_metrics function"""
 
     # Update model breakdown
-    if record.model not in breakdown.models:
-        breakdown.models[record.model] = MetricWithMetadata(
-            metrics=SpendMetrics(),
-            metadata=model_metadata.get(
-                record.model, {}
-            ),  # Add any model-specific metadata here
+    if record.model:
+        if record.model not in breakdown.models:
+            breakdown.models[record.model] = MetricWithMetadata(
+                metrics=SpendMetrics(),
+                metadata=model_metadata.get(
+                    record.model, {}
+                ),  # Add any model-specific metadata here
+            )
+        breakdown.models[record.model].metrics = update_metrics(
+            breakdown.models[record.model].metrics, record
         )
-    breakdown.models[record.model].metrics = update_metrics(
-        breakdown.models[record.model].metrics, record
-    )
 
     # Update provider breakdown
     provider = record.custom_llm_provider or "unknown"
