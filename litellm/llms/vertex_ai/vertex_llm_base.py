@@ -29,7 +29,9 @@ class VertexBase(BaseLLM):
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
         self._credentials: Optional[GoogleCredentialsObject] = None
-        self._credentials_project_mapping: InMemoryCache = InMemoryCache()
+        self._credentials_project_mapping: InMemoryCache = InMemoryCache(
+            max_size_in_memory=4
+        )
         self.project_id: Optional[str] = None
         self.async_handler: Optional[AsyncHTTPHandler] = None
 
@@ -266,8 +268,9 @@ class VertexBase(BaseLLM):
             f"Checking cached credentials for project_id: {project_id}"
         )
 
-
-        credential_cached_object: Optional[GoogleCredentialsObject] = self._credentials_project_mapping.get_cache(credential_cache_key)
+        credential_cached_object: Optional[GoogleCredentialsObject] = (
+            self._credentials_project_mapping.get_cache(credential_cache_key)
+        )
         if credential_cached_object:
             verbose_logger.debug(
                 f"Cached credentials found for project_id: {project_id}."
