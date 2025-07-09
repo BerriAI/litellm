@@ -199,7 +199,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
             metrics.metrics.cache_read_input_tokens || 0;
           providerSpend[provider].metrics.cache_creation_input_tokens +=
             metrics.metrics.cache_creation_input_tokens || 0;
-      );
+      });
     });
 
     return Object.entries(providerSpend).map(([provider, metrics]) => ({
