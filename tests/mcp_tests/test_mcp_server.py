@@ -93,7 +93,7 @@ async def test_mcp_server_manager_https_server():
         assert tools[0].name == "zapier_mcp_server-gmail_send_email"
         
         result = await mcp_server_manager.call_tool(
-            name="zapier_mcp_server/gmail_send_email",
+            name="zapier_mcp_server-gmail_send_email",
             arguments={
                 "body": "Test",
                 "message": "Test",
@@ -185,8 +185,8 @@ async def test_mcp_http_transport_list_tools_mock():
         mock_client.list_tools.assert_called_once()
         
         # Verify tool mapping was updated
-        assert test_manager.tool_name_to_mcp_server_name_mapping["test_http_server/gmail_send_email"] == "test_http_server"
-        assert test_manager.tool_name_to_mcp_server_name_mapping["test_http_server/calendar_create_event"] == "test_http_server"
+        assert test_manager.tool_name_to_mcp_server_name_mapping["test_http_server-gmail_send_email"] == "test_http_server"
+        assert test_manager.tool_name_to_mcp_server_name_mapping["test_http_server-calendar_create_event"] == "test_http_server"
 
 
 @pytest.mark.asyncio
