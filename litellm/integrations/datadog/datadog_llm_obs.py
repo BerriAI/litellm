@@ -160,11 +160,12 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             input_tokens=float(standard_logging_payload.get("prompt_tokens", 0)),
             output_tokens=float(standard_logging_payload.get("completion_tokens", 0)),
             total_tokens=float(standard_logging_payload.get("total_tokens", 0)),
+            total_cost=float(standard_logging_payload.get("response_cost", 0)),
         )
 
         return LLMObsPayload(
             parent_id=metadata.get("parent_id", "undefined"),
-            trace_id=metadata.get("trace_id", str(uuid.uuid4())),
+            trace_id=standard_logging_payload.get("trace_id", str(uuid.uuid4())),
             span_id=metadata.get("span_id", str(uuid.uuid4())),
             name=metadata.get("name", "litellm_llm_call"),
             meta=meta,
@@ -202,11 +203,19 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
     def _get_dd_llm_obs_payload_metadata(
         self, standard_logging_payload: StandardLoggingPayload
     ) -> Dict:
+        """
+        Fields to track in DD LLM Observability metadata from litellm standard logging payload
+        """
         _metadata = {
             "model_name": standard_logging_payload.get("model", "unknown"),
             "model_provider": standard_logging_payload.get(
                 "custom_llm_provider", "unknown"
             ),
+            "id": standard_logging_payload.get("id", "unknown"),
+            "trace_id": standard_logging_payload.get("trace_id", "unknown"),
+            "cache_hit": standard_logging_payload.get("cache_hit", "unknown"),
+            "cache_key": standard_logging_payload.get("cache_key", "unknown"),
+            "saved_cache_cost": standard_logging_payload.get("saved_cache_cost", 0),
         }
         _standard_logging_metadata: dict = (
             dict(standard_logging_payload.get("metadata", {})) or {}
