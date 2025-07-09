@@ -1045,3 +1045,76 @@ class TestHTMLIntegration:
         
         assert isinstance(html, str)
         assert len(html) > 0
+
+
+class TestCustomUISSO:
+    """Test the custom UI SSO sign-in handler functionality"""
+
+    @pytest.mark.asyncio
+    async def test_handle_custom_ui_sso_sign_in_success(self):
+        """Test successful custom UI SSO sign-in with valid headers"""
+        from fastapi_sso.sso.base import OpenID
+
+        from litellm.integrations.custom_sso_handler import CustomSSOLoginHandler
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Mock request with custom headers
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {
+            "x-litellm-user-id": "test_user_123",
+            "x-litellm-user-email": "test@example.com",
+            "x-forwarded-for": "192.168.1.1",
+        }
+        mock_request.base_url = "https://test.litellm.ai/"
+
+        # Mock the custom handler
+        mock_custom_handler = MagicMock(spec=CustomSSOLoginHandler)
+        expected_openid = OpenID(
+            id="test_user_123",
+            email="test@example.com",
+            first_name="Test",
+            last_name="User",
+            display_name="Test User",
+            picture=None,
+            provider="custom",
+        )
+        mock_custom_handler.handle_custom_ui_sso_sign_in = AsyncMock(
+            return_value=expected_openid
+        )
+
+        # Mock the redirect response method
+        mock_redirect_response = MagicMock()
+        mock_redirect_response.status_code = 303
+
+        with patch(
+            "litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler",
+            mock_custom_handler,
+        ):
+            with patch.object(
+                SSOAuthenticationHandler,
+                "get_redirect_response_from_openid",
+                return_value=mock_redirect_response,
+            ) as mock_get_redirect:
+                # Act
+                result = await SSOAuthenticationHandler.handle_custom_ui_sso_sign_in(
+                    request=mock_request
+                )
+
+                # Assert
+                # Verify the custom handler was called with the request
+                mock_custom_handler.handle_custom_ui_sso_sign_in.assert_called_once_with(
+                    request=mock_request
+                )
+
+                # Verify the redirect response was generated with correct OpenID
+                mock_get_redirect.assert_called_once_with(
+                    result=expected_openid,
+                    request=mock_request,
+                    received_response=None,
+                    generic_client_id=None,
+                    ui_access_mode=None,
+                )
+
+                # Verify the result is the redirect response
+                assert result == mock_redirect_response
+                assert result.status_code == 303
