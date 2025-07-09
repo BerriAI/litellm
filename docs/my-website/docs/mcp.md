@@ -442,7 +442,7 @@ if __name__ == "__main__":
 </Tabs>
 
 
-### Using a different Authentication Header
+### Customize the MCP Auth Header Name
 
 By default, LiteLLM uses `x-mcp-auth` to pass your credentials to MCP servers. You can change this header name in one of the following ways:
 1. Set the `LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME` environment variable
@@ -465,6 +465,9 @@ general_settings:
   mcp_client_side_auth_header_name: "authorization"
 ```
 
+#### Using the authorization header
+
+In this example the `authorization` header will be passed to the MCP server for authentication.
 
 ```bash title="cURL with authorization header" showLineNumbers
 curl --location '<your-litellm-proxy-base-url>/v1/responses' \
