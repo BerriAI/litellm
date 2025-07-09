@@ -4,6 +4,7 @@ LiteLLM MCP Server Routes
 
 import asyncio
 import contextlib
+from datetime import datetime
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 
 from fastapi import FastAPI, HTTPException
@@ -303,6 +304,7 @@ if MCP_AVAILABLE:
         """
         Call a specific tool with the provided arguments (handles prefixed tool names)
         """
+        start_time = datetime.now()
         if arguments is None:
             raise HTTPException(
                 status_code=400, detail="Request arguments are required"
@@ -339,7 +341,7 @@ if MCP_AVAILABLE:
         mcp_server: Optional[MCPServer] = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
         if mcp_server:
             standard_logging_mcp_tool_call["mcp_server_cost_info"] = (mcp_server.mcp_info or {}).get("mcp_server_cost_info")
-            return await _handle_managed_mcp_tool(
+            response = await _handle_managed_mcp_tool(
                 name=name,  # Pass the full name (potentially prefixed)
                 arguments=arguments,
                 user_api_key_auth=user_api_key_auth,
@@ -350,7 +352,16 @@ if MCP_AVAILABLE:
         #########################################################
         # Deprecated: Local MCP Server Tool
         #########################################################
-        return await _handle_local_mcp_tool(original_tool_name, arguments)
+        response = await _handle_local_mcp_tool(original_tool_name, arguments)
+        if litellm_logging_obj:
+            end_time = datetime.now()
+            await litellm_logging_obj.async_post_mcp_tool_call_hook(
+                kwargs=litellm_logging_obj.model_call_details,
+                response_obj=response,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        return response
 
     def _get_standard_logging_mcp_tool_call(
         name: str,

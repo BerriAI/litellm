@@ -363,7 +363,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
         Useful if you want to modiy the standard logging payload after the MCP tool call is made.
         """
-        pass
+        return None
     
 
     # Useful helpers for custom logger classes
