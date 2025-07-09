@@ -662,7 +662,7 @@ class LiteLLMCompletionResponsesConfig:
                         GenericResponseOutputItem(
                             type="reasoning",
                             id=f"{chat_completion_response.id}_reasoning",
-                            status=choice.finish_reason,
+                            status=choice.finish_reason or "completed",
                             role="assistant",
                             content=[
                                 OutputText(
