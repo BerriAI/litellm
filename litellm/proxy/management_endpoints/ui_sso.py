@@ -805,7 +805,11 @@ class SSOAuthenticationHandler:
     async def handle_custom_ui_sso_sign_in(
         request: Request,
     ) -> RedirectResponse:
-        # 1. call the user defined custom sso sign in handler
+        """
+        Allow a user to execute their custom code to parse incoming request headers and return a OpenID object
+
+        Use this when you have an OAuth proxy in front of LiteLLM (where the OAuth proxy has already authenticated the user)
+        """
         from fastapi_sso.sso.base import OpenID
 
         from litellm.integrations.custom_sso_handler import CustomSSOLoginHandler
