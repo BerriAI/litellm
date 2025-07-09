@@ -611,3 +611,53 @@ async def test_get_config_from_file(tmp_path, monkeypatch):
 
     result = await proxy_config._get_config_from_file(None)
     assert result == test_config
+
+
+@pytest.mark.asyncio
+async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
+    """
+    Test that _add_proxy_budget_to_db only creates a user and no keys are added.
+    
+    This validates that generate_key_helper_fn is called with table_name="user" 
+    which should prevent key creation in LiteLLM_VerificationToken table.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    import litellm
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    # Set up required litellm settings
+    litellm.budget_duration = "30d"
+    litellm.max_budget = 100.0
+    
+    litellm_proxy_budget_name = "litellm-proxy-budget"
+
+    # Mock generate_key_helper_fn to capture its call arguments
+    mock_generate_key_helper = AsyncMock(return_value={
+        "user_id": litellm_proxy_budget_name,
+        "max_budget": 100.0,
+        "budget_duration": "30d",
+        "spend": 0,
+        "models": [],
+    })
+    
+    # Patch generate_key_helper_fn in proxy_server where it's being called from
+    with patch("litellm.proxy.proxy_server.generate_key_helper_fn", mock_generate_key_helper):
+        # Call the function under test
+        ProxyStartupEvent._add_proxy_budget_to_db(litellm_proxy_budget_name)
+        
+        # Allow async task to complete
+        import asyncio
+        await asyncio.sleep(0.1)
+        
+        # Verify that generate_key_helper_fn was called
+        mock_generate_key_helper.assert_called_once()
+        call_args = mock_generate_key_helper.call_args
+        
+        # Verify critical parameters that prevent key creation
+        assert call_args.kwargs["request_type"] == "user"
+        assert call_args.kwargs["table_name"] == "user"
+        assert call_args.kwargs["user_id"] == litellm_proxy_budget_name
+        assert call_args.kwargs["max_budget"] == 100.0
+        assert call_args.kwargs["budget_duration"] == "30d"
+        assert call_args.kwargs["query_type"] == "update_data"

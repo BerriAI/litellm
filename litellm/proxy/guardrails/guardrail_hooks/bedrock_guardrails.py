@@ -262,12 +262,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             if self._should_raise_guardrail_blocked_exception(
                 bedrock_guardrail_response
             ):
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "Violated guardrail policy",
-                        "bedrock_guardrail_response": _json_response,
-                    },
+                raise self._get_http_exception_for_blocked_guardrail(
+                    bedrock_guardrail_response
                 )
         else:
             verbose_proxy_logger.error(
@@ -277,6 +273,30 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
 
         return bedrock_guardrail_response
+    
+
+    def _get_http_exception_for_blocked_guardrail(self, response: BedrockGuardrailResponse) -> HTTPException:
+        """
+        Get the HTTP exception for a blocked guardrail.
+        """
+        bedrock_guardrail_output_text: str = ""
+        outputs: Optional[List[BedrockGuardrailOutput]] = (
+            response.get("outputs", []) or []
+        )
+        if outputs:
+            for output in outputs:
+                if output.get("text"):
+                    bedrock_guardrail_output_text += output.get("text") or ""
+                
+        
+        return HTTPException(
+            status_code=400,
+            detail={
+                "error": "Violated guardrail policy", 
+                "bedrock_guardrail_response": bedrock_guardrail_output_text,
+            }
+        )
+
 
     def _should_raise_guardrail_blocked_exception(
         self, response: BedrockGuardrailResponse

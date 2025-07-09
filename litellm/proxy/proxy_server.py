@@ -3306,6 +3306,7 @@ class ProxyStartupEvent:
         asyncio.create_task(
             generate_key_helper_fn(  # type: ignore
                 request_type="user",
+                table_name="user",
                 user_id=litellm_proxy_budget_name,
                 duration=None,
                 models=[],
