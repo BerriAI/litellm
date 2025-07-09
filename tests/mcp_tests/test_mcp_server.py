@@ -90,7 +90,7 @@ async def test_mcp_server_manager_https_server():
         
         # Verify tools were returned and properly prefixed
         assert len(tools) == 1
-        assert tools[0].name == "zapier_mcp_server/gmail_send_email"
+        assert tools[0].name == "zapier_mcp_server-gmail_send_email"
         
         result = await mcp_server_manager.call_tool(
             name="zapier_mcp_server/gmail_send_email",
@@ -177,8 +177,8 @@ async def test_mcp_http_transport_list_tools_mock():
         
         # Assertions
         assert len(tools) == 2
-        assert tools[0].name == "test_http_server/gmail_send_email"
-        assert tools[1].name == "test_http_server/calendar_create_event"
+        assert tools[0].name == "test_http_server-gmail_send_email"
+        assert tools[1].name == "test_http_server-calendar_create_event"
         
         # Verify client methods were called
         mock_client.__aenter__.assert_called()
@@ -640,7 +640,7 @@ async def test_list_tools_rest_api_success():
 
             assert isinstance(response, dict)
             assert len(response["tools"]) == 1
-            assert response["tools"][0].name == "test_server/test_tool"
+            assert response["tools"][0].name == "test_server-test_tool"
     finally:
         # Restore original state
         global_mcp_server_manager.registry = {}

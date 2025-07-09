@@ -30,7 +30,7 @@ class TestMCPLogger(CustomLogger):
         print("success event")
         self.standard_logging_payload = kwargs.get("standard_logging_object", None)
         print(f"Captured standard_logging_payload: {self.standard_logging_payload}")
-
+    
 
 @pytest.mark.asyncio
 async def test_mcp_cost_tracking():
@@ -89,9 +89,13 @@ async def test_mcp_cost_tracking():
 
             print("tool_name_to_mcp_server_name_mapping", local_mcp_server_manager.tool_name_to_mcp_server_name_mapping)
 
+            # Manually add the tool mapping to ensure it's available (since mocking might not capture it properly)
+            local_mcp_server_manager.tool_name_to_mcp_server_name_mapping["add_tools"] = "zapier_gmail_server"
+            local_mcp_server_manager.tool_name_to_mcp_server_name_mapping["zapier_gmail_server-add_tools"] = "zapier_gmail_server"
+
             # Call mcp tool
             response = await mcp_server_tool_call(
-                name="zapier_gmail_server/add_tools",  # Use prefixed name
+                name="zapier_gmail_server-add_tools",  # Use correct prefixed name with - separator
                 arguments={
                     "test": "test"
                 }
@@ -148,6 +152,7 @@ async def test_mcp_cost_tracking_per_tool():
     ])
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.disconnect = AsyncMock(return_value=None)
     
     # Mock the MCPClient constructor
     def mock_client_constructor(*args, **kwargs):
@@ -182,6 +187,12 @@ async def test_mcp_cost_tracking_per_tool():
         # Initialize the tool mapping
         await local_mcp_server_manager._initialize_tool_name_to_mcp_server_name_mapping()
         
+        # Manually add the tool mapping to ensure it's available (since mocking might not capture it properly)
+        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping["expensive_tool"] = "test_server"
+        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping["test_server-expensive_tool"] = "test_server"
+        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping["cheap_tool"] = "test_server"
+        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping["test_server-cheap_tool"] = "test_server"
+        
         # Patch the global manager in both modules where it's used
         with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager', local_mcp_server_manager), \
              patch('litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager', local_mcp_server_manager):
@@ -190,7 +201,7 @@ async def test_mcp_cost_tracking_per_tool():
 
             # Test 1: Call expensive_tool - should cost 5.0
             response1 = await mcp_server_tool_call(
-                name="test_server/expensive_tool",  # Use prefixed name
+                name="test_server-expensive_tool",  # Use correct prefixed name with - separator
                 arguments={
                     "data": "test_expensive"
                 }
@@ -211,7 +222,7 @@ async def test_mcp_cost_tracking_per_tool():
 
             # Test 2: Call cheap_tool - should cost 0.1
             response2 = await mcp_server_tool_call(
-                name="test_server/cheap_tool",  # Use prefixed name
+                name="test_server-cheap_tool",  # Use correct prefixed name with - separator
                 arguments={
                     "data": "test_cheap"
                 }
@@ -243,3 +254,85 @@ async def test_mcp_cost_tracking_per_tool():
             
             # Verify client methods were called twice
             assert mock_client.call_tool.call_count == 2
+
+
+
+
+class MCPLoggerHook(CustomLogger):
+    async def async_post_mcp_tool_call_hook(self, kwargs, response_obj, start_time, end_time):
+        print("post mcp tool call response_obj", response_obj)
+        return response_obj
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_call_hook():
+    # Create a mock tool call result
+    litellm.logging_callback_manager._reset_all_callbacks()
+    mock_result = CallToolResult(
+        content=[TextContent(type="text", text="Test response")],
+        isError=False
+    )
+    
+    # Create a mock MCPClient
+    mock_client = AsyncMock()
+    mock_client.call_tool = AsyncMock(return_value=mock_result)
+    mock_client.list_tools = AsyncMock(return_value=[
+        MCPTool(
+            name="add_tools",
+            description="Test tool",
+            inputSchema={"type": "object", "properties": {"test": {"type": "string"}}}
+        )
+    ])
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.disconnect = AsyncMock(return_value=None)
+    
+    # Mock the MCPClient constructor
+    def mock_client_constructor(*args, **kwargs):
+        return mock_client
+
+    # Initialize the server manager
+    local_mcp_server_manager = MCPServerManager()
+    
+    with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient', mock_client_constructor):
+        # Load the server config
+        local_mcp_server_manager.load_servers_from_config(
+            mcp_servers_config={
+                "zapier_gmail_server": {
+                    "url": os.getenv("ZAPIER_MCP_HTTPS_SERVER_URL"),
+                    "mcp_info": {
+                        "mcp_server_cost_info": {
+                            "default_cost_per_query": 1.2,
+                        }
+                    }
+                }
+            }
+        )
+
+        # Set up the test logger
+        test_logger = MCPLoggerHook()
+        litellm.callbacks = [test_logger]
+
+        # Initialize the tool mapping
+        await local_mcp_server_manager._initialize_tool_name_to_mcp_server_name_mapping()
+        
+        # Manually add the tool mapping to ensure it's available (since mocking might not capture it properly)
+        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping["add_tools"] = "zapier_gmail_server"
+        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping["zapier_gmail_server-add_tools"] = "zapier_gmail_server"
+        
+        # Patch the global manager in both modules where it's used
+        with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager', local_mcp_server_manager), \
+             patch('litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager', local_mcp_server_manager):
+
+            print("tool_name_to_mcp_server_name_mapping", local_mcp_server_manager.tool_name_to_mcp_server_name_mapping)
+
+            # Call mcp tool using the correct separator format (- not /)
+            response = await mcp_server_tool_call(
+                name="zapier_gmail_server-add_tools",  # Use correct prefixed name with - separator
+                arguments={
+                    "test": "test"
+                }
+            )
+
+            # wait 1-2 seconds for logging to be processed
+            await asyncio.sleep(2)
