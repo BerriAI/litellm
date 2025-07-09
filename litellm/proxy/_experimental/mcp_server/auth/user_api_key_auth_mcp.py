@@ -51,7 +51,7 @@ class MCPRequestHandler:
         litellm_api_key = (
             MCPRequestHandler.get_litellm_api_key_from_headers(headers) or ""
         )
-        mcp_auth_header = headers.get(MCPRequestHandler.LITELLM_MCP_AUTH_HEADER_NAME)
+        mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers)
         mcp_servers_header = headers.get(MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME)
         verbose_logger.debug(f"Raw MCP servers header: {mcp_servers_header}")
         mcp_servers = None
@@ -83,6 +83,42 @@ class MCPRequestHandler:
         )
 
         return validated_user_api_key_auth, mcp_auth_header, mcp_servers
+    
+
+    @staticmethod
+    def _get_mcp_auth_header_from_headers(headers: Headers) -> Optional[str]:
+        """
+        Get the header passed to LiteLLM to pass to downstream MCP servers
+
+        By default litellm will check for the header `x-mcp-auth` by setting one of the following:
+            1. `LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME` as an environment variable
+            2. `mcp_client_side_auth_header_name` in the general settings on the config.yaml file
+
+        Support this auth: https://docs.litellm.ai/docs/mcp#using-your-mcp-with-client-side-credentials
+
+        If you want to use a different header name, you can set the `LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME` in the secret manager or `mcp_client_side_auth_header_name` in the general settings.
+        """
+        mcp_client_side_auth_header_name: str = MCPRequestHandler._get_mcp_client_side_auth_header_name()
+        return headers.get(mcp_client_side_auth_header_name)
+    
+    @staticmethod
+    def _get_mcp_client_side_auth_header_name() -> str:
+        """
+        Get the header name used to pass the MCP auth header to the MCP server
+
+        By default litellm will check for the header `x-mcp-auth` by setting one of the following:
+            1. `LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME` as an environment variable
+            2. `mcp_client_side_auth_header_name` in the general settings on the config.yaml file
+        """
+        from litellm.proxy.proxy_server import general_settings
+        from litellm.secret_managers.main import get_secret_str
+        MCP_CLIENT_SIDE_AUTH_HEADER_NAME: str = MCPRequestHandler.LITELLM_MCP_AUTH_HEADER_NAME
+        if get_secret_str("LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME") is not None:
+            MCP_CLIENT_SIDE_AUTH_HEADER_NAME = get_secret_str("LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME") or MCP_CLIENT_SIDE_AUTH_HEADER_NAME
+        elif general_settings.get("mcp_client_side_auth_header_name") is not None:
+            MCP_CLIENT_SIDE_AUTH_HEADER_NAME = general_settings.get("mcp_client_side_auth_header_name") or MCP_CLIENT_SIDE_AUTH_HEADER_NAME
+        return MCP_CLIENT_SIDE_AUTH_HEADER_NAME
+
 
     @staticmethod
     def get_litellm_api_key_from_headers(headers: Headers) -> Optional[str]:
