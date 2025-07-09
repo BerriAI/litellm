@@ -7,7 +7,7 @@
 
 import os
 import uuid
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union, TypedDict
 
 try:
     from ulid import ULID
@@ -15,6 +15,14 @@ try:
     ULID_AVAILABLE = True
 except ImportError:
     ULID_AVAILABLE = False
+
+try:
+    import httpx
+
+    HTTPX_AVAILABLE = True
+except ImportError:
+    httpx = None
+    HTTPX_AVAILABLE = False
 
 from fastapi import HTTPException
 
@@ -31,6 +39,15 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 import litellm
+
+
+class LassoResponse(TypedDict):
+    """Type definition for Lasso API response."""
+
+    violations_detected: bool
+    deputies: Dict[str, bool]
+    findings: Dict[str, List[Dict[str, Any]]]
+    messages: Optional[List[Dict[str, str]]]
 
 
 class LassoGuardrailMissingSecrets(Exception):
@@ -221,11 +238,18 @@ class LassoGuardrail(CustomGuardrail):
         """
         Get or generate a conversation_id for this request.
 
-        Uses litellm_call_id to ensure the same conversation_id is used for both pre-call
-        and post-call hooks within the same request, enabling proper conversation grouping in Lasso UI.
+        This method ensures session consistency by using litellm_call_id as a cache key.
+        The same conversation_id is used for both pre-call and post-call hooks within
+        the same request, enabling proper conversation grouping in Lasso UI.
+
+        Example:
+            >>> guardrail = LassoGuardrail(lasso_api_key="key")
+            >>> data = {"litellm_call_id": "call_123"}
+            >>> conversation_id = guardrail._get_or_generate_conversation_id(data, cache)
+            >>> # Returns consistent ID for same litellm_call_id
 
         Args:
-            data: The request data
+            data: The request data containing litellm_call_id
             cache: The cache instance for storing conversation_id
 
         Returns:
@@ -272,6 +296,18 @@ class LassoGuardrail(CustomGuardrail):
         """
         Run the Lasso guardrail with the specified message type.
 
+        This is the core method that handles both classification and masking workflows.
+        It chooses the appropriate API endpoint based on the masking configuration
+        and processes the response according to Lasso's action-based system.
+
+        Workflow:
+        1. Validate messages are present
+        2. Prepare headers and payload
+        3. Choose API endpoint (classify vs classifix)
+        4. Call Lasso API
+        5. Process response and apply masking if needed
+        6. Handle blocking vs non-blocking violations
+
         Args:
             data: The request data containing messages
             cache: The cache instance for storing conversation_id (optional for post-call)
@@ -279,35 +315,109 @@ class LassoGuardrail(CustomGuardrail):
 
         Raises:
             LassoGuardrailAPIError: If the Lasso API call fails
+            HTTPException: If blocking violations are detected
         """
         messages: List[Dict[str, str]] = data.get("messages", [])
         if not messages:
             return data
 
+        if self.mask:
+            return await self._handle_masking(data, cache, message_type, messages)
+        else:
+            return await self._handle_classification(data, cache, message_type, messages)
+
+    async def _handle_classification(
+        self,
+        data: dict,
+        cache: Optional[DualCache],
+        message_type: Literal["PROMPT", "COMPLETION"],
+        messages: List[Dict[str, str]],
+    ) -> dict:
+        """Handle classification without masking."""
         try:
             headers = self._prepare_headers(data, cache)
             payload = self._prepare_payload(messages, message_type, data, cache)
+            response = await self._call_lasso_api(headers=headers, payload=payload)
+            self._process_lasso_response(response)
+            return data
+        except Exception as e:
+            return await self._handle_api_error(e, message_type)
 
-            # Use classifix endpoint when masking is enabled
-            if self.mask:
-                api_url = self.api_base.replace("/gateway/v3/classify", "/gateway/v1/classifix")
-                response = await self._call_lasso_api(headers=headers, payload=payload, api_url=api_url)
-                self._process_lasso_response(response)
+    async def _handle_masking(
+        self,
+        data: dict,
+        cache: Optional[DualCache],
+        message_type: Literal["PROMPT", "COMPLETION"],
+        messages: List[Dict[str, str]],
+    ) -> dict:
+        """Handle masking with classifix endpoint."""
+        try:
+            headers = self._prepare_headers(data, cache)
+            payload = self._prepare_payload(messages, message_type, data, cache)
+            api_url = self.api_base.replace("/gateway/v3/classify", "/gateway/v1/classifix")
+            response = await self._call_lasso_api(headers=headers, payload=payload, api_url=api_url)
+            self._process_lasso_response(response)
 
-                # Apply masking to messages if violations detected and masked messages are available
-                if response.get("violations_detected") and response.get("messages"):
-                    data["messages"] = response["messages"]
-                    verbose_proxy_logger.debug("Applied Lasso masking to messages")
-            else:
-                response = await self._call_lasso_api(headers=headers, payload=payload)
-                self._process_lasso_response(response)
+            # Apply masking to messages if violations detected and masked messages are available
+            if response.get("violations_detected") and response.get("messages"):
+                data["messages"] = response["messages"]
+                self._log_masking_applied(message_type, response)
 
             return data
         except Exception as e:
-            if isinstance(e, HTTPException):
-                raise e
-            verbose_proxy_logger.error(f"Error calling Lasso API: {str(e)}")
-            raise LassoGuardrailAPIError(f"Failed to verify request safety with Lasso API: {str(e)}")
+            return await self._handle_api_error(e, message_type)
+
+    async def _handle_api_error(
+        self,
+        error: Exception,
+        message_type: Literal["PROMPT", "COMPLETION"],
+    ) -> None:
+        """Handle API errors with specific error types."""
+        if isinstance(error, HTTPException):
+            raise error
+
+        # Log error with context
+        verbose_proxy_logger.error(
+            f"Error calling Lasso API: {str(error)}",
+            extra={
+                "guardrail_name": getattr(self, "guardrail_name", "unknown"),
+                "message_type": message_type,
+                "error_type": type(error).__name__,
+            },
+        )
+
+        # Handle specific error types if httpx is available
+        if HTTPX_AVAILABLE:
+            if isinstance(error, httpx.TimeoutException):
+                raise LassoGuardrailAPIError("Lasso API timeout")
+            elif isinstance(error, httpx.HTTPStatusError):
+                if error.response.status_code == 401:
+                    raise LassoGuardrailMissingSecrets("Invalid API key")
+                elif error.response.status_code == 429:
+                    raise LassoGuardrailAPIError("Lasso API rate limit exceeded")
+                else:
+                    raise LassoGuardrailAPIError(f"API error: {error.response.status_code}")
+
+        # Generic error handling
+        raise LassoGuardrailAPIError(f"Failed to verify request safety with Lasso API: {str(error)}")
+
+    def _log_masking_applied(
+        self,
+        message_type: Literal["PROMPT", "COMPLETION"],
+        response: Dict[str, Any],
+    ) -> None:
+        """Log masking application with structured context."""
+        conversation_id = getattr(self, "conversation_id", "unknown")
+        verbose_proxy_logger.debug(
+            "Lasso masking applied",
+            extra={
+                "guardrail_name": getattr(self, "guardrail_name", "unknown"),
+                "message_type": message_type,
+                "violations_count": len(response.get("findings", {})),
+                "masked_fields": len(response.get("messages", [])),
+                "conversation_id": conversation_id,
+            },
+        )
 
     def _prepare_headers(self, data: dict, cache: Optional[DualCache] = None) -> Dict[str, str]:
         """Prepare headers for the Lasso API request."""
@@ -384,7 +494,7 @@ class LassoGuardrail(CustomGuardrail):
         headers: Dict[str, str],
         payload: Dict[str, Any],
         api_url: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> LassoResponse:
         """Call the Lasso API and return the response."""
         url = api_url or self.api_base
         verbose_proxy_logger.debug(f"Calling Lasso API with messageType: {payload.get('messageType')}")
@@ -397,8 +507,32 @@ class LassoGuardrail(CustomGuardrail):
         response.raise_for_status()
         return response.json()
 
-    def _process_lasso_response(self, response: Dict[str, Any]) -> None:
-        """Process the Lasso API response and raise exceptions if violations are detected."""
+    def _process_lasso_response(self, response: LassoResponse) -> None:
+        """
+        Process the Lasso API response and handle violations according to action types.
+
+        This method implements the action-based blocking logic:
+        - BLOCK: Raises HTTPException to stop request/response
+        - AUTO_MASKING: Logs warning and continues (masking applied elsewhere)
+        - WARN: Logs warning and continues
+
+        Example Response:
+            {
+                "violations_detected": true,
+                "findings": {
+                    "jailbreak": [{
+                        "action": "BLOCK",
+                        "severity": "HIGH"
+                    }]
+                }
+            }
+
+        Args:
+            response: The response dictionary from Lasso API
+
+        Raises:
+            HTTPException: If any finding has "action": "BLOCK"
+        """
         if response and response.get("violations_detected") is True:
             violated_deputies = self._parse_violated_deputies(response)
             verbose_proxy_logger.warning(f"Lasso guardrail detected violations: {violated_deputies}")
@@ -422,8 +556,31 @@ class LassoGuardrail(CustomGuardrail):
                     f"Non-blocking Lasso violations detected, continuing with warning: {violated_deputies}"
                 )
 
-    def _check_for_blocking_actions(self, response: Dict[str, Any]) -> List[str]:
-        """Check findings for actions that should block the request/response."""
+    def _check_for_blocking_actions(self, response: LassoResponse) -> List[str]:
+        """
+        Check findings for actions that should block the request/response.
+
+        Examines the findings section of the Lasso response to identify which
+        deputies have violations with "BLOCK" action. This enables granular
+        control where some violations (like PII) can be masked while others
+        (like jailbreaks) are blocked entirely.
+
+        Args:
+            response: The response dictionary from Lasso API
+
+        Returns:
+            List[str]: Names of deputies with blocking violations
+
+        Example:
+            >>> response = {
+            ...     "findings": {
+            ...         "jailbreak": [{"action": "BLOCK"}],
+            ...         "pattern-detection": [{"action": "AUTO_MASKING"}]
+            ...     }
+            ... }
+            >>> guardrail._check_for_blocking_actions(response)
+            ['jailbreak']
+        """
         blocking_violations = []
         findings = response.get("findings", {})
 
@@ -437,7 +594,7 @@ class LassoGuardrail(CustomGuardrail):
 
         return blocking_violations
 
-    def _parse_violated_deputies(self, response: Dict[str, Any]) -> List[str]:
+    def _parse_violated_deputies(self, response: LassoResponse) -> List[str]:
         """Parse the response to extract violated deputies."""
         violated_deputies = []
         if "deputies" in response:
