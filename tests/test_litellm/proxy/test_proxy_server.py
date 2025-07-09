@@ -661,3 +661,57 @@ async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
         assert call_args.kwargs["max_budget"] == 100.0
         assert call_args.kwargs["budget_duration"] == "30d"
         assert call_args.kwargs["query_type"] == "update_data"
+
+
+@pytest.mark.asyncio
+async def test_custom_ui_sso_sign_in_handler_config_loading():
+    """
+    Test that custom_ui_sso_sign_in_handler from config gets properly loaded into the global variable
+    """
+    import tempfile
+    from unittest.mock import MagicMock, patch
+
+    import yaml
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    # Create a test config with custom_ui_sso_sign_in_handler
+    test_config = {
+        "general_settings": {
+            "custom_ui_sso_sign_in_handler": "custom_hooks.custom_ui_sso_hook.custom_ui_sso_sign_in_handler"
+        },
+        "model_list": [],
+        "router_settings": {},
+        "litellm_settings": {}
+    }
+
+    # Create temporary config file
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        yaml.dump(test_config, f)
+        config_file_path = f.name
+
+    # Mock the get_instance_fn to return a mock handler
+    mock_custom_handler = MagicMock()
+    
+    try:
+        with patch("litellm.proxy.proxy_server.get_instance_fn", return_value=mock_custom_handler) as mock_get_instance:
+            # Create ProxyConfig instance and load config
+            proxy_config = ProxyConfig()
+            # Create a mock router since load_config requires it
+            mock_router = MagicMock()
+            await proxy_config.load_config(router=mock_router, config_file_path=config_file_path)
+            
+            # Verify get_instance_fn was called with correct parameters
+            mock_get_instance.assert_called_with(
+                value="custom_hooks.custom_ui_sso_hook.custom_ui_sso_sign_in_handler",
+                config_file_path=config_file_path
+            )
+            
+            # Verify the global variable was set
+            from litellm.proxy.proxy_server import user_custom_ui_sso_sign_in_handler
+            assert user_custom_ui_sso_sign_in_handler == mock_custom_handler
+            
+    finally:
+        # Clean up temporary file
+        import os
+        os.unlink(config_file_path)

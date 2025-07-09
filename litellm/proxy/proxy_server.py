@@ -481,7 +481,7 @@ _description = (
 
 
 def cleanup_router_config_variables():
-    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, use_background_health_checks, health_check_interval, prisma_client
+    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, health_check_interval, prisma_client
 
     # Set all variables to None
     master_key = None
@@ -491,6 +491,7 @@ def cleanup_router_config_variables():
     user_custom_auth_path = None
     user_custom_key_generate = None
     user_custom_sso = None
+    user_custom_ui_sso_sign_in_handler = None
     use_background_health_checks = None
     health_check_interval = None
     prisma_client = None
@@ -911,6 +912,7 @@ redis_usage_cache: Optional[RedisCache] = (
 user_custom_auth = None
 user_custom_key_generate = None
 user_custom_sso = None
+user_custom_ui_sso_sign_in_handler = None
 use_background_health_checks = None
 use_queue = False
 health_check_interval = None
@@ -1644,7 +1646,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, use_background_health_checks, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings
 
         config: dict = await self.get_config(config_file_path=config_file_path)
 
@@ -1945,6 +1947,12 @@ class ProxyConfig:
             if custom_sso is not None:
                 user_custom_sso = get_instance_fn(
                     value=custom_sso, config_file_path=config_file_path
+                )
+
+            custom_ui_sso_sign_in_handler = general_settings.get("custom_ui_sso_sign_in_handler", None)
+            if custom_ui_sso_sign_in_handler is not None:
+                user_custom_ui_sso_sign_in_handler = get_instance_fn(
+                    value=custom_ui_sso_sign_in_handler, config_file_path=config_file_path
                 )
 
             if enterprise_proxy_config is not None:
