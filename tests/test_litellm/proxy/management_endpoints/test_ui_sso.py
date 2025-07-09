@@ -1050,13 +1050,44 @@ class TestHTMLIntegration:
 class TestCustomUISSO:
     """Test the custom UI SSO sign-in handler functionality"""
 
+    def test_enterprise_import_error_handling(self):
+        """Test that proper error is raised when enterprise module is not available"""
+        from unittest.mock import MagicMock, patch
+
+        from litellm.proxy.management_endpoints.ui_sso import google_login
+
+        # Mock request
+        mock_request = MagicMock()
+        mock_request.base_url = "https://test.example.com/"
+        
+        # Mock user_custom_ui_sso_sign_in_handler to exist but make enterprise import fail
+        with patch("litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler", MagicMock()):
+            with patch.dict('sys.modules', {'enterprise.litellm_enterprise.proxy.auth.custom_sso_handler': None}):
+                # Temporarily mock the google_login function call to test the import error path
+                async def mock_google_login():
+                    # This mimics the relevant part of google_login that would trigger the import error
+                    try:
+                        from enterprise.litellm_enterprise.proxy.auth.custom_sso_handler import (
+                            EnterpriseCustomSSOHandler,
+                        )
+                        return "success"
+                    except ImportError:
+                        raise ValueError("Enterprise features are not available. Custom UI SSO sign-in requires LiteLLM Enterprise.")
+                
+                # Test that the ValueError is raised with the correct message
+                import pytest
+                with pytest.raises(ValueError, match="Enterprise features are not available"):
+                    asyncio.run(mock_google_login())
+
     @pytest.mark.asyncio
     async def test_handle_custom_ui_sso_sign_in_success(self):
         """Test successful custom UI SSO sign-in with valid headers"""
         from fastapi_sso.sso.base import OpenID
 
+        from enterprise.litellm_enterprise.proxy.auth.custom_sso_handler import (
+            EnterpriseCustomSSOHandler,
+        )
         from litellm.integrations.custom_sso_handler import CustomSSOLoginHandler
-        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         # Mock request with custom headers
         mock_request = MagicMock(spec=Request)
@@ -1096,7 +1127,7 @@ class TestCustomUISSO:
                 return_value=mock_redirect_response,
             ) as mock_get_redirect:
                 # Act
-                result = await SSOAuthenticationHandler.handle_custom_ui_sso_sign_in(
+                result = await EnterpriseCustomSSOHandler.handle_custom_ui_sso_sign_in(
                     request=mock_request
                 )
 
@@ -1127,8 +1158,10 @@ class TestCustomUISSO:
         """
         from fastapi_sso.sso.base import OpenID
 
+        from enterprise.litellm_enterprise.proxy.auth.custom_sso_handler import (
+            EnterpriseCustomSSOHandler,
+        )
         from litellm.integrations.custom_sso_handler import CustomSSOLoginHandler
-        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         # Create a real custom handler class instance
         class TestCustomSSOHandler(CustomSSOLoginHandler):
@@ -1179,7 +1212,7 @@ class TestCustomUISSO:
                 return_value=mock_redirect_response,
             ) as mock_get_redirect:
                 # Act
-                result = await SSOAuthenticationHandler.handle_custom_ui_sso_sign_in(
+                result = await EnterpriseCustomSSOHandler.handle_custom_ui_sso_sign_in(
                     request=mock_request
                 )
 

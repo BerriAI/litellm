@@ -128,9 +128,15 @@ async def google_login(request: Request, source: Optional[str] = None, key: Opti
 
     # check if user defined a custom auth sso sign in handler, if yes, use it
     if user_custom_ui_sso_sign_in_handler is not None:
-        return await SSOAuthenticationHandler.handle_custom_ui_sso_sign_in(
-            request=request,
-        )
+        try:
+            from litellm_enterprise.proxy.auth.custom_sso_handler import (
+                EnterpriseCustomSSOHandler,
+            )
+            return await EnterpriseCustomSSOHandler.handle_custom_ui_sso_sign_in(
+                request=request,
+            )
+        except ImportError:
+            raise ValueError("Enterprise features are not available. Custom UI SSO sign-in requires LiteLLM Enterprise.")
 
     # Check if we should use SSO handler
     if (
@@ -1170,34 +1176,7 @@ class SSOAuthenticationHandler:
         )
         return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}" if source == LITELLM_CLI_SOURCE_IDENTIFIER and key else None
     
-    @staticmethod
-    async def handle_custom_ui_sso_sign_in(
-        request: Request,
-    ) -> RedirectResponse:
-        """
-        Allow a user to execute their custom code to parse incoming request headers and return a OpenID object
 
-        Use this when you have an OAuth proxy in front of LiteLLM (where the OAuth proxy has already authenticated the user)
-        """
-        from fastapi_sso.sso.base import OpenID
-
-        from litellm.integrations.custom_sso_handler import CustomSSOLoginHandler
-        from litellm.proxy.proxy_server import user_custom_ui_sso_sign_in_handler
-
-        if user_custom_ui_sso_sign_in_handler is None:
-            raise ValueError("custom_ui_sso_sign_in_handler is not configured. Please set it in general_settings.")
-        
-        custom_sso_login_handler = cast(CustomSSOLoginHandler, user_custom_ui_sso_sign_in_handler)
-        openid_response: OpenID = await custom_sso_login_handler.handle_custom_ui_sso_sign_in(
-            request=request,
-        )
-        return await SSOAuthenticationHandler.get_redirect_response_from_openid(
-            result=openid_response,
-            request=request,
-            received_response=None,
-            generic_client_id=None,
-            ui_access_mode=None,
-        )
 
 
     @staticmethod
