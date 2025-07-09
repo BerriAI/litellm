@@ -705,9 +705,6 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
     key = response["token"]  # type: ignore
     user_id = response["user_id"]  # type: ignore
 
-    litellm_dashboard_ui = get_custom_url(
-        request_base_url=str(request.base_url), route="ui/"
-    )
     user_role = (
         user_defined_values["user_role"]
         or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
@@ -732,63 +729,16 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
                 },
             )
 
-    disabled_non_admin_personal_key_creation = (
-        get_disabled_non_admin_personal_key_creation()
-    )
-
-    import jwt
-
-    if get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
-        _user_info: Optional[LiteLLM_UserTable] = None
-        if (
-            user_defined_values is not None
-            and user_defined_values["user_id"] is not None
-        ):
-            _user_info = LiteLLM_UserTable(
-                user_id=user_defined_values["user_id"],
-                user_role=user_defined_values["user_role"] or user_role,
-                models=[],
-                max_budget=litellm.max_ui_session_budget,
-            )
-        if _user_info is None:
-            raise HTTPException(
-                status_code=401,
-                detail={
-                    "error": "User Information is required for experimental UI login"
-                },
-            )
-
-        key = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
-            _user_info
-        )
-
-    returned_ui_token_object = ReturnedUITokenObject(
-        user_id=cast(str, user_id),
-        key=key,
+    return SSOAuthenticationHandler.return_ui_sso_redirect_response_after_sign_in(
+        user_id=user_id,
         user_email=user_email,
         user_role=user_role,
-        login_method="sso",
-        premium_user=premium_user,
-        auth_header_name=general_settings.get(
-            "litellm_key_header_name", "Authorization"
-        ),
-        disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
-        server_root_path=get_server_root_path(),
+        user_defined_values=user_defined_values,
+        key=key,
+        request=request,
     )
 
-    jwt_token = jwt.encode(  # type: ignore
-        cast(dict, returned_ui_token_object),
-        master_key,
-        algorithm="HS256",
-    )
-    verbose_proxy_logger.info(f"user_id: {user_id}; jwt_token: {jwt_token}")
-    if user_id is not None and isinstance(user_id, str):
-        litellm_dashboard_ui += "?login=success"
-    verbose_proxy_logger.info(f"Redirecting to {litellm_dashboard_ui}")
-    redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
-    redirect_response.set_cookie(key="token", value=jwt_token)
-    return redirect_response
-
+    
 
 async def cli_sso_callback(request: Request, key: Optional[str] = None):
     """CLI SSO callback - generates the key with pre-specified ID"""
@@ -1348,6 +1298,83 @@ class SSOAuthenticationHandler:
             LITELLM_CLI_SOURCE_IDENTIFIER,
         )
         return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}" if source == LITELLM_CLI_SOURCE_IDENTIFIER and key else None
+    
+    @staticmethod
+    def return_ui_sso_redirect_response_after_sign_in(
+        user_id: Optional[str],
+        user_email: Optional[str],
+        user_role: str,
+        key: str,
+        user_defined_values: Optional[SSOUserDefinedValues],
+        request: Request,
+    ) -> RedirectResponse:
+        import jwt
+
+        from litellm.proxy.proxy_server import (
+            general_settings,
+            master_key,
+            premium_user,
+        )
+        from litellm.proxy.utils import get_custom_url
+        from litellm.types.proxy.ui_sso import ReturnedUITokenObject
+        
+        disabled_non_admin_personal_key_creation = (
+            get_disabled_non_admin_personal_key_creation()
+        )
+        litellm_dashboard_ui = get_custom_url(
+            request_base_url=str(request.base_url), route="ui/"
+        )
+
+        if get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
+            _user_info: Optional[LiteLLM_UserTable] = None
+            if (
+                user_defined_values is not None
+                and user_defined_values["user_id"] is not None
+            ):
+                _user_info = LiteLLM_UserTable(
+                    user_id=user_defined_values["user_id"],
+                    user_role=user_defined_values["user_role"] or user_role,
+                    models=[],
+                    max_budget=litellm.max_ui_session_budget,
+                )
+            if _user_info is None:
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "error": "User Information is required for experimental UI login"
+                    },
+                )
+
+            key = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
+                _user_info
+            )
+
+        returned_ui_token_object = ReturnedUITokenObject(
+            user_id=cast(str, user_id),
+            key=key,
+            user_email=user_email,
+            user_role=user_role,
+            login_method="sso",
+            premium_user=premium_user,
+            auth_header_name=general_settings.get(
+                "litellm_key_header_name", "Authorization"
+            ),
+            disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
+            server_root_path=get_server_root_path(),
+        )
+
+        jwt_token = jwt.encode(
+            cast(dict, returned_ui_token_object),
+            master_key or "",
+            algorithm="HS256",
+        )
+        verbose_proxy_logger.info(f"user_id: {user_id}; jwt_token: {jwt_token}")
+        if user_id is not None and isinstance(user_id, str):
+            litellm_dashboard_ui += "?login=success"
+        verbose_proxy_logger.info(f"Redirecting to {litellm_dashboard_ui}")
+        redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
+        redirect_response.set_cookie(key="token", value=jwt_token)
+        return redirect_response
 
 
 class MicrosoftSSOHandler:
