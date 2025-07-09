@@ -1821,7 +1821,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_request_route: Optional[str]
 
 
-class StandardLoggingMCPToolCall(TypedDict, total=False):    
+class StandardLoggingMCPToolCall(TypedDict, total=False):
     name: str
     """
     Name of the tool to call
@@ -1852,6 +1852,7 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
     Namespaced tool name of the MCP tool that the tool call was made to
 
     Includes the server name prefix if it exists - eg. `deepwiki-mcp/get_page_content`
+    """
 
     mcp_server_cost_info: Optional[MCPServerCostInfo]
     """
