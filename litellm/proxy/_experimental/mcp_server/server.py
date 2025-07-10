@@ -4,6 +4,7 @@ LiteLLM MCP Server Routes
 
 import asyncio
 import contextlib
+from datetime import datetime
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 
 from fastapi import FastAPI, HTTPException
@@ -50,9 +51,7 @@ if MCP_AVAILABLE:
         auth_context_var,
     )
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-    from mcp.types import EmbeddedResource as MCPEmbeddedResource
-    from mcp.types import ImageContent as MCPImageContent
-    from mcp.types import TextContent as MCPTextContent
+    from mcp.types import EmbeddedResource, ImageContent, TextContent
     from mcp.types import Tool as MCPTool
 
     from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
@@ -185,7 +184,7 @@ if MCP_AVAILABLE:
     @server.call_tool()
     async def mcp_server_tool_call(
         name: str, arguments: Dict[str, Any] | None
-    ) -> List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]:
+    ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
         """
         Call a specific tool with the provided arguments
 
@@ -333,16 +332,16 @@ if MCP_AVAILABLE:
 
     @client
     async def call_mcp_tool(
-        name: str,
-        arguments: Optional[Dict[str, Any]] = None,
-        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-        mcp_auth_header: Optional[str] = None,
-        **kwargs: Any,
-    ) -> List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]:
+            name: str,
+            arguments: Optional[Dict[str, Any]] = None,
+            user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+            mcp_auth_header: Optional[str] = None,
+            **kwargs: Any
+    ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
         """
         Call a specific tool with the provided arguments (handles prefixed tool names)
         """
-
+        start_time = datetime.now()
         if arguments is None:
             raise HTTPException(
                 status_code=400, detail="Request arguments are required"
@@ -367,6 +366,7 @@ if MCP_AVAILABLE:
             litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
                 standard_logging_mcp_tool_call
             )
+            litellm_logging_obj.model = f"MCP: {name}"
         # Try managed server tool first (pass the full prefixed name)
         # Primary and recommended way to use MCP servers
         #########################################################
@@ -377,7 +377,7 @@ if MCP_AVAILABLE:
             standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
                 mcp_server.mcp_info or {}
             ).get("mcp_server_cost_info")
-            return await _handle_managed_mcp_tool(
+            response =  await _handle_managed_mcp_tool(
                 name=name,  # Pass the full name (potentially prefixed)
                 arguments=arguments,
                 user_api_key_auth=user_api_key_auth,
@@ -388,7 +388,22 @@ if MCP_AVAILABLE:
         #########################################################
         # Deprecated: Local MCP Server Tool
         #########################################################
-        return await _handle_local_mcp_tool(original_tool_name, arguments)
+        else:
+            response = await _handle_local_mcp_tool(original_tool_name, arguments)
+        
+        #########################################################
+        # Post MCP Tool Call Hook
+        # Allow modifying the MCP tool call response before it is returned to the user
+        #########################################################
+        if litellm_logging_obj:
+            end_time = datetime.now()
+            await litellm_logging_obj.async_post_mcp_tool_call_hook(
+                kwargs=litellm_logging_obj.model_call_details,
+                response_obj=response,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        return response
 
     def _get_standard_logging_mcp_tool_call(
         name: str,
@@ -417,7 +432,7 @@ if MCP_AVAILABLE:
         arguments: Dict[str, Any],
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
-    ) -> List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]:
+    ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
         """Handle tool execution for managed server tools"""
         call_tool_result = await global_mcp_server_manager.call_tool(
             name=name,
@@ -430,7 +445,7 @@ if MCP_AVAILABLE:
 
     async def _handle_local_mcp_tool(
         name: str, arguments: Dict[str, Any]
-    ) -> List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]:
+    ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
         """
         Handle tool execution for local registry tools
         Note: Local tools don't use prefixes, so we use the original name
@@ -441,9 +456,9 @@ if MCP_AVAILABLE:
 
         try:
             result = tool.handler(**arguments)
-            return [MCPTextContent(text=str(result), type="text")]
+            return [TextContent(text=str(result), type="text")]
         except Exception as e:
-            return [MCPTextContent(text=f"Error: {str(e)}", type="text")]
+            return [TextContent(text=f"Error: {str(e)}", type="text")]
 
     async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send

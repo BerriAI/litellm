@@ -82,6 +82,7 @@ from litellm.types.llms.openai import (
     ResponseCompletedEvent,
     ResponsesAPIResponse,
 )
+from litellm.types.mcp import MCPPostCallResponseObject
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import CustomPricingLiteLLMParams
 from litellm.types.utils import (
@@ -1060,6 +1061,63 @@ class Logging(LiteLLMLoggingBaseClass):
                     str(e)
                 )
             )
+
+    async def async_post_mcp_tool_call_hook(
+        self,
+        kwargs: dict,
+        response_obj: Any,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ):
+        """
+        Post MCP Tool Call Hook
+
+        Use this to modify the MCP tool call response before it is returned to the user.
+        """
+        from litellm.types.llms.base import HiddenParams
+        from litellm.types.mcp import MCPPostCallResponseObject
+        callbacks = self.get_combined_callback_list(
+            dynamic_success_callbacks=self.dynamic_success_callbacks,
+            global_callbacks=litellm.success_callback,
+        )
+        post_mcp_tool_call_response_obj: MCPPostCallResponseObject = MCPPostCallResponseObject(
+            mcp_tool_call_response=response_obj,
+            hidden_params=HiddenParams()
+        )
+        for callback in callbacks:
+            try:
+                if isinstance(callback, CustomLogger):
+                    response: Optional[MCPPostCallResponseObject] = await callback.async_post_mcp_tool_call_hook(
+                        kwargs=kwargs,
+                        response_obj=post_mcp_tool_call_response_obj,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
+                    ######################################################################
+                    # if any of the callbacks modify the response, use the modified response
+                    # current implementation returns the first modified response
+                    ######################################################################
+                    if response is not None:
+                        response_obj = self._parse_post_mcp_call_hook_response(response=response)
+            except Exception as e:
+                verbose_logger.exception(
+                    "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {}".format(
+                        str(e)
+                    )
+                )
+        return response_obj
+
+    def _parse_post_mcp_call_hook_response(self, response: Optional[MCPPostCallResponseObject]) -> Any:
+        """
+        Parse the response from the post_mcp_tool_call_hook
+
+        1. Unpack the mcp_tool_call_response
+        2. save the updated response_cost to the model_call_details
+        """
+        if response is None:
+            return None
+        self.model_call_details["response_cost"] = response.hidden_params.response_cost
+        return response.mcp_tool_call_response
 
     def get_response_ms(self) -> float:
         return (
