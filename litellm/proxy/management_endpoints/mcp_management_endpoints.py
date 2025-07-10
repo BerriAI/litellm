@@ -11,6 +11,7 @@ Endpoints here:
 - DELETE `/v1/mcp/server/{server_id}` - Deletes the mcp server given `server_id`.
 - GET `/v1/mcp/tools - lists all the tools available for a key
 - GET `/v1/mcp/access_groups` - lists all available MCP access groups
+
 """
 
 import importlib
@@ -245,6 +246,7 @@ if MCP_AVAILABLE:
                         updated_at=datetime.now(),
                     )
                 )
+
         # Map servers to their teams and return
         LIST_MCP_SERVERS = [
             LiteLLM_MCPServerTable(

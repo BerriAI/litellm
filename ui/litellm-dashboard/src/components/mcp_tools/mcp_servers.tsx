@@ -92,6 +92,7 @@ const MCPServers: React.FC<MCPServerProps> = ({
   const [selectedMcpAccessGroup, setSelectedMcpAccessGroup] = useState<string>("all");
   const [filteredServers, setFilteredServers] = useState<MCPServer[]>([]);
 
+
   // Get unique teams from all servers
   const uniqueTeams = React.useMemo(() => {
     if (!mcpServers) return [];

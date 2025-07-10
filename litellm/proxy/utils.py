@@ -363,7 +363,7 @@ class ProxyLogging:
             if self.alerting is not None and "slack" in self.alerting:
                 # NOTE: ENSURE we only add callbacks when alerting is on
                 # We should NOT add callbacks when alerting is off
-                if "daily_reports" in self.alert_types:
+                if "daily_reports" in self.alert_types or "outage_alerts" in self.alert_types or "region_outage_alerts" in self.alert_types:
                     litellm.logging_callback_manager.add_litellm_callback(self.slack_alerting_instance)  # type: ignore
                 litellm.logging_callback_manager.add_litellm_success_callback(
                     self.slack_alerting_instance.response_taking_too_long_callback
@@ -3170,3 +3170,14 @@ def get_server_root_path() -> str:
     - Otherwise, default to "/".
     """
     return os.getenv("SERVER_ROOT_PATH", "/")
+
+
+def get_prisma_client_or_throw(message: str):
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": message},
+        )
+    return prisma_client

@@ -880,7 +880,19 @@ class DBSpendUpdateWriter:
                                 where_constraint["mcp_namespaced_tool_name"] = mcp_namespaced_tool_name
                             
                             where_clause = {
-                                unique_constraint_name: where_constraint
+                                unique_constraint_name: {
+                                    entity_id_field: entity_id,
+                                    "date": transaction["date"],
+                                    "api_key": transaction["api_key"],
+                                    "model": transaction["model"],
+                                    "custom_llm_provider": transaction.get(
+                                        "custom_llm_provider"
+                                    ),
+                                    "mcp_namespaced_tool_name": transaction.get(
+                                        "mcp_namespaced_tool_name"
+                                    )
+                                    or "",
+                                }
                             }
 
                             # Get the table dynamically
