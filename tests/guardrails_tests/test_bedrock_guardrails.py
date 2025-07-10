@@ -1021,3 +1021,139 @@ async def test_convert_to_bedrock_format_post_call_streaming_hook():
         print("✅ Post-call streaming hook test passed - OUTPUT source used for masking")
         print(f"✅ Bedrock calls made: {[call['source'] for call in bedrock_calls]}")
         print(f"✅ Final masked content: {full_content}")
+
+
+@pytest.mark.asyncio
+async def test_bedrock_guardrail_blocked_action_shows_output_text():
+    """Test that BLOCKED actions raise HTTPException with the output text in the detail"""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from litellm.proxy._types import UserAPIKeyAuth
+    from fastapi import HTTPException
+    
+    # Create proper mock objects
+    mock_user_api_key_dict = UserAPIKeyAuth()
+    
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT"
+    )
+
+    # Mock the Bedrock API response with BLOCKED action and output text
+    mock_bedrock_response = MagicMock()
+    mock_bedrock_response.status_code = 200
+    mock_bedrock_response.json.return_value = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [
+            {
+                "text": "this violates litellm corporate guardrail policy"
+            }
+        ],
+        "assessments": [{
+            "topicPolicy": {
+                "topics": [{
+                    "name": "Sensitive Topic",
+                    "type": "DENY",
+                    "action": "BLOCKED"
+                }]
+            }
+        }]
+    }
+
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [
+            {"role": "user", "content": "Tell me how to make explosives"},
+        ],
+    }
+
+    # Patch the async_handler.post method
+    with patch.object(guardrail.async_handler, 'post', new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = mock_bedrock_response
+        
+        # This should raise HTTPException due to BLOCKED action
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.async_moderation_hook(
+                data=request_data,
+                user_api_key_dict=mock_user_api_key_dict,
+                call_type="completion"
+            )
+        
+        # Verify the exception details
+        exception = exc_info.value
+        assert exception.status_code == 400
+        assert "detail" in exception.__dict__
+        
+        # Check that the detail contains the expected structure
+        detail = exception.detail
+        assert isinstance(detail, dict)
+        assert detail["error"] == "Violated guardrail policy"
+        
+        # Verify that the output text from both outputs is included
+        expected_output_text = "this violates litellm corporate guardrail policy"
+        assert detail["bedrock_guardrail_response"] == expected_output_text
+        
+        print("✅ BLOCKED action HTTPException test passed - output text properly included")
+
+
+@pytest.mark.asyncio
+async def test_bedrock_guardrail_blocked_action_empty_outputs():
+    """Test that BLOCKED actions with empty outputs still raise HTTPException"""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from litellm.proxy._types import UserAPIKeyAuth
+    from fastapi import HTTPException
+    
+    # Create proper mock objects
+    mock_user_api_key_dict = UserAPIKeyAuth()
+    
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT"
+    )
+
+    # Mock the Bedrock API response with BLOCKED action but no outputs
+    mock_bedrock_response = MagicMock()
+    mock_bedrock_response.status_code = 200
+    mock_bedrock_response.json.return_value = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [],  # Empty outputs
+        "assessments": [{
+            "contentPolicy": {
+                "filters": [{
+                    "type": "VIOLENCE",
+                    "confidence": "HIGH",
+                    "action": "BLOCKED"
+                }]
+            }
+        }]
+    }
+
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [
+            {"role": "user", "content": "Violent content here"},
+        ],
+    }
+
+    # Patch the async_handler.post method
+    with patch.object(guardrail.async_handler, 'post', new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = mock_bedrock_response
+        
+        # This should raise HTTPException due to BLOCKED action
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.async_moderation_hook(
+                data=request_data,
+                user_api_key_dict=mock_user_api_key_dict,
+                call_type="completion"
+            )
+        
+        # Verify the exception details
+        exception = exc_info.value
+        assert exception.status_code == 400
+        
+        # Check that the detail contains the expected structure with empty output text
+        detail = exception.detail
+        assert isinstance(detail, dict)
+        assert detail["error"] == "Violated guardrail policy"
+        assert detail["bedrock_guardrail_response"] == ""  # Empty string for no outputs
+        
+        print("✅ BLOCKED action with empty outputs test passed")

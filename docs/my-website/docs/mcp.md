@@ -442,6 +442,58 @@ if __name__ == "__main__":
 </Tabs>
 
 
+### Customize the MCP Auth Header Name
+
+By default, LiteLLM uses `x-mcp-auth` to pass your credentials to MCP servers. You can change this header name in one of the following ways:
+1. Set the `LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME` environment variable
+
+```bash title="Environment Variable" showLineNumbers
+export LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME="authorization"
+```
+
+
+2. Set the `mcp_client_side_auth_header_name` in the general settings on the config.yaml file
+
+```yaml title="config.yaml" showLineNumbers
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: sk-xxxxxxx
+
+general_settings:
+  mcp_client_side_auth_header_name: "authorization"
+```
+
+#### Using the authorization header
+
+In this example the `authorization` header will be passed to the MCP server for authentication.
+
+```bash title="cURL with authorization header" showLineNumbers
+curl --location '<your-litellm-proxy-base-url>/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $LITELLM_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "<your-litellm-proxy-base-url>/mcp",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+                "authorization": "Bearer sk-zapier-token-123"
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
+```
+
+
+
 ## ✨ MCP Permission Management
 
 LiteLLM supports managing permissions for MCP Servers by Keys, Teams, Organizations (entities) on LiteLLM. When a MCP client attempts to list tools, LiteLLM will only return the tools the entity has permissions to access.
