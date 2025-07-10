@@ -33,6 +33,7 @@ class SupportedGuardrailIntegrations(Enum):
     PANW_PRISMA_AIRS = "panw_prisma_airs"
     AZURE_PROMPT_SHIELD = "azure/prompt_shield"
     AZURE_TEXT_MODERATIONS = "azure/text_moderations"
+    MODEL_ARMOR = "model_armor"
 
 
 class Role(Enum):
@@ -301,6 +302,31 @@ class BedrockGuardrailConfigModel(BaseModel):
     )
 
 
+class ModelArmorConfigModel(BaseModel):
+    """Configuration parameters for Google Cloud Model Armor guardrail"""
+
+    template_id: Optional[str] = Field(
+        default=None, description="The ID of your Model Armor template"
+    )
+    project_id: Optional[str] = Field(
+        default=None, description="Google Cloud project ID"
+    )
+    location: Optional[str] = Field(
+        default=None, description="Google Cloud location/region (e.g., us-central1)"
+    )
+    credentials: Optional[str] = Field(
+        default=None,
+        description="Path to Google Cloud credentials JSON file or JSON string",
+    )
+    api_endpoint: Optional[str] = Field(
+        default=None, description="Optional custom API endpoint for Model Armor"
+    )
+    fail_on_error: Optional[bool] = Field(
+        default=True,
+        description="Whether to fail the request if Model Armor encounters an error",
+    )
+
+
 class LakeraV2GuardrailConfigModel(BaseModel):
     """Configuration parameters for the Lakera AI v2 guardrail"""
 
@@ -392,6 +418,7 @@ class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
 class LitellmParams(
     PresidioConfigModel,
     BedrockGuardrailConfigModel,
+    ModelArmorConfigModel,
     LakeraV2GuardrailConfigModel,
     LassoGuardrailConfigModel,
     BaseLitellmParams,
