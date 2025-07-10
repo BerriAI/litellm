@@ -14,9 +14,6 @@ def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
         module_name = ".".join(parts[:-1])
         instance_name = parts[-1]
 
-        # Security: Check if the module name contains any dangerous modules that can execute arbitrary code
-        security_checks(module_name=module_name)
-
         # If config_file_path is provided, use it to determine the module spec and load the module
         if config_file_path is not None:
             directory = os.path.dirname(config_file_path)
@@ -50,37 +47,8 @@ def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
         raise e
 
 
-def security_checks(
-    module_name: str,
-):
-    """
-    This function checks if the module name contains any dangerous modules that can execute arbitrary code.
-
-    Reference: https://huntr.com/bounties/1d98bebb-6cf4-46c9-87c3-d3b1972973b5
-    """
-    DANGEROUS_MODULES = [
-        "os",
-        "sys",
-        "subprocess",
-        "shutil",
-        "socket",
-        "multiprocessing",
-        "threading",
-        "ctypes",
-        "pickle",
-        "marshal",
-        "builtins",
-        "__builtin__",
-    ]
-    # Security: Check if the module name contains any dangerous modules
-    if any(dangerous in module_name.lower() for dangerous in DANGEROUS_MODULES):
-        raise ImportError(
-            f"Importing from module {module_name} is not allowed for security reasons"
-        )
-
-
 def validate_custom_validate_return_type(
-    fn: Optional[Callable[..., Any]]
+    fn: Optional[Callable[..., Any]],
 ) -> Optional[Callable[..., Literal[True]]]:
     if fn is None:
         return None

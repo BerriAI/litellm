@@ -81,6 +81,22 @@ class TestLangfuseOtelIntegration:
             
             mock_set_attributes.assert_called_once_with(mock_span, mock_kwargs, mock_response)
 
+    def test_set_langfuse_environment_attribute(self):
+        """Test that Langfuse environment is set correctly when environment variable is present."""
+        mock_span = MagicMock()
+        mock_kwargs = {"test": "kwargs"}
+        test_env = "staging"
+
+        with patch.dict(os.environ, {'LANGFUSE_TRACING_ENVIRONMENT': test_env}):
+            with patch('litellm.integrations.arize._utils.safe_set_attribute') as mock_safe_set_attribute:
+                LangfuseOtelLogger._set_langfuse_specific_attributes(mock_span, mock_kwargs)
+                
+                mock_safe_set_attribute.assert_called_once_with(
+                    span=mock_span,
+                    key="langfuse.environment",
+                    value=test_env
+                )
+
 
 if __name__ == "__main__":
     pytest.main([__file__]) 

@@ -20,6 +20,12 @@ from litellm.experimental_mcp_client.client import MCPClient
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
+from litellm.proxy._experimental.mcp_server.utils import (
+    add_server_prefix_to_tool_name,
+    get_server_name_prefix_tool_mcp,
+    is_tool_name_prefixed,
+    normalize_server_name,
+)
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     MCPAuthType,
@@ -30,7 +36,6 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
-from litellm.proxy._experimental.mcp_server.utils import add_server_prefix_to_tool_name, normalize_server_name, get_server_name_prefix_tool_mcp, is_tool_name_prefixed
 
 
 class MCPServerManager:
@@ -121,6 +126,7 @@ class MCPServerManager:
 
     def add_update_server(self, mcp_server: LiteLLM_MCPServerTable):
         if mcp_server.server_id not in self.get_registry():
+            _mcp_info: MCPInfo = mcp_server.mcp_info or {}
             new_server = MCPServer(
                 server_id=mcp_server.server_id,
                 name=mcp_server.alias or mcp_server.server_id,
@@ -131,6 +137,7 @@ class MCPServerManager:
                 mcp_info=MCPInfo(
                     server_name=mcp_server.alias or mcp_server.server_id,
                     description=mcp_server.description,
+                    mcp_server_cost_info=_mcp_info.get("mcp_server_cost_info", None),
                 ),
             )
             self.registry[mcp_server.server_id] = new_server
@@ -157,6 +164,17 @@ class MCPServerManager:
                 "No allowed MCP Servers found for user api key auth, returning default registry servers"
             )
             return list(self.get_registry().keys())
+
+
+    async def get_tools_for_server(self, server_id: str) -> List[MCPTool]:
+        """
+        Get the tools for a given server
+        """
+        server = self.get_mcp_server_by_id(server_id)
+        if server is None:
+            return []
+        return await self._get_tools_from_server(server)
+        
 
     async def list_tools(
         self, 

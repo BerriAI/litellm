@@ -24,6 +24,7 @@ from litellm.types.mcp import (
     MCPTransport,
     MCPTransportType,
 )
+from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
@@ -447,6 +448,7 @@ class LiteLLMRoutes(enum.Enum):
             "/metrics",
             "/litellm/.well-known/litellm-ui-config",
             "/.well-known/litellm-ui-config",
+            "/public/model_hub",
         ]
     )
 
@@ -845,6 +847,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
     auth_type: Optional[MCPAuthType] = None
     url: str
+    mcp_info: Optional[MCPInfo] = None
 
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
@@ -855,6 +858,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
     auth_type: Optional[MCPAuthType] = None
     url: str
+    mcp_info: Optional[MCPInfo] = None
 
 
 class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
@@ -871,6 +875,8 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     created_by: Optional[str] = None
     updated_at: Optional[datetime] = None
     updated_by: Optional[str] = None
+    teams: List[Dict[str, Optional[str]]] = Field(default_factory=list)
+    mcp_info: Optional[MCPInfo] = None
 
 
 class NewUserRequestTeam(LiteLLMPydanticObjectBase):
@@ -2173,6 +2179,7 @@ class SpendLogsPayload(TypedDict):
     model: str
     model_id: Optional[str]
     model_group: Optional[str]
+    mcp_namespaced_tool_name: Optional[str]
     api_base: str
     user: str
     metadata: str  # json str
@@ -3053,8 +3060,9 @@ class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
 class BaseDailySpendTransaction(TypedDict):
     date: str
     api_key: str
-    model: str
+    model: Optional[str]
     model_group: Optional[str]
+    mcp_namespaced_tool_name: Optional[str]
     custom_llm_provider: Optional[str]
 
     # token count metrics
