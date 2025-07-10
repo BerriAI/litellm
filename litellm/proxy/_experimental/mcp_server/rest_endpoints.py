@@ -183,7 +183,8 @@ if MCP_AVAILABLE:
 
             await client.connect()
         except Exception as e:
-            return {"status": "error", "message": str(e)}
+            verbose_logger.error(f"Error in test_connection: {e}", exc_info=True)
+            return {"status": "error", "message": "An internal error has occurred."}
         return {"status": "ok"}
         
     
@@ -210,7 +211,8 @@ if MCP_AVAILABLE:
             )
             list_tools_result = await client.list_tools()
         except Exception as e:
-            return {"status": "error", "message": str(e)}
+            verbose_logger.error(f"Error in test_tools_list: {e}", exc_info=True)
+            return {"status": "error", "message": "An internal error has occurred."}
         return {
             "tools": list_tools_result,
             "error": None,
