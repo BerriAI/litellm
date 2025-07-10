@@ -1,10 +1,3 @@
-# +-------------------------------------------------------------+
-#
-#           Use Google Cloud Model Armor for your LLM calls
-#
-# +-------------------------------------------------------------+
-#  Thank you users! We ❤️ you! - Krrish & Ishaan
-
 from typing import Any, AsyncGenerator, List, Literal, Optional, Union
 
 from fastapi import HTTPException
