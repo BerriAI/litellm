@@ -321,6 +321,8 @@ def get_secret(  # noqa: PLR0915
             secret_value_as_bool = str_to_bool(secret) if secret is not None else None
             if secret_value_as_bool is not None and isinstance(secret_value_as_bool, bool):
                 return secret_value_as_bool
+            elif secret is None:
+                return default_value
             else:
                 return secret
     except Exception as e:
