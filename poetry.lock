@@ -1833,14 +1833,14 @@ openai = ["openai (>=0.27.8)"]
 
 [[package]]
 name = "litellm-enterprise"
-version = "0.1.11"
+version = "0.1.12"
 description = "Package for LiteLLM Enterprise features"
 optional = true
 python-versions = "!=2.7.*,!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,!=3.7.*,>=3.8"
 groups = ["main"]
 markers = "extra == \"proxy\""
 files = [
-    {file = "litellm_enterprise-0.1.11.tar.gz", hash = "sha256:37aa547116846518700a3911fec51a31703788af32c6842ce6a31da9335d67fe"},
+    {file = "litellm_enterprise-0.1.12.tar.gz", hash = "sha256:b14a9e8bedc382950561d9a1f0c7efc11f4d2392164820dc48aba65d9cd77c83"},
 ]
 
 [[package]]
@@ -4992,4 +4992,4 @@ utils = ["numpydoc"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.8.1,<4.0, !=3.9.7"
-content-hash = "2c9c3d5f721baa1f50f53e0afcb715a9774d25805344df877172794307989836"
+content-hash = "4d534ca4583435169e6b3966c1e301bc96ca005997a9a40986a5fd0f218c0c84"
