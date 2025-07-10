@@ -27,18 +27,17 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
   // Transform string array to object array for initial form values
   useEffect(() => {
     if (mcpServer.mcp_access_groups) {
-      form.setFieldValue(
-        'mcp_access_groups',
-        mcpServer.mcp_access_groups.map(group => ({ name: String(group) }))
-      );
+      // If access groups are objects, extract the name property; if strings, use as is
+      const groupNames = mcpServer.mcp_access_groups.map((g: any) => typeof g === 'string' ? g : g.name || String(g));
+      form.setFieldValue('mcp_access_groups', groupNames);
     }
   }, [mcpServer]);
 
   const handleSave = async (values: Record<string, any>) => {
     if (!accessToken) return;
     try {
-      // Transform access groups back to the format expected by the backend
-      const accessGroups = values.mcp_access_groups?.map((group: { name: string }) => ({ name: group.name })) || [];
+      // Transform access groups back to the format expected by the backend (array of objects with name)
+      const accessGroups = (values.mcp_access_groups || []).map((name: string) => ({ name }));
 
       // Prepare the payload with cost configuration
       const payload = {
@@ -108,55 +107,17 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
                   </Tooltip>
                 </span>
               }
+              name="mcp_access_groups"
+              getValueFromEvent={value => value}
             >
-              <Form.List name="mcp_access_groups" initialValue={[]}>
-                {(fields, { add, remove }) => (
-                  <>
-                    {fields.map((field, index) => (
-                      <Form.Item required={false} key={field.key}>
-                        <div className="flex items-center gap-2">
-                          <Form.Item
-                            {...field}
-                            name={[field.name, 'name']}
-                            validateTrigger={['onChange', 'onBlur']}
-                            rules={[
-                              {
-                                required: true,
-                                whitespace: true,
-                                message: "Please input access group name or delete this field.",
-                              },
-                            ]}
-                            noStyle
-                          >
-                            <Input 
-                              placeholder="Enter access group name" 
-                              style={{ width: '60%' }}
-                              className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                            />
-                          </Form.Item>
-                          {fields.length > 0 && (
-                            <MinusCircleOutlined
-                              className="text-red-500 hover:text-red-700"
-                              onClick={() => remove(field.name)}
-                            />
-                          )}
-                        </div>
-                      </Form.Item>
-                    ))}
-                    <Form.Item>
-                      <AntdButton
-                        type="dashed"
-                        onClick={() => add({ name: '' })}
-                        block
-                        icon={<PlusOutlined />}
-                        className="rounded-lg"
-                      >
-                        Add Access Group
-                      </AntdButton>
-                    </Form.Item>
-                  </>
-                )}
-              </Form.List>
+              <Select
+                mode="tags"
+                style={{ width: '100%' }}
+                placeholder="Add or select access groups"
+                tokenSeparators={[',']}
+                // Ensure value is always an array of strings
+                getPopupContainer={trigger => trigger.parentNode}
+              />
             </Form.Item>
 
             <div className="flex justify-end gap-2">
