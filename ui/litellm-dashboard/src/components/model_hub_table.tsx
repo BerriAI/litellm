@@ -1,27 +1,20 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { modelHubCall } from "./networking";
 import { getConfigFieldSetting, updateConfigFieldSetting } from "./networking";
+import { ModelDataTable } from "./model_dashboard/table";
+import { modelHubColumns } from "./model_hub_table_columns";
 import {
   Card,
   Text,
   Title,
   Button,
   Badge,
-  Table,
-  TableHead,
-  TableHeaderCell,
-  TableBody,
-  TableRow,
-  TableCell,
   Flex,
 } from "@tremor/react";
-import { 
-  CopyOutlined, 
-  InfoCircleOutlined
-} from "@ant-design/icons";
-import { Modal, Tooltip, message, Tag } from "antd";
+import { Modal, message } from "antd";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { Table as TableInstance } from '@tanstack/react-table';
 
 interface ModelHubTableProps {
   accessToken: string | null;
@@ -62,7 +55,9 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [selectedProvider, setSelectedProvider] = useState<string>("");
   const [selectedMode, setSelectedMode] = useState<string>("");
+  const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
   const router = useRouter();
+  const tableRef = useRef<TableInstance<any>>(null);
 
   useEffect(() => {
     if (!accessToken) {
@@ -153,15 +148,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
     return `$${(cost * 1_000_000).toFixed(2)}`;
   };
 
-  const formatTokens = (tokens: number) => {
-    if (tokens >= 1_000_000) {
-      return `${(tokens / 1_000_000).toFixed(1)}M`;
-    } else if (tokens >= 1_000) {
-      return `${(tokens / 1_000).toFixed(1)}K`;
-    }
-    return tokens.toString();
-  };
-
   const getUniqueProviders = (data: ModelGroupInfo[]) => {
     const providers = new Set<string>();
     data.forEach(model => {
@@ -185,7 +171,35 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
     return matchesSearch && matchesProvider && matchesMode;
   }) || [];
 
+  const handleRowSelection = (modelGroup: string, isSelected: boolean) => {
+    const newSelection = new Set(selectedModels);
+    if (isSelected) {
+      newSelection.add(modelGroup);
+    } else {
+      newSelection.delete(modelGroup);
+    }
+    setSelectedModels(newSelection);
+  };
 
+  const handleSelectAll = () => {
+    // If all models are selected, unselect all
+    // If some or no models are selected, select all
+    if (isAllSelected) {
+      setSelectedModels(new Set());
+    } else {
+      const allModelGroups = new Set(filteredData.map(model => model.model_group));
+      setSelectedModels(allModelGroups);
+    }
+  };
+
+  const isAllSelected = filteredData.length > 0 && selectedModels.size === filteredData.length && 
+    filteredData.every(model => selectedModels.has(model.model_group));
+  const isIndeterminate = selectedModels.size > 0 && selectedModels.size < filteredData.length;
+
+  // Clear selections when filters change to avoid confusion
+  useEffect(() => {
+    setSelectedModels(new Set());
+  }, [searchTerm, selectedProvider, selectedMode]);
 
   return (
     <div className="w-full mx-4 h-[75vh]">
@@ -256,136 +270,41 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
           </Card>
 
           {/* Model Table */}
-          <Card>
-            {loading ? (
-              <div className="text-center py-8">
-                <Text>Loading models...</Text>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <Table className="min-w-full">
-                <TableHead>
-                  <TableRow>
-                    <TableHeaderCell className="min-w-40">Model</TableHeaderCell>
-                    <TableHeaderCell className="min-w-20 hidden md:table-cell">Provider</TableHeaderCell>
-                    <TableHeaderCell className="min-w-16 hidden lg:table-cell">Mode</TableHeaderCell>
-                    <TableHeaderCell className="min-w-24 hidden lg:table-cell">Tokens</TableHeaderCell>
-                    <TableHeaderCell className="min-w-24">Cost/1M</TableHeaderCell>
-                    <TableHeaderCell className="min-w-28">Features</TableHeaderCell>
-                    <TableHeaderCell className="min-w-16 hidden md:table-cell">Public</TableHeaderCell>
-                    <TableHeaderCell className="min-w-16">Details</TableHeaderCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {filteredData.map((model) => (
-                    <TableRow key={model.model_group}>
-                      <TableCell>
-                        <div className="space-y-1">
-                          <div className="flex items-center space-x-2">
-                            <Text className="font-medium text-sm">{model.model_group}</Text>
-                            <Tooltip title="Copy model name">
-                              <CopyOutlined
-                                onClick={() => copyToClipboard(model.model_group)}
-                                className="cursor-pointer text-gray-500 hover:text-blue-500 text-xs"
-                              />
-                            </Tooltip>
-                          </div>
-                          {/* Show provider on mobile when provider column is hidden */}
-                          <div className="md:hidden">
-                            <Text className="text-xs text-gray-600">
-                              {model.providers.join(", ")}
-                            </Text>
-                          </div>
-                        </div>
-                      </TableCell>
-                      <TableCell className="hidden md:table-cell">
-                        <div className="flex flex-wrap gap-1">
-                          {model.providers.slice(0, 2).map(provider => (
-                            <Tag key={provider} color="blue" className="text-xs">
-                              {provider}
-                            </Tag>
-                          ))}
-                          {model.providers.length > 2 && (
-                            <Text className="text-xs text-gray-500">+{model.providers.length - 2}</Text>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="hidden lg:table-cell">
-                        {model.mode ? (
-                          <Badge color="green" size="sm">{model.mode}</Badge>
-                        ) : (
-                          <Text className="text-gray-500">-</Text>
-                        )}
-                      </TableCell>
-                      <TableCell className="hidden lg:table-cell">
-                        <div className="space-y-1">
-                          <Text className="text-xs">
-                            {model.max_input_tokens ? formatTokens(model.max_input_tokens) : "-"} / {model.max_output_tokens ? formatTokens(model.max_output_tokens) : "-"}
-                          </Text>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="space-y-1">
-                          <Text className="text-xs">
-                            {model.input_cost_per_token ? formatCost(model.input_cost_per_token) : "-"}
-                          </Text>
-                          <Text className="text-xs text-gray-500">
-                            {model.output_cost_per_token ? formatCost(model.output_cost_per_token) : "-"}
-                          </Text>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap gap-1">
-                          {(() => {
-                            const capabilities = getModelCapabilities(model);
-                            const colors = ['green', 'blue', 'purple', 'orange', 'red', 'yellow'];
-                            
-                            if (capabilities.length === 0) {
-                              return <Text className="text-gray-500 text-xs">-</Text>;
-                            }
-                            
-                            return capabilities.map((capability, index) => (
-                              <Badge 
-                                key={capability} 
-                                color={colors[index % colors.length]} 
-                                size="xs"
-                              >
-                                {formatCapabilityName(capability)}
-                              </Badge>
-                            ));
-                          })()}
-                        </div>
-                      </TableCell>
-                      <TableCell className="hidden md:table-cell">
-                        {model.public === true ? (
-                          <Badge color="green" size="xs">Yes</Badge>
-                        ) : (
-                          <Badge color="gray" size="xs">No</Badge>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          size="xs"
-                          variant="secondary"
-                          onClick={() => showModal(model)}
-                          icon={InfoCircleOutlined}
-                        >
-                          <span className="hidden lg:inline">Details</span>
-                          <span className="lg:hidden">Info</span>
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-                </Table>
-              </div>
+          <ModelDataTable
+            columns={modelHubColumns(
+              selectedModels,
+              isAllSelected,
+              isIndeterminate,
+              handleRowSelection,
+              handleSelectAll,
+              showModal,
+              copyToClipboard,
             )}
-          </Card>
+            data={filteredData}
+            isLoading={loading}
+            table={tableRef}
+            defaultSorting={[{ id: "model_group", desc: false }]}
+          />
 
-          <div className="mt-4 text-center">
+          <div className="mt-4 text-center space-y-2">
             <Text className="text-sm text-gray-600">
               Showing {filteredData.length} of {modelHubData?.length || 0} models
             </Text>
+            {selectedModels.size > 0 && (
+              <div className="flex items-center justify-center space-x-4">
+                <Text className="text-sm text-blue-600">
+                  {selectedModels.size} model{selectedModels.size !== 1 ? 's' : ''} selected
+                </Text>
+                <Button
+                  size="xs"
+                  variant="secondary"
+                  onClick={() => setSelectedModels(new Set())}
+                  className="text-xs"
+                >
+                  Unselect All
+                </Button>
+              </div>
+            )}
           </div>
         </div>
       ) : (
@@ -448,7 +367,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                   <Text className="font-medium">Providers:</Text>
                   <div className="flex flex-wrap gap-1 mt-1">
                     {selectedModel.providers.map(provider => (
-                      <Tag key={provider} color="blue">{provider}</Tag>
+                      <Badge key={provider} color="blue">{provider}</Badge>
                     ))}
                   </div>
                 </div>
@@ -529,7 +448,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                 <Text className="text-lg font-semibold mb-4">Supported OpenAI Parameters</Text>
                 <div className="flex flex-wrap gap-2">
                   {selectedModel.supported_openai_params.map(param => (
-                    <Tag key={param} color="green">{param}</Tag>
+                    <Badge key={param} color="green">{param}</Badge>
                   ))}
                 </div>
               </div>
