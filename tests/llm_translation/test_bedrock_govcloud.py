@@ -112,10 +112,11 @@ class TestBedrockGovCloudSupport:
         assert mock_init_client.called
 
     def test_govcloud_model_in_bedrock_models_list(self):
-        """Test that GovCloud models are included in bedrock_models list"""
-        # The bedrock_models list should include GovCloud regional models
-        assert any("us-gov-east-1" in model for model in litellm.bedrock_models)
-        assert any("us-gov-west-1" in model for model in litellm.bedrock_models)
+        """Test that GovCloud models are NOT included in bedrock_models list (they are pricing-only)"""
+        # Regional models including GovCloud should be excluded from bedrock_models list
+        # They are only in model_cost for pricing purposes
+        assert not any("us-gov-east-1" in model for model in litellm.bedrock_models)
+        assert not any("us-gov-west-1" in model for model in litellm.bedrock_models)
 
     def test_govcloud_model_cost_properties(self):
         """Test that GovCloud models have proper cost configuration"""
