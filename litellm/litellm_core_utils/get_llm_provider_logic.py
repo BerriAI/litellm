@@ -559,7 +559,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         api_base = (
             api_base
             or get_secret_str("GITHUB_API_BASE")
-            or "https://models.inference.ai.azure.com"  # This is github's default base url
+            or "https://models.github.ai/inference"  # This is github's default base url
         )
         dynamic_api_key = api_key or get_secret_str("GITHUB_API_KEY")
     elif custom_llm_provider == "litellm_proxy":
