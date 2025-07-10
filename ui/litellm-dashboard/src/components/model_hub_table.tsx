@@ -43,6 +43,8 @@ interface ModelGroupInfo {
   supports_vision: boolean;
   supports_function_calling: boolean;
   supported_openai_params?: string[];
+  // Allow any additional supports_ properties
+  [key: `supports_${string}`]: boolean;
 }
 
 const ModelHubTable: React.FC<ModelHubTableProps> = ({
@@ -130,6 +132,22 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
     message.success("Copied to clipboard!");
   };
 
+  const formatCapabilityName = (key: string) => {
+    // Remove 'supports_' prefix and convert snake_case to Title Case
+    return key
+      .replace(/^supports_/, '')
+      .split('_')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
+  };
+
+  const getModelCapabilities = (model: ModelGroupInfo) => {
+    // Find all properties that start with 'supports_' and are true
+    return Object.entries(model)
+      .filter(([key, value]) => key.startsWith('supports_') && value === true)
+      .map(([key]) => key);
+  };
+
   const formatCost = (cost: number) => {
     return `$${(cost * 1_000_000).toFixed(2)}`;
   };
@@ -169,7 +187,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
 
 
   return (
-    <div>
+    <div className="w-full mx-4 h-[75vh]">
       {(publicPage && publicPageAllowed) || publicPage == false ? (
         <div className="w-full m-2 mt-2 p-8">
           <div className="flex justify-between items-center mb-6">
@@ -316,18 +334,24 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-wrap gap-1">
-                          {model.supports_function_calling && (
-                            <Badge color="green" size="xs">Fn</Badge>
-                          )}
-                          {model.supports_vision && (
-                            <Badge color="blue" size="xs">Vision</Badge>
-                          )}
-                          {model.supports_parallel_function_calling && (
-                            <Badge color="purple" size="xs">Parallel</Badge>
-                          )}
-                          {!model.supports_function_calling && !model.supports_vision && !model.supports_parallel_function_calling && (
-                            <Text className="text-gray-500 text-xs">-</Text>
-                          )}
+                          {(() => {
+                            const capabilities = getModelCapabilities(model);
+                            const colors = ['green', 'blue', 'purple', 'orange', 'red', 'yellow'];
+                            
+                            if (capabilities.length === 0) {
+                              return <Text className="text-gray-500 text-xs">-</Text>;
+                            }
+                            
+                            return capabilities.map((capability, index) => (
+                              <Badge 
+                                key={capability} 
+                                color={colors[index % colors.length]} 
+                                size="xs"
+                              >
+                                {formatCapabilityName(capability)}
+                              </Badge>
+                            ));
+                          })()}
                         </div>
                       </TableCell>
                       <TableCell>
@@ -449,18 +473,23 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
             <div>
               <Text className="text-lg font-semibold mb-4">Capabilities</Text>
               <div className="flex flex-wrap gap-2">
-                {selectedModel.supports_function_calling && (
-                  <Badge color="green">Function Calling</Badge>
-                )}
-                {selectedModel.supports_vision && (
-                  <Badge color="blue">Vision Support</Badge>
-                )}
-                {selectedModel.supports_parallel_function_calling && (
-                  <Badge color="purple">Parallel Function Calling</Badge>
-                )}
-                {!selectedModel.supports_function_calling && !selectedModel.supports_vision && !selectedModel.supports_parallel_function_calling && (
-                  <Text className="text-gray-500">No special capabilities listed</Text>
-                )}
+                {(() => {
+                  const capabilities = getModelCapabilities(selectedModel);
+                  const colors = ['green', 'blue', 'purple', 'orange', 'red', 'yellow'];
+                  
+                  if (capabilities.length === 0) {
+                    return <Text className="text-gray-500">No special capabilities listed</Text>;
+                  }
+                  
+                  return capabilities.map((capability, index) => (
+                    <Badge 
+                      key={capability} 
+                      color={colors[index % colors.length]}
+                    >
+                      {formatCapabilityName(capability)}
+                    </Badge>
+                  ));
+                })()}
               </div>
             </div>
 
