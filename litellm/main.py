@@ -2894,6 +2894,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     acompletion=acompletion,
                     client=client,
                     api_base=api_base,
+                    api_key=api_key
                 )
             elif bedrock_route == "converse_like":
                 model = model.replace("converse_like/", "")
@@ -3918,6 +3919,7 @@ def embedding(  # noqa: PLR0915
                 api_base=api_base,
                 print_verbose=print_verbose,
                 extra_headers=extra_headers,
+                api_key=api_key,
             )
         elif custom_llm_provider == "triton":
             if api_base is None:
