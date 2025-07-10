@@ -33,12 +33,14 @@ if TYPE_CHECKING:
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.mcp import MCPPostCallResponseObject
 
     Span = Union[_Span, Any]
 else:
     Span = Any
     LiteLLMLoggingObj = Any
     UserAPIKeyAuth = Any
+    MCPPostCallResponseObject = Any
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
@@ -357,7 +359,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     #########################################################
     # MCP TOOL CALL HOOKS
     #########################################################
-    async def async_post_mcp_tool_call_hook(self, kwargs, response_obj, start_time, end_time):
+    async def async_post_mcp_tool_call_hook(self, kwargs, response_obj: MCPPostCallResponseObject, start_time, end_time) -> Optional[MCPPostCallResponseObject]:
         """
         This log gets called after the MCP tool call is made.
 

@@ -3,6 +3,7 @@ import sys
 import pytest
 import asyncio
 import json
+from typing import Optional
 from unittest.mock import AsyncMock, patch
 
 
@@ -18,6 +19,8 @@ from litellm.proxy._experimental.mcp_server.server import (
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
    MCPServerManager,
 )
+from litellm.types.mcp import MCPPostCallResponseObject
+from litellm.types.utils import HiddenParams
 from mcp.types import Tool as MCPTool, CallToolResult, TextContent
 
 
@@ -259,8 +262,10 @@ async def test_mcp_cost_tracking_per_tool():
 
 
 class MCPLoggerHook(CustomLogger):
-    async def async_post_mcp_tool_call_hook(self, kwargs, response_obj, start_time, end_time):
+    async def async_post_mcp_tool_call_hook(self, kwargs, response_obj: MCPPostCallResponseObject, start_time, end_time) -> Optional[MCPPostCallResponseObject]:
         print("post mcp tool call response_obj", response_obj)
+        # update the MCPPostCallResponseObject with the response_cost
+        response_obj.hidden_params.response_cost = 1.42
         return response_obj
 
 
