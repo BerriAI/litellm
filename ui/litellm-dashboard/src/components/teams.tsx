@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { Typography } from "antd";
-import { teamDeleteCall, teamUpdateCall, teamInfoCall, Organization, DEFAULT_ORGANIZATION } from "./networking";
+import { teamDeleteCall, teamUpdateCall, teamInfoCall, Organization, DEFAULT_ORGANIZATION, fetchMCPAccessGroups } from "./networking";
 import TeamMemberModal from "@/components/team/edit_membership";
 import { fetchTeams } from "./common_components/fetch_teams";
 import {
@@ -184,6 +184,8 @@ const Teams: React.FC<TeamProps> = ({
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
+  const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
+  const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
 
   useEffect(() => {
     console.log(`currentOrgForCreateTeam: ${currentOrgForCreateTeam}`);
@@ -212,6 +214,22 @@ const Teams: React.FC<TeamProps> = ({
     };
 
     fetchGuardrails();
+  }, [accessToken]);
+
+  const fetchMcpAccessGroups = async () => {
+    try {
+      if (accessToken == null) {
+        return;
+      }
+      const groups = await fetchMCPAccessGroups(accessToken);
+      setMcpAccessGroups(groups);
+    } catch (error) {
+      console.error("Failed to fetch MCP access groups:", error);
+    }
+  };
+
+  useEffect(() => {
+    fetchMcpAccessGroups();
   }, [accessToken]);
 
   useEffect(() => {
@@ -365,6 +383,15 @@ const Teams: React.FC<TeamProps> = ({
           }
           formValues.object_permission.mcp_servers = formValues.allowed_mcp_server_ids;
           delete formValues.allowed_mcp_server_ids;
+        }
+
+        // Transform allowed_mcp_access_groups into object_permission
+        if (formValues.allowed_mcp_access_groups && formValues.allowed_mcp_access_groups.length > 0) {
+          if (!formValues.object_permission) {
+            formValues.object_permission = {};
+          }
+          formValues.object_permission.mcp_access_groups = formValues.allowed_mcp_access_groups;
+          delete formValues.allowed_mcp_access_groups;
         }
         const response: any = await teamCreateCall(accessToken, formValues);
         if (teams !== null) {
@@ -1062,7 +1089,7 @@ const Teams: React.FC<TeamProps> = ({
                         <NumericalInput step={1} width={400} />
                       </Form.Item>
 
-                      <Accordion className="mt-20 mb-8">
+                      <Accordion className="mt-20 mb-8" onClick={() => { if (!mcpAccessGroupsLoaded) { fetchMcpAccessGroups(); setMcpAccessGroupsLoaded(true); } }}>
                         <AccordionHeader>
                           <b>Additional Settings</b>
                         </AccordionHeader>
@@ -1152,20 +1179,20 @@ const Teams: React.FC<TeamProps> = ({
                             label={
                               <span>
                                 Allowed MCP Servers{' '}
-                                <Tooltip title="Select which MCP servers this team can access by default. Leave empty for access to all MCP servers">
+                                <Tooltip title="Select which MCP servers or access groups this team can access by default. Leave empty for access to all.">
                                   <InfoCircleOutlined style={{ marginLeft: '4px' }} />
                                 </Tooltip>
                               </span>
                             }
-                            name="allowed_mcp_server_ids"
+                            name="allowed_mcp_servers_and_groups"
                             className="mt-8"
-                            help="Select MCP servers this team can access. Leave empty for access to all MCP servers"
+                            help="Select MCP servers or access groups this team can access. Leave empty for access to all."
                           >
                             <PremiumMCPSelector
-                              onChange={(values) => form.setFieldValue('allowed_mcp_server_ids', values)}
-                              value={form.getFieldValue('allowed_mcp_server_ids')}
+                              onChange={val => form.setFieldValue('allowed_mcp_servers_and_groups', val)}
+                              value={form.getFieldValue('allowed_mcp_servers_and_groups')}
                               accessToken={accessToken || ''}
-                              placeholder="Select MCP servers (optional)"
+                              placeholder="Select MCP servers or access groups (optional)"
                               premiumUser={premiumUser}
                             />
                           </Form.Item>

@@ -155,7 +155,8 @@ model LiteLLM_UserTable {
 model LiteLLM_ObjectPermissionTable {
   object_permission_id  String         @id @default(uuid())
   mcp_servers           String[]       @default([])
-  vector_stores         String[]       @default([])
+  vector_stores         String[]       @default([])  
+  mcp_access_groups     String[]       @default([])
   teams                 LiteLLM_TeamTable[]
   verification_tokens   LiteLLM_VerificationToken[]
   organizations         LiteLLM_OrganizationTable[]

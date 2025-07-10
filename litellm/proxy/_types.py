@@ -668,6 +668,7 @@ class ModelParams(LiteLLMPydanticObjectBase):
 
 class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     mcp_servers: Optional[List[str]] = None
+    mcp_access_groups: Optional[List[str]] = None
     vector_stores: Optional[List[str]] = None
 
 
@@ -1271,6 +1272,7 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
 
     object_permission_id: str
     mcp_servers: Optional[List[str]] = []
+    mcp_access_groups: Optional[List[str]] = []
     vector_stores: Optional[List[str]] = []
 
 
