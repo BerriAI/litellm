@@ -4263,6 +4263,9 @@ class Router:
         When a retry or fallback happens, log the details of the just failed model call - similar to Sentry breadcrumbing
         """
         try:
+            _metadata_var = (
+                "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
+            )
             # Log failed model as the previous model
             previous_model = {
                 "exception_type": type(e).__name__,
@@ -4274,11 +4277,11 @@ class Router:
             ) in (
                 kwargs.items()
             ):  # log everything in kwargs except the old previous_models value - prevent nesting
-                if k not in ["metadata", "messages", "original_function"]:
+                if k not in [_metadata_var, "messages", "original_function"]:
                     previous_model[k] = v
-                elif k == "metadata" and isinstance(v, dict):
-                    previous_model["metadata"] = {}  # type: ignore
-                    for metadata_k, metadata_v in kwargs["metadata"].items():
+                elif k == _metadata_var and isinstance(v, dict):
+                    previous_model[_metadata_var] = {}  # type: ignore
+                    for metadata_k, metadata_v in kwargs[_metadata_var].items():
                         if metadata_k != "previous_models":
                             previous_model[k][metadata_k] = metadata_v  # type: ignore
 
@@ -4287,7 +4290,7 @@ class Router:
                 self.previous_models.pop(0)
 
             self.previous_models.append(previous_model)
-            kwargs["metadata"]["previous_models"] = self.previous_models
+            kwargs[_metadata_var]["previous_models"] = self.previous_models
             return kwargs
         except Exception as e:
             raise e
