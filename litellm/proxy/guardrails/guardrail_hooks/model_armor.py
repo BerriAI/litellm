@@ -31,7 +31,6 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
-    TextChoices,
 )
 
 GUARDRAIL_NAME = "model_armor"
@@ -195,8 +194,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             )
 
         json_response = response.json()
-        import asyncio
-        if asyncio.iscoroutine(json_response):
+        if hasattr(json_response, '__await__'):
             return await json_response
         return json_response
 
@@ -381,7 +379,6 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """Process streaming response chunks."""
-        import asyncio
 
         from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
         from litellm.main import stream_chunk_builder
