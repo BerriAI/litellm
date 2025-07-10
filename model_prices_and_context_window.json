@@ -4961,7 +4961,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
-        "source": "https://docs.x.ai/docs/models".
+        "source": "https://docs.x.ai/docs/models",
         "supports_web_search": true
     },
     "xai/grok-4-0709": {
@@ -4975,7 +4975,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
-        "source": "https://docs.x.ai/docs/models".
+        "source": "https://docs.x.ai/docs/models",
         "supports_web_search": true
     },
     "xai/grok-4-latest": {
@@ -4989,7 +4989,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
-        "source": "https://docs.x.ai/docs/models".
+        "source": "https://docs.x.ai/docs/models",
         "supports_web_search": true
     },
     "deepseek/deepseek-coder": {
