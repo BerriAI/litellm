@@ -6499,8 +6499,10 @@ def _get_model_group_info(
     llm_router: Router, all_models_str: List[str], model_group: Optional[str]
 ) -> List[ModelGroupInfo]:
     model_groups: List[ModelGroupInfo] = []
+    # ensure all_models_str is a set
+    all_models_str_set = set(all_models_str)
 
-    for model in all_models_str:
+    for model in all_models_str_set:
         if model_group is not None and model_group != model:
             continue
 
