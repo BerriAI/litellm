@@ -78,7 +78,7 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
         _safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
         return parsed_body
 
-    except (json.JSONDecodeError, orjson.JSONDecodeError, ProxyException):
+    except (json.JSONDecodeError, orjson.JSONDecodeError, ProxyException) as e:
         # Re-raise ProxyException as-is
         verbose_proxy_logger.error(f"Invalid JSON payload received: {str(e)}")
         raise
