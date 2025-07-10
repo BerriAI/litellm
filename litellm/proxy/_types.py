@@ -847,6 +847,8 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     auth_type: Optional[MCPAuthType] = None
     url: str
     mcp_info: Optional[MCPInfo] = None
+    mcp_access_groups: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
+
 
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
@@ -858,6 +860,8 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     auth_type: Optional[MCPAuthType] = None
     url: str
     mcp_info: Optional[MCPInfo] = None
+    mcp_access_groups: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
+
 
 
 class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
@@ -875,6 +879,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     updated_at: Optional[datetime] = None
     updated_by: Optional[str] = None
     teams: List[Dict[str, Optional[str]]] = Field(default_factory=list)
+    mcp_access_groups: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     mcp_info: Optional[MCPInfo] = None
 
 class NewUserRequestTeam(LiteLLMPydanticObjectBase):

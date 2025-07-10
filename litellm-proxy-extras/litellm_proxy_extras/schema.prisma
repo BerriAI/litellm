@@ -176,6 +176,7 @@ model LiteLLM_MCPServerTable {
   updated_at   DateTime?      @default(now()) @updatedAt @map("updated_at")
   updated_by   String?
   mcp_info     Json?          @default("{}")
+  mcp_access_groups Json?
 }
 
 // Generate Tokens for Proxy

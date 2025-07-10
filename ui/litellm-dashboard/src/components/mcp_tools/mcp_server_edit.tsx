@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from "react";
-import { Form, Select, Button as AntdButton, message } from "antd";
+import { Form, Select, Button as AntdButton, message, Input, Space, Tooltip } from "antd";
 import { Button, TextInput, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { MCPServer, MCPServerCostInfo } from "./types";
 import { updateMCPServer } from "../networking";
 import MCPServerCostConfig from "./mcp_server_cost_config";
+import { MinusCircleOutlined, PlusOutlined, InfoCircleOutlined } from "@ant-design/icons";
 
 interface MCPServerEditProps {
   mcpServer: MCPServer;
@@ -23,9 +24,22 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
     }
   }, [mcpServer]);
 
+  // Transform string array to object array for initial form values
+  useEffect(() => {
+    if (mcpServer.mcp_access_groups) {
+      form.setFieldValue(
+        'mcp_access_groups',
+        mcpServer.mcp_access_groups.map(group => ({ name: String(group) }))
+      );
+    }
+  }, [mcpServer]);
+
   const handleSave = async (values: Record<string, any>) => {
     if (!accessToken) return;
     try {
+      // Transform access groups back to the format expected by the backend
+      const accessGroups = values.mcp_access_groups?.map((group: { name: string }) => ({ name: group.name })) || [];
+
       // Prepare the payload with cost configuration
       const payload = {
         ...values,
@@ -34,7 +48,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
           server_name: values.alias || values.url,
           description: values.description,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null
-        }
+        },
+        mcp_access_groups: accessGroups
       };
 
       const updated = await updateMCPServer(accessToken, payload);
@@ -83,6 +98,67 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
                 <Select.Option value="2024-11-05">2024-11-05</Select.Option>
               </Select>
             </Form.Item>
+
+            <Form.Item
+              label={
+                <span className="text-sm font-medium text-gray-700 flex items-center">
+                  MCP Access Groups
+                  <Tooltip title="Define access groups for this MCP server. Each group represents a set of permissions.">
+                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                  </Tooltip>
+                </span>
+              }
+            >
+              <Form.List name="mcp_access_groups" initialValue={[]}>
+                {(fields, { add, remove }) => (
+                  <>
+                    {fields.map((field, index) => (
+                      <Form.Item required={false} key={field.key}>
+                        <div className="flex items-center gap-2">
+                          <Form.Item
+                            {...field}
+                            name={[field.name, 'name']}
+                            validateTrigger={['onChange', 'onBlur']}
+                            rules={[
+                              {
+                                required: true,
+                                whitespace: true,
+                                message: "Please input access group name or delete this field.",
+                              },
+                            ]}
+                            noStyle
+                          >
+                            <Input 
+                              placeholder="Enter access group name" 
+                              style={{ width: '60%' }}
+                              className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                            />
+                          </Form.Item>
+                          {fields.length > 0 && (
+                            <MinusCircleOutlined
+                              className="text-red-500 hover:text-red-700"
+                              onClick={() => remove(field.name)}
+                            />
+                          )}
+                        </div>
+                      </Form.Item>
+                    ))}
+                    <Form.Item>
+                      <AntdButton
+                        type="dashed"
+                        onClick={() => add({ name: '' })}
+                        block
+                        icon={<PlusOutlined />}
+                        className="rounded-lg"
+                      >
+                        Add Access Group
+                      </AntdButton>
+                    </Form.Item>
+                  </>
+                )}
+              </Form.List>
+            </Form.Item>
+
             <div className="flex justify-end gap-2">
               <AntdButton onClick={onCancel}>Cancel</AntdButton>
               <Button type="submit">Save Changes</Button>

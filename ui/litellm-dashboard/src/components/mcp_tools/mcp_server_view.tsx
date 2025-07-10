@@ -186,6 +186,25 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                     <Text className="font-medium">Spec Version</Text>
                     <div>{mcpServer.spec_version}</div>
                   </div>
+                  <div>
+                    <Text className="font-medium">Access Groups</Text>
+                    <div>
+                      {mcpServer.mcp_access_groups && mcpServer.mcp_access_groups.length > 0 ? (
+                        <div className="flex flex-wrap gap-2">
+                          {mcpServer.mcp_access_groups.map((group, index) => (
+                            <span 
+                              key={index}
+                              className="px-2 py-1 bg-gray-100 rounded-md text-sm"
+                            >
+                              {group.name}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <Text className="text-gray-500">No access groups defined</Text>
+                      )}
+                    </div>
+                  </div>
                 </div>
               )}
             </Card>

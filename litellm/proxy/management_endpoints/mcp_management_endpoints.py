@@ -207,7 +207,7 @@ if MCP_AVAILABLE:
                         updated_at=datetime.now(),
                     )
                 )
-
+        print(f"LIST_MCP_SERVERS: {LIST_MCP_SERVERS}")
         # Map servers to their teams and return
         LIST_MCP_SERVERS = [
             LiteLLM_MCPServerTable(
@@ -222,6 +222,7 @@ if MCP_AVAILABLE:
                 created_by=server.created_by,
                 updated_at=server.updated_at,
                 updated_by=server.updated_by,
+                mcp_access_groups=server.mcp_access_groups if server.mcp_access_groups is not None else [],
                 teams=cast(List[Dict[str, str | None]], server_to_teams_map.get(server.server_id, []))
             )
             for server in LIST_MCP_SERVERS

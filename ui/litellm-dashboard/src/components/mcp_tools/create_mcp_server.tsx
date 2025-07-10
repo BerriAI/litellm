@@ -6,8 +6,10 @@ import {
   Select,
   message,
   Button as AntdButton,
+  Space,
+  Input,
 } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { InfoCircleOutlined, MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { createMCPServer } from "../networking";
 import { MCPServer, MCPServerCostInfo } from "./types";
@@ -32,18 +34,23 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [form] = Form.useForm();
   const [isLoading, setIsLoading] = useState(false);
   const [costConfig, setCostConfig] = useState<MCPServerCostInfo>({});
+  const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
 
   const handleCreate = async (formValues: Record<string, any>) => {
     setIsLoading(true);
     try {
+      // Transform access groups into objects with name property
+      const accessGroups = formValues.mcp_access_groups?.map((group: string) => ({ name: group })) || [];
+
       // Prepare the payload with cost configuration
       const payload = {
         ...formValues,
         mcp_info: {
           server_name: formValues.alias || formValues.url,
           description: formValues.description,
-          mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null
-        }
+          mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null,
+        },
+        mcp_access_groups: accessGroups
       };
 
       console.log(`Payload: ${JSON.stringify(payload)}`);
@@ -243,6 +250,33 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   <Select.Option value="2025-03-26">2025-03-26 (Latest)</Select.Option>
                   <Select.Option value="2024-11-05">2024-11-05</Select.Option>
                 </Select>
+              </Form.Item>
+
+              <Form.Item
+                label={
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    MCP Access Groups
+                    <Tooltip title="Specify access groups for this MCP server. Users must be in at least one of these groups to access the server.">
+                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                    </Tooltip>
+                  </span>
+                }
+                name="mcp_access_groups"
+                className="mb-4"
+              >
+                <Select
+                  mode="tags"
+                  showSearch
+                  placeholder="Select existing groups or type to create new ones"
+                  optionFilterProp="children"
+                  tokenSeparators={[',']}
+                  options={mcpAccessGroups.map((group) => ({
+                    value: group,
+                    label: group
+                  }))}
+                  maxTagCount="responsive"
+                  allowClear
+                />
               </Form.Item>
             </div>
 
