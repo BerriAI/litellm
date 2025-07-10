@@ -448,6 +448,7 @@ class LiteLLMRoutes(enum.Enum):
             "/metrics",
             "/litellm/.well-known/litellm-ui-config",
             "/.well-known/litellm-ui-config",
+            "/public/model_hub",
         ]
     )
 
@@ -875,6 +876,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     updated_at: Optional[datetime] = None
     updated_by: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
+
 
 class NewUserRequestTeam(LiteLLMPydanticObjectBase):
     team_id: str
