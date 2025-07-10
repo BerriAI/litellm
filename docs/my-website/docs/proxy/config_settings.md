@@ -597,6 +597,7 @@ router_settings:
 | OTEL_EXPORTER | Exporter type for OpenTelemetry
 | OTEL_EXPORTER_OTLP_PROTOCOL | Exporter type for OpenTelemetry
 | OTEL_HEADERS | Headers for OpenTelemetry requests
+| OTEL_MODEL_ID | Model ID for OpenTelemetry tracing
 | OTEL_EXPORTER_OTLP_HEADERS | Headers for OpenTelemetry requests
 | OTEL_SERVICE_NAME | Service name identifier for OpenTelemetry
 | OTEL_TRACER_NAME | Tracer name for OpenTelemetry tracing

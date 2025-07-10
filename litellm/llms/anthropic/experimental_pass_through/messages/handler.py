@@ -25,7 +25,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
 from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler
-from .utils import AnthropicMessagesRequestUtils
+from .utils import AnthropicMessagesRequestUtils, mock_response
 
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
@@ -92,6 +92,7 @@ async def anthropic_messages(
         response = init_response
     return response
 
+
 def validate_anthropic_api_metadata(metadata: Optional[Dict] = None) -> Optional[Dict]:
     """
     Validate Anthropic API metadata - This is done to ensure only allowed `metadata` fields are passed to Anthropic API
@@ -102,6 +103,7 @@ def validate_anthropic_api_metadata(metadata: Optional[Dict] = None) -> Optional
         return None
     anthropic_metadata_obj = AnthropicMetadata(**metadata)
     return anthropic_metadata_obj.model_dump(exclude_none=True)
+
 
 def anthropic_messages_handler(
     max_tokens: int,
@@ -131,12 +133,14 @@ def anthropic_messages_handler(
     Makes Anthropic `/v1/messages` API calls In the Anthropic API Spec
     """
     from litellm.types.utils import LlmProviders
+
     metadata = validate_anthropic_api_metadata(metadata)
 
     local_vars = locals()
     is_async = kwargs.pop("is_async", False)
     # Use provided client or create a new one
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
+
     litellm_params = GenericLiteLLMParams(
         **kwargs,
         api_key=api_key,
@@ -154,6 +158,15 @@ def anthropic_messages_handler(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
+
+    if litellm_params.mock_response and isinstance(litellm_params.mock_response, str):
+
+        return mock_response(
+            model=model,
+            messages=messages,
+            max_tokens=max_tokens,
+            mock_response=litellm_params.mock_response,
+        )
 
     anthropic_messages_provider_config: Optional[BaseAnthropicMessagesConfig] = None
 
