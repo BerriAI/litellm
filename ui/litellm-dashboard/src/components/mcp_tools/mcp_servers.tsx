@@ -115,7 +115,7 @@ const MCPServers: React.FC<MCPServerProps> = ({
   const uniqueMcpAccessGroups = React.useMemo(() => {
     if (!mcpServers) return [];
     return Array.from(new Set(
-      mcpServers.flatMap(server => server.mcp_access_groups?.map(group => group.name) || [])
+      mcpServers.flatMap(server => server.mcp_access_groups)
     ));
   }, [mcpServers]);
 
@@ -146,7 +146,9 @@ const MCPServers: React.FC<MCPServerProps> = ({
     }
     if (group !== "all") {
       filtered = filtered.filter(server =>
-        server.mcp_access_groups?.some(g => g.name === group)
+        server.mcp_access_groups?.some((g: any) =>
+          typeof g === 'string' ? g === group : g && g.name === group
+        )
       );
     }
     setFilteredServers(filtered);

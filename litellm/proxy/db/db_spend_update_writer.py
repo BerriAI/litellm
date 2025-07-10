@@ -864,19 +864,23 @@ class DBSpendUpdateWriter:
                             entity_id = transaction.get(entity_id_field)
 
                             # Construct the where clause dynamically
+                            where_constraint = {
+                                entity_id_field: entity_id,
+                                "date": transaction["date"],
+                                "api_key": transaction["api_key"],
+                                "model": transaction["model"],
+                                "custom_llm_provider": transaction.get(
+                                    "custom_llm_provider"
+                                ),
+                            }
+                            
+                            # Only include mcp_namespaced_tool_name if it's not None
+                            mcp_namespaced_tool_name = transaction.get("mcp_namespaced_tool_name")
+                            if mcp_namespaced_tool_name is not None:
+                                where_constraint["mcp_namespaced_tool_name"] = mcp_namespaced_tool_name
+                            
                             where_clause = {
-                                unique_constraint_name: {
-                                    entity_id_field: entity_id,
-                                    "date": transaction["date"],
-                                    "api_key": transaction["api_key"],
-                                    "model": transaction["model"],
-                                    "custom_llm_provider": transaction.get(
-                                        "custom_llm_provider"
-                                    ),
-                                    "mcp_namespaced_tool_name": transaction.get(
-                                        "mcp_namespaced_tool_name"
-                                    ),
-                                }
+                                unique_constraint_name: where_constraint
                             }
 
                             # Get the table dynamically

@@ -441,6 +441,8 @@ if MCP_AVAILABLE:
         --header 'Authorization: Bearer your_api_key_here'
         ```
         """
+        print(f"Editing MCP Server with payload: {payload}")
+        print(f"mcp access groups: {payload.mcp_access_groups}")
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
         )

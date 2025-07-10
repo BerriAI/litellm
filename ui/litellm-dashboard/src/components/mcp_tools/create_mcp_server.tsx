@@ -40,7 +40,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     setIsLoading(true);
     try {
       // Transform access groups into objects with name property
-      const accessGroups = formValues.mcp_access_groups?.map((group: string) => ({ name: group })) || [];
+      
+      const accessGroups = formValues.mcp_access_groups
 
       // Prepare the payload with cost configuration
       const payload = {
