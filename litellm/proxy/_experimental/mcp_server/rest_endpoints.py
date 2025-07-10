@@ -160,12 +160,12 @@ if MCP_AVAILABLE:
     from litellm.proxy.management_endpoints.mcp_management_endpoints import (
         NewMCPServerRequest,
     )
-    @router.get("/health")
-    async def health_check(
+    @router.get("/test/connection")
+    async def test_connection(
         request: NewMCPServerRequest,
     ):
         """
-        Test if we can connect to the provided MCP server
+        Test if we can connect to the provided MCP server before adding it
         """
         try:
             client = global_mcp_server_manager._create_mcp_client(
@@ -187,13 +187,13 @@ if MCP_AVAILABLE:
         return {"status": "ok"}
         
     
-    @router.get("/health/tools/list")
-    async def list_tools(
+    @router.get("/test/tools/list")
+    async def test_tools_list(
         request: NewMCPServerRequest,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
-        List tools from MCP server
+        Preview tools available from MCP server before adding it
         """
         try:
             client = global_mcp_server_manager._create_mcp_client(
