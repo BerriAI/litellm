@@ -6,7 +6,6 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import os
-import sys
 from typing import Any, AsyncGenerator, List, Literal, Optional, Union
 
 from fastapi import HTTPException
@@ -30,7 +29,6 @@ from litellm.types.utils import (
     Choices,
     ModelResponse,
     ModelResponseStream,
-    StreamingChoices,
 )
 
 GUARDRAIL_NAME = "model_armor"
