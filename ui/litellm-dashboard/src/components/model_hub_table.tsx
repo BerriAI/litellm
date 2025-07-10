@@ -237,7 +237,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                   placeholder="Search model names..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="border rounded px-3 py-2 w-64"
+                  className="border rounded px-3 py-2 w-64 h-10 text-sm"
                 />
               </div>
               <div>
@@ -245,11 +245,11 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                 <select
                   value={selectedProvider}
                   onChange={(e) => setSelectedProvider(e.target.value)}
-                  className="border rounded px-3 py-2"
+                  className="border rounded px-3 py-2 text-sm text-gray-600 w-40 h-10"
                 >
-                  <option value="">All Providers</option>
+                  <option value="" className="text-sm text-gray-600">All Providers</option>
                   {modelHubData && getUniqueProviders(modelHubData).map(provider => (
-                    <option key={provider} value={provider}>{provider}</option>
+                    <option key={provider} value={provider} className="text-sm text-gray-800">{provider}</option>
                   ))}
                 </select>
               </div>
@@ -258,11 +258,11 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                 <select
                   value={selectedMode}
                   onChange={(e) => setSelectedMode(e.target.value)}
-                  className="border rounded px-3 py-2"
+                  className="border rounded px-3 py-2 text-sm text-gray-600 w-32 h-10"
                 >
-                  <option value="">All Modes</option>
+                  <option value="" className="text-sm text-gray-600">All Modes</option>
                   {modelHubData && getUniqueModes(modelHubData).map(mode => (
-                    <option key={mode} value={mode}>{mode}</option>
+                    <option key={mode} value={mode} className="text-sm text-gray-800">{mode}</option>
                   ))}
                 </select>
               </div>
