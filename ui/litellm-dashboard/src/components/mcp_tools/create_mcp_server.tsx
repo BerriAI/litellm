@@ -7,12 +7,13 @@ import {
   message,
   Button as AntdButton,
 } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { InfoCircleOutlined, ExperimentOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { createMCPServer } from "../networking";
 import { MCPServer, MCPServerCostInfo } from "./types";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import { isAdminRole } from "@/utils/roles";
+import MCPConnectionTest from "../mcp_connection_test";
 
 
 const asset_logos_folder = '../ui/assets/logos/';
@@ -32,6 +33,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [form] = Form.useForm();
   const [isLoading, setIsLoading] = useState(false);
   const [costConfig, setCostConfig] = useState<MCPServerCostInfo>({});
+  const [isTestModalVisible, setTestModalVisible] = useState(false);
+  const [currentFormValues, setCurrentFormValues] = useState<Record<string, any>>({});
 
   const handleCreate = async (formValues: Record<string, any>) => {
     setIsLoading(true);
@@ -74,6 +77,20 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     form.resetFields();
     setCostConfig({});
     setModalVisible(false);
+  };
+
+  const handleTestConnection = () => {
+    form.validateFields().then((values) => {
+      setCurrentFormValues(values);
+      setTestModalVisible(true);
+    }).catch(() => {
+      message.error("Please fill in required fields before testing connection");
+    });
+  };
+
+  const handleTestModalCancel = () => {
+    setTestModalVisible(false);
+    setCurrentFormValues({});
   };
 
   // rendering
@@ -253,25 +270,59 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 onChange={setCostConfig}
                 accessToken={accessToken}
                 disabled={false}
+                formValues={form.getFieldsValue()}
               />
             </div>
 
-            <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100">
+            <div className="flex items-center justify-between pt-6 border-t border-gray-100">
               <Button 
                 variant="secondary"
-                onClick={handleCancel}
+                onClick={handleTestConnection}
+                icon={ExperimentOutlined}
               >
-                Cancel
+                Test Connection
               </Button>
-              <Button 
-                variant="primary"
-                loading={isLoading}
-              >
-                {isLoading ? 'Creating...' : 'Add MCP Server'}
-              </Button>
+              <div className="flex items-center space-x-3">
+                <Button 
+                  variant="secondary"
+                  onClick={handleCancel}
+                >
+                  Cancel
+                </Button>
+                <Button 
+                  variant="primary"
+                  loading={isLoading}
+                >
+                  {isLoading ? 'Creating...' : 'Add MCP Server'}
+                </Button>
+              </div>
             </div>
           </Form>
         </div>
+      </Modal>
+
+      {/* Test Connection Modal */}
+      <Modal
+        title="Test MCP Server Connection"
+        open={isTestModalVisible}
+        onCancel={handleTestModalCancel}
+        footer={null}
+        width={800}
+        className="top-8"
+        styles={{
+          body: { padding: '0' },
+          header: { padding: '24px 24px 0 24px', border: 'none' },
+        }}
+      >
+        {isTestModalVisible && accessToken && (
+          <MCPConnectionTest
+            formValues={currentFormValues}
+            accessToken={accessToken}
+            serverName={currentFormValues.alias || currentFormValues.url || "MCP Server"}
+            onClose={handleTestModalCancel}
+            onTestComplete={() => {}}
+          />
+        )}
       </Modal>
     </div>
   );
