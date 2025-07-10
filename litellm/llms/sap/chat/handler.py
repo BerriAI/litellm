@@ -106,26 +106,6 @@ class GenAIHubOrchestration(BaseLLM):
         return self._orchestration_client
 
 
-    def _validate_environment(
-        self, api_key: Optional[str], user_headers: dict, tenant_id: Optional[str]
-    ) -> dict:
-        if api_key is None:
-            raise ValueError(
-                "Missing Predibase API Key - A call is being made to predibase but no key is set either in the environment variables or via params"
-            )
-        if tenant_id is None:
-            raise ValueError(
-                "Missing Predibase Tenant ID - Required for making the request. Set dynamically (e.g. `completion(..tenant_id=<MY-ID>)`) or in env - `PREDIBASE_TENANT_ID`."
-            )
-        headers = {
-            "content-type": "application/json",
-            "Authorization": "Bearer {}".format(api_key),
-        }
-        if user_headers is not None and isinstance(user_headers, dict):
-            headers = {**headers, **user_headers}
-        return headers
-
-
     def encode_model_id(self, model_id: str) -> str:
         """
         Double encode the model ID to ensure it matches the expected double-encoded format.
