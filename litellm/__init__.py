@@ -327,6 +327,7 @@ disable_add_prefix_to_prompt: bool = (
     False  # used by anthropic, to disable adding prefix to prompt
 )
 public_model_groups: Optional[List[str]] = None
+public_model_groups_request_access_form: Optional[str] = None
 #### REQUEST PRIORITIZATION #####
 priority_reservation: Optional[Dict[str, float]] = None
 
