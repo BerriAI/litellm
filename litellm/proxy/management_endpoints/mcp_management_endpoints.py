@@ -16,7 +16,7 @@ Endpoints here:
 import importlib
 from typing import Iterable, List, Optional, Dict, cast
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response, status, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from fastapi.responses import JSONResponse
 
 import litellm
@@ -46,10 +46,6 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
-    )
-    from litellm.proxy._experimental.mcp_server.server import (
-        ListMCPToolsRestAPIResponseObject,
-        call_mcp_tool,
     )
     from litellm.proxy._types import (
         LiteLLM_MCPServerTable,
@@ -140,11 +136,9 @@ if MCP_AVAILABLE:
         try:
             # Get all MCP servers and extract their access groups
             mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many()
-            print(f"MCP servers: {mcp_servers}")
             # Extract all unique access groups
             access_groups = set()
             for server in mcp_servers:
-                print(f"Server: {server}")
                 if server.mcp_access_groups:
                     access_groups.update(server.mcp_access_groups)
             
