@@ -58,8 +58,8 @@ const ConditionalPublicModelName: React.FC = () => {
             };
           }
           return {
-            public_name: model,
-            litellm_model: model
+            public_name: model+"/<name>",
+            litellm_model: model+"/"
           };
         });
         
