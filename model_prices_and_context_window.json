@@ -2430,6 +2430,38 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
+    "azure/o3-deep-research": {
+        "max_tokens": 100000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 1e-05,
+        "output_cost_per_token": 4e-05,
+        "cache_read_input_token_cost": 2.5e-06,
+        "litellm_provider": "azure",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_pdf_input": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_web_search": true
+    },
     "azure/o4-mini": {
         "max_tokens": 100000,
         "max_input_tokens": 200000,
