@@ -21,6 +21,7 @@ from ..exceptions import (
     ServiceUnavailableError,
     Timeout,
     UnprocessableEntityError,
+    MidStreamFallbackError,
 )
 
 
@@ -556,13 +557,31 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         llm_provider="anthropic",
                     )
-                elif "overloaded_error" in error_str:
+                elif ("overloaded" in error_str.lower() or 
+                      (hasattr(original_exception, "status_code") and
+                       original_exception.status_code == 529)):
                     exception_mapping_worked = True
-                    raise InternalServerError(
-                        message="AnthropicError - {}".format(error_str),
-                        model=model,
-                        llm_provider="anthropic",
-                    )
+                    streaming_obj = getattr(original_exception, "streaming_obj", None)
+                    generated_content = ""
+                    is_pre_first_chunk = True
+                    if streaming_obj:
+                        is_pre_first_chunk = getattr(streaming_obj, "sent_first_chunk", False) is False
+                        generated_content = getattr(streaming_obj, "response_uptil_now", "")
+
+                        raise MidStreamFallbackError(
+                            message="AnthropicException - {}".format(error_str),
+                            model=model,
+                            custom_llm_provider="anthropic",
+                            original_exception=original_exception,
+                            generated_content=generated_content,
+                            is_pre_first_chunk=is_pre_first_chunk,
+                        )
+                    else:
+                        raise InternalServerError(
+                            message="AnthropicException - {}".format(error_str),
+                            model=model,
+                            llm_provider="anthropic",
+                        )
                 if "Invalid API Key" in error_str:
                     exception_mapping_worked = True
                     raise AuthenticationError(

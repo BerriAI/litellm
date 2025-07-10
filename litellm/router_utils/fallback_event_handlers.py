@@ -119,6 +119,41 @@ async def run_async_fallback(
 
     error_from_fallbacks = original_exception
 
+    # Handle mid-stream fallbacks by preserving already generated content
+    is_mid_stream = kwargs.pop("is_mid_stream_fallback", False)
+    previous_content = kwargs.pop("previous_content", "")
+
+    # If this is a mid-stream fallback and we have previous content, prepare messages
+    if is_mid_stream and previous_content and "messages" in kwargs:
+        messages = kwargs.get("messages", [])
+
+        if isinstance(messages, list) and len(messages) > 0:
+            if previous_content.strip():
+                # Check for a system message
+                system_msg_idx = None
+                for i, msg in enumerate(messages):
+                    if msg.get("role") == "system":
+                        system_msg_idx = i
+                        break
+
+                continuation_text = f"The following is the beginning of an assistant's response. Continue from where it left off: '{previous_content}'"
+
+                if system_msg_idx is not None:
+                    # Append to existing system message
+                    messages[system_msg_idx]["content"] = messages[system_msg_idx].get("content", "") + "\n\n" + continuation_text 
+                else:
+                    # Add a new system message
+                    messages.insert(0, {"role": "assistant", "content": continuation_text})
+
+                # Update kwargs with modified messages
+                kwargs["messages"] = messages
+                # Add to metadata to track this was a mid-stream fallback
+                kwargs.setdefault("metadata", {}).update({
+                    "is_mid_stream_fallback": True,
+                    "fallback_depth": fallback_depth,
+                    "previous_content_length": len(previous_content)
+                })
+
     for mg in fallback_model_group:
         if mg == original_model_group:
             continue
@@ -139,11 +174,21 @@ async def run_async_fallback(
             response = await litellm_router.async_function_with_fallbacks(
                 *args, **kwargs
             )
+            if hasattr(response, "_hidden_params"):
+                response._hidden_params.setdefault("metadata", {})["mid_stream_fallback"] = True
+                # Also add to additional_headers for header propagation
+                response._hidden_params.setdefault("additional_headers", {})["x-litellm-mid-stream-fallback"] = True
             verbose_router_logger.info("Successful fallback b/w models.")
             response = add_fallback_headers_to_response(
                 response=response,
                 attempted_fallbacks=fallback_depth,
             )
+            # If this was a mid-stream fallback, also add that to response headers
+            if is_mid_stream and hasattr(response, "_hidden_params"):
+                response._hidden_params.setdefault("additional_headers", {})
+                response._hidden_params["additional_headers"]["x-litellm-mid-stream-fallback"] = True
+                response._hidden_params["additional_headers"]["x-litellm-previous-content-length"] = len(previous_content)
+                
             # callback for successfull_fallback_event():
             await log_success_fallback_event(
                 original_model_group=original_model_group,

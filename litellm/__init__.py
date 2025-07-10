@@ -1155,6 +1155,7 @@ from .exceptions import (
     UnprocessableEntityError,
     InternalServerError,
     JSONSchemaValidationError,
+    MidStreamFallbackError,
     LITELLM_EXCEPTION_TYPES,
     MockException,
 )
