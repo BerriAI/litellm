@@ -7,7 +7,7 @@ from mcp.types import TextContent as MCPTextContent
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
 
-from litellm.types.utils import HiddenParams
+from litellm.types.llms.base import HiddenParams
 
 
 class MCPTransport(str, enum.Enum):
