@@ -5,7 +5,6 @@
 # +-------------------------------------------------------------+
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-import os
 from typing import Any, AsyncGenerator, List, Literal, Optional, Union
 
 from fastapi import HTTPException
