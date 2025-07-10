@@ -186,12 +186,16 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
 
         For non streaming calls, CompletionStartTime is time we get the response back
         """
-        start_time = standard_logging_payload.get("startTime")
-        completion_start_time = standard_logging_payload.get("completionStartTime")
-        end_time = standard_logging_payload.get("endTime")
-        if completion_start_time is not None:
+        start_time: Optional[float] = standard_logging_payload.get("startTime")
+        completion_start_time: Optional[float] = standard_logging_payload.get("completionStartTime")
+        end_time: Optional[float] = standard_logging_payload.get("endTime")
+
+        if completion_start_time is not None and start_time is not None:
             return completion_start_time - start_time
-        return end_time - start_time
+        elif end_time is not None and start_time is not None:
+            return end_time - start_time
+        else:
+            return 0.0
 
 
     def _get_response_messages(self, response_obj: Any) -> List[Any]:
