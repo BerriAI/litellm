@@ -339,6 +339,7 @@ class BaseLLMHTTPHandler:
             optional_params=optional_params,
             request_data=data,
             api_base=api_base,
+            api_key=api_key,
             stream=stream,
             fake_stream=fake_stream,
             model=model,
@@ -1324,6 +1325,7 @@ class BaseLLMHTTPHandler:
             ),  # dynamic aws_* params are passed under litellm_params
             request_data=request_body,
             api_base=request_url,
+            api_key=api_key,
             stream=stream,
             fake_stream=False,
             model=model,

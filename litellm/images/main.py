@@ -302,6 +302,8 @@ def image_generation(  # noqa: PLR0915
                 model_response=model_response,
                 aimg_generation=aimg_generation,
                 client=client,
+                api_base=api_base,
+                api_key=api_key
             )
         elif custom_llm_provider == "vertex_ai":
             vertex_ai_project = (
