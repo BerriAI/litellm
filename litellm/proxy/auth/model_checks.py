@@ -74,12 +74,10 @@ async def get_mcp_server_ids(
     if prisma_client is None:
         return []
 
-    print(f"user_api_key_dict: {user_api_key_dict.object_permission_id}")
 
     if user_api_key_dict.object_permission_id is None:
         return []
 
-    print(f"user_api_key_dict.object_permission_id: {user_api_key_dict.object_permission_id}")
 
     # Make a direct SQL query to get just the mcp_servers
     try:
@@ -91,7 +89,6 @@ async def get_mcp_server_ids(
             return result.mcp_servers
         return []
     except Exception as e:
-        print(f"Error getting mcp servers: {str(e)}")
         return []
 
 
