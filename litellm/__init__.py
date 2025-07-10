@@ -2,7 +2,7 @@
 import warnings
 
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
-### INIT VARIABLES ##################
+### INIT VARIABLES ###################
 import threading
 import os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
@@ -61,8 +61,14 @@ from litellm.constants import (
     DEFAULT_ALLOWED_FAILS,
 )
 from litellm.types.guardrails import GuardrailItem
-from litellm.types.secret_managers.main import KeyManagementSystem, KeyManagementSettings
-from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams, LiteLLM_UpperboundKeyGenerateParams
+from litellm.types.secret_managers.main import (
+    KeyManagementSystem,
+    KeyManagementSettings,
+)
+from litellm.types.proxy.management_endpoints.ui_sso import (
+    DefaultTeamSSOParams,
+    LiteLLM_UpperboundKeyGenerateParams,
+)
 from litellm.types.utils import StandardKeyGenerationConfig, LlmProviders
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
@@ -320,6 +326,8 @@ prometheus_metrics_config: Optional[List] = None
 disable_add_prefix_to_prompt: bool = (
     False  # used by anthropic, to disable adding prefix to prompt
 )
+public_model_groups: Optional[List[str]] = None
+public_model_groups_links: Dict[str, str] = {}
 #### REQUEST PRIORITIZATION #####
 priority_reservation: Optional[Dict[str, float]] = None
 
