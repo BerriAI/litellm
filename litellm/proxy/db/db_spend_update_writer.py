@@ -875,7 +875,8 @@ class DBSpendUpdateWriter:
                                     ),
                                     "mcp_namespaced_tool_name": transaction.get(
                                         "mcp_namespaced_tool_name"
-                                    ),
+                                    )
+                                    or "",
                                 }
                             }
 
