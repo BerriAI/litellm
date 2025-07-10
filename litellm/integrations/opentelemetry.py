@@ -122,7 +122,6 @@ class OpenTelemetry(CustomLogger):
         **kwargs,
     ):
         from opentelemetry import trace
-        from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.trace import SpanKind
 
@@ -388,7 +387,6 @@ class OpenTelemetry(CustomLogger):
 
     def _get_tracer_with_dynamic_headers(self, dynamic_headers: dict):
         """Create a temporary tracer with dynamic headers for this request only."""
-        from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
 
         # Create a temporary tracer provider with dynamic headers
