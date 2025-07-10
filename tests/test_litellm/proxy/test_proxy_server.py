@@ -715,3 +715,109 @@ async def test_custom_ui_sso_sign_in_handler_config_loading():
         # Clean up temporary file
         import os
         os.unlink(config_file_path)
+
+
+@pytest.mark.asyncio
+async def test_load_environment_variables_direct_and_os_environ():
+    """
+    Test _load_environment_variables method with direct values and os.environ/ prefixed values
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    
+    # Test config with both direct values and os.environ/ prefixed values
+    test_config = {
+        "environment_variables": {
+            "DIRECT_VAR": "direct_value",
+            "NUMERIC_VAR": 12345,
+            "BOOL_VAR": True,
+            "SECRET_VAR": "os.environ/ACTUAL_SECRET_VAR"
+        }
+    }
+    
+    # Mock get_secret_str to return a resolved value
+    mock_secret_value = "resolved_secret_value"
+    
+    with patch("litellm.proxy.proxy_server.get_secret_str", return_value=mock_secret_value) as mock_get_secret:
+        with patch.dict(os.environ, {}, clear=False):  # Don't clear existing env vars, just track changes
+            # Call the method under test
+            proxy_config._load_environment_variables(test_config)
+            
+            # Verify direct environment variables were set correctly
+            assert os.environ["DIRECT_VAR"] == "direct_value"
+            assert os.environ["NUMERIC_VAR"] == "12345"  # Should be converted to string
+            assert os.environ["BOOL_VAR"] == "True"  # Should be converted to string
+            
+            # Verify os.environ/ prefixed variable was resolved and set
+            assert os.environ["SECRET_VAR"] == mock_secret_value
+            
+            # Verify get_secret_str was called with the correct value
+            mock_get_secret.assert_called_once_with(secret_name="os.environ/ACTUAL_SECRET_VAR")
+
+
+@pytest.mark.asyncio
+async def test_load_environment_variables_litellm_license_and_edge_cases():
+    """
+    Test _load_environment_variables method with LITELLM_LICENSE special handling and edge cases
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    
+    # Test Case 1: LITELLM_LICENSE in environment_variables
+    test_config_with_license = {
+        "environment_variables": {
+            "LITELLM_LICENSE": "test_license_key",
+            "OTHER_VAR": "other_value"
+        }
+    }
+    
+    # Mock _license_check
+    mock_license_check = MagicMock()
+    mock_license_check.is_premium.return_value = True
+    
+    with patch("litellm.proxy.proxy_server._license_check", mock_license_check):
+        with patch.dict(os.environ, {}, clear=False):
+            # Call the method under test
+            proxy_config._load_environment_variables(test_config_with_license)
+            
+            # Verify LITELLM_LICENSE was set in environment
+            assert os.environ["LITELLM_LICENSE"] == "test_license_key"
+            
+            # Verify license check was updated
+            assert mock_license_check.license_str == "test_license_key"
+            mock_license_check.is_premium.assert_called_once()
+    
+    # Test Case 2: No environment_variables in config
+    test_config_no_env_vars = {}
+    
+    # This should not raise any errors and should return without doing anything
+    result = proxy_config._load_environment_variables(test_config_no_env_vars)
+    assert result is None  # Method returns None
+    
+    # Test Case 3: environment_variables is None
+    test_config_none_env_vars = {"environment_variables": None}
+    
+    # This should not raise any errors and should return without doing anything
+    result = proxy_config._load_environment_variables(test_config_none_env_vars)
+    assert result is None  # Method returns None
+    
+    # Test Case 4: os.environ/ prefix but get_secret_str returns None
+    test_config_secret_none = {
+        "environment_variables": {
+            "FAILED_SECRET": "os.environ/NONEXISTENT_SECRET"
+        }
+    }
+    
+    with patch("litellm.proxy.proxy_server.get_secret_str", return_value=None):
+        with patch.dict(os.environ, {}, clear=False):
+            # Call the method under test
+            proxy_config._load_environment_variables(test_config_secret_none)
+            
+            # Verify that the environment variable was not set when secret resolution fails
+            assert "FAILED_SECRET" not in os.environ
