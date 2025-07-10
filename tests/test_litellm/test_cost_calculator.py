@@ -354,9 +354,9 @@ def test_bedrock_cost_calculator_comparison_with_without_cache():
             )
         ],
         usage=Usage(
-            total_tokens=1020,
-            prompt_tokens=1000,
-            completion_tokens=20,
+            total_tokens=28508,
+            prompt_tokens=28495,
+            completion_tokens=13,
         ),
     )
 
@@ -377,13 +377,20 @@ def test_bedrock_cost_calculator_comparison_with_without_cache():
             )
         ],
         usage=Usage(
-            total_tokens=1020,
-            prompt_tokens=1000,
-            completion_tokens=20,
-            prompt_tokens_details=PromptTokensDetailsWrapper(
-                cached_tokens=900,  # 900 tokens are cached (cheaper)
-                text_tokens=100,    # Only 100 new tokens
-            ),
+            **{
+                "total_tokens": 28508,
+                "prompt_tokens": 28495,
+                "completion_tokens": 13,
+                "prompt_tokens_details": {"audio_tokens": None, "cached_tokens": 0},
+                "cache_read_input_tokens": 28491,  # Most tokens are read from cache (cheaper)
+                "completion_tokens_details": {
+                    "audio_tokens": None,
+                    "reasoning_tokens": 0,
+                    "accepted_prediction_tokens": None,
+                    "rejected_prediction_tokens": None,
+                },
+                "cache_creation_input_tokens": 15,  # Only 15 new tokens added to cache
+            }
         ),
     )
 
@@ -404,6 +411,3 @@ def test_bedrock_cost_calculator_comparison_with_without_cache():
     assert cost_with_cache < cost_no_cache
     print(f"Cost without cache: {cost_no_cache}")
     print(f"Cost with cache: {cost_with_cache}")
-    print(f"Savings: {cost_no_cache - cost_with_cache} ({((cost_no_cache - cost_with_cache) / cost_no_cache * 100):.1f}%)")
-
-
