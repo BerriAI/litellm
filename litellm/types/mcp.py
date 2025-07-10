@@ -1,14 +1,19 @@
 import enum
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
-from mcp.types import EmbeddedResource as MCPEmbeddedResource
-from mcp.types import ImageContent as MCPImageContent
-from mcp.types import TextContent as MCPTextContent
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel
 from typing_extensions import TypedDict
 
 from litellm.types.llms.base import HiddenParams
 
+if TYPE_CHECKING:
+    from mcp.types import EmbeddedResource as MCPEmbeddedResource
+    from mcp.types import ImageContent as MCPImageContent
+    from mcp.types import TextContent as MCPTextContent
+else:
+    MCPEmbeddedResource = Any
+    MCPImageContent = Any
+    MCPTextContent = Any
 
 class MCPTransport(str, enum.Enum):
     sse = "sse"
