@@ -43,7 +43,7 @@ class ModelConfig(BaseModel):
 
 
 class RouterConfig(BaseModel):
-    model_list: List[ModelConfig]
+    model_list: Optional[List[ModelConfig]]
 
     redis_url: Optional[str] = None
     redis_host: Optional[str] = None
@@ -351,7 +351,7 @@ class LiteLLM_Params(GenericLiteLLMParams):
 
 class updateLiteLLMParams(GenericLiteLLMParams):
     # This class is used to update the LiteLLM_Params
-    # only differece is model is optional
+    # only difference is model is optional
     model: Optional[str] = None
 
 
