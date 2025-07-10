@@ -262,6 +262,15 @@ async def test_mcp_cost_tracking_per_tool():
 
 
 class MCPLoggerHook(CustomLogger):
+    def __init__(self):
+        self.standard_logging_payload = None
+        super().__init__()
+    
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        print("success event")
+        self.standard_logging_payload = kwargs.get("standard_logging_object", None)
+        print(f"Captured standard_logging_payload: {self.standard_logging_payload}")
+    
     async def async_post_mcp_tool_call_hook(self, kwargs, response_obj: MCPPostCallResponseObject, start_time, end_time) -> Optional[MCPPostCallResponseObject]:
         print("post mcp tool call response_obj", response_obj)
         # update the MCPPostCallResponseObject with the response_cost
