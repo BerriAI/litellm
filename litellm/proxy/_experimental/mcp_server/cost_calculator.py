@@ -15,7 +15,9 @@ else:
 
 class MCPCostCalculator:
     @staticmethod
-    def calculate_mcp_tool_call_cost(litellm_logging_obj: Optional[LitellmLoggingObject]) -> float:
+    def calculate_mcp_tool_call_cost(
+        litellm_logging_obj: Optional[LitellmLoggingObject],
+        ) -> float:
         """
         Calculate the cost of an MCP tool call.
 
@@ -23,6 +25,14 @@ class MCPCostCalculator:
         """
         if litellm_logging_obj is None:
             return 0.0
+        
+        #########################################################
+        # Get the response cost from logging object model_call_details
+        # This is set when a user modifies the response in a post_mcp_tool_call_hook
+        #########################################################
+        response_cost = litellm_logging_obj.model_call_details.get("response_cost", None)
+        if response_cost is not None:
+            return response_cost
         
         #########################################################
         # Unpack the mcp_tool_call_metadata
