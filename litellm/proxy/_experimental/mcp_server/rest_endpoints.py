@@ -160,7 +160,7 @@ if MCP_AVAILABLE:
     from litellm.proxy.management_endpoints.mcp_management_endpoints import (
         NewMCPServerRequest,
     )
-    @router.get("/test/connection")
+    @router.post("/test/connection")
     async def test_connection(
         request: NewMCPServerRequest,
     ):
@@ -187,7 +187,7 @@ if MCP_AVAILABLE:
         return {"status": "ok"}
         
     
-    @router.get("/test/tools/list")
+    @router.post("/test/tools/list")
     async def test_tools_list(
         request: NewMCPServerRequest,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
