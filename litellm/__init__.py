@@ -2,7 +2,7 @@
 import warnings
 
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
-### INIT VARIABLES ###################
+### INIT VARIABLES ##################
 import threading
 import os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
@@ -61,14 +61,8 @@ from litellm.constants import (
     DEFAULT_ALLOWED_FAILS,
 )
 from litellm.types.guardrails import GuardrailItem
-from litellm.types.secret_managers.main import (
-    KeyManagementSystem,
-    KeyManagementSettings,
-)
-from litellm.types.proxy.management_endpoints.ui_sso import (
-    DefaultTeamSSOParams,
-    LiteLLM_UpperboundKeyGenerateParams,
-)
+from litellm.types.secret_managers.main import KeyManagementSystem, KeyManagementSettings
+from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams, LiteLLM_UpperboundKeyGenerateParams
 from litellm.types.utils import StandardKeyGenerationConfig, LlmProviders
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
@@ -326,8 +320,6 @@ prometheus_metrics_config: Optional[List] = None
 disable_add_prefix_to_prompt: bool = (
     False  # used by anthropic, to disable adding prefix to prompt
 )
-public_model_groups: Optional[List[str]] = None
-public_model_groups_links: Dict[str, str] = {}
 #### REQUEST PRIORITIZATION #####
 priority_reservation: Optional[Dict[str, float]] = None
 
@@ -499,7 +491,6 @@ elevenlabs_models: List = []
 def is_bedrock_pricing_only_model(key: str) -> bool:
     """
     Excludes keys with the pattern 'bedrock/<region>/<model>'. These are in the model_prices_and_context_window.json file for pricing purposes only.
-    Exception: GovCloud models (us-gov-east-1, us-gov-west-1) are NOT pricing-only and should be included.
 
     Args:
         key (str): A key to filter.
@@ -514,17 +505,6 @@ def is_bedrock_pricing_only_model(key: str) -> bool:
         return True
 
     is_match = bedrock_pattern.match(key)
-    
-    # If it matches the regional pattern, check if it's a GovCloud region
-    if is_match:
-        # Extract the region from the key
-        parts = key.split("/")
-        if len(parts) >= 2:
-            region = parts[1]
-            # GovCloud regions should NOT be excluded
-            if region in ["us-gov-east-1", "us-gov-west-1"]:
-                return False
-    
     return is_match is not None
 
 
