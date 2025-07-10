@@ -149,3 +149,70 @@ if MCP_AVAILABLE:
             proxy_config=proxy_config,
         )
         return await call_mcp_tool(**data)
+    
+    ########################################################
+    # MCP Connection testing routes
+    # /health -> Test if we can connect to the MCP server
+    # /health/tools/list -> List tools from MCP server
+    # For these routes users will dynamically pass the MCP connection params, they don't need to be on the MCP registry
+    ########################################################
+    from litellm.proxy._experimental.mcp_server.server import MCPServer
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        NewMCPServerRequest,
+    )
+    @router.get("/health")
+    async def health_check(
+        request: NewMCPServerRequest,
+    ):
+        """
+        Test if we can connect to the provided MCP server
+        """
+        try:
+            client = global_mcp_server_manager._create_mcp_client(
+                server=MCPServer(
+                    server_id=request.server_id or "",
+                    name=request.alias or "",
+                    url=request.url,
+                    transport=request.transport,
+                    spec_version=request.spec_version,
+                    auth_type=request.auth_type,
+                    mcp_info=request.mcp_info,
+                ),
+                mcp_auth_header=None,
+            )
+
+            await client.connect()
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+        return {"status": "ok"}
+        
+    
+    @router.get("/health/tools/list")
+    async def list_tools(
+        request: NewMCPServerRequest,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """
+        List tools from MCP server
+        """
+        try:
+            client = global_mcp_server_manager._create_mcp_client(
+                server=MCPServer(
+                    server_id=request.server_id or "",
+                    name=request.alias or "",
+                    url=request.url,
+                    transport=request.transport,
+                    spec_version=request.spec_version,
+                    auth_type=request.auth_type,
+                    mcp_info=request.mcp_info,
+                ),
+                mcp_auth_header=None,
+            )
+            list_tools_result = await client.list_tools()
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+        return {
+            "tools": list_tools_result,
+            "error": None,
+            "message": "Successfully retrieved tools"
+        }
