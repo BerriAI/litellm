@@ -6507,16 +6507,11 @@ def _get_model_group_info(
         _model_group_info = llm_router.get_model_group_info(model_group=model)
 
         if _model_group_info is not None:
-            if litellm.public_model_groups_request_access_form is not None:
-                _model_group_info.request_access_form = (
-                    litellm.public_model_groups_request_access_form
-                )
             model_groups.append(_model_group_info)
         else:
             model_group_info = ModelGroupInfo(
                 model_group=model,
                 providers=[],
-                request_access_form=litellm.public_model_groups_request_access_form,
             )
             model_groups.append(model_group_info)
     return model_groups
