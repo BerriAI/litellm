@@ -318,8 +318,8 @@
         "max_tokens": 131072,
         "max_input_tokens": 131072,
         "max_output_tokens": 16384,
-        "input_cost_per_token": 0.000003,
-        "output_cost_per_token": 0.00001,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1e-05,
         "litellm_provider": "watsonx",
         "mode": "chat",
         "supports_function_calling": true,
@@ -15804,7 +15804,6 @@
         "output_cost_per_token": 0.0,
         "litellm_provider": "bedrock",
         "mode": "embedding"
-
     },
     "bedrock/us-gov-east-1/amazon.titan-embed-text-v2:0": {
         "max_tokens": 8192,
@@ -15814,7 +15813,6 @@
         "output_cost_per_token": 0.0,
         "litellm_provider": "bedrock",
         "mode": "embedding"
-
     },
     "bedrock/us-gov-east-1/amazon.titan-text-express-v1": {
         "max_tokens": 8000,
@@ -15824,7 +15822,6 @@
         "output_cost_per_token": 1.7e-06,
         "litellm_provider": "bedrock",
         "mode": "chat"
-
     },
     "bedrock/us-gov-east-1/amazon.titan-text-lite-v1": {
         "max_tokens": 4000,
@@ -15834,7 +15831,6 @@
         "output_cost_per_token": 4e-07,
         "litellm_provider": "bedrock",
         "mode": "chat"
-
     },
     "bedrock/us-gov-east-1/amazon.titan-text-premier-v1:0": {
         "max_tokens": 32000,
@@ -15844,7 +15840,6 @@
         "output_cost_per_token": 1.5e-06,
         "litellm_provider": "bedrock",
         "mode": "chat"
-
     },
     "bedrock/us-gov-east-1/anthropic.claude-3-5-sonnet-20240620-v1:0": {
         "max_tokens": 4096,
@@ -15859,24 +15854,6 @@
         "supports_vision": true,
         "supports_pdf_input": true,
         "supports_tool_choice": true
-
-    },
-    "bedrock_converse/us-gov-east-1/anthropic.claude-3-5-sonnet-20240620-v1:0": {
-        "max_tokens": 4096,
-        "max_input_tokens": 200000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 3e-06,
-        "output_cost_per_token": 1.5e-05,
-        "litellm_provider": "bedrock_converse",
-        "mode": "chat",
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_prompt_caching": true,
-        "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "supported_endpoints": ["/v1/chat/completions"]
     },
     "bedrock/us-gov-east-1/anthropic.claude-3-haiku-20240307-v1:0": {
         "max_tokens": 4096,
@@ -15891,24 +15868,6 @@
         "supports_vision": true,
         "supports_pdf_input": true,
         "supports_tool_choice": true
-
-    },
-    "bedrock_converse/us-gov-east-1/anthropic.claude-3-haiku-20240307-v1:0": {
-        "max_tokens": 4096,
-        "max_input_tokens": 200000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 2.5e-07,
-        "output_cost_per_token": 1.25e-06,
-        "litellm_provider": "bedrock_converse",
-        "mode": "chat",
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_prompt_caching": true,
-        "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "supported_endpoints": ["/v1/chat/completions"]
     },
     "bedrock/us-gov-east-1/meta.llama3-70b-instruct-v1:0": {
         "max_tokens": 8192,
@@ -15918,7 +15877,6 @@
         "output_cost_per_token": 3.5e-06,
         "litellm_provider": "bedrock",
         "mode": "chat"
-
     },
     "bedrock/us-gov-east-1/meta.llama3-8b-instruct-v1:0": {
         "max_tokens": 8192,
@@ -15928,7 +15886,6 @@
         "output_cost_per_token": 6e-07,
         "litellm_provider": "bedrock",
         "mode": "chat"
-
     },
     "bedrock/us-gov-west-1/amazon.titan-embed-text-v1": {
         "max_tokens": 8192,
@@ -15938,7 +15895,6 @@
         "output_cost_per_token": 0.0,
         "litellm_provider": "bedrock",
         "mode": "embedding"
-
     },
     "bedrock/us-gov-west-1/amazon.titan-embed-text-v2:0": {
         "max_tokens": 8192,
@@ -15948,7 +15904,6 @@
         "output_cost_per_token": 0.0,
         "litellm_provider": "bedrock",
         "mode": "embedding"
-
     },
     "bedrock/us-gov-west-1/amazon.titan-text-express-v1": {
         "max_tokens": 8000,
@@ -15958,7 +15913,6 @@
         "output_cost_per_token": 1.7e-06,
         "litellm_provider": "bedrock",
         "mode": "chat"
-
     },
     "bedrock/us-gov-west-1/amazon.titan-text-lite-v1": {
         "max_tokens": 4000,
@@ -15968,7 +15922,6 @@
         "output_cost_per_token": 4e-07,
         "litellm_provider": "bedrock",
         "mode": "chat"
-
     },
     "bedrock/us-gov-west-1/amazon.titan-text-premier-v1:0": {
         "max_tokens": 32000,
@@ -15978,7 +15931,6 @@
         "output_cost_per_token": 1.5e-06,
         "litellm_provider": "bedrock",
         "mode": "chat"
-
     },
     "bedrock/us-gov-west-1/anthropic.claude-3-5-sonnet-20240620-v1:0": {
         "max_tokens": 4096,
@@ -15993,24 +15945,6 @@
         "supports_vision": true,
         "supports_pdf_input": true,
         "supports_tool_choice": true
-
-    },
-    "bedrock_converse/us-gov-west-1/anthropic.claude-3-5-sonnet-20240620-v1:0": {
-        "max_tokens": 4096,
-        "max_input_tokens": 200000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 3e-06,
-        "output_cost_per_token": 1.5e-05,
-        "litellm_provider": "bedrock_converse",
-        "mode": "chat",
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_prompt_caching": true,
-        "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "supported_endpoints": ["/v1/chat/completions"]
     },
     "bedrock/us-gov-west-1/anthropic.claude-3-haiku-20240307-v1:0": {
         "max_tokens": 4096,
@@ -16025,24 +15959,6 @@
         "supports_vision": true,
         "supports_pdf_input": true,
         "supports_tool_choice": true
-
-    },
-    "bedrock_converse/us-gov-west-1/anthropic.claude-3-haiku-20240307-v1:0": {
-        "max_tokens": 4096,
-        "max_input_tokens": 200000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 2.5e-07,
-        "output_cost_per_token": 1.25e-06,
-        "litellm_provider": "bedrock_converse",
-        "mode": "chat",
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_prompt_caching": true,
-        "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "supported_endpoints": ["/v1/chat/completions"]
     },
     "bedrock/us-gov-west-1/meta.llama3-70b-instruct-v1:0": {
         "max_tokens": 8192,
@@ -16052,7 +15968,6 @@
         "output_cost_per_token": 3.5e-06,
         "litellm_provider": "bedrock",
         "mode": "chat"
-
     },
     "bedrock/us-gov-west-1/meta.llama3-8b-instruct-v1:0": {
         "max_tokens": 8192,
@@ -16062,6 +15977,5 @@
         "output_cost_per_token": 6e-07,
         "litellm_provider": "bedrock",
         "mode": "chat"
-
     }
 }
