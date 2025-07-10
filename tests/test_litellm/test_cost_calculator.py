@@ -325,3 +325,85 @@ def test_cost_calculator_with_cache_creation():
     )
 
     print(result)
+
+
+def test_bedrock_cost_calculator_comparison_with_without_cache():
+    """Test that Bedrock caching reduces costs compared to non-cached requests"""
+    from litellm import completion_cost
+    from litellm.types.utils import (
+        Choices,
+        Message,
+        PromptTokensDetailsWrapper,
+        Usage,
+    )
+
+    # Response WITHOUT caching
+    response_no_cache = ModelResponse(
+        id="msg_no_cache",
+        created=1750733889,
+        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        object="chat.completion",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="Response without cache",
+                    role="assistant",
+                ),
+            )
+        ],
+        usage=Usage(
+            total_tokens=1020,
+            prompt_tokens=1000,
+            completion_tokens=20,
+        ),
+    )
+
+    # Response WITH caching (same total tokens, but most are cached)
+    response_with_cache = ModelResponse(
+        id="msg_with_cache",
+        created=1750733889,
+        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        object="chat.completion",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="Response with cache",
+                    role="assistant",
+                ),
+            )
+        ],
+        usage=Usage(
+            total_tokens=1020,
+            prompt_tokens=1000,
+            completion_tokens=20,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=900,  # 900 tokens are cached (cheaper)
+                text_tokens=100,    # Only 100 new tokens
+            ),
+        ),
+    )
+
+    # Calculate costs
+    cost_no_cache = completion_cost(
+        completion_response=response_no_cache,
+        model="bedrock/anthropic.claude-sonnet-4-20250514-v1:0",
+        custom_llm_provider="bedrock",
+    )
+
+    cost_with_cache = completion_cost(
+        completion_response=response_with_cache,
+        model="bedrock/anthropic.claude-sonnet-4-20250514-v1:0",
+        custom_llm_provider="bedrock",
+    )
+
+    # Verify that cached request is cheaper
+    assert cost_with_cache < cost_no_cache
+    print(f"Cost without cache: {cost_no_cache}")
+    print(f"Cost with cache: {cost_with_cache}")
+    print(f"Savings: {cost_no_cache - cost_with_cache} ({((cost_no_cache - cost_with_cache) / cost_no_cache * 100):.1f}%)")
+
+
