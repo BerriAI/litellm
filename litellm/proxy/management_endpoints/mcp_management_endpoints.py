@@ -10,12 +10,13 @@ Endpoints here:
 - PUT `/v1/mcp/server` -  Edits an existing mcp server.
 - DELETE `/v1/mcp/server/{server_id}` - Deletes the mcp server given `server_id`.
 - GET `/v1/mcp/tools - lists all the tools available for a key
+- GET `/v1/mcp/access_groups` - lists all available MCP access groups
 """
 
 import importlib
 from typing import Iterable, List, Optional, Dict, cast
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, status, Query
 from fastapi.responses import JSONResponse
 
 import litellm
@@ -45,6 +46,10 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
+    )
+    from litellm.proxy._experimental.mcp_server.server import (
+        ListMCPToolsRestAPIResponseObject,
+        call_mcp_tool,
     )
     from litellm.proxy._types import (
         LiteLLM_MCPServerTable,
@@ -111,6 +116,45 @@ if MCP_AVAILABLE:
 
         return {"tools": tools}
 
+    @router.get(
+        "/access_groups",
+        tags=["mcp"],
+        dependencies=[Depends(user_api_key_auth)],
+    )
+    async def get_mcp_access_groups(
+            user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """
+        Get all available MCP access groups from the database
+        """
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "Database not connected. Connect a database to your proxy"
+                },
+            )
+
+        try:
+            # Get all MCP servers and extract their access groups
+            mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many()
+            print(f"MCP servers: {mcp_servers}")
+            # Extract all unique access groups
+            access_groups = set()
+            for server in mcp_servers:
+                print(f"Server: {server}")
+                if server.mcp_access_groups:
+                    access_groups.update(server.mcp_access_groups)
+            
+            # Convert to sorted list
+            access_groups_list = sorted(list(access_groups))
+            
+            return {"access_groups": access_groups_list}
+        except Exception as e:
+            verbose_proxy_logger.debug(f"Error getting MCP access groups: {e}")
+            return {"access_groups": []}
 
     ## FastAPI Routes
     @router.get(
