@@ -242,6 +242,9 @@ spec:
           - "/app/proxy_server_config.yaml"
         ports:
         - containerPort: 4000
+        args:
+            - "--config"
+            - "/app/proxy_server_config.yaml"
         volumeMounts:
         - name: config-volume
           mountPath: /app/proxy_server_config.yaml
