@@ -51,6 +51,7 @@ if MCP_AVAILABLE:
         auth_context_var,
     )
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+    from mcp.types import EmbeddedResource, ImageContent, TextContent
     from mcp.types import Tool as MCPTool
 
     from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
@@ -65,11 +66,6 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy._experimental.mcp_server.utils import (
         get_server_name_prefix_tool_mcp,
-    )
-    from litellm.types.mcp import (
-        LiteLLM_MCPEmbeddedResource,
-        LiteLLM_MCPImageContent,
-        LiteLLM_MCPTextContent,
     )
 
     ######################################################
@@ -188,7 +184,7 @@ if MCP_AVAILABLE:
     @server.call_tool()
     async def mcp_server_tool_call(
         name: str, arguments: Dict[str, Any] | None
-    ) -> List[Union[LiteLLM_MCPTextContent, LiteLLM_MCPImageContent, LiteLLM_MCPEmbeddedResource]]:
+    ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
         """
         Call a specific tool with the provided arguments
 
@@ -341,7 +337,7 @@ if MCP_AVAILABLE:
             user_api_key_auth: Optional[UserAPIKeyAuth] = None,
             mcp_auth_header: Optional[str] = None,
             **kwargs: Any
-    ) -> List[Union[LiteLLM_MCPTextContent, LiteLLM_MCPImageContent, LiteLLM_MCPEmbeddedResource]]:
+    ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
         """
         Call a specific tool with the provided arguments (handles prefixed tool names)
         """
@@ -442,7 +438,7 @@ if MCP_AVAILABLE:
         arguments: Dict[str, Any],
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
-    ) -> List[Union[LiteLLM_MCPTextContent, LiteLLM_MCPImageContent, LiteLLM_MCPEmbeddedResource]]:
+    ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
         """Handle tool execution for managed server tools"""
         call_tool_result = await global_mcp_server_manager.call_tool(
             name=name,
@@ -455,7 +451,7 @@ if MCP_AVAILABLE:
 
     async def _handle_local_mcp_tool(
         name: str, arguments: Dict[str, Any]
-    ) -> List[Union[LiteLLM_MCPTextContent, LiteLLM_MCPImageContent, LiteLLM_MCPEmbeddedResource]]:
+    ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
         """
         Handle tool execution for local registry tools
         Note: Local tools don't use prefixes, so we use the original name
@@ -466,9 +462,9 @@ if MCP_AVAILABLE:
 
         try:
             result = tool.handler(**arguments)
-            return [LiteLLM_MCPTextContent(text=str(result), type="text")]
+            return [TextContent(text=str(result), type="text")]
         except Exception as e:
-            return [LiteLLM_MCPTextContent(text=f"Error: {str(e)}", type="text")]
+            return [TextContent(text=f"Error: {str(e)}", type="text")]
 
     async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
