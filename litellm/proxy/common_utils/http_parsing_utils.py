@@ -5,6 +5,7 @@ import orjson
 from fastapi import Request, UploadFile, status
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import ProxyException
 from litellm.types.router import Deployment
 
 
@@ -44,8 +45,8 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
             else:
                 try:
                     parsed_body = orjson.loads(body)
-                except orjson.JSONDecodeError:
-                    # Fall back to the standard json module which is more forgiving
+                except orjson.JSONDecodeError as e:
+                    # First try the standard json module which is more forgiving
                     # First decode bytes to string if needed
                     body_str = body.decode("utf-8") if isinstance(body, bytes) else body
 
@@ -61,15 +62,26 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
                         r"(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]", "", body_str
                     )
 
-                    parsed_body = json.loads(body_str)
+                    try:
+                        parsed_body = json.loads(body_str)
+                    except json.JSONDecodeError:
+                        # If both orjson and json.loads fail, throw a proper error
+                        verbose_proxy_logger.error(f"Invalid JSON payload received: {str(e)}")
+                        raise ProxyException(
+                            message=f"Invalid JSON payload: {str(e)}",
+                            type="invalid_request_error",
+                            param="request_body",
+                            code=status.HTTP_400_BAD_REQUEST,
+                        )
 
         # Cache the parsed result
         _safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
         return parsed_body
 
-    except (json.JSONDecodeError, orjson.JSONDecodeError):
-        verbose_proxy_logger.exception("Invalid JSON payload received.")
-        return {}
+    except (json.JSONDecodeError, orjson.JSONDecodeError, ProxyException) as e:
+        # Re-raise ProxyException as-is
+        verbose_proxy_logger.error(f"Invalid JSON payload received: {str(e)}")
+        raise
     except Exception as e:
         # Catch unexpected errors to avoid crashes
         verbose_proxy_logger.exception(
