@@ -59,7 +59,6 @@ const MCPConnectionTest: React.FC<MCPConnectionTestProps> = ({
       console.log("Connection test response:", connectionResponse);
       
       if (connectionResponse.status === "ok") {
-        message.success("MCP connection test successful!");
         setConnectionError(null);
         setConnectionSuccess(true);
       } else {

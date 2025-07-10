@@ -202,8 +202,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                     className="rounded-lg"
                     size="large"
                   >
-                    <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
                     <Select.Option value="http">HTTP</Select.Option>
+                    <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
                   </Select>
                 </Form.Item>
 

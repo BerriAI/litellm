@@ -52,7 +52,6 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({
         setToolsError(null);
         onToolsLoaded?.(toolsResponse.tools);
         if (toolsResponse.tools.length > 0 && !hasShownSuccessMessage) {
-          message.success(`✅ MCP Server connected! Found ${toolsResponse.tools.length} available tools.`);
           setHasShownSuccessMessage(true);
         }
       } else {
@@ -95,7 +94,7 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({
     <Card>
       <div className="space-y-4">
         <div className="flex items-center gap-2">
-          <InfoCircleOutlined className="text-blue-600" />
+          <CheckCircleOutlined className="text-blue-600" />
           <Title>Connection Status</Title>
         </div>
 
