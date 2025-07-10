@@ -160,11 +160,13 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             input_tokens=float(standard_logging_payload.get("prompt_tokens", 0)),
             output_tokens=float(standard_logging_payload.get("completion_tokens", 0)),
             total_tokens=float(standard_logging_payload.get("total_tokens", 0)),
+            total_cost=float(standard_logging_payload.get("response_cost", 0)),
+            time_to_first_token=self._get_time_to_first_token_seconds(standard_logging_payload),
         )
 
         return LLMObsPayload(
             parent_id=metadata.get("parent_id", "undefined"),
-            trace_id=metadata.get("trace_id", str(uuid.uuid4())),
+            trace_id=standard_logging_payload.get("trace_id", str(uuid.uuid4())),
             span_id=metadata.get("span_id", str(uuid.uuid4())),
             name=metadata.get("name", "litellm_llm_call"),
             meta=meta,
@@ -175,6 +177,26 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                 self._get_datadog_tags(standard_logging_object=standard_logging_payload)
             ],
         )
+    
+    def _get_time_to_first_token_seconds(self, standard_logging_payload: StandardLoggingPayload) -> float:
+        """
+        Get the time to first token in seconds
+
+        CompletionStartTime - StartTime = Time to first token
+
+        For non streaming calls, CompletionStartTime is time we get the response back
+        """
+        start_time: Optional[float] = standard_logging_payload.get("startTime")
+        completion_start_time: Optional[float] = standard_logging_payload.get("completionStartTime")
+        end_time: Optional[float] = standard_logging_payload.get("endTime")
+
+        if completion_start_time is not None and start_time is not None:
+            return completion_start_time - start_time
+        elif end_time is not None and start_time is not None:
+            return end_time - start_time
+        else:
+            return 0.0
+
 
     def _get_response_messages(self, response_obj: Any) -> List[Any]:
         """
@@ -202,11 +224,19 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
     def _get_dd_llm_obs_payload_metadata(
         self, standard_logging_payload: StandardLoggingPayload
     ) -> Dict:
+        """
+        Fields to track in DD LLM Observability metadata from litellm standard logging payload
+        """
         _metadata = {
             "model_name": standard_logging_payload.get("model", "unknown"),
             "model_provider": standard_logging_payload.get(
                 "custom_llm_provider", "unknown"
             ),
+            "id": standard_logging_payload.get("id", "unknown"),
+            "trace_id": standard_logging_payload.get("trace_id", "unknown"),
+            "cache_hit": standard_logging_payload.get("cache_hit", "unknown"),
+            "cache_key": standard_logging_payload.get("cache_key", "unknown"),
+            "saved_cache_cost": standard_logging_payload.get("saved_cache_cost", 0),
         }
         _standard_logging_metadata: dict = (
             dict(standard_logging_payload.get("metadata", {})) or {}
