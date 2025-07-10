@@ -88,7 +88,7 @@ async def get_mcp_server_ids(
         if result and result.mcp_servers:
             return result.mcp_servers
         return []
-    except Exception as e:
+    except Exception:
         return []
 
 
