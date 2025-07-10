@@ -478,6 +478,7 @@ class HiddenParams(OpenAIObject):
     model_id: Optional[str] = None  # used in Router for individual deployments
     api_base: Optional[str] = None  # returns api base used for making completion call
     _response_ms: Optional[float] = None
+    response_cost: Optional[float] = None
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
