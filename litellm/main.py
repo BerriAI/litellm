@@ -2565,6 +2565,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             gemini_api_key = (
                 api_key
+                or get_secret("GOOGLE_API_KEY")
                 or get_secret("GEMINI_API_KEY")
                 or get_secret("PALM_API_KEY")  # older palm api key should also work
                 or litellm.api_key
@@ -3958,7 +3959,7 @@ def embedding(  # noqa: PLR0915
             )
         elif custom_llm_provider == "gemini":
             gemini_api_key = (
-                api_key or get_secret_str("GEMINI_API_KEY") or litellm.api_key
+                api_key or get_secret("GOOGLE_API_KEY") or get_secret_str("GEMINI_API_KEY") or litellm.api_key
             )
 
             api_base = api_base or litellm.api_base or get_secret_str("GEMINI_API_BASE")
