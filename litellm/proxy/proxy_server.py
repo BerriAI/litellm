@@ -1640,6 +1640,39 @@ class ProxyConfig:
         if credential_list_dict:
             credential_list = [CredentialItem(**cred) for cred in credential_list_dict]
         return credential_list
+    
+    def _load_environment_variables(self, config: dict):
+        ## ENVIRONMENT VARIABLES
+        global premium_user
+        environment_variables = config.get("environment_variables", None)
+        if environment_variables:
+            for key, value in environment_variables.items():
+                #########################################################
+                # handles this scenario:
+                # ```yaml
+                # environment_variables:
+                #     ARIZE_ENDPOINT: os.environ/ARIZE_ENDPOINT
+                # ```
+                #########################################################
+                if isinstance(value, str) and value.startswith("os.environ/"):
+                    resolved_secret_string: Optional[str] = get_secret_str(secret_name=value)
+                    if resolved_secret_string is not None:
+                        os.environ[key] = resolved_secret_string
+                else:
+                    #########################################################
+                    # handles this scenario:
+                    # ```yaml
+                    # environment_variables:
+                    #     ARIZE_ENDPOINT: https://otlp.arize.com/v1
+                    # ```
+                    #########################################################
+                    os.environ[key] = str(value)
+
+            # check if litellm_license in general_settings
+            if "LITELLM_LICENSE" in environment_variables:
+                _license_check.license_str = os.getenv("LITELLM_LICENSE", None)
+                premium_user = _license_check.is_premium()
+        return
 
     async def load_config(  # noqa: PLR0915
         self, router: Optional[litellm.Router], config_file_path: str
@@ -1651,16 +1684,7 @@ class ProxyConfig:
 
         config: dict = await self.get_config(config_file_path=config_file_path)
 
-        ## ENVIRONMENT VARIABLES
-        environment_variables = config.get("environment_variables", None)
-        if environment_variables:
-            for key, value in environment_variables.items():
-                os.environ[key] = str(get_secret(secret_name=key, default_value=value))
-
-            # check if litellm_license in general_settings
-            if "LITELLM_LICENSE" in environment_variables:
-                _license_check.license_str = os.getenv("LITELLM_LICENSE", None)
-                premium_user = _license_check.is_premium()
+        self._load_environment_variables(config=config)
 
         ## Callback settings
         callback_settings = config.get("callback_settings", None)
