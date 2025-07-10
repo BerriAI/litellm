@@ -43,8 +43,9 @@ interface ModelGroupInfo {
   supports_vision: boolean;
   supports_function_calling: boolean;
   supported_openai_params?: string[];
-  // Allow any additional supports_ properties
-  [key: `supports_${string}`]: boolean;
+  public?: boolean; // Whether the model is public (defaults to false)
+  // Allow any additional properties for flexibility
+  [key: string]: any;
 }
 
 const ModelHubTable: React.FC<ModelHubTableProps> = ({
@@ -271,6 +272,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                     <TableHeaderCell className="min-w-24 hidden lg:table-cell">Tokens</TableHeaderCell>
                     <TableHeaderCell className="min-w-24">Cost/1M</TableHeaderCell>
                     <TableHeaderCell className="min-w-28">Features</TableHeaderCell>
+                    <TableHeaderCell className="min-w-16 hidden md:table-cell">Public</TableHeaderCell>
                     <TableHeaderCell className="min-w-16">Details</TableHeaderCell>
                   </TableRow>
                 </TableHead>
@@ -353,6 +355,13 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                             ));
                           })()}
                         </div>
+                      </TableCell>
+                      <TableCell className="hidden md:table-cell">
+                        {model.public === true ? (
+                          <Badge color="green" size="xs">Yes</Badge>
+                        ) : (
+                          <Badge color="gray" size="xs">No</Badge>
+                        )}
                       </TableCell>
                       <TableCell>
                         <Button
