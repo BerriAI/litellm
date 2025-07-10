@@ -39,7 +39,7 @@ const MCPServerCostConfig: React.FC<MCPServerCostConfigProps> = ({
   const handleToolCostChange = (toolName: string, cost: number | null) => {
     const updated = {
       ...value,
-      tool_costs: {
+      tool_name_to_cost_per_query: {
         ...value.tool_name_to_cost_per_query,
         [toolName]: cost
       }
@@ -210,7 +210,7 @@ const MCPServerCostConfig: React.FC<MCPServerCostConfigProps> = ({
             </div>
           )}
 
-        {(value.default_cost_per_query || (value.tool_costs && Object.keys(value.tool_costs).length > 0)) && (
+        {(value.default_cost_per_query || (value.tool_name_to_cost_per_query && Object.keys(value.tool_name_to_cost_per_query).length > 0)) && (
           <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
             <Text className="text-blue-800 font-medium">Cost Summary:</Text>
             <div className="mt-2 space-y-1">

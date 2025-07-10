@@ -6010,28 +6010,18 @@ export const testMCPConnectionRequest = async (
       JSON.stringify(mcpServerConfig)
     );
 
-    // Construct the URL with query parameters
-    const baseUrl = proxyBaseUrl
+    // Construct the URL for POST request
+    const url = proxyBaseUrl
       ? `${proxyBaseUrl}/mcp-rest/test/connection`
       : `/mcp-rest/test/connection`;
-    
-    const queryParams = new URLSearchParams();
-    if (mcpServerConfig.server_id) queryParams.append('server_id', mcpServerConfig.server_id);
-    if (mcpServerConfig.alias) queryParams.append('alias', mcpServerConfig.alias);
-    if (mcpServerConfig.url) queryParams.append('url', mcpServerConfig.url);
-    if (mcpServerConfig.transport) queryParams.append('transport', mcpServerConfig.transport);
-    if (mcpServerConfig.spec_version) queryParams.append('spec_version', mcpServerConfig.spec_version);
-    if (mcpServerConfig.auth_type) queryParams.append('auth_type', mcpServerConfig.auth_type);
-    if (mcpServerConfig.mcp_info) queryParams.append('mcp_info', JSON.stringify(mcpServerConfig.mcp_info));
-    
-    const url = `${baseUrl}?${queryParams.toString()}`;
 
     const response = await fetch(url, {
-      method: "GET",
+      method: "POST",
       headers: {
         "Content-Type": "application/json",
         [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       },
+      body: JSON.stringify(mcpServerConfig),
     });
 
     // Check for non-JSON responses first
@@ -6079,28 +6069,18 @@ export const testMCPToolsListRequest = async (
       JSON.stringify(mcpServerConfig)
     );
 
-    // Construct the URL with query parameters
-    const baseUrl = proxyBaseUrl
+    // Construct the URL for POST request
+    const url = proxyBaseUrl
       ? `${proxyBaseUrl}/mcp-rest/test/tools/list`
       : `/mcp-rest/test/tools/list`;
-    
-    const queryParams = new URLSearchParams();
-    if (mcpServerConfig.server_id) queryParams.append('server_id', mcpServerConfig.server_id);
-    if (mcpServerConfig.alias) queryParams.append('alias', mcpServerConfig.alias);
-    if (mcpServerConfig.url) queryParams.append('url', mcpServerConfig.url);
-    if (mcpServerConfig.transport) queryParams.append('transport', mcpServerConfig.transport);
-    if (mcpServerConfig.spec_version) queryParams.append('spec_version', mcpServerConfig.spec_version);
-    if (mcpServerConfig.auth_type) queryParams.append('auth_type', mcpServerConfig.auth_type);
-    if (mcpServerConfig.mcp_info) queryParams.append('mcp_info', JSON.stringify(mcpServerConfig.mcp_info));
-    
-    const url = `${baseUrl}?${queryParams.toString()}`;
 
     const response = await fetch(url, {
-      method: "GET",
+      method: "POST",
       headers: {
         "Content-Type": "application/json",
         [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       },
+      body: JSON.stringify(mcpServerConfig),
     });
 
     // Check for non-JSON responses first
