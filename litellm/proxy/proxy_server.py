@@ -300,6 +300,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     router as pass_through_router,
 )
+from litellm.proxy.public_endpoints import router as public_endpoints_router
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
 from litellm.proxy.response_api_endpoints.endpoints import router as response_router
 from litellm.proxy.route_llm_request import route_request
@@ -6507,12 +6508,15 @@ def _get_model_group_info(
     llm_router: Router, all_models_str: List[str], model_group: Optional[str]
 ) -> List[ModelGroupInfo]:
     model_groups: List[ModelGroupInfo] = []
+    # ensure all_models_str is a set
+    all_models_str_set = set(all_models_str)
 
-    for model in all_models_str:
+    for model in all_models_str_set:
         if model_group is not None and model_group != model:
             continue
 
         _model_group_info = llm_router.get_model_group_info(model_group=model)
+
         if _model_group_info is not None:
             model_groups.append(_model_group_info)
         else:
@@ -8630,6 +8634,7 @@ async def get_routes():
 app.include_router(router)
 app.include_router(response_router)
 app.include_router(batches_router)
+app.include_router(public_endpoints_router)
 app.include_router(rerank_router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)

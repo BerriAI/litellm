@@ -1,9 +1,19 @@
 import enum
-from typing import Dict, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 from typing_extensions import TypedDict
 
+from litellm.types.llms.base import HiddenParams
+
+if TYPE_CHECKING:
+    from mcp.types import EmbeddedResource as MCPEmbeddedResource
+    from mcp.types import ImageContent as MCPImageContent
+    from mcp.types import TextContent as MCPTextContent
+else:
+    MCPEmbeddedResource = Any
+    MCPImageContent = Any
+    MCPTextContent = Any
 
 class MCPTransport(str, enum.Enum):
     sse = "sse"
@@ -40,3 +50,11 @@ class MCPServerCostInfo(TypedDict, total=False):
     """
     Granular, set a custom cost for each tool in the MCP server
     """
+
+
+class MCPPostCallResponseObject(BaseModel):
+    """
+    Pydantic object used for MCP post_call_hook response
+    """
+    mcp_tool_call_response: List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]
+    hidden_params: HiddenParams
