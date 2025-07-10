@@ -1,5 +1,5 @@
 import enum
-from typing import Any, Dict, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from mcp.types import EmbeddedResource as MCPEmbeddedResource
 from mcp.types import ImageContent as MCPImageContent
@@ -51,5 +51,5 @@ class MCPPostCallResponseObject(BaseModel):
     """
     Pydantic object used for MCP post_call_hook response
     """
-    mcp_tool_call_response: Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]
+    mcp_tool_call_response: List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]
     hidden_params: HiddenParams
