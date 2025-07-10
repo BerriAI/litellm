@@ -16,3 +16,6 @@ guardrails:
       mode: "during_call"
       guardrailIdentifier: ff6ujrregl1q
       guardrailVersion: "DRAFT"
+
+litellm_settings:
+  callbacks: ["datadog_llm_observability"]
