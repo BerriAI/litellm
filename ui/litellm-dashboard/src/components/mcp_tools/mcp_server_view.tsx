@@ -191,12 +191,12 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                     <div>
                       {mcpServer.mcp_access_groups && mcpServer.mcp_access_groups.length > 0 ? (
                         <div className="flex flex-wrap gap-2">
-                          {mcpServer.mcp_access_groups.map((group, index) => (
+                          {mcpServer.mcp_access_groups.map((group: any, index: number) => (
                             <span 
                               key={index}
                               className="px-2 py-1 bg-gray-100 rounded-md text-sm"
                             >
-                              {group.name}
+                              {typeof group === 'string' ? group : group?.name ?? ''}
                             </span>
                           ))}
                         </div>

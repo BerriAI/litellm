@@ -228,10 +228,10 @@ async def create_mcp_server(
         mcp_info = safe_dumps(data.mcp_info)
         del data_dict["mcp_info"]
     
-    # Handle mcp_access_groups serialization
-    mcp_access_groups: Optional[str] = None
+    # Handle mcp_access_groups - it's already a List[str], no need to serialize
+    mcp_access_groups: Optional[list] = None
     if data.mcp_access_groups is not None:
-        mcp_access_groups = safe_dumps(data.mcp_access_groups)
+        mcp_access_groups = data.mcp_access_groups
         del data_dict["mcp_access_groups"]
 
     mcp_server_record = await prisma_client.db.litellm_mcpservertable.create(
@@ -263,10 +263,10 @@ async def update_mcp_server(
         mcp_info = safe_dumps(data.mcp_info)
         del data_dict["mcp_info"]
     
-    # Handle mcp_access_groups serialization
-    mcp_access_groups: Optional[str] = None
+    # Handle mcp_access_groups - it's already a List[str], no need to serialize
+    mcp_access_groups: Optional[list] = None
     if data.mcp_access_groups is not None:
-        mcp_access_groups = safe_dumps(data.mcp_access_groups)
+        mcp_access_groups = data.mcp_access_groups
         del data_dict["mcp_access_groups"]
 
     mcp_server_record = await prisma_client.db.litellm_mcpservertable.update(

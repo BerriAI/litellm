@@ -207,7 +207,6 @@ if MCP_AVAILABLE:
                         updated_at=datetime.now(),
                     )
                 )
-        print(f"LIST_MCP_SERVERS: {LIST_MCP_SERVERS}")
         # Map servers to their teams and return
         LIST_MCP_SERVERS = [
             LiteLLM_MCPServerTable(

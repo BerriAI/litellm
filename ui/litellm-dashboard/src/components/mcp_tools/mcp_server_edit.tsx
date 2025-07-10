@@ -36,8 +36,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
   const handleSave = async (values: Record<string, any>) => {
     if (!accessToken) return;
     try {
-      // Transform access groups back to the format expected by the backend (array of objects with name)
-      const accessGroups = (values.mcp_access_groups || []).map((name: string) => ({ name }));
+      // Ensure access groups is always a string array
+      const accessGroups = (values.mcp_access_groups || []).map((g: any) => typeof g === 'string' ? g : g.name || String(g));
 
       // Prepare the payload with cost configuration
       const payload = {
