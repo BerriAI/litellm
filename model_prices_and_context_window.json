@@ -4960,6 +4960,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "source": "https://docs.x.ai/docs/models".
         "supports_web_search": true
     },
     "xai/grok-4-0709": {
@@ -4972,6 +4974,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "source": "https://docs.x.ai/docs/models".
         "supports_web_search": true
     },
     "xai/grok-4-latest": {
@@ -4984,6 +4988,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "source": "https://docs.x.ai/docs/models".
         "supports_web_search": true
     },
     "deepseek/deepseek-coder": {
