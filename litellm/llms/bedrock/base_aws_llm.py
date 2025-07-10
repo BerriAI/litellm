@@ -22,7 +22,7 @@ from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import BEDROCK_INVOKE_PROVIDERS_LITERAL, BEDROCK_MAX_POLICY_SIZE
 from litellm.litellm_core_utils.dd_tracing import tracer
-from litellm.secret_managers.main import get_secret
+from litellm.secret_managers.main import get_secret, get_secret_str
 
 if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest
@@ -678,7 +678,7 @@ class BaseAWSLLM:
         if api_key is not None:
             aws_bearer_token: Optional[str] = api_key
         else:
-            aws_bearer_token = os.environ.get("AWS_BEARER_TOKEN_BEDROCK")
+            aws_bearer_token = get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
             
         if aws_bearer_token:
             try:
@@ -729,7 +729,7 @@ class BaseAWSLLM:
         if api_key is not None:
             aws_bearer_token: Optional[str] = api_key
         else:
-            aws_bearer_token = os.environ.get("AWS_BEARER_TOKEN_BEDROCK")
+            aws_bearer_token = get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
             
         # If aws bearer token is set, use it directly in the header
         if aws_bearer_token:
