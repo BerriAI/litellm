@@ -46,17 +46,17 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
     fetchData();
   }, [accessToken]);
 
-  // Combine options
+  // Combine options, access groups first
   const options = [
-    ...mcpServers.map(server => ({
-      label: `${server.alias || server.server_id} (${server.server_id})`,
-      value: server.server_id,
-      isAccessGroup: false
-    })),
     ...accessGroups.map(group => ({
       label: group,
       value: group,
       isAccessGroup: true
+    })),
+    ...mcpServers.map(server => ({
+      label: `${server.alias || server.server_id} (${server.server_id})`,
+      value: server.server_id,
+      isAccessGroup: false
     }))
   ];
 
