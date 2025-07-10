@@ -58,7 +58,7 @@ export const mcpServerColumns = (
   },
   {
     header: "Created At",
-    accessorKey: "model_info.created_at",
+    accessorKey: "created_at",
     sortingFn: "datetime",
     cell: ({ row }) => {
       const server = row.original;
@@ -71,7 +71,7 @@ export const mcpServerColumns = (
   },
   {
     header: "Updated At",
-    accessorKey: "model_info.updated_at",
+    accessorKey: "updated_at",
     sortingFn: "datetime",
     cell: ({ row }) => {
       const server = row.original;
