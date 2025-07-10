@@ -19,6 +19,7 @@ import PassThroughSettings from "@/components/pass_through_settings";
 import BudgetPanel from "@/components/budgets/budget_panel";
 import SpendLogsTable from "@/components/view_logs";
 import ModelHub from "@/components/model_hub";
+import ModelHubTable from "@/components/model_hub_table";
 import NewUsagePage from "@/components/new_usage";
 import APIRef from "@/components/api_ref";
 import ChatUI from "@/components/chat_ui";
@@ -371,6 +372,12 @@ export default function CreateKeyPage() {
                 />
               ) : page == "model-hub" ? (
                 <ModelHub
+                  accessToken={accessToken}
+                  publicPage={false}
+                  premiumUser={premiumUser}
+                />
+              ) : page == "model-hub-table" ? (
+                <ModelHubTable
                   accessToken={accessToken}
                   publicPage={false}
                   premiumUser={premiumUser}

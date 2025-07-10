@@ -64,7 +64,16 @@ const Sidebar: React.FC<SidebarProps> = ({
     { key: "17", page: "organizations", label: "Organizations", icon: <BankOutlined />, roles: all_admin_roles },
     { key: "5", page: "users", label: "Internal Users", icon: <UserOutlined />, roles: all_admin_roles },
     { key: "14", page: "api_ref", label: "API Reference", icon: <ApiOutlined /> },
-    { key: "16", page: "model-hub", label: "Model Hub", icon: <AppstoreOutlined /> },
+    { 
+      key: "16", 
+      page: "model-hub", 
+      label: "Model Hub", 
+      icon: <AppstoreOutlined />,
+      children: [
+        { key: "16a", page: "model-hub", label: "Card View", icon: <AppstoreOutlined /> },
+        { key: "16b", page: "model-hub-table", label: "Table View", icon: <LineChartOutlined /> }
+      ]
+    },
     { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined />},
     { key: "11", page: "guardrails", label: "Guardrails", icon: <SafetyOutlined />, roles: all_admin_roles },
     { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined /> },

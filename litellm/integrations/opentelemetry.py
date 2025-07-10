@@ -41,13 +41,41 @@ else:
     Context = Any
 
 LITELLM_TRACER_NAME = os.getenv("OTEL_TRACER_NAME", "litellm")
-LITELLM_RESOURCE: Dict[Any, Any] = {
-    "service.name": os.getenv("OTEL_SERVICE_NAME", "litellm"),
-    "deployment.environment": os.getenv("OTEL_ENVIRONMENT_NAME", "production"),
-    "model_id": os.getenv("OTEL_SERVICE_NAME", "litellm"),
-}
+# Remove the hardcoded LITELLM_RESOURCE dictionary - we'll create it properly later
 RAW_REQUEST_SPAN_NAME = "raw_gen_ai_request"
 LITELLM_REQUEST_SPAN_NAME = "litellm_request"
+
+
+def _get_litellm_resource():
+    """
+    Create a proper OpenTelemetry Resource that respects OTEL_RESOURCE_ATTRIBUTES
+    while maintaining backward compatibility with LiteLLM-specific environment variables.
+    """
+    from opentelemetry.sdk.resources import OTELResourceDetector, Resource
+
+    # Create base resource attributes with LiteLLM-specific defaults
+    # These will be overridden by OTEL_RESOURCE_ATTRIBUTES if present
+    base_attributes: Dict[str, Optional[str]] = {
+        "service.name": os.getenv("OTEL_SERVICE_NAME", "litellm"),
+        "deployment.environment": os.getenv("OTEL_ENVIRONMENT_NAME", "production"),
+        # Fix the model_id to use proper environment variable or default to service name
+        "model_id": os.getenv(
+            "OTEL_MODEL_ID", os.getenv("OTEL_SERVICE_NAME", "litellm")
+        ),
+    }
+
+    # Create base resource with LiteLLM-specific defaults
+    base_resource = Resource.create(base_attributes)  # type: ignore
+
+    # Create resource from OTEL_RESOURCE_ATTRIBUTES using the detector
+    otel_resource_detector = OTELResourceDetector()
+    env_resource = otel_resource_detector.detect()
+
+    # Merge the resources: env_resource takes precedence over base_resource
+    # This ensures OTEL_RESOURCE_ATTRIBUTES overrides LiteLLM defaults
+    merged_resource = base_resource.merge(env_resource)
+
+    return merged_resource
 
 
 @dataclass
@@ -94,7 +122,6 @@ class OpenTelemetry(CustomLogger):
         **kwargs,
     ):
         from opentelemetry import trace
-        from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.trace import SpanKind
 
@@ -105,7 +132,7 @@ class OpenTelemetry(CustomLogger):
         self.OTEL_EXPORTER = self.config.exporter
         self.OTEL_ENDPOINT = self.config.endpoint
         self.OTEL_HEADERS = self.config.headers
-        provider = TracerProvider(resource=Resource(attributes=LITELLM_RESOURCE))
+        provider = TracerProvider(resource=_get_litellm_resource())
         provider.add_span_processor(self._get_span_processor())
         self.callback_name = callback_name
 
@@ -316,7 +343,7 @@ class OpenTelemetry(CustomLogger):
 
             # End Parent OTEL Sspan
             parent_otel_span.end(end_time=self._to_ns(datetime.now()))
-    
+
     #########################################################
     # Team/Key Based Logging Control Flow
     #########################################################
@@ -331,43 +358,48 @@ class OpenTelemetry(CustomLogger):
             Tracer: The tracer to use for this request
         """
         dynamic_headers = self._get_dynamic_otel_headers_from_kwargs(kwargs)
-        
+
         if dynamic_headers is not None:
             # Create spans using a temporary tracer with dynamic headers
             tracer_to_use = self._get_tracer_with_dynamic_headers(dynamic_headers)
-            verbose_logger.debug("Using dynamic headers for this request: %s", dynamic_headers)
+            verbose_logger.debug(
+                "Using dynamic headers for this request: %s", dynamic_headers
+            )
         else:
             tracer_to_use = self.tracer
-        
+
         return tracer_to_use
-    
+
     def _get_dynamic_otel_headers_from_kwargs(self, kwargs) -> Optional[dict]:
         """Extract dynamic headers from kwargs if available."""
-        standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = kwargs.get("standard_callback_dynamic_params")
-        
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params")
+        )
+
         if not standard_callback_dynamic_params:
             return None
 
         dynamic_headers = self.construct_dynamic_otel_headers(
             standard_callback_dynamic_params=standard_callback_dynamic_params
         )
-        
+
         return dynamic_headers if dynamic_headers else None
 
     def _get_tracer_with_dynamic_headers(self, dynamic_headers: dict):
         """Create a temporary tracer with dynamic headers for this request only."""
-        from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
 
         # Create a temporary tracer provider with dynamic headers
-        temp_provider = TracerProvider(resource=Resource(attributes=LITELLM_RESOURCE))
-        temp_provider.add_span_processor(self._get_span_processor(dynamic_headers=dynamic_headers))
-        
+        temp_provider = TracerProvider(resource=_get_litellm_resource())
+        temp_provider.add_span_processor(
+            self._get_span_processor(dynamic_headers=dynamic_headers)
+        )
+
         return temp_provider.get_tracer(LITELLM_TRACER_NAME)
 
-    def construct_dynamic_otel_headers(self, standard_callback_dynamic_params: StandardCallbackDynamicParams) -> Optional[dict]:
+    def construct_dynamic_otel_headers(
+        self, standard_callback_dynamic_params: StandardCallbackDynamicParams
+    ) -> Optional[dict]:
         """
         Construct dynamic headers from standard callback dynamic params
 
@@ -377,7 +409,7 @@ class OpenTelemetry(CustomLogger):
             dict: A dictionary of dynamic headers
         """
         return None
-    
+
     #########################################################
     # End of Team/Key Based Logging Control Flow
     #########################################################
@@ -391,7 +423,7 @@ class OpenTelemetry(CustomLogger):
             kwargs,
             self.config,
         )
-        
+
         _parent_context, parent_otel_span = self._get_span_context(kwargs)
         # Span 1: Request sent to litellm SDK
         otel_tracer: Tracer = self.get_tracer_to_use_for_request(kwargs)
@@ -487,7 +519,6 @@ class OpenTelemetry(CustomLogger):
         )
 
         guardrail_span.end(end_time=self._to_ns(end_time_datetime))
-
 
     def _handle_failure(self, kwargs, response_obj, start_time, end_time):
         from opentelemetry.trace import Status, StatusCode
