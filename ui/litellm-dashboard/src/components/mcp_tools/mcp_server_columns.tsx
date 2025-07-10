@@ -56,6 +56,21 @@ export const mcpServerColumns = (
       </span>
     ),
   },
+    {
+    id: "mcp_access_groups",
+    header: "Access Groups",
+    cell: ({ row }) => {
+      const groups = row.original.mcp_access_groups;
+      if (Array.isArray(groups) && groups.length > 0) {
+        console.log("Access Groups:", groups);
+        // Extract names from the groups array
+        const groupNames = groups.map(group => group.name).filter(name => name);
+        // Join the names into a single string
+        return <span>{groupNames.join(", ")}</span>;
+      }
+      return <span className="text-gray-400 italic">None</span>;
+    },
+  },
   {
     id: "actions",
     header: "Info",
