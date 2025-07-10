@@ -53,19 +53,19 @@ const formatTokens = (tokens: number) => {
 
 export const modelHubColumns = (
   selectedModels: Set<string>,
-  isAllSelected: boolean,
+  allModelsSelected: boolean,
   isIndeterminate: boolean,
   handleModelSelection: (modelGroup: string, checked: boolean) => void,
-  handleSelectAll: () => void,
+  handleSelectAll: (checked: boolean) => void,
   showModal: (model: ModelHubData) => void,
   copyToClipboard: (text: string) => void,
 ): ColumnDef<ModelHubData>[] => [
   {
     header: () => (
       <Checkbox
-        checked={isAllSelected}
+        checked={allModelsSelected}
         indeterminate={isIndeterminate}
-        onChange={handleSelectAll}
+        onChange={(e) => handleSelectAll(e.target.checked)}
         onClick={(e) => e.stopPropagation()}
       />
     ),

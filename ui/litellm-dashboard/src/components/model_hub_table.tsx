@@ -181,20 +181,19 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
     setSelectedModels(newSelection);
   };
 
-  const handleSelectAll = () => {
-    // If all models are selected, unselect all
-    // If some or no models are selected, select all
-    if (isAllSelected) {
-      setSelectedModels(new Set());
+  const handleSelectAll = (checked: boolean) => {
+    console.log("checked", checked);
+    if (checked) {
+      const allModelGroups = filteredData.map(model => model.model_group);
+      setSelectedModels(new Set(allModelGroups));
     } else {
-      const allModelGroups = new Set(filteredData.map(model => model.model_group));
-      setSelectedModels(allModelGroups);
+      setSelectedModels(new Set());
     }
   };
 
-  const isAllSelected = filteredData.length > 0 && selectedModels.size === filteredData.length && 
-    filteredData.every(model => selectedModels.has(model.model_group));
-  const isIndeterminate = selectedModels.size > 0 && selectedModels.size < filteredData.length;
+  // Use the same logic as health check columns
+  const allModelsSelected = filteredData.length > 0 && filteredData.every(model => selectedModels.has(model.model_group));
+  const isIndeterminate = selectedModels.size > 0 && !allModelsSelected;
 
   // Clear selections when filters change to avoid confusion
   useEffect(() => {
@@ -273,7 +272,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
           <ModelDataTable
             columns={modelHubColumns(
               selectedModels,
-              isAllSelected,
+              allModelsSelected,
               isIndeterminate,
               handleRowSelection,
               handleSelectAll,
