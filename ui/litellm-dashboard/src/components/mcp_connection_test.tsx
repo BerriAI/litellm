@@ -240,6 +240,12 @@ const MCPConnectionTest: React.FC<MCPConnectionTestProps> = ({
           >
             Test Again
           </Button>
+          <Button 
+            type="primary"
+            onClick={onClose}
+          >
+            Close
+          </Button>
         </Space>
       </div>
     </div>

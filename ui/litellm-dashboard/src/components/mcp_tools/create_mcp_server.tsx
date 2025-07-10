@@ -35,6 +35,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [costConfig, setCostConfig] = useState<MCPServerCostInfo>({});
   const [isTestModalVisible, setTestModalVisible] = useState(false);
   const [currentFormValues, setCurrentFormValues] = useState<Record<string, any>>({});
+  const [formValues, setFormValues] = useState<Record<string, any>>({});
 
   const handleCreate = async (formValues: Record<string, any>) => {
     setIsLoading(true);
@@ -138,6 +139,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           <Form
             form={form}
             onFinish={handleCreate}
+            onValuesChange={(_, allValues) => setFormValues(allValues)}
             layout="vertical"
             className="space-y-6"
           >
@@ -270,7 +272,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 onChange={setCostConfig}
                 accessToken={accessToken}
                 disabled={false}
-                formValues={form.getFieldsValue()}
+                formValues={formValues}
               />
             </div>
 

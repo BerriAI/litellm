@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from "react";
-import { Tooltip, InputNumber, Button, message, Spin, Alert } from "antd";
-import { InfoCircleOutlined, DollarOutlined, ReloadOutlined } from "@ant-design/icons";
+import { Tooltip, InputNumber, Button, message, Spin, Alert, Collapse, Badge } from "antd";
+import { InfoCircleOutlined, DollarOutlined, ReloadOutlined, ToolOutlined } from "@ant-design/icons";
 import { Card, Title, Text } from "@tremor/react";
 import { MCPServerCostInfo } from "./types";
 import { testMCPToolsListRequest } from "../networking";
+
+const { Panel } = Collapse;
 
 interface MCPServerCostConfigProps {
   value?: MCPServerCostInfo;
@@ -86,12 +88,19 @@ const MCPServerCostConfig: React.FC<MCPServerCostConfigProps> = ({
     }
   };
 
-  // Auto-fetch tools when form values change and URL is available
+  // Check if we have the minimum required fields to fetch tools
+  const canFetchTools = formValues.url && formValues.transport && formValues.auth_type && accessToken;
+
+  // Auto-fetch tools when form values change and required fields are available
   useEffect(() => {
-    if (formValues.url && accessToken) {
+    if (canFetchTools) {
       fetchTools();
+    } else {
+      // Clear tools if required fields are missing
+      setTools([]);
+      setToolsError(null);
     }
-  }, [formValues.url, formValues.transport, formValues.auth_type, accessToken]);
+  }, [formValues.url, formValues.transport, formValues.auth_type, formValues.spec_version, accessToken]);
 
   return (
     <Card>
@@ -130,83 +139,114 @@ const MCPServerCostConfig: React.FC<MCPServerCostConfigProps> = ({
         </div>
 
           {/* Tools-specific costs section */}
-          {formValues.url && (
+          {canFetchTools && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">
-                    Tool-Specific Costs ($)
-                    <Tooltip title="Set specific costs for individual tools. If not set, the default cost will be used.">
-                      <InfoCircleOutlined className="ml-1 text-gray-400" />
-                    </Tooltip>
-                  </label>
-                  <Text className="text-gray-500 text-sm">
-                    Configure costs for specific tools from this MCP server
-                  </Text>
-                </div>
-                <Button
-                  icon={<ReloadOutlined />}
-                  onClick={fetchTools}
-                  loading={isLoadingTools}
-                  disabled={disabled}
-                  size="small"
-                >
-                  Refresh Tools
-                </Button>
-              </div>
+              <label className="block text-sm font-medium text-gray-700">
+                Tool-Specific Costs ($)
+                <Tooltip title="Set specific costs for individual tools. If not set, the default cost will be used.">
+                  <InfoCircleOutlined className="ml-1 text-gray-400" />
+                </Tooltip>
+              </label>
+              <Text className="text-gray-500 text-sm">
+                Configure costs for specific tools from this MCP server
+              </Text>
 
-              {isLoadingTools && (
+              {isLoadingTools ? (
                 <div className="flex items-center justify-center py-8">
                   <Spin size="large" />
                   <Text className="ml-3">Loading available tools...</Text>
                 </div>
-              )}
-
-              {toolsError && (
+              ) : toolsError ? (
                 <Alert
                   message="Error loading tools"
                   description={toolsError}
                   type="warning"
                   showIcon
-                  className="mb-4"
+                  action={
+                    <Button
+                      icon={<ReloadOutlined />}
+                      onClick={fetchTools}
+                      size="small"
+                    >
+                      Retry
+                    </Button>
+                  }
                 />
-              )}
-
-              {!isLoadingTools && tools.length > 0 && (
-                <div className="space-y-3 max-h-64 overflow-y-auto border rounded-lg p-4">
-                  {tools.map((tool, index) => (
-                    <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                      <div className="flex-1">
-                        <Text className="font-medium text-gray-900">{tool.name}</Text>
-                        {tool.description && (
-                          <Text className="text-gray-500 text-sm block mt-1">
-                            {tool.description}
-                          </Text>
-                        )}
-                      </div>
-                      <div className="ml-4">
-                        <InputNumber
-                          min={0}
-                          step={0.0001}
-                          precision={4}
-                          placeholder="Use default"
-                          value={value.tool_name_to_cost_per_query?.[tool.name]}
-                          onChange={(cost) => handleToolCostChange(tool.name, cost)}
-                          disabled={disabled}
-                          style={{ width: '120px' }}
-                          addonBefore="$"
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {!isLoadingTools && tools.length === 0 && !toolsError && formValues.url && (
-                <div className="text-center py-8 text-gray-500">
+              ) : tools.length > 0 ? (
+                <Collapse
+                  items={[
+                    {
+                      key: '1',
+                      label: (
+                        <div className="flex items-center">
+                          <ToolOutlined className="mr-2 text-blue-500" />
+                          <span className="font-medium">Available Tools</span>
+                          <Badge 
+                            count={tools.length} 
+                            style={{ 
+                              backgroundColor: '#52c41a', 
+                              marginLeft: '8px' 
+                            }} 
+                          />
+                        </div>
+                      ),
+                      children: (
+                        <div className="space-y-3 max-h-64 overflow-y-auto">
+                          {tools.map((tool, index) => (
+                            <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                              <div className="flex-1">
+                                <Text className="font-medium text-gray-900">{tool.name}</Text>
+                                {tool.description && (
+                                  <Text className="text-gray-500 text-sm block mt-1">
+                                    {tool.description}
+                                  </Text>
+                                )}
+                              </div>
+                              <div className="ml-4">
+                                <InputNumber
+                                  min={0}
+                                  step={0.0001}
+                                  precision={4}
+                                  placeholder="Use default"
+                                  value={value.tool_name_to_cost_per_query?.[tool.name]}
+                                  onChange={(cost) => handleToolCostChange(tool.name, cost)}
+                                  disabled={disabled}
+                                  style={{ width: '120px' }}
+                                  addonBefore="$"
+                                />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ),
+                    },
+                  ]}
+                />
+              ) : (
+                <div className="text-center py-8 text-gray-500 border rounded-lg border-dashed">
+                  <ToolOutlined className="text-2xl mb-2" />
                   <Text>No tools found for this MCP server</Text>
                 </div>
               )}
+            </div>
+          )}
+
+          {!canFetchTools && formValues.url && (
+            <div className="space-y-4">
+              <label className="block text-sm font-medium text-gray-700">
+                Tool-Specific Costs ($)
+                <Tooltip title="Complete the required fields (URL, Transport, Authentication) to load available tools.">
+                  <InfoCircleOutlined className="ml-1 text-gray-400" />
+                </Tooltip>
+              </label>
+              <div className="text-center py-8 text-gray-400 border rounded-lg border-dashed">
+                <ToolOutlined className="text-2xl mb-2" />
+                <Text>Complete required fields to load tools</Text>
+                <br />
+                <Text className="text-sm">
+                  Fill in URL, Transport, and Authentication to see available tools
+                </Text>
+              </div>
             </div>
           )}
 
