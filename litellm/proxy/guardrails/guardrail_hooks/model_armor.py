@@ -5,7 +5,6 @@
 # +-------------------------------------------------------------+
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-import asyncio
 import os
 import sys
 from typing import Any, AsyncGenerator, List, Literal, Optional, Union
@@ -196,6 +195,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             )
 
         json_response = response.json()
+        import asyncio
         if asyncio.iscoroutine(json_response):
             return await json_response
         return json_response
@@ -385,8 +385,6 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
         from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
         from litellm.main import stream_chunk_builder
-        from litellm.types.utils import TextCompletionResponse
-
         # Collect all chunks
         all_chunks: List[ModelResponseStream] = []
         async for chunk in response:
