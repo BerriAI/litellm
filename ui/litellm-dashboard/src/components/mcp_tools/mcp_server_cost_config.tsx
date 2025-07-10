@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Tooltip, InputNumber, Button, message, Spin, Alert, Collapse, Badge } from "antd";
-import { InfoCircleOutlined, DollarOutlined, ReloadOutlined, ToolOutlined } from "@ant-design/icons";
+import { InfoCircleOutlined, DollarOutlined, ReloadOutlined, ToolOutlined, CheckCircleOutlined, ExclamationCircleOutlined } from "@ant-design/icons";
 import { Card, Title, Text } from "@tremor/react";
 import { MCPServerCostInfo } from "./types";
 import { testMCPToolsListRequest } from "../networking";
@@ -29,6 +29,7 @@ const MCPServerCostConfig: React.FC<MCPServerCostConfigProps> = ({
   const [tools, setTools] = useState<any[]>([]);
   const [isLoadingTools, setIsLoadingTools] = useState(false);
   const [toolsError, setToolsError] = useState<string | null>(null);
+  const [hasShownSuccessMessage, setHasShownSuccessMessage] = useState(false);
 
   const handleDefaultCostChange = (defaultCost: number | null) => {
     const updated = {
@@ -74,10 +75,15 @@ const MCPServerCostConfig: React.FC<MCPServerCostConfigProps> = ({
       if (toolsResponse.tools && !toolsResponse.error) {
         setTools(toolsResponse.tools);
         setToolsError(null);
+        if (toolsResponse.tools.length > 0 && !hasShownSuccessMessage) {
+          message.success(`✅ MCP Server connected! Found ${toolsResponse.tools.length} available tools.`);
+          setHasShownSuccessMessage(true);
+        }
       } else {
         const errorMessage = toolsResponse.message || "Failed to retrieve tools list";
         setToolsError(errorMessage);
         setTools([]);
+        setHasShownSuccessMessage(false);
       }
     } catch (error) {
       console.error("Tools fetch error:", error);
@@ -95,11 +101,12 @@ const MCPServerCostConfig: React.FC<MCPServerCostConfigProps> = ({
   useEffect(() => {
     if (canFetchTools) {
       fetchTools();
-    } else {
-      // Clear tools if required fields are missing
-      setTools([]);
-      setToolsError(null);
-    }
+          } else {
+        // Clear tools if required fields are missing
+        setTools([]);
+        setToolsError(null);
+        setHasShownSuccessMessage(false);
+      }
   }, [formValues.url, formValues.transport, formValues.auth_type, formValues.spec_version, accessToken]);
 
   return (
@@ -107,8 +114,8 @@ const MCPServerCostConfig: React.FC<MCPServerCostConfigProps> = ({
       <div className="space-y-6">
         <div className="flex items-center gap-2 mb-4">
           <DollarOutlined className="text-green-600" />
-          <Title>Cost Configuration</Title>
-          <Tooltip title="Configure costs for this MCP server's tool calls. These costs will be tracked when the server's tools are used.">
+          <Title>Connection & Cost Configuration</Title>
+          <Tooltip title="Test connection and configure costs for this MCP server's tool calls. Tool fetching confirms the connection is working.">
             <InfoCircleOutlined className="text-gray-400" />
           </Tooltip>
         </div>
@@ -138,18 +145,38 @@ const MCPServerCostConfig: React.FC<MCPServerCostConfigProps> = ({
           </div>
         </div>
 
-          {/* Tools-specific costs section */}
+          {/* Connection Status & Tools Section */}
           {canFetchTools && (
             <div className="space-y-4">
-              <label className="block text-sm font-medium text-gray-700">
-                Tool-Specific Costs ($)
-                <Tooltip title="Set specific costs for individual tools. If not set, the default cost will be used.">
-                  <InfoCircleOutlined className="ml-1 text-gray-400" />
-                </Tooltip>
-              </label>
-              <Text className="text-gray-500 text-sm">
-                Configure costs for specific tools from this MCP server
-              </Text>
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="flex items-center text-sm font-medium text-gray-700">
+                    MCP Server Connection & Tools
+                    <Tooltip title="Automatically tests connection by fetching available tools. Set individual costs or use the default rate.">
+                      <InfoCircleOutlined className="ml-1 text-gray-400" />
+                    </Tooltip>
+                  </label>
+                  <Text className="text-gray-500 text-sm">
+                    {isLoadingTools 
+                      ? "Testing connection and loading tools..." 
+                      : tools.length > 0 
+                        ? "Connection successful - configure tool costs below"
+                        : "Configure costs for available tools"}
+                  </Text>
+                </div>
+                {!isLoadingTools && !toolsError && tools.length > 0 && (
+                  <div className="flex items-center text-green-600">
+                    <CheckCircleOutlined className="mr-1" />
+                    <Text className="text-green-600 font-medium">Connected</Text>
+                  </div>
+                )}
+                {toolsError && (
+                  <div className="flex items-center text-red-600">
+                    <ExclamationCircleOutlined className="mr-1" />
+                    <Text className="text-red-600 font-medium">Connection Failed</Text>
+                  </div>
+                )}
+              </div>
 
               {isLoadingTools ? (
                 <div className="flex items-center justify-center py-8">
@@ -224,8 +251,10 @@ const MCPServerCostConfig: React.FC<MCPServerCostConfigProps> = ({
                 />
               ) : (
                 <div className="text-center py-8 text-gray-500 border rounded-lg border-dashed">
-                  <ToolOutlined className="text-2xl mb-2" />
-                  <Text>No tools found for this MCP server</Text>
+                  <CheckCircleOutlined className="text-2xl mb-2 text-green-500" />
+                  <Text className="text-green-600 font-medium">Connection successful!</Text>
+                  <br />
+                  <Text className="text-gray-500">No tools found for this MCP server</Text>
                 </div>
               )}
             </div>
