@@ -64,7 +64,7 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
 
                     try:
                         parsed_body = json.loads(body_str)
-                    except json.JSONDecodeError as json_error:
+                    except json.JSONDecodeError:
                         # If both orjson and json.loads fail, throw a proper error
                         verbose_proxy_logger.error(f"Invalid JSON payload received: {str(e)}")
                         raise ProxyException(
@@ -80,6 +80,7 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
 
     except (json.JSONDecodeError, orjson.JSONDecodeError, ProxyException):
         # Re-raise ProxyException as-is
+        verbose_proxy_logger.error(f"Invalid JSON payload received: {str(e)}")
         raise
     except Exception as e:
         # Catch unexpected errors to avoid crashes
