@@ -661,6 +661,7 @@ def test_arouter_responses_api_bridge():
         assert mock_post.call_args.kwargs["json"]["model"] == "webinterface-o3-pro"
 
 
+
 @pytest.mark.asyncio
 async def test_router_v1_messages_fallbacks():
     """
@@ -698,6 +699,34 @@ async def test_router_v1_messages_fallbacks():
     print(result)
     assert result["content"][0]["text"] == "Hello, world I am a fallback!"
 
+    
+def test_add_invalid_provider_to_router():
+    """
+    Test that router.add_deployment raises an error if the provider is invalid
+    """
+    from litellm.types.router import Deployment
+    
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",     
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+    )
+
+    with pytest.raises(Exception) as e:
+        router.add_deployment(
+            Deployment(
+                model_name="vertex_ai/*",
+                litellm_params={
+                    "model": "vertex_ai/*",
+                    "custom_llm_provider": "vertex_ai_eu",
+                },
+            )
+        )
+
+    assert router.pattern_router.patterns == {}
 
 @pytest.mark.asyncio
 async def test_router_ageneric_api_call_with_fallbacks_helper():

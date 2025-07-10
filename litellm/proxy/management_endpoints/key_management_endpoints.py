@@ -1497,11 +1497,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     ] = None,  # object_permission_id <-> LiteLLM_ObjectPermissionTable
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None,
 ):
-    from litellm.proxy.proxy_server import (
-        litellm_proxy_budget_name,
-        premium_user,
-        prisma_client,
-    )
+    from litellm.proxy.proxy_server import premium_user, prisma_client
 
     if prisma_client is None:
         raise Exception(
@@ -1660,10 +1656,8 @@ async def generate_key_helper_fn(  # noqa: PLR0915
                         table_name="user",
                         update_key_values=update_key_values,
                     )
-            if user_id == litellm_proxy_budget_name or (
-                table_name is not None and table_name == "user"
-            ):
-                # do not create a key for litellm_proxy_budget_name or if table name is set to just 'user'
+            if table_name is not None and table_name == "user":
+                # do not create a key if table name is set to just 'user'
                 # we only need to ensure this exists in the user table
                 # the LiteLLM_VerificationToken table will increase in size if we don't do this check
                 return user_data
