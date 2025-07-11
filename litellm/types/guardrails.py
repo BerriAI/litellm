@@ -5,6 +5,10 @@ from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from typing_extensions import Required, TypedDict
 
+from litellm.types.proxy.guardrails.guardrail_hooks.openai.openai_moderation import (
+    OpenAIModerationGuardrailConfigModel,
+)
+
 """
 Pydantic object defining how to set guardrails on litellm proxy
 
@@ -33,7 +37,7 @@ class SupportedGuardrailIntegrations(Enum):
     PANW_PRISMA_AIRS = "panw_prisma_airs"
     AZURE_PROMPT_SHIELD = "azure/prompt_shield"
     AZURE_TEXT_MODERATIONS = "azure/text_moderations"
-
+    OPENAI_MODERATION = "openai_moderation"
 
 class Role(Enum):
     SYSTEM = "system"
@@ -402,6 +406,7 @@ class LitellmParams(
     LakeraV2GuardrailConfigModel,
     LassoGuardrailConfigModel,
     BaseLitellmParams,
+    OpenAIModerationGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(

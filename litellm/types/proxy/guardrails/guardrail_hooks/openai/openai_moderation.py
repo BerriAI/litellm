@@ -5,7 +5,14 @@ from pydantic import BaseModel, Field
 from ..base import GuardrailConfigModel
 
 
-class OpenAIModerationGuardrailConfigModel(GuardrailConfigModel):
+class BaseOpenAIModerationGuardrailConfigModel(GuardrailConfigModel):
+    """Base configuration model for the OpenAI Moderation guardrail"""
+    model: Optional[Literal["omni-moderation-latest", "text-moderation-latest"]] = Field(
+        default="omni-moderation-latest",
+        description="The OpenAI moderation model to use. 'omni-moderation-latest' supports more categorization options and multi-modal inputs. Defaults to 'omni-moderation-latest'.",
+    )
+
+class OpenAIModerationGuardrailConfigModel(BaseOpenAIModerationGuardrailConfigModel):
     """Configuration model for the OpenAI Moderation guardrail"""
     
     api_key: Optional[str] = Field(
@@ -18,10 +25,6 @@ class OpenAIModerationGuardrailConfigModel(GuardrailConfigModel):
         description="OpenAI API base URL. Defaults to 'https://api.openai.com/v1'.",
     )
 
-    model: Optional[Literal["omni-moderation-latest", "text-moderation-latest"]] = Field(
-        default="omni-moderation-latest",
-        description="The OpenAI moderation model to use. 'omni-moderation-latest' supports more categorization options and multi-modal inputs. Defaults to 'omni-moderation-latest'.",
-    )
     
 
     @staticmethod
