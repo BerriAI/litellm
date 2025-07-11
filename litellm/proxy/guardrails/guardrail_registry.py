@@ -490,7 +490,7 @@ class InMemoryGuardrailHandler:
             )
 
         default_on = litellm_params.default_on
-        api_base = litellm_params.api_base
+        api_base = getattr(litellm_params, "api_base", None)
 
         # Build kwargs to make api_base optional
         guardrail_kwargs = {
