@@ -18,6 +18,7 @@ import { MCPServer, handleTransport, handleAuth } from "./types";
 // TODO: Move Tools viewer from index file
 import { MCPToolsViewer } from ".";
 import MCPServerEdit from "./mcp_server_edit";
+import MCPServerCostDisplay from "./mcp_server_cost_display";
 import { getMaskedAndFullUrl } from "./utils";
 
 interface MCPServerViewProps {
@@ -147,45 +148,50 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                   onSuccess={handleSuccess}
                 />
               ) : (
-                <div className="space-y-4">
-                  <div>
-                    <Text className="font-medium">Server Name</Text>
-                    <div>{mcpServer.alias}</div>
-                  </div>
-                  <div>
-                    <Text className="font-medium">Description</Text>
-                    <div>{mcpServer.description}</div>
-                  </div>
-                  <div>
-                    <Text className="font-medium">URL</Text>
-                    <div className="font-mono break-all overflow-wrap-anywhere max-w-full flex items-center gap-2">
-                      {renderUrlWithToggle(mcpServer.url, showFullUrl)}
-                      {hasToken && (
-                        <button
-                          onClick={() => setShowFullUrl(!showFullUrl)}
-                          className="p-1 hover:bg-gray-100 rounded"
-                        >
-                          <Icon
-                            icon={showFullUrl ? EyeOffIcon : EyeIcon}
-                            size="sm"
-                            className="text-gray-500"
-                          />
-                        </button>
-                      )}
+                <div className="space-y-6">
+                  <div className="space-y-4">
+                    <div>
+                      <Text className="font-medium">Server Name</Text>
+                      <div>{mcpServer.alias}</div>
                     </div>
-                  </div>
-                  <div>
-                    <Text className="font-medium">Transport</Text>
-                    <div>{handleTransport(mcpServer.transport)}</div>
-                  </div>
-                  <div>
-                    <Text className="font-medium">Auth Type</Text>
-                    <div>{handleAuth(mcpServer.auth_type)}</div>
-                  </div>
-                  <div>
-                    <Text className="font-medium">Spec Version</Text>
-                    <div>{mcpServer.spec_version}</div>
-                  </div>
+                    <div>
+                      <Text className="font-medium">Description</Text>
+                      <div>{mcpServer.description}</div>
+                    </div>
+                    <div>
+                      <Text className="font-medium">URL</Text>
+                      <div className="font-mono break-all overflow-wrap-anywhere max-w-full flex items-center gap-2">
+                        {renderUrlWithToggle(mcpServer.url, showFullUrl)}
+                        {hasToken && (
+                          <button
+                            onClick={() => setShowFullUrl(!showFullUrl)}
+                            className="p-1 hover:bg-gray-100 rounded"
+                          >
+                            <Icon
+                              icon={showFullUrl ? EyeOffIcon : EyeIcon}
+                              size="sm"
+                              className="text-gray-500"
+                            />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <Text className="font-medium">Transport</Text>
+                      <div>{handleTransport(mcpServer.transport)}</div>
+                    </div>
+                    <div>
+                      <Text className="font-medium">Auth Type</Text>
+                      <div>{handleAuth(mcpServer.auth_type)}</div>
+                    </div>
+                    <div>
+                      <Text className="font-medium">Spec Version</Text>
+                      <div>{mcpServer.spec_version}</div>
+                    </div>
+                                    </div>
+
+                  {/* Cost Configuration Section */}
+                  <MCPServerCostDisplay costConfig={mcpServer.mcp_info?.mcp_server_cost_info} />
                 </div>
               )}
             </Card>
