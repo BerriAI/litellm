@@ -13,7 +13,6 @@ from typing import (
     Optional,
     Type,
     Union,
-    cast,
 )
 
 from fastapi import HTTPException
