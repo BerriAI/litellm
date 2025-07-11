@@ -15,10 +15,16 @@ class EnterpriseCustomGuardrailHelper:
         Assumes check for event match is done in `should_run_guardrail`
         Returns True if the guardrail should be run by tag
         """
-
         from litellm.litellm_core_utils.litellm_logging import (
             StandardLoggingPayloadSetup,
         )
+        from litellm.proxy._types import CommonProxyErrors
+        from litellm.proxy.proxy_server import premium_user
+
+        if not premium_user:
+            raise Exception(
+                f"Setting tag based guardrail modes is only available in litellm-enterprise. {CommonProxyErrors.not_premium_user.value}."
+            )
 
         if event_hook is None or not isinstance(event_hook, Mode):
             return None
