@@ -103,6 +103,8 @@ export function KeyEditView({
     guardrails: keyData.metadata?.guardrails || [],
     vector_stores: keyData.object_permission?.vector_stores || [],
     mcp_servers: keyData.object_permission?.mcp_servers || [],
+    permissions: keyData.permissions ? JSON.stringify(keyData.permissions, null, 2) : "",
+    soft_budget: keyData.litellm_budget_table?.soft_budget || null,
     logging_settings: extractLoggingSettings(keyData.metadata)
   };
 
@@ -138,6 +140,10 @@ export function KeyEditView({
 
       <Form.Item label="Max Budget (USD)" name="max_budget">
         <NumericalInput step={0.01} style={{ width: "100%" }} placeholder="Enter a numerical value"/>
+      </Form.Item>
+
+      <Form.Item label="Soft Budget (USD)" name="soft_budget">
+        <NumericalInput step={0.01} style={{ width: "100%" }} placeholder="Enter soft budget for alerts"/>
       </Form.Item>
 
       <Form.Item label="Reset Budget" name="budget_duration">
@@ -194,6 +200,13 @@ export function KeyEditView({
         />
       </Form.Item>
 
+      <Form.Item label="Permissions" name="permissions">
+        <Input.TextArea 
+          rows={3} 
+          placeholder='{"allow_pii_controls": true}'
+          className="font-mono"
+        />
+      </Form.Item>
 
       <Form.Item label="Team ID" name="team_id">
         <Select
