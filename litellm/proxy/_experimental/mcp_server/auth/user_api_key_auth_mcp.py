@@ -220,7 +220,17 @@ class MCPRequestHandler:
         if key_object_permission is None:
             return []
 
-        return key_object_permission.mcp_servers or []
+        # Get direct MCP servers
+        direct_mcp_servers = key_object_permission.mcp_servers or []
+        
+        # Get MCP servers from access groups
+        access_group_servers = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+            key_object_permission.mcp_access_groups or []
+        )
+        
+        # Combine both lists
+        all_servers = direct_mcp_servers + access_group_servers
+        return list(set(all_servers))
 
     @staticmethod
     async def _get_allowed_mcp_servers_for_team(
@@ -257,4 +267,132 @@ class MCPRequestHandler:
         if object_permissions is None:
             return []
 
-        return object_permissions.mcp_servers or []
+        # Get direct MCP servers
+        direct_mcp_servers = object_permissions.mcp_servers or []
+        
+        # Get MCP servers from access groups
+        access_group_servers = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+            object_permissions.mcp_access_groups or []
+        )
+        
+        # Combine both lists
+        all_servers = direct_mcp_servers + access_group_servers
+        return list(set(all_servers))
+
+    @staticmethod
+    async def _get_mcp_servers_from_access_groups(
+        access_groups: List[str]
+    ) -> List[str]:
+        """
+        Resolve MCP access groups to server IDs by querying the MCP server table
+        """
+        from litellm.proxy.proxy_server import prisma_client
+
+        if not access_groups or prisma_client is None:
+            return []
+
+        try:
+            # Find all MCP servers that have any of the specified access groups
+            mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many(
+                where={
+                    "mcp_access_groups": {
+                        "hasSome": access_groups
+                    }
+                }
+            )
+            
+            # Extract server IDs
+            server_ids = [server.server_id for server in mcp_servers]
+            return server_ids
+        except Exception as e:
+            verbose_logger.debug(f"Error getting MCP servers from access groups: {e}")
+            return []
+
+    @staticmethod
+    async def get_mcp_access_groups(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ) -> List[str]:
+        """
+        Get list of MCP access groups for the given user/key based on permissions
+        """
+        from typing import List
+
+        access_groups: List[str] = []
+        access_groups_for_key = (
+            await MCPRequestHandler._get_mcp_access_groups_for_key(user_api_key_auth)
+        )
+        access_groups_for_team = (
+            await MCPRequestHandler._get_mcp_access_groups_for_team(user_api_key_auth)
+        )
+
+        #########################################################
+        # If team has access groups, then key must have a subset of the team's access groups
+        #########################################################
+        if len(access_groups_for_team) > 0:
+            for access_group in access_groups_for_key:
+                if access_group in access_groups_for_team:
+                    access_groups.append(access_group)
+        else:
+            access_groups = access_groups_for_key
+
+        return list(set(access_groups))
+
+    @staticmethod
+    async def _get_mcp_access_groups_for_key(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ) -> List[str]:
+        from litellm.proxy.proxy_server import prisma_client
+
+        if user_api_key_auth is None:
+            return []
+
+        if user_api_key_auth.object_permission_id is None:
+            return []
+
+        if prisma_client is None:
+            verbose_logger.debug("prisma_client is None")
+            return []
+
+        key_object_permission = (
+            await prisma_client.db.litellm_objectpermissiontable.find_unique(
+                where={"object_permission_id": user_api_key_auth.object_permission_id},
+            )
+        )
+        if key_object_permission is None:
+            return []
+
+        return key_object_permission.mcp_access_groups or []
+
+    @staticmethod
+    async def _get_mcp_access_groups_for_team(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ) -> List[str]:
+        """
+        Get MCP access groups for the team
+        """
+        from litellm.proxy.proxy_server import prisma_client
+
+        if user_api_key_auth is None:
+            return []
+
+        if user_api_key_auth.team_id is None:
+            return []
+
+        if prisma_client is None:
+            verbose_logger.debug("prisma_client is None")
+            return []
+
+        team_obj: Optional[LiteLLM_TeamTable] = (
+            await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": user_api_key_auth.team_id},
+            )
+        )
+        if team_obj is None:
+            verbose_logger.debug("team_obj is None")
+            return []
+
+        object_permissions = team_obj.object_permission
+        if object_permissions is None:
+            return []
+
+        return object_permissions.mcp_access_groups or []
