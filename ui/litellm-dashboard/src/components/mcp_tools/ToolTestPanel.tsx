@@ -1,7 +1,7 @@
 import React from "react";
 import { Button, Callout, TextInput } from "@tremor/react";
 import { MCPTool, InputSchema } from "./types";
-import { Modal, Form, Tooltip, message } from "antd";
+import { Form, Tooltip, message } from "antd";
 import { InfoCircleOutlined, ClockCircleOutlined } from "@ant-design/icons";
 
 const AuthBanner = ({ needsAuth, authValue }: { needsAuth: boolean; authValue?: string | null }) => {
@@ -120,42 +120,40 @@ export function ToolTestPanel({
   };
 
   return (
-    <Modal
-      title={
-        <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
-          {tool.mcp_info.logo_url && (
-            <img
-              src={tool.mcp_info.logo_url}
-              alt={`${tool.mcp_info.server_name} logo`}
-              className="w-8 h-8 object-contain"
-              style={{ 
-                height: '20px', 
-                width: '20px', 
-                marginRight: '8px',
-                objectFit: 'contain'
-              }}
-            />
-          )}
-          <div className="flex-1 min-w-0">
-            <h2 className="text-xl font-semibold text-gray-900">
-              Test Tool: <span className="font-mono text-blue-600">{tool.name}</span>
-            </h2>
-            <p className="text-sm text-gray-600 mt-1">{tool.description}</p>
-            <p className="text-xs text-gray-500 mt-1">Provider: {tool.mcp_info.server_name}</p>
+    <div className="bg-white border border-gray-200 rounded-lg shadow-sm">
+      {/* Header */}
+      <div className="border-b border-gray-200 p-6">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            {tool.mcp_info.logo_url && (
+              <img
+                src={tool.mcp_info.logo_url}
+                alt={`${tool.mcp_info.server_name} logo`}
+                className="w-8 h-8 object-contain"
+              />
+            )}
+            <div className="flex-1 min-w-0">
+              <h2 className="text-xl font-semibold text-gray-900">
+                Test Tool: <span className="font-mono text-blue-600">{tool.name}</span>
+              </h2>
+              <p className="text-sm text-gray-600 mt-1">{tool.description}</p>
+              <p className="text-xs text-gray-500 mt-1">Provider: {tool.mcp_info.server_name}</p>
+            </div>
           </div>
+          <Button
+            onClick={onClose}
+            variant="light"
+            size="sm"
+            className="text-gray-500 hover:text-gray-700"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </Button>
         </div>
-      }
-      open={true}
-      width={1200}
-      onCancel={onClose}
-      footer={null}
-      className="top-8"
-      styles={{
-        body: { padding: '24px' },
-        header: { padding: '24px 24px 0 24px', border: 'none' },
-      }}
-    >
-      <div className="mt-6">
+      </div>
+
+      <div className="p-6">
         {/* Auth Banner */}
         <AuthBanner needsAuth={needsAuth} authValue={authValue} />
         
@@ -560,6 +558,6 @@ export function ToolTestPanel({
           )}
         </div>
       </div>
-    </Modal>
+    </div>
   );
 } 
