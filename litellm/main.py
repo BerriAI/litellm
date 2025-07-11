@@ -525,8 +525,13 @@ async def acompletion(
         await asyncio.sleep(mock_delay)
 
     try:
+        # Remove the acompletion flag before calling sync completion
+        # This ensures the sync wrapper properly sets up callbacks
+        sync_completion_kwargs = completion_kwargs.copy()
+        sync_completion_kwargs.pop("acompletion", None)
+        
         # Use a partial function to pass your keyword arguments
-        func = partial(completion, **completion_kwargs, **kwargs)
+        func = partial(completion, **sync_completion_kwargs, **kwargs)
 
         # Add the context to the function
         ctx = contextvars.copy_context()
