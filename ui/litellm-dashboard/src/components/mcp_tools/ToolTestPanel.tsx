@@ -7,7 +7,7 @@ import { InfoCircleOutlined, ClockCircleOutlined } from "@ant-design/icons";
 const AuthBanner = ({ needsAuth, authValue }: { needsAuth: boolean; authValue?: string | null }) => {
   if (!needsAuth || (needsAuth && authValue)) {
     return (
-      <Callout title="Authentication" color="green" className="mb-4">
+      <Callout title="Authentication" color="green" className="mb-3">
         This tool does not require authentication or has authentication added.
       </Callout>
     );
@@ -15,7 +15,7 @@ const AuthBanner = ({ needsAuth, authValue }: { needsAuth: boolean; authValue?: 
 
   if (needsAuth && !authValue) {
     return (
-      <Callout title="Authentication required" color="yellow" className="mb-4">
+      <Callout title="Authentication required" color="yellow" className="mb-3">
         Please provide authentication details if this tool call requires auth.
       </Callout>
     );
@@ -120,221 +120,194 @@ export function ToolTestPanel({
   };
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg shadow-sm">
-      {/* Header */}
-      <div className="border-b border-gray-200 p-6">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            {tool.mcp_info.logo_url && (
-              <img
-                src={tool.mcp_info.logo_url}
-                alt={`${tool.mcp_info.server_name} logo`}
-                className="w-8 h-8 object-contain"
-              />
-            )}
-            <div className="flex-1 min-w-0">
-              <h2 className="text-xl font-semibold text-gray-900">
-                Test Tool: <span className="font-mono text-blue-600">{tool.name}</span>
-              </h2>
-              <p className="text-sm text-gray-600 mt-1">{tool.description}</p>
-              <p className="text-xs text-gray-500 mt-1">Provider: {tool.mcp_info.server_name}</p>
-            </div>
+    <div className="space-y-4 h-full">
+      {/* Compact Header */}
+      <div className="flex items-center justify-between pb-3 border-b border-gray-200">
+        <div className="flex items-center space-x-3">
+          {tool.mcp_info.logo_url && (
+            <img
+              src={tool.mcp_info.logo_url}
+              alt={`${tool.mcp_info.server_name} logo`}
+              className="w-6 h-6 object-contain"
+            />
+          )}
+          <div className="flex-1 min-w-0">
+            <h2 className="text-lg font-semibold text-gray-900">
+              Test Tool: <span className="font-mono text-blue-600">{tool.name}</span>
+            </h2>
+            <p className="text-xs text-gray-600">{tool.description}</p>
+            <p className="text-xs text-gray-500">Provider: {tool.mcp_info.server_name}</p>
           </div>
-          <Button
-            onClick={onClose}
-            variant="light"
-            size="sm"
-            className="text-gray-500 hover:text-gray-700"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </Button>
         </div>
+        <Button
+          onClick={onClose}
+          variant="light"
+          size="sm"
+          className="text-gray-500 hover:text-gray-700"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </Button>
       </div>
 
-      <div className="p-6">
-        {/* Auth Banner */}
-        <AuthBanner needsAuth={needsAuth} authValue={authValue} />
-        
-        {/* Content */}
-        <div className={`grid gap-8 ${result || error ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-2'}`}>
-          {/* Form Section */}
-          <div className="space-y-6">
-            <div className="bg-white border border-gray-200 rounded-lg p-6 shadow-sm">
-              <div className="flex items-center justify-between mb-6">
-                <h3 className="text-lg font-semibold text-gray-900">Input Parameters</h3>
-                <Tooltip title="Configure the input parameters for this tool call">
-                  <InfoCircleOutlined className="text-gray-400 hover:text-gray-600" />
-                </Tooltip>
-              </div>
-              
-              <Form form={form} onFinish={handleSubmit} layout="vertical" className={`${result || error ? 'space-y-2' : 'space-y-4'}`}>
-                {typeof tool.inputSchema === "string" ? (
-                  <div className={`${result || error ? 'space-y-2' : 'space-y-4'}`}>
-                    {!(result || error) && (
-                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                        <div className="flex items-start space-x-3">
-                          <InfoCircleOutlined className="text-blue-500 mt-0.5" />
-                          <div>
-                            <p className="text-sm font-medium text-blue-900">Dynamic Schema</p>
-                            <p className="text-xs text-blue-700 mt-1">This tool uses a dynamic input schema.</p>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    <Form.Item
-                      label={
-                        <span className="text-sm font-medium text-gray-700">
-                          Input <span className="text-red-500">*</span>
-                        </span>
-                      }
-                      name="input"
-                      rules={[{ required: true, message: "Please enter input for this tool" }]}
-                    >
-                      <TextInput
-                        placeholder="Enter input for this tool"
-                        className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                      />
-                    </Form.Item>
-                  </div>
-                ) : schema.properties === undefined ? (
-                  <div className={`text-center ${result || error ? 'py-4' : 'py-12'} bg-gray-50 rounded-lg border border-gray-200`}>
-                    <div className="max-w-sm mx-auto">
-                      {!(result || error) && (
-                        <div className="mb-4">
-                          <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          </svg>
-                        </div>
-                      )}
-                      <h4 className="text-sm font-medium text-gray-900 mb-1">No Parameters Required</h4>
-                      <p className="text-xs text-gray-500">This tool can be called without any input parameters.</p>
-                    </div>
-                  </div>
-                ) : (
-                  <div className={`${result || error ? 'space-y-2' : 'space-y-4'}`}>
-                    {Object.entries(schema.properties).map(([key, prop]) => (
-                      <Form.Item
-                        key={key}
-                        label={
-                          <span className="text-sm font-medium text-gray-700 flex items-center">
-                            {key}{" "}
-                            {schema.required?.includes(key) && <span className="text-red-500">*</span>}
-                            {prop.description && !result && !error && (
-                              <Tooltip title={prop.description}>
-                                <InfoCircleOutlined className="ml-2 text-gray-400 hover:text-gray-600" />
-                              </Tooltip>
-                            )}
-                          </span>
-                        }
-                        name={key}
-                        rules={[
-                          {
-                            required: schema.required?.includes(key),
-                            message: `Please enter ${key}`,
-                          },
-                        ]}
-                      >
-                        {prop.type === "string" && (
-                          <TextInput
-                            placeholder={prop.description || `Enter ${key}`}
-                            className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                          />
-                        )}
-
-                        {prop.type === "number" && (
-                          <input
-                            type="number"
-                            placeholder={prop.description || `Enter ${key}`}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm transition-colors"
-                          />
-                        )}
-
-                        {prop.type === "boolean" && (
-                          <div className="flex items-center space-x-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
-                            <input
-                              type="checkbox"
-                              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded transition-colors"
-                            />
-                            <span className="text-sm text-gray-700">Enable this option</span>
-                          </div>
-                        )}
-                      </Form.Item>
-                    ))}
-                  </div>
-                )}
-
-                <div className={`${result || error ? 'pt-3 border-t border-gray-100' : 'pt-6 border-t border-gray-100'}`}>
-                  <Button
-                    onClick={() => form.submit()}
-                    disabled={isLoading}
-                    variant="primary"
-                    className="w-full"
-                    loading={isLoading}
-                  >
-                    {isLoading ? "Calling Tool..." : (result || error) ? "Call Again" : "Call Tool"}
-                  </Button>
-                </div>
-              </Form>
+      {/* Auth Banner */}
+      <AuthBanner needsAuth={needsAuth} authValue={authValue} />
+      
+      {/* Two Column Layout - Always Side by Side */}
+      <div className="grid grid-cols-2 gap-4 h-full">
+        {/* Left Column - Input Parameters */}
+        <div className="bg-white border border-gray-200 rounded-lg">
+          <div className="border-b border-gray-100 px-4 py-2">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-gray-900">Input Parameters</h3>
+              <Tooltip title="Configure the input parameters for this tool call">
+                <InfoCircleOutlined className="text-gray-400 hover:text-gray-600" />
+              </Tooltip>
             </div>
           </div>
-
-          {/* Result Section */}
-          {!result && !error && !isLoading && (
-            <div className="space-y-6">
-              <div className="bg-white border border-gray-200 rounded-lg shadow-sm">
-                <div className="border-b border-gray-100 px-6 py-4">
-                  <h3 className="text-lg font-semibold text-gray-900">Tool Result</h3>
+          
+          <div className="p-4">
+            <Form form={form} onFinish={handleSubmit} layout="vertical" className="space-y-3">
+              {typeof tool.inputSchema === "string" ? (
+                <div className="space-y-3">
+                  <Form.Item
+                    label={
+                      <span className="text-sm font-medium text-gray-700">
+                        Input <span className="text-red-500">*</span>
+                      </span>
+                    }
+                    name="input"
+                    rules={[{ required: true, message: "Please enter input for this tool" }]}
+                    className="mb-3"
+                  >
+                    <TextInput
+                      placeholder="Enter input for this tool"
+                      className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                    />
+                  </Form.Item>
                 </div>
-                <div className="p-6">
-                  <div className="flex flex-col justify-center items-center h-64 text-gray-500">
-                    <div className="text-center max-w-sm">
-                      <div className="mb-4">
-                        <svg className="mx-auto h-16 w-16 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                        </svg>
-                      </div>
-                      <h4 className="text-sm font-medium text-gray-900 mb-2">Ready to Call Tool</h4>
-                      <p className="text-xs text-gray-500 leading-relaxed">
-                        Configure the input parameters on the left and click "Call Tool" to see the results here.
-                      </p>
-                    </div>
+              ) : schema.properties === undefined ? (
+                <div className="text-center py-6 bg-gray-50 rounded-lg border border-gray-200">
+                  <div className="max-w-sm mx-auto">
+                    <h4 className="text-sm font-medium text-gray-900 mb-1">No Parameters Required</h4>
+                    <p className="text-xs text-gray-500">This tool can be called without any input parameters.</p>
                   </div>
                 </div>
+              ) : (
+                <div className="space-y-3">
+                  {Object.entries(schema.properties).map(([key, prop]) => (
+                    <Form.Item
+                      key={key}
+                      label={
+                        <span className="text-sm font-medium text-gray-700 flex items-center">
+                          {key}{" "}
+                          {schema.required?.includes(key) && <span className="text-red-500">*</span>}
+                          {prop.description && (
+                            <Tooltip title={prop.description}>
+                              <InfoCircleOutlined className="ml-2 text-gray-400 hover:text-gray-600" />
+                            </Tooltip>
+                          )}
+                        </span>
+                      }
+                      name={key}
+                      rules={[
+                        {
+                          required: schema.required?.includes(key),
+                          message: `Please enter ${key}`,
+                        },
+                      ]}
+                      className="mb-3"
+                    >
+                      {prop.type === "string" && (
+                        <TextInput
+                          placeholder={prop.description || `Enter ${key}`}
+                          className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                        />
+                      )}
+
+                      {prop.type === "number" && (
+                        <input
+                          type="number"
+                          placeholder={prop.description || `Enter ${key}`}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm transition-colors"
+                        />
+                      )}
+
+                      {prop.type === "boolean" && (
+                        <div className="flex items-center space-x-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded transition-colors"
+                          />
+                          <span className="text-sm text-gray-700">Enable this option</span>
+                        </div>
+                      )}
+                    </Form.Item>
+                  ))}
+                </div>
+              )}
+
+              <div className="pt-3 border-t border-gray-100">
+                <Button
+                  onClick={() => form.submit()}
+                  disabled={isLoading}
+                  variant="primary"
+                  className="w-full"
+                  loading={isLoading}
+                >
+                  {isLoading ? "Calling Tool..." : (result || error) ? "Call Again" : "Call Tool"}
+                </Button>
               </div>
-            </div>
-          )}
+            </Form>
+          </div>
+        </div>
+
+        {/* Right Column - Tool Result */}
+        <div className="bg-white border border-gray-200 rounded-lg">
+          <div className="border-b border-gray-100 px-4 py-2">
+            <h3 className="text-sm font-semibold text-gray-900">Tool Result</h3>
+          </div>
           
-          {/* Results when present - full width */}
-          {(result || error || isLoading) && (
-            <div className="bg-white border border-gray-200 rounded-lg shadow-sm">
-              <div className="border-b border-gray-100 px-6 py-4">
-                <h3 className="text-lg font-semibold text-gray-900">Tool Result</h3>
+          <div className="p-4">
+            {!result && !error && !isLoading ? (
+              /* Empty State */
+              <div className="flex flex-col justify-center items-center h-48 text-gray-500">
+                <div className="text-center max-w-sm">
+                  <div className="mb-3">
+                    <svg className="mx-auto h-12 w-12 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                  </div>
+                  <h4 className="text-sm font-medium text-gray-900 mb-1">Ready to Call Tool</h4>
+                  <p className="text-xs text-gray-500 leading-relaxed">
+                    Configure the input parameters and click "Call Tool" to see the results here.
+                  </p>
+                </div>
               </div>
-              
-              <div className="p-6">
+            ) : (
+              <div className="space-y-3">
                 {/* Result Control Bar */}
                 {result && !isLoading && !error && (
-                  <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+                  <div className="p-2 bg-green-50 border border-green-200 rounded-lg">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center space-x-2">
-                        <svg className="h-5 w-5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <svg className="h-4 w-4 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
-                        <h4 className="text-sm font-medium text-green-900">Tool executed successfully</h4>
+                        <h4 className="text-xs font-medium text-green-900">Tool executed successfully</h4>
                         {duration !== null && (
-                          <span className="text-xs text-green-600 ml-2">
+                          <span className="text-xs text-green-600 ml-1">
                             • {(duration / 1000).toFixed(2)}s
                           </span>
                         )}
                       </div>
 
-                      <div className="flex items-center space-x-2">
-                        <div className="flex bg-white rounded-lg border border-green-300 p-1">
+                      <div className="flex items-center space-x-1">
+                        <div className="flex bg-white rounded border border-green-300 p-0.5">
                           <button
                             onClick={() => setViewMode('formatted')}
-                            className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                            className={`px-2 py-1 text-xs font-medium rounded transition-colors ${
                               viewMode === 'formatted'
                                 ? 'bg-green-100 text-green-800'
                                 : 'text-green-600 hover:text-green-800'
@@ -344,7 +317,7 @@ export function ToolTestPanel({
                           </button>
                           <button
                             onClick={() => setViewMode('json')}
-                            className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                            className={`px-2 py-1 text-xs font-medium rounded transition-colors ${
                               viewMode === 'json'
                                 ? 'bg-green-100 text-green-800'
                                 : 'text-green-600 hover:text-green-800'
@@ -359,7 +332,7 @@ export function ToolTestPanel({
                           className="p-1 hover:bg-green-100 rounded text-green-700"
                           title="Copy response"
                         >
-                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                             <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                             <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
                           </svg>
@@ -369,38 +342,36 @@ export function ToolTestPanel({
                   </div>
                 )}
 
-
-
-                <div className="min-h-[400px] max-h-[500px] overflow-y-auto">
+                <div className="max-h-96 overflow-y-auto">
                   {isLoading && (
-                    <div className="flex flex-col justify-center items-center h-full py-16 text-gray-500">
+                    <div className="flex flex-col justify-center items-center h-48 text-gray-500">
                       <div className="relative">
-                        <div className="animate-spin rounded-full h-10 w-10 border-2 border-gray-200"></div>
-                        <div className="animate-spin rounded-full h-10 w-10 border-2 border-blue-600 border-t-transparent absolute top-0"></div>
+                        <div className="animate-spin rounded-full h-8 w-8 border-2 border-gray-200"></div>
+                        <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-600 border-t-transparent absolute top-0"></div>
                       </div>
-                      <p className="text-sm font-medium mt-4">Calling tool...</p>
+                      <p className="text-sm font-medium mt-3">Calling tool...</p>
                       <p className="text-xs text-gray-400 mt-1">Please wait while we process your request</p>
                     </div>
                   )}
 
                   {error && (
-                    <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-                      <div className="flex items-start space-x-3">
+                    <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                      <div className="flex items-start space-x-2">
                         <div className="flex-shrink-0">
-                          <svg className="h-5 w-5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <svg className="h-4 w-4 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                           </svg>
                         </div>
                         <div className="flex-1">
-                          <div className="flex items-center space-x-2 mb-2">
-                            <h4 className="text-sm font-medium text-red-900">Tool Call Failed</h4>
+                          <div className="flex items-center space-x-2 mb-1">
+                            <h4 className="text-xs font-medium text-red-900">Tool Call Failed</h4>
                             {duration !== null && (
                               <span className="text-xs text-red-600">
                                 • {(duration / 1000).toFixed(2)}s
                               </span>
                             )}
                           </div>
-                          <div className="bg-white border border-red-200 rounded-lg p-3 max-h-64 overflow-y-auto">
+                          <div className="bg-white border border-red-200 rounded p-2 max-h-48 overflow-y-auto">
                             <pre className="text-xs whitespace-pre-wrap text-red-700 font-mono">{error.message}</pre>
                           </div>
                         </div>
@@ -409,19 +380,19 @@ export function ToolTestPanel({
                   )}
 
                   {result && !isLoading && !error && (
-                    <div className="space-y-4">
+                    <div className="space-y-3">
                       {viewMode === 'formatted' ? (
                         // Formatted View
                         result.map((content: any, idx: number) => (
                           <div key={idx} className="border border-gray-200 rounded-lg overflow-hidden">
                             {content.type === "text" && (
                               <div>
-                                <div className="bg-gray-50 px-4 py-2 border-b border-gray-200">
+                                <div className="bg-gray-50 px-3 py-1 border-b border-gray-200">
                                   <span className="text-xs font-medium text-gray-700 uppercase tracking-wide">Text Response</span>
                                 </div>
-                                <div className="p-4">
-                                  <div className="bg-white rounded-lg border border-gray-200 max-h-80 overflow-y-auto">
-                                    <div className="p-4 space-y-3">
+                                <div className="p-3">
+                                  <div className="bg-white rounded border border-gray-200 max-h-64 overflow-y-auto">
+                                    <div className="p-3 space-y-2">
                                       {content.text.split('\n\n').map((section: string, sectionIndex: number) => {
                                         if (section.trim() === '') return null;
                                         
@@ -429,8 +400,8 @@ export function ToolTestPanel({
                                         if (section.startsWith('##')) {
                                           const headerText = section.replace(/^#+\s/, '');
                                           return (
-                                            <div key={sectionIndex} className="border-b border-gray-200 pb-2 mb-3">
-                                              <h3 className="text-base font-semibold text-gray-900">{headerText}</h3>
+                                            <div key={sectionIndex} className="border-b border-gray-200 pb-1 mb-2">
+                                              <h3 className="text-sm font-semibold text-gray-900">{headerText}</h3>
                                             </div>
                                           );
                                         }
@@ -440,8 +411,8 @@ export function ToolTestPanel({
                                         if (urlRegex.test(section)) {
                                           const parts = section.split(urlRegex);
                                           return (
-                                            <div key={sectionIndex} className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                                              <div className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
+                                            <div key={sectionIndex} className="bg-blue-50 border border-blue-200 rounded p-2">
+                                              <div className="text-xs text-gray-700 leading-relaxed whitespace-pre-wrap">
                                                 {parts.map((part, partIndex) => {
                                                   if (urlRegex.test(part)) {
                                                     return (
@@ -466,16 +437,16 @@ export function ToolTestPanel({
                                         // Handle score information
                                         if (section.includes('Score:')) {
                                           return (
-                                            <div key={sectionIndex} className="bg-green-50 border-l-4 border-green-400 p-3 rounded-r">
-                                              <p className="text-sm text-green-800 font-medium whitespace-pre-wrap">{section}</p>
+                                            <div key={sectionIndex} className="bg-green-50 border-l-4 border-green-400 p-2 rounded-r">
+                                              <p className="text-xs text-green-800 font-medium whitespace-pre-wrap">{section}</p>
                                             </div>
                                           );
                                         }
                                         
                                         // Regular content sections
                                         return (
-                                          <div key={sectionIndex} className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                                            <div className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap font-mono">
+                                          <div key={sectionIndex} className="bg-gray-50 rounded p-2 border border-gray-200">
+                                            <div className="text-xs text-gray-700 leading-relaxed whitespace-pre-wrap font-mono">
                                               {section}
                                             </div>
                                           </div>
@@ -489,15 +460,15 @@ export function ToolTestPanel({
 
                             {content.type === "image" && content.url && (
                               <div>
-                                <div className="bg-gray-50 px-4 py-2 border-b border-gray-200">
+                                <div className="bg-gray-50 px-3 py-1 border-b border-gray-200">
                                   <span className="text-xs font-medium text-gray-700 uppercase tracking-wide">Image Response</span>
                                 </div>
-                                <div className="p-4">
-                                  <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                                <div className="p-3">
+                                  <div className="bg-gray-50 rounded p-3 border border-gray-200">
                                     <img
                                       src={content.url}
                                       alt="Tool result"
-                                      className="max-w-full h-auto rounded-lg shadow-sm"
+                                      className="max-w-full h-auto rounded shadow-sm"
                                     />
                                   </div>
                                 </div>
@@ -506,27 +477,27 @@ export function ToolTestPanel({
 
                             {content.type === "embedded_resource" && (
                               <div>
-                                <div className="bg-gray-50 px-4 py-2 border-b border-gray-200">
+                                <div className="bg-gray-50 px-3 py-1 border-b border-gray-200">
                                   <span className="text-xs font-medium text-gray-700 uppercase tracking-wide">Embedded Resource</span>
                                 </div>
-                                <div className="p-4">
-                                  <div className="flex items-center space-x-3 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                                <div className="p-3">
+                                  <div className="flex items-center space-x-2 p-3 bg-blue-50 border border-blue-200 rounded">
                                     <div className="flex-shrink-0">
-                                      <svg className="h-6 w-6 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                      <svg className="h-5 w-5 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                                       </svg>
                                     </div>
                                     <div className="flex-1">
-                                      <p className="text-sm font-medium text-blue-900">Resource Type: {content.resource_type}</p>
+                                      <p className="text-xs font-medium text-blue-900">Resource Type: {content.resource_type}</p>
                                       {content.url && (
                                         <a
                                           href={content.url}
                                           target="_blank"
                                           rel="noopener noreferrer"
-                                          className="inline-flex items-center text-sm text-blue-600 hover:text-blue-800 hover:underline mt-1 transition-colors"
+                                          className="inline-flex items-center text-xs text-blue-600 hover:text-blue-800 hover:underline mt-1 transition-colors"
                                         >
                                           View Resource
-                                          <svg className="ml-1 h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                                          <svg className="ml-1 h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
                                             <path d="M11 3a1 1 0 100 2h2.586l-6.293 6.293a1 1 0 101.414 1.414L15 6.414V9a1 1 0 102 0V4a1 1 0 00-1-1h-5z" />
                                             <path d="M5 5a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-3a1 1 0 10-2 0v3H5V7h3a1 1 0 000-2H5z" />
                                           </svg>
@@ -541,8 +512,8 @@ export function ToolTestPanel({
                         ))
                       ) : (
                         // JSON View
-                        <div className="bg-white rounded-lg border border-gray-200">
-                          <div className="p-4 overflow-auto max-h-96 bg-gray-50">
+                        <div className="bg-white rounded border border-gray-200">
+                          <div className="p-3 overflow-auto max-h-80 bg-gray-50">
                             <pre className="text-xs font-mono whitespace-pre-wrap break-all text-gray-800">
                               {JSON.stringify(result, null, 2)}
                             </pre>
@@ -551,11 +522,10 @@ export function ToolTestPanel({
                       )}
                     </div>
                   )}
-
                 </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
     </div>
