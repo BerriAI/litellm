@@ -7,7 +7,17 @@
 
 import json
 import os
-from typing import TYPE_CHECKING, List, Literal, Optional, Type, TypedDict, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Type,
+    TypedDict,
+    Union,
+)
 
 from fastapi import HTTPException
 
@@ -67,6 +77,7 @@ class GuardrailsAI(CustomGuardrail):
         supported_event_hooks = [
             GuardrailEventHooks.post_call,
             GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.logging_only,
         ]
         super().__init__(supported_event_hooks=supported_event_hooks, **kwargs)
 
@@ -142,6 +153,26 @@ class GuardrailsAI(CustomGuardrail):
         response = _json_response.get("outputs", [])[0].get("data", [])[0]
         return response
 
+    async def process_input(self, data: dict, call_type: str) -> dict:
+        if call_type == "acompletion" or call_type == "completion":
+            from litellm.litellm_core_utils.prompt_templates.common_utils import (
+                get_last_user_message,
+                set_last_user_message,
+            )
+
+            if "messages" not in data:  # invalid request
+                return data
+
+            text = get_last_user_message(data["messages"])
+            if text is None:
+                return data
+            updated_text = await self.make_guardrails_ai_api_request_pre_call_request(
+                text_input=text, request_data=data
+            )
+            data["messages"] = set_last_user_message(data["messages"], updated_text)
+
+        return data
+
     @log_guardrail_information
     async def async_pre_call_hook(
         self,
@@ -162,25 +193,16 @@ class GuardrailsAI(CustomGuardrail):
         Union[Exception, str, dict]
     ]:  # raise exception if invalid, return a str for the user to receive - if rejected, or return a modified dictionary for passing into litellm
 
+        return await self.process_input(data=data, call_type=call_type)
+
+    async def async_logging_hook(
+        self, kwargs: dict, result: Any, call_type: str
+    ) -> Tuple[dict, Any]:
+
         if call_type == "acompletion" or call_type == "completion":
-            from litellm.litellm_core_utils.prompt_templates.common_utils import (
-                get_last_user_message,
-                set_last_user_message,
-            )
+            kwargs = await self.process_input(data=kwargs, call_type=call_type)
 
-            if "messages" not in data:  # invalid request
-                return None
-
-            text = get_last_user_message(data["messages"])
-            if text is None:
-                return None
-            updated_text = await self.make_guardrails_ai_api_request_pre_call_request(
-                text_input=text, request_data=data
-            )
-            data["messages"] = set_last_user_message(data["messages"], updated_text)
-
-            return data
-        return None
+        return kwargs, result
 
     @log_guardrail_information
     async def async_post_call_success_hook(

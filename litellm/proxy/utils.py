@@ -363,7 +363,11 @@ class ProxyLogging:
             if self.alerting is not None and "slack" in self.alerting:
                 # NOTE: ENSURE we only add callbacks when alerting is on
                 # We should NOT add callbacks when alerting is off
-                if "daily_reports" in self.alert_types or "outage_alerts" in self.alert_types or "region_outage_alerts" in self.alert_types:
+                if (
+                    "daily_reports" in self.alert_types
+                    or "outage_alerts" in self.alert_types
+                    or "region_outage_alerts" in self.alert_types
+                ):
                     litellm.logging_callback_manager.add_litellm_callback(self.slack_alerting_instance)  # type: ignore
                 litellm.logging_callback_manager.add_litellm_success_callback(
                     self.slack_alerting_instance.response_taking_too_long_callback
@@ -1770,7 +1774,6 @@ class PrismaClient:
                         WHERE v.token = '{token}'
                     """
 
-                    print_verbose("sql_query being made={}".format(sql_query))
                     response = await self.db.query_first(query=sql_query)
 
                     if response is not None:
