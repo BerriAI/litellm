@@ -10,7 +10,9 @@ import {
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { createMCPServer } from "../networking";
-import { MCPServer } from "./types";
+import { MCPServer, MCPServerCostInfo } from "./types";
+import MCPServerCostConfig from "./mcp_server_cost_config";
+import MCPConnectionStatus from "./mcp_connection_status";
 import { isAdminRole } from "@/utils/roles";
 
 
@@ -30,20 +32,35 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 }) => {
   const [form] = Form.useForm();
   const [isLoading, setIsLoading] = useState(false);
+  const [costConfig, setCostConfig] = useState<MCPServerCostInfo>({});
+  const [formValues, setFormValues] = useState<Record<string, any>>({});
+  const [tools, setTools] = useState<any[]>([]);
 
   const handleCreate = async (formValues: Record<string, any>) => {
     setIsLoading(true);
     try {
-      console.log(`formValues: ${JSON.stringify(formValues)}`);
+      // Prepare the payload with cost configuration
+      const payload = {
+        ...formValues,
+        mcp_info: {
+          server_name: formValues.alias || formValues.url,
+          description: formValues.description,
+          mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null
+        }
+      };
+
+      console.log(`Payload: ${JSON.stringify(payload)}`);
 
       if (accessToken != null) {
-        const response: MCPServer = await createMCPServer(
+        const response = await createMCPServer(
           accessToken,
-          formValues
+          payload
         );
 
         message.success("MCP Server created successfully");
         form.resetFields();
+        setCostConfig({});
+        setTools([]);
         setModalVisible(false);
         onCreateSuccess(response);
       }
@@ -59,8 +76,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
   const handleCancel = () => {
     form.resetFields();
+    setCostConfig({});
+    setTools([]);
     setModalVisible(false);
   };
+
+
 
   // rendering
   if (!isAdminRole(userRole)) {
@@ -107,11 +128,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           <Form
             form={form}
             onFinish={handleCreate}
+            onValuesChange={(_, allValues) => setFormValues(allValues)}
             layout="vertical"
             className="space-y-6"
           >
             <div className="grid grid-cols-1 gap-6">
-            <Form.Item
+              <Form.Item
                 label={
                   <span className="text-sm font-medium text-gray-700 flex items-center">
                     MCP Server Name
@@ -180,8 +202,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                     className="rounded-lg"
                     size="large"
                   >
-                    <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
                     <Select.Option value="http">HTTP</Select.Option>
+                    <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
                   </Select>
                 </Form.Item>
 
@@ -232,6 +254,25 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               </Form.Item>
             </div>
 
+            {/* Connection Status Section */}
+            <div className="mt-8 pt-6 border-t border-gray-200">
+              <MCPConnectionStatus
+                accessToken={accessToken}
+                formValues={formValues}
+                onToolsLoaded={setTools}
+              />
+            </div>
+
+            {/* Cost Configuration Section */}
+            <div className="mt-6">
+              <MCPServerCostConfig
+                value={costConfig}
+                onChange={setCostConfig}
+                tools={tools}
+                disabled={false}
+              />
+            </div>
+
             <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100">
               <Button 
                 variant="secondary"
@@ -249,6 +290,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           </Form>
         </div>
       </Modal>
+
+
     </div>
   );
 };
