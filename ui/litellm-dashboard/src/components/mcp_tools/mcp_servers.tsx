@@ -152,10 +152,20 @@ const MCPServers: React.FC<MCPServerProps> = ({
 
   React.useEffect(() => {
     if (mcpServers) {
-      // Default to showing empty list for personal servers
-      setFilteredServers([]);
+      // Filter servers based on current team selection
+      if (currentTeam === "all") {
+        setFilteredServers(mcpServers);
+      } else if (currentTeam === "personal") {
+        // For now, show empty list for personal servers
+        setFilteredServers([]);
+      } else {
+        const filtered = mcpServers.filter(server => 
+          server.teams?.some(team => team.team_id === currentTeam)
+        );
+        setFilteredServers(filtered);
+      }
     }
-  }, [mcpServers]);
+  }, [mcpServers, currentTeam]);
 
   const columns = React.useMemo(
     () =>
