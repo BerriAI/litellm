@@ -116,6 +116,11 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                 </div>
               </Card>
             </Grid>
+            <Card className="mt-2">
+              <Title>Cost Configuration</Title>
+              <MCPServerCostDisplay costConfig={mcpServer.mcp_info?.mcp_server_cost_info} />
+            </Card>
+
           </TabPanel>
 
           {/* Tool Panel */}
