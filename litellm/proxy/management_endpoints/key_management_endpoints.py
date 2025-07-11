@@ -808,10 +808,12 @@ async def _set_object_permission(
     Creates the LiteLLM_ObjectPermissionTable record for the key.
     - Handles permissions for vector stores and mcp servers.
     """
+    from litellm._logging import verbose_proxy_logger
     if prisma_client is None:
         return data_json
 
     if "object_permission" in data_json:
+        verbose_proxy_logger.info(f"[object_permission] Creating object_permission: {data_json['object_permission']}")
         created_object_permission = (
             await prisma_client.db.litellm_objectpermissiontable.create(
                 data=data_json["object_permission"],
@@ -820,9 +822,11 @@ async def _set_object_permission(
         data_json["object_permission_id"] = (
             created_object_permission.object_permission_id
         )
-
+        verbose_proxy_logger.info(f"[object_permission] Set object_permission_id: {data_json['object_permission_id']}")
         # delete the object_permission from the data_json
         data_json.pop("object_permission")
+    else:
+        verbose_proxy_logger.info("[object_permission] No object_permission in data_json, skipping creation.")
     return data_json
 
 
@@ -2593,10 +2597,24 @@ async def _list_key_helper(
     # Prepare response
     key_list: List[Union[str, UserAPIKeyAuth]] = []
     for key in keys:
+        key_dict = key.dict()
+        # Patch: Attach object_permission if object_permission_id is set
+        object_permission_id = key_dict.get("object_permission_id")
+        if object_permission_id:
+            object_permission = await prisma_client.db.litellm_objectpermissiontable.find_unique(
+                where={"object_permission_id": object_permission_id},
+            )
+            if object_permission:
+                # Convert to dict if needed
+                try:
+                    object_permission = object_permission.model_dump()
+                except Exception:
+                    object_permission = object_permission.dict()
+                key_dict["object_permission"] = object_permission
         if return_full_object is True:
-            key_list.append(UserAPIKeyAuth(**key.dict()))  # Return full key object
+            key_list.append(UserAPIKeyAuth(**key_dict))  # Return full key object
         else:
-            _token = key.dict().get("token")
+            _token = key_dict.get("token")
             key_list.append(_token)  # Return only the token
 
     return KeyListResponseObject(
