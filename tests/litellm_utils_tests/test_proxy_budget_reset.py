@@ -908,7 +908,7 @@ async def test_service_logger_endusers_success():
 
 
 @pytest.mark.asyncio
-async def test_service_logger_users_failure():
+async def test_service_logger_endusers_failure():
     """
     Test that a failure during enduser reset calls the failure hook with appropriate metadata,
     logs the exception, and does not call the success hook.
@@ -988,3 +988,69 @@ async def test_service_logger_users_failure():
     endusers_found_str = event_metadata.get("endusers_found", "")
     assert "user1" in endusers_found_str
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reset_budget_for_litellm_team_members_called():
+    """
+    Test that when reset_budget_for_litellm_budget_table is called,
+    team members' budgets are also reset via reset_budget_for_litellm_team_members
+    """
+    # Arrange
+    budget1 = LiteLLM_BudgetTableFull(
+        **{
+            "budget_id": "budget1",
+            "max_budget": 100.0,
+            "budget_duration": "1d",
+            "created_at": datetime.now(timezone.utc) - timedelta(days=2),
+        }
+    )
+
+    enduser1 = {"user_id": "user1", "spend": 25.0, "budget_id": "budget1"}
+
+    prisma_client = MagicMock()
+
+    async def fake_get_data(*, table_name, query_type, **kwargs):
+        if table_name == "budget":
+            return [budget1]
+        elif table_name == "enduser":
+            return [enduser1]
+        return []
+
+    prisma_client.get_data = AsyncMock(side_effect=fake_get_data)
+    prisma_client.update_data = AsyncMock()
+
+    # Mock the db.litellm_teammembership.update_many call
+    prisma_client.db = MagicMock()
+    prisma_client.db.litellm_teammembership = MagicMock()
+    prisma_client.db.litellm_teammembership.update_many = AsyncMock(
+        return_value={"count": 2}
+    )
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
+    proxy_logging_obj.service_logging_obj.async_service_failure_hook = AsyncMock()
+
+    job = ResetBudgetJob(proxy_logging_obj, prisma_client)
+
+    async def fake_reset_enduser(enduser):
+        enduser["spend"] = 0.0
+        return enduser
+
+    with patch.object(
+        ResetBudgetJob,
+        "_reset_budget_for_enduser",
+        side_effect=fake_reset_enduser,
+    ):
+        # Act
+        await job.reset_budget_for_litellm_budget_table()
+
+    # Assert
+    # Verify that the team membership update was called
+    prisma_client.db.litellm_teammembership.update_many.assert_called_once()
+
+    # Verify the call was made with correct parameters
+    call_args = prisma_client.db.litellm_teammembership.update_many.call_args
+    assert call_args.kwargs["where"]["budget_id"]["in"] == ["budget1"]
+    assert call_args.kwargs["data"]["spend"] == 0
