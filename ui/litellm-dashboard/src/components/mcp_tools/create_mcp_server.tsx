@@ -180,7 +180,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               <Form.Item
                 label={
                   <span className="text-sm font-medium text-gray-700">
-                    MCP Server URL <span className="text-red-500">*</span>
+                    MCP Server URL
                   </span>
                 }
                 name="url"
@@ -199,7 +199,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 <Form.Item
                   label={
                     <span className="text-sm font-medium text-gray-700">
-                      Transport Type <span className="text-red-500">*</span>
+                      Transport Type
                     </span>
                   }
                   name="transport"
@@ -218,7 +218,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 <Form.Item
                   label={
                     <span className="text-sm font-medium text-gray-700">
-                      Authentication <span className="text-red-500">*</span>
+                      Authentication
                     </span>
                   }
                   name="auth_type"
@@ -240,7 +240,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               <Form.Item
                 label={
                   <span className="text-sm font-medium text-gray-700 flex items-center">
-                    MCP Version <span className="text-red-500 ml-1">*</span>
+                    MCP Version
                     <Tooltip title="Select the MCP specification version your server supports">
                       <InfoCircleOutlined className="ml-2 text-gray-400 hover:text-gray-600" />
                     </Tooltip>
