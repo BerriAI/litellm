@@ -12,7 +12,10 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 
 
-def test_custom_guardrail_with_mode():
+def test_custom_guardrail_with_mode(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.premium_user", True
+    )  # Set premium_user to True
     cg = CustomGuardrail(
         guardrail_name="test_guardrail",
         supported_event_hooks=[
