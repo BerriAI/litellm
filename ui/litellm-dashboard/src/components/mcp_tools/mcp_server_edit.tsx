@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from "react";
-import { Form, Select, Button as AntdButton, message } from "antd";
+import { Form, Select, Button as AntdButton, message, Input, Space, Tooltip } from "antd";
 import { Button, TextInput, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { MCPServer, MCPServerCostInfo } from "./types";
 import { updateMCPServer, testMCPToolsListRequest } from "../networking";
 import MCPServerCostConfig from "./mcp_server_cost_config";
+import { MinusCircleOutlined, PlusOutlined, InfoCircleOutlined } from "@ant-design/icons";
 
 interface MCPServerEditProps {
   mcpServer: MCPServer;
@@ -22,6 +23,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
   useEffect(() => {
     if (mcpServer.mcp_info?.mcp_server_cost_info) {
       setCostConfig(mcpServer.mcp_info.mcp_server_cost_info);
+    }
+  }, [mcpServer]);
+
+  // Transform string array to object array for initial form values
+  useEffect(() => {
+    if (mcpServer.mcp_access_groups) {
+      // If access groups are objects, extract the name property; if strings, use as is
+      const groupNames = mcpServer.mcp_access_groups.map((g: any) => typeof g === 'string' ? g : g.name || String(g));
+      form.setFieldValue('mcp_access_groups', groupNames);
     }
   }, [mcpServer]);
 
@@ -68,6 +78,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
   const handleSave = async (values: Record<string, any>) => {
     if (!accessToken) return;
     try {
+      // Ensure access groups is always a string array
+      const accessGroups = (values.mcp_access_groups || []).map((g: any) => typeof g === 'string' ? g : g.name || String(g));
+
       // Prepare the payload with cost configuration
       const payload = {
         ...values,
@@ -76,7 +89,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
           server_name: values.alias || values.url,
           description: values.description,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null
-        }
+        },
+        mcp_access_groups: accessGroups
       };
 
       const updated = await updateMCPServer(accessToken, payload);
@@ -125,6 +139,29 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
                 <Select.Option value="2024-11-05">2024-11-05</Select.Option>
               </Select>
             </Form.Item>
+
+            <Form.Item
+              label={
+                <span className="text-sm font-medium text-gray-700 flex items-center">
+                  MCP Access Groups
+                  <Tooltip title="Define access groups for this MCP server. Each group represents a set of permissions.">
+                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                  </Tooltip>
+                </span>
+              }
+              name="mcp_access_groups"
+              getValueFromEvent={value => value}
+            >
+              <Select
+                mode="tags"
+                style={{ width: '100%' }}
+                placeholder="Add or select access groups"
+                tokenSeparators={[',']}
+                // Ensure value is always an array of strings
+                getPopupContainer={trigger => trigger.parentNode}
+              />
+            </Form.Item>
+
             <div className="flex justify-end gap-2">
               <AntdButton onClick={onCancel}>Cancel</AntdButton>
               <Button type="submit">Save Changes</Button>
