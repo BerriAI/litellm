@@ -1105,6 +1105,82 @@ def transcription_cost(
     )
 
 
+def _build_model_name_variants(
+    model: str,
+    size_str: str,
+    quality: Optional[str],
+    custom_llm_provider: Optional[str],
+) -> Tuple[List[Optional[str]], Optional[str]]:
+    """Build various model name variants for cost lookup."""
+    # Build model names for cost lookup
+    base_model_name = f"{size_str}/{model}"
+    model_name_without_custom_llm_provider: Optional[str] = None
+    if custom_llm_provider is not None and model.startswith(f"{custom_llm_provider}/"):
+        model_name_without_custom_llm_provider = model.replace(
+            f"{custom_llm_provider}/", ""
+        )
+        base_model_name = (
+            f"{custom_llm_provider}/{size_str}/{model_name_without_custom_llm_provider}"
+        )
+    model_name_with_quality = (
+        f"{quality}/{base_model_name}" if quality else base_model_name
+    )
+
+    # gpt-image-1 models use low, medium, high quality. If user did not specify quality, use medium fot gpt-image-1 model family
+    model_name_with_v2_quality = (
+        f"{ImageGenerationRequestQuality.MEDIUM.value}/{base_model_name}"
+    )
+
+    model_without_provider = f"{size_str}/{model.split('/')[-1]}"
+    model_with_quality_without_provider = (
+        f"{quality}/{model_without_provider}" if quality else model_without_provider
+    )
+
+    models_to_check: List[Optional[str]] = [
+        model_name_with_quality,
+        base_model_name,
+        model_name_with_v2_quality,
+        model_with_quality_without_provider,
+        model_without_provider,
+        model,
+        model_name_without_custom_llm_provider,
+    ]
+    
+    return models_to_check, model_name_without_custom_llm_provider
+
+
+def _find_azure_token_based_model(
+    size_str: str,
+    quality: Optional[str],
+    custom_llm_provider: str,
+) -> Optional[Union[dict, ModelInfo]]:
+    """Find Azure model with token-based pricing."""
+    # Look for any token-based pricing model for the same size
+    # This is a more generic approach that doesn't hardcode "gpt-image-1"
+    size_based_models = [
+        f"{custom_llm_provider}/{size_str}/{model_name}"
+        for model_name in ["gpt-image-1", "dall-e-3", "dall-e-2"]
+    ]
+
+    for base_model in size_based_models:
+        azure_model_with_quality = (
+            f"{quality}/{base_model}" if quality else base_model
+        )
+        for candidate in [azure_model_with_quality, base_model]:
+            try:
+                model_info = litellm.get_model_info(
+                    model=candidate, custom_llm_provider=custom_llm_provider
+                )
+                if model_info and (
+                    "input_cost_per_token" in model_info
+                    or "output_cost_per_token" in model_info
+                ):
+                    return model_info
+            except Exception:
+                continue
+    return None
+
+
 def default_image_cost_calculator(
     model: str,
     custom_llm_provider: Optional[str] = None,
@@ -1141,45 +1217,20 @@ def default_image_cost_calculator(
     # Parse dimensions
     height, width = map(int, size_str.split("-x-"))
 
-    # Build model names for cost lookup
-    base_model_name = f"{size_str}/{model}"
-    model_name_without_custom_llm_provider: Optional[str] = None
-    if custom_llm_provider is not None and model.startswith(f"{custom_llm_provider}/"):
-        model_name_without_custom_llm_provider = model.replace(
-            f"{custom_llm_provider}/", ""
-        )
-        base_model_name = (
-            f"{custom_llm_provider}/{size_str}/{model_name_without_custom_llm_provider}"
-        )
-    model_name_with_quality = (
-        f"{quality}/{base_model_name}" if quality else base_model_name
+    # Build model name variants
+    models_to_check, _ = _build_model_name_variants(
+        model=model,
+        size_str=size_str,
+        quality=quality,
+        custom_llm_provider=custom_llm_provider,
     )
-
-    # gpt-image-1 models use low, medium, high quality. If user did not specify quality, use medium fot gpt-image-1 model family
-    model_name_with_v2_quality = (
-        f"{ImageGenerationRequestQuality.MEDIUM.value}/{base_model_name}"
-    )
-
+    
     verbose_logger.debug(
-        f"Looking up cost for models: {model_name_with_quality}, {base_model_name}"
-    )
-
-    model_without_provider = f"{size_str}/{model.split('/')[-1]}"
-    model_with_quality_without_provider = (
-        f"{quality}/{model_without_provider}" if quality else model_without_provider
+        f"Looking up cost for models: {models_to_check[0]}, {models_to_check[1]}"
     )
 
     # Try model with quality first, fall back to base model name
     cost_info: Optional[Union[dict, ModelInfo]] = None
-    models_to_check: List[Optional[str]] = [
-        model_name_with_quality,
-        base_model_name,
-        model_name_with_v2_quality,
-        model_with_quality_without_provider,
-        model_without_provider,
-        model,
-        model_name_without_custom_llm_provider,
-    ]
 
     # Try to find model info using get_model_info
     for _model_candidate in models_to_check:
@@ -1198,32 +1249,11 @@ def default_image_cost_calculator(
     # For Azure custom deployments, if we still haven't found the model,
     # try to find a base model that supports token-based pricing
     if cost_info is None and custom_llm_provider == "azure":
-        # Look for any token-based pricing model for the same size
-        # This is a more generic approach that doesn't hardcode "gpt-image-1"
-        size_based_models = [
-            f"{custom_llm_provider}/{size_str}/{model_name}"
-            for model_name in ["gpt-image-1", "dall-e-3", "dall-e-2"]
-        ]
-
-        for base_model in size_based_models:
-            azure_model_with_quality = (
-                f"{quality}/{base_model}" if quality else base_model
-            )
-            for candidate in [azure_model_with_quality, base_model]:
-                try:
-                    model_info = litellm.get_model_info(
-                        model=candidate, custom_llm_provider=custom_llm_provider
-                    )
-                    if model_info and (
-                        "input_cost_per_token" in model_info
-                        or "output_cost_per_token" in model_info
-                    ):
-                        cost_info = model_info
-                        break
-                except Exception:
-                    continue
-            if cost_info:
-                break
+        cost_info = _find_azure_token_based_model(
+            size_str=size_str,
+            quality=quality,
+            custom_llm_provider=custom_llm_provider,
+        )
 
     if cost_info is None:
         raise Exception(
