@@ -900,10 +900,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           {/* Section 4: Logging Settings */}
           {!isFormDisabled && (
             <div className="mb-8">
-              <Accordion className="mt-4 mb-4">
-                <AccordionHeader>
-                  <b>Logging Settings</b>
-                </AccordionHeader>
+                             <Accordion className="mt-4 mb-4">
+                 <AccordionHeader>
+                   <Title className="m-0">Logging Settings</Title>
+                 </AccordionHeader>
                 <AccordionBody>
                   <div className="mt-4">
                     <PremiumLoggingSettings
