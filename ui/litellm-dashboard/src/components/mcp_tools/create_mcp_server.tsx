@@ -6,11 +6,15 @@ import {
   Select,
   message,
   Button as AntdButton,
+  Space,
+  Input,
 } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { InfoCircleOutlined, MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { createMCPServer } from "../networking";
-import { MCPServer } from "./types";
+import { MCPServer, MCPServerCostInfo } from "./types";
+import MCPServerCostConfig from "./mcp_server_cost_config";
+import MCPConnectionStatus from "./mcp_connection_status";
 import { isAdminRole } from "@/utils/roles";
 
 
@@ -30,20 +34,41 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 }) => {
   const [form] = Form.useForm();
   const [isLoading, setIsLoading] = useState(false);
+  const [costConfig, setCostConfig] = useState<MCPServerCostInfo>({});
+  const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
+  const [formValues, setFormValues] = useState<Record<string, any>>({});
+  const [tools, setTools] = useState<any[]>([]);
 
   const handleCreate = async (formValues: Record<string, any>) => {
     setIsLoading(true);
     try {
-      console.log(`formValues: ${JSON.stringify(formValues)}`);
+      // Transform access groups into objects with name property
+      
+      const accessGroups = formValues.mcp_access_groups
+
+      // Prepare the payload with cost configuration
+      const payload = {
+        ...formValues,
+        mcp_info: {
+          server_name: formValues.alias || formValues.url,
+          description: formValues.description,
+          mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null,
+        },
+        mcp_access_groups: accessGroups
+      };
+
+      console.log(`Payload: ${JSON.stringify(payload)}`);
 
       if (accessToken != null) {
-        const response: MCPServer = await createMCPServer(
+        const response = await createMCPServer(
           accessToken,
-          formValues
+          payload
         );
 
         message.success("MCP Server created successfully");
         form.resetFields();
+        setCostConfig({});
+        setTools([]);
         setModalVisible(false);
         onCreateSuccess(response);
       }
@@ -59,8 +84,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
   const handleCancel = () => {
     form.resetFields();
+    setCostConfig({});
+    setTools([]);
     setModalVisible(false);
   };
+
+
 
   // rendering
   if (!isAdminRole(userRole)) {
@@ -107,15 +136,16 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           <Form
             form={form}
             onFinish={handleCreate}
+            onValuesChange={(_, allValues) => setFormValues(allValues)}
             layout="vertical"
             className="space-y-6"
           >
             <div className="grid grid-cols-1 gap-6">
-            <Form.Item
+              <Form.Item
                 label={
                   <span className="text-sm font-medium text-gray-700 flex items-center">
                     MCP Server Name
-                    <Tooltip title="Best practice: Use a descriptive name that indicates the server's purpose (e.g., 'GitHub Integration', 'Email Service')">
+                    <Tooltip title="Best practice: Use a descriptive name that indicates the server's purpose (e.g., 'GitHub_MCP', 'Email_Service'). Hyphens '-' are not allowed; use underscores '_' instead.">
                       <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                     </Tooltip>
                   </span>
@@ -123,10 +153,16 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 name="alias"
                 rules={[
                   { required: false, message: "Please enter a server name" },
+                  {
+                    validator: (_, value) =>
+                      value && value.includes('-')
+                        ? Promise.reject("Server name cannot contain '-' (hyphen). Please use '_' (underscore) instead.")
+                        : Promise.resolve(),
+                  },
                 ]}
               >
                 <TextInput 
-                  placeholder="e.g., GitHub MCP, Zapier MCP, etc." 
+                  placeholder="e.g., GitHub_MCP, Zapier_MCP, etc." 
                   className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                 />
               </Form.Item>
@@ -150,7 +186,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               <Form.Item
                 label={
                   <span className="text-sm font-medium text-gray-700">
-                    MCP Server URL <span className="text-red-500">*</span>
+                    MCP Server URL
                   </span>
                 }
                 name="url"
@@ -169,7 +205,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 <Form.Item
                   label={
                     <span className="text-sm font-medium text-gray-700">
-                      Transport Type <span className="text-red-500">*</span>
+                      Transport Type
                     </span>
                   }
                   name="transport"
@@ -180,15 +216,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                     className="rounded-lg"
                     size="large"
                   >
-                    <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
                     <Select.Option value="http">HTTP</Select.Option>
+                    <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
                   </Select>
                 </Form.Item>
 
                 <Form.Item
                   label={
                     <span className="text-sm font-medium text-gray-700">
-                      Authentication <span className="text-red-500">*</span>
+                      Authentication
                     </span>
                   }
                   name="auth_type"
@@ -210,7 +246,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               <Form.Item
                 label={
                   <span className="text-sm font-medium text-gray-700 flex items-center">
-                    MCP Version <span className="text-red-500 ml-1">*</span>
+                    MCP Version
                     <Tooltip title="Select the MCP specification version your server supports">
                       <InfoCircleOutlined className="ml-2 text-gray-400 hover:text-gray-600" />
                     </Tooltip>
@@ -230,6 +266,43 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   <Select.Option value="2024-11-05">2024-11-05</Select.Option>
                 </Select>
               </Form.Item>
+
+              <Form.Item
+                label={
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    MCP Access Groups
+                    <Tooltip title="Specify access groups for this MCP server. Users must be in at least one of these groups to access the server.">
+                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                    </Tooltip>
+                  </span>
+                }
+                name="mcp_access_groups"
+                className="mb-4"
+              >
+                <Select
+                  mode="tags"
+                  showSearch
+                  placeholder="Select existing groups or type to create new ones"
+                  optionFilterProp="children"
+                  tokenSeparators={[',']}
+                  options={mcpAccessGroups.map((group) => ({
+                    value: group,
+                    label: group
+                  }))}
+                  maxTagCount="responsive"
+                  allowClear
+                />
+              </Form.Item>
+            </div>
+
+            {/* Cost Configuration Section */}
+            <div className="mt-8 pt-6 border-t border-gray-200">
+              <MCPServerCostConfig
+                value={costConfig}
+                onChange={setCostConfig}
+                tools={tools}
+                disabled={false}
+              />
             </div>
 
             <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100">
@@ -249,6 +322,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           </Form>
         </div>
       </Modal>
+
+
     </div>
   );
 };

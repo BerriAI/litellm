@@ -88,3 +88,16 @@ test-integration:
 
 test-unit-helm: install-helm-unittest
 	helm unittest -f 'tests/*.yaml' deploy/charts/litellm-helm
+
+# LLM Translation testing targets
+test-llm-translation: install-test-deps
+	@echo "Running LLM translation tests..."
+	@python .github/workflows/run_llm_translation_tests.py
+
+test-llm-translation-single: install-test-deps
+	@echo "Running single LLM translation test file..."
+	@if [ -z "$(FILE)" ]; then echo "Usage: make test-llm-translation-single FILE=test_filename.py"; exit 1; fi
+	@mkdir -p test-results
+	poetry run pytest tests/llm_translation/$(FILE) \
+		--junitxml=test-results/junit.xml \
+		-v --tb=short --maxfail=100 --timeout=300

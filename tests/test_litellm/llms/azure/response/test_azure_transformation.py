@@ -2,6 +2,8 @@ import os
 import sys
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
@@ -10,6 +12,7 @@ from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIC
 from litellm.types.router import GenericLiteLLMParams
 
 
+@pytest.mark.serial
 def test_validate_environment_api_key_within_litellm_params():
     azure_openai_responses_apiconfig = AzureOpenAIResponsesAPIConfig()
     litellm_params = GenericLiteLLMParams(api_key="test-api-key")
@@ -22,7 +25,7 @@ def test_validate_environment_api_key_within_litellm_params():
 
     assert result == expected
 
-
+@pytest.mark.serial
 def test_validate_environment_api_key_within_litellm():
     azure_openai_responses_apiconfig = AzureOpenAIResponsesAPIConfig()
 
@@ -36,7 +39,7 @@ def test_validate_environment_api_key_within_litellm():
 
         assert result == expected
 
-
+@pytest.mark.serial
 def test_validate_environment_azure_key_within_litellm():
     azure_openai_responses_apiconfig = AzureOpenAIResponsesAPIConfig()
 
@@ -50,7 +53,7 @@ def test_validate_environment_azure_key_within_litellm():
 
         assert result == expected
 
-
+@pytest.mark.serial
 def test_validate_environment_azure_openai_api_key_within_secret_str():
     azure_openai_responses_apiconfig = AzureOpenAIResponsesAPIConfig()
 
@@ -70,7 +73,7 @@ def test_validate_environment_azure_openai_api_key_within_secret_str():
 
         assert result == expected
 
-
+@pytest.mark.serial
 def test_validate_environment_azure_api_key_within_secret_str():
     azure_openai_responses_apiconfig = AzureOpenAIResponsesAPIConfig()
 

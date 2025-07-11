@@ -27,7 +27,7 @@ def setup_mocks(monkeypatch):
     monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
     monkeypatch.delenv("AZURE_SCOPE", raising=False)
     monkeypatch.delenv("AZURE_AD_TOKEN", raising=False)
-    
+
     with patch(
         "litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id"
     ) as mock_entra_token, patch(
@@ -427,6 +427,10 @@ def test_select_azure_base_url_called(setup_mocks):
             "afile_list",
             "aimage_edit",
             "image_edit",
+            "agenerate_content_stream",
+            "agenerate_content",
+            "allm_passthrough_route",
+            "llm_passthrough_route",
         ]
     ],
 )
@@ -1031,8 +1035,8 @@ def test_with_existing_azure_ad_token_from_env(setup_mocks):
     # mock get_secret_str("AZURE_AD_TOKEN") to "test-token"
     with patch("litellm.llms.azure.common_utils.get_secret_str") as mock_get_secret_str:
         # Configure the mock to return "test-token" when called with "AZURE_AD_TOKEN"
-        mock_get_secret_str.side_effect = (
-            lambda key: "test-token" if key == "AZURE_AD_TOKEN" else None
+        mock_get_secret_str.side_effect = lambda key: (
+            "test-token" if key == "AZURE_AD_TOKEN" else None
         )
 
         litellm_params = GenericLiteLLMParams()

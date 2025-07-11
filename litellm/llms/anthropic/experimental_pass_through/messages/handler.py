@@ -17,6 +17,7 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.types.llms.anthropic_messages.anthropic_request import AnthropicMetadata
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -24,7 +25,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
 from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler
-from .utils import AnthropicMessagesRequestUtils
+from .utils import AnthropicMessagesRequestUtils, mock_response
 
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
@@ -92,6 +93,18 @@ async def anthropic_messages(
     return response
 
 
+def validate_anthropic_api_metadata(metadata: Optional[Dict] = None) -> Optional[Dict]:
+    """
+    Validate Anthropic API metadata - This is done to ensure only allowed `metadata` fields are passed to Anthropic API
+
+    If there are any litellm specific metadata fields, use `litellm_metadata` key to pass them.
+    """
+    if metadata is None:
+        return None
+    anthropic_metadata_obj = AnthropicMetadata(**metadata)
+    return anthropic_metadata_obj.model_dump(exclude_none=True)
+
+
 def anthropic_messages_handler(
     max_tokens: int,
     messages: List[Dict],
@@ -121,10 +134,13 @@ def anthropic_messages_handler(
     """
     from litellm.types.utils import LlmProviders
 
+    metadata = validate_anthropic_api_metadata(metadata)
+
     local_vars = locals()
     is_async = kwargs.pop("is_async", False)
     # Use provided client or create a new one
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
+
     litellm_params = GenericLiteLLMParams(
         **kwargs,
         api_key=api_key,
@@ -142,6 +158,15 @@ def anthropic_messages_handler(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
+
+    if litellm_params.mock_response and isinstance(litellm_params.mock_response, str):
+
+        return mock_response(
+            model=model,
+            messages=messages,
+            max_tokens=max_tokens,
+            mock_response=litellm_params.mock_response,
+        )
 
     anthropic_messages_provider_config: Optional[BaseAnthropicMessagesConfig] = None
 

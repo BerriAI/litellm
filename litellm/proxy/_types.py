@@ -24,7 +24,9 @@ from litellm.types.mcp import (
     MCPTransport,
     MCPTransportType,
 )
+from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.router import RouterErrors, UpdateRouterConfig
+from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
     CallTypes,
     EmbeddingResponse,
@@ -185,27 +187,6 @@ def hash_token(token: str):
     return hashed_token
 
 
-class LiteLLM_UpperboundKeyGenerateParams(LiteLLMPydanticObjectBase):
-    """
-    Set default upperbound to max budget a key called via `/key/generate` can be.
-
-    Args:
-        max_budget (Optional[float], optional): Max budget a key can be. Defaults to None.
-        budget_duration (Optional[str], optional): Duration of the budget. Defaults to None.
-        duration (Optional[str], optional): Duration of the key. Defaults to None.
-        max_parallel_requests (Optional[int], optional): Max number of requests that can be made in parallel. Defaults to None.
-        tpm_limit (Optional[int], optional): Tpm limit. Defaults to None.
-        rpm_limit (Optional[int], optional): Rpm limit. Defaults to None.
-    """
-
-    max_budget: Optional[float] = None
-    budget_duration: Optional[str] = None
-    duration: Optional[str] = None
-    max_parallel_requests: Optional[int] = None
-    tpm_limit: Optional[int] = None
-    rpm_limit: Optional[int] = None
-
-
 class KeyManagementRoutes(str, enum.Enum):
     """
     Enum for key management routes
@@ -216,6 +197,7 @@ class KeyManagementRoutes(str, enum.Enum):
     KEY_UPDATE = "/key/update"
     KEY_DELETE = "/key/delete"
     KEY_REGENERATE = "/key/regenerate"
+    KEY_GENERATE_SERVICE_ACCOUNT = "/key/service-account/generate"
     KEY_REGENERATE_WITH_PATH_PARAM = "/key/{key_id}/regenerate"
     KEY_BLOCK = "/key/block"
     KEY_UNBLOCK = "/key/unblock"
@@ -341,10 +323,24 @@ class LiteLLMRoutes(enum.Enum):
 
     anthropic_routes = [
         "/v1/messages",
-        # MCP routes
+    ]
+
+    mcp_routes = [
+        "/mcp",
+        "/mcp/",
+        "/mcp/{subpath}",
         "/mcp/tools",
         "/mcp/tools/list",
         "/mcp/tools/call",
+    ]
+
+    google_routes = [
+        "/v1beta/models/{model_name}:countTokens",
+        "/v1beta/models/{model_name}:generateContent",
+        "/v1beta/models/{model_name}:streamGenerateContent",
+        "/models/{model_name}:countTokens",
+        "/models/{model_name}:generateContent",
+        "/models/{model_name}:streamGenerateContent",
     ]
 
     apply_guardrail_routes = [
@@ -356,6 +352,7 @@ class LiteLLMRoutes(enum.Enum):
         + anthropic_routes
         + mapped_pass_through_routes
         + apply_guardrail_routes
+        + mcp_routes
     )
     info_routes = [
         "/key/info",
@@ -385,6 +382,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_DELETE,
         KeyManagementRoutes.KEY_INFO,
         KeyManagementRoutes.KEY_REGENERATE,
+        KeyManagementRoutes.KEY_GENERATE_SERVICE_ACCOUNT,
         KeyManagementRoutes.KEY_REGENERATE_WITH_PATH_PARAM,
         KeyManagementRoutes.KEY_LIST,
         KeyManagementRoutes.KEY_BLOCK,
@@ -450,6 +448,7 @@ class LiteLLMRoutes(enum.Enum):
             "/metrics",
             "/litellm/.well-known/litellm-ui-config",
             "/.well-known/litellm-ui-config",
+            "/public/model_hub",
         ]
     )
 
@@ -670,6 +669,7 @@ class ModelParams(LiteLLMPydanticObjectBase):
 
 class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     mcp_servers: Optional[List[str]] = None
+    mcp_access_groups: Optional[List[str]] = None
     vector_stores: Optional[List[str]] = None
 
 
@@ -778,6 +778,7 @@ class UpdateKeyRequest(KeyRequestBase):
 class RegenerateKeyRequest(GenerateKeyRequest):
     # This needs to be different from UpdateKeyRequest, because "key" is optional for this
     key: Optional[str] = None
+    new_key: Optional[str] = None
     duration: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
@@ -847,6 +848,9 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
     auth_type: Optional[MCPAuthType] = None
     url: str
+    mcp_info: Optional[MCPInfo] = None
+    mcp_access_groups: List[str] = Field(default_factory=list)
+
 
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
@@ -857,6 +861,9 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
     auth_type: Optional[MCPAuthType] = None
     url: str
+    mcp_info: Optional[MCPInfo] = None
+    mcp_access_groups: List[str] = Field(default_factory=list)
+
 
 
 class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
@@ -873,6 +880,9 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     created_by: Optional[str] = None
     updated_at: Optional[datetime] = None
     updated_by: Optional[str] = None
+    teams: List[Dict[str, Optional[str]]] = Field(default_factory=list)
+    mcp_access_groups: List[str] = Field(default_factory=list)
+    mcp_info: Optional[MCPInfo] = None
 
 
 class NewUserRequestTeam(LiteLLMPydanticObjectBase):
@@ -1059,8 +1069,14 @@ class DeleteCustomerRequest(LiteLLMPydanticObjectBase):
 
 
 class MemberBase(LiteLLMPydanticObjectBase):
-    user_id: Optional[str] = None
-    user_email: Optional[str] = None
+    user_id: Optional[str] = Field(
+        default=None,
+        description="The unique ID of the user to add. Either user_id or user_email must be provided",
+    )
+    user_email: Optional[str] = Field(
+        default=None,
+        description="The email address of the user to add. Either user_id or user_email must be provided",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -1076,7 +1092,9 @@ class Member(MemberBase):
     role: Literal[
         "admin",
         "user",
-    ]
+    ] = Field(
+        description="The role of the user within the team. 'admin' users can manage team settings and members, 'user' is a regular team member"
+    )
 
 
 class OrgMember(MemberBase):
@@ -1256,6 +1274,7 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
 
     object_permission_id: str
     mcp_servers: Optional[List[str]] = []
+    mcp_access_groups: Optional[List[str]] = []
     vector_stores: Optional[List[str]] = []
 
 
@@ -1372,40 +1391,6 @@ class OrganizationRequest(LiteLLMPydanticObjectBase):
 
 class DeleteOrganizationRequest(LiteLLMPydanticObjectBase):
     organization_ids: List[str]  # required
-
-
-class KeyManagementSystem(enum.Enum):
-    GOOGLE_KMS = "google_kms"
-    AZURE_KEY_VAULT = "azure_key_vault"
-    AWS_SECRET_MANAGER = "aws_secret_manager"
-    GOOGLE_SECRET_MANAGER = "google_secret_manager"
-    HASHICORP_VAULT = "hashicorp_vault"
-    LOCAL = "local"
-    AWS_KMS = "aws_kms"
-
-
-class KeyManagementSettings(LiteLLMPydanticObjectBase):
-    hosted_keys: Optional[List] = None
-    store_virtual_keys: Optional[bool] = False
-    """
-    If True, virtual keys created by litellm will be stored in the secret manager
-    """
-    prefix_for_stored_virtual_keys: str = "litellm/"
-    """
-    If set, this prefix will be used for stored virtual keys in the secret manager
-    """
-
-    access_mode: Literal["read_only", "write_only", "read_and_write"] = "read_only"
-    """
-    Access mode for the secret manager, when write_only will only use for writing secrets
-    """
-
-    primary_secret_name: Optional[str] = None
-    """
-    If set, will read secrets from this primary secret in the secret manager
-
-    eg. on AWS you can store multiple secret values as K/V pairs in a single secret
-    """
 
 
 class TeamDefaultSettings(LiteLLMPydanticObjectBase):
@@ -2201,6 +2186,7 @@ class SpendLogsPayload(TypedDict):
     model: str
     model_id: Optional[str]
     model_group: Optional[str]
+    mcp_namespaced_tool_name: Optional[str]
     api_base: str
     user: str
     metadata: str  # json str
@@ -2511,7 +2497,9 @@ class LiteLLM_TeamMembership(LiteLLMPydanticObjectBase):
 
 
 class MemberAddRequest(LiteLLMPydanticObjectBase):
-    member: Union[List[Member], Member]
+    member: Union[List[Member], Member] = Field(
+        description="Member object or list of member objects to add. Each member must include either user_id or user_email, and a role"
+    )
 
     def __init__(self, **data):
         member_data = data.get("member")
@@ -2581,8 +2569,27 @@ class MemberUpdateResponse(LiteLLMPydanticObjectBase):
 
 # Team Member Requests
 class TeamMemberAddRequest(MemberAddRequest):
-    team_id: str
-    max_budget_in_team: Optional[float] = None  # Users max budget within the team
+    """
+    Request body for adding members to a team.
+
+    Example:
+    ```json
+    {
+        "team_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849",
+        "member": {
+            "role": "user",
+            "user_id": "user123"
+        },
+        "max_budget_in_team": 100.0
+    }
+    ```
+    """
+
+    team_id: str = Field(description="The ID of the team to add the member to")
+    max_budget_in_team: Optional[float] = Field(
+        default=None,
+        description="Maximum budget allocated to this user within the team. If not set, user has unlimited budget within team limits",
+    )
 
 
 class TeamMemberDeleteRequest(MemberDeleteRequest):
@@ -2705,6 +2712,7 @@ class SpecialHeaders(enum.Enum):
     azure_apim_authorization = "Ocp-Apim-Subscription-Key"
     custom_litellm_api_key = "x-litellm-api-key"
     mcp_auth = "x-mcp-auth"
+    mcp_servers = "x-mcp-servers"
 
 
 class LitellmDataForBackendLLMCall(TypedDict, total=False):
@@ -2881,6 +2889,11 @@ class RoleMapping(BaseModel):
     internal_role: RBAC_ROLES
 
 
+class JWTLiteLLMRoleMap(BaseModel):
+    jwt_role: str
+    litellm_role: LitellmUserRoles
+
+
 class ScopeMapping(OIDCPermissions):
     scope: str
 
@@ -2952,6 +2965,11 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     enforce_scope_based_access: bool = False
     enforce_team_based_model_access: bool = False
     custom_validate: Optional[Callable[..., Literal[True]]] = None
+    #########################################################
+    # Fields for syncing user team membership and roles with IDP provider
+    jwt_litellm_role_map: Optional[List[JWTLiteLLMRoleMap]] = None
+    sync_user_role_and_teams: bool = False
+    #########################################################
 
     def __init__(self, **kwargs: Any) -> None:
         # get the attribute names for this Pydantic model
@@ -3049,8 +3067,9 @@ class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
 class BaseDailySpendTransaction(TypedDict):
     date: str
     api_key: str
-    model: str
+    model: Optional[str]
     model_group: Optional[str]
+    mcp_namespaced_tool_name: Optional[str]
     custom_llm_provider: Optional[str]
 
     # token count metrics

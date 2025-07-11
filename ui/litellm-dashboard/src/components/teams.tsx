@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { Typography } from "antd";
-import { teamDeleteCall, teamUpdateCall, teamInfoCall, Organization, DEFAULT_ORGANIZATION } from "./networking";
+import { teamDeleteCall, teamUpdateCall, teamInfoCall, Organization, DEFAULT_ORGANIZATION, fetchMCPAccessGroups } from "./networking";
 import TeamMemberModal from "@/components/team/edit_membership";
 import { fetchTeams } from "./common_components/fetch_teams";
 import {
@@ -60,7 +60,9 @@ import AvailableTeamsPanel from "@/components/team/available_teams";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import PremiumVectorStoreSelector from "./common_components/PremiumVectorStoreSelector";
 import PremiumMCPSelector from "./common_components/PremiumMCPSelector";
+import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
 import type { KeyResponse, Team } from "./key_team_helpers/key_list";
+import { formatNumberWithCommas } from "../utils/dataUtils";
 
 interface TeamProps {
   teams: Team[] | null;
@@ -181,6 +183,9 @@ const Teams: React.FC<TeamProps> = ({
   // Add this state near the other useState declarations
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
+  const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
+  const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
+  const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
 
   useEffect(() => {
     console.log(`currentOrgForCreateTeam: ${currentOrgForCreateTeam}`);
@@ -211,6 +216,22 @@ const Teams: React.FC<TeamProps> = ({
     fetchGuardrails();
   }, [accessToken]);
 
+  const fetchMcpAccessGroups = async () => {
+    try {
+      if (accessToken == null) {
+        return;
+      }
+      const groups = await fetchMCPAccessGroups(accessToken);
+      setMcpAccessGroups(groups);
+    } catch (error) {
+      console.error("Failed to fetch MCP access groups:", error);
+    }
+  };
+
+  useEffect(() => {
+    fetchMcpAccessGroups();
+  }, [accessToken]);
+
   useEffect(() => {
     const fetchTeamInfo = () => {
       if (!teams) return;
@@ -234,6 +255,7 @@ const Teams: React.FC<TeamProps> = ({
   const handleOk = () => {
     setIsTeamModalVisible(false);
     form.resetFields();
+    setLoggingSettings([]);
   };
 
   const handleMemberOk = () => {
@@ -244,8 +266,8 @@ const Teams: React.FC<TeamProps> = ({
 
   const handleCancel = () => {
     setIsTeamModalVisible(false);
-
     form.resetFields();
+    setLoggingSettings([]);
   };
 
   const handleMemberCancel = () => {
@@ -325,6 +347,27 @@ const Teams: React.FC<TeamProps> = ({
         }
 
         message.info("Creating Team");
+        
+        // Handle logging settings in metadata
+        if (loggingSettings.length > 0) {
+          let metadata = {};
+          if (formValues.metadata) {
+            try {
+              metadata = JSON.parse(formValues.metadata);
+            } catch (e) {
+              console.warn("Invalid JSON in metadata field, starting with empty object");
+            }
+          }
+          
+          // Add logging settings to metadata
+          metadata = {
+            ...metadata,
+            logging: loggingSettings.filter(config => config.callback_name) // Only include configs with callback_name
+          };
+          
+          formValues.metadata = JSON.stringify(metadata);
+        }
+        
         // Transform allowed_vector_store_ids and allowed_mcp_server_ids into object_permission
         if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
           formValues.object_permission = {
@@ -341,6 +384,15 @@ const Teams: React.FC<TeamProps> = ({
           formValues.object_permission.mcp_servers = formValues.allowed_mcp_server_ids;
           delete formValues.allowed_mcp_server_ids;
         }
+
+        // Transform allowed_mcp_access_groups into object_permission
+        if (formValues.allowed_mcp_access_groups && formValues.allowed_mcp_access_groups.length > 0) {
+          if (!formValues.object_permission) {
+            formValues.object_permission = {};
+          }
+          formValues.object_permission.mcp_access_groups = formValues.allowed_mcp_access_groups;
+          delete formValues.allowed_mcp_access_groups;
+        }
         const response: any = await teamCreateCall(accessToken, formValues);
         if (teams !== null) {
           setTeams([...teams, response]);
@@ -350,6 +402,7 @@ const Teams: React.FC<TeamProps> = ({
         console.log(`response for team create call: ${response}`);
         message.success("Team created");
         form.resetFields();
+        setLoggingSettings([]);
         setIsTeamModalVisible(false);
       }
     } catch (error) {
@@ -700,7 +753,7 @@ const Teams: React.FC<TeamProps> = ({
                             overflow: "hidden",
                           }}
                         >
-                          {Number(team["spend"]).toFixed(4)}
+                          {formatNumberWithCommas(team["spend"], 4)}
                         </TableCell>
                         <TableCell
                           style={{
@@ -911,7 +964,7 @@ const Teams: React.FC<TeamProps> = ({
                 <Modal
                   title="Create Team"
                   visible={isTeamModalVisible}
-                  width={800}
+                  width={1000}
                   footer={null}
                   onOk={handleOk}
                   onCancel={handleCancel}
@@ -1036,7 +1089,7 @@ const Teams: React.FC<TeamProps> = ({
                         <NumericalInput step={1} width={400} />
                       </Form.Item>
 
-                      <Accordion className="mt-20 mb-8">
+                      <Accordion className="mt-20 mb-8" onClick={() => { if (!mcpAccessGroupsLoaded) { fetchMcpAccessGroups(); setMcpAccessGroupsLoaded(true); } }}>
                         <AccordionHeader>
                           <b>Additional Settings</b>
                         </AccordionHeader>
@@ -1126,23 +1179,38 @@ const Teams: React.FC<TeamProps> = ({
                             label={
                               <span>
                                 Allowed MCP Servers{' '}
-                                <Tooltip title="Select which MCP servers this team can access by default. Leave empty for access to all MCP servers">
+                                <Tooltip title="Select which MCP servers or access groups this team can access by default. Leave empty for access to all.">
                                   <InfoCircleOutlined style={{ marginLeft: '4px' }} />
                                 </Tooltip>
                               </span>
                             }
-                            name="allowed_mcp_server_ids"
+                            name="allowed_mcp_servers_and_groups"
                             className="mt-8"
-                            help="Select MCP servers this team can access. Leave empty for access to all MCP servers"
+                            help="Select MCP servers or access groups this team can access. Leave empty for access to all."
                           >
                             <PremiumMCPSelector
-                              onChange={(values) => form.setFieldValue('allowed_mcp_server_ids', values)}
-                              value={form.getFieldValue('allowed_mcp_server_ids')}
+                              onChange={val => form.setFieldValue('allowed_mcp_servers_and_groups', val)}
+                              value={form.getFieldValue('allowed_mcp_servers_and_groups')}
                               accessToken={accessToken || ''}
-                              placeholder="Select MCP servers (optional)"
+                              placeholder="Select MCP servers or access groups (optional)"
                               premiumUser={premiumUser}
                             />
                           </Form.Item>
+                        </AccordionBody>
+                      </Accordion>
+
+                      <Accordion className="mt-8 mb-8">
+                        <AccordionHeader>
+                          <b>Logging Settings</b>
+                        </AccordionHeader>
+                        <AccordionBody>
+                          <div className="mt-4">
+                            <PremiumLoggingSettings
+                              value={loggingSettings}
+                              onChange={setLoggingSettings}
+                              premiumUser={premiumUser}
+                            />
+                          </div>
                         </AccordionBody>
                       </Accordion>
                     </>

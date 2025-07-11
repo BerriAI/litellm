@@ -211,6 +211,7 @@ def test_add_headers_to_request(litellm_key_header_name):
         "Authorization": "Bearer 1234",
         "X-Custom-Header": "Custom-Value",
         "X-Stainless-Header": "Stainless-Value",
+        "anthropic-beta": "beta-value",
     }
     request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")
@@ -219,7 +220,10 @@ def test_add_headers_to_request(litellm_key_header_name):
     forwarded_headers = LiteLLMProxyRequestSetup._get_forwardable_headers(
         request_headers
     )
-    assert forwarded_headers == {"X-Custom-Header": "Custom-Value"}
+    assert forwarded_headers == {
+        "X-Custom-Header": "Custom-Value",
+        "anthropic-beta": "beta-value",
+    }
 
 
 @pytest.mark.parametrize(

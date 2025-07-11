@@ -320,7 +320,7 @@ async def test_get_all_team_models():
     # Mock router
     mock_router = MagicMock()
 
-    def mock_get_model_list(model_name):
+    def mock_get_model_list(model_name, team_id=None):
         if model_name == "gpt-4":
             return mock_models_gpt4
         elif model_name == "gpt-3.5-turbo":
@@ -355,10 +355,10 @@ async def test_get_all_team_models():
 
         # Verify router.get_model_list was called for each model
         expected_calls = [
-            mock.call(model_name="gpt-4"),
-            mock.call(model_name="gpt-3.5-turbo"),
-            mock.call(model_name="claude-3"),
-            mock.call(model_name="gpt-4"),  # Called again for team2
+            mock.call(model_name="gpt-4", team_id="team1"),
+            mock.call(model_name="gpt-3.5-turbo", team_id="team1"),
+            mock.call(model_name="claude-3", team_id="team2"),
+            mock.call(model_name="gpt-4", team_id="team2"),
         ]
         mock_router.get_model_list.assert_has_calls(expected_calls, any_order=True)
 
@@ -386,8 +386,8 @@ async def test_get_all_team_models():
 
         # Verify router.get_model_list was called only for team1 models
         expected_calls = [
-            mock.call(model_name="gpt-4"),
-            mock.call(model_name="gpt-3.5-turbo"),
+            mock.call(model_name="gpt-4", team_id="team1"),
+            mock.call(model_name="gpt-3.5-turbo", team_id="team1"),
         ]
         mock_router.get_model_list.assert_has_calls(expected_calls, any_order=True)
 
@@ -413,7 +413,7 @@ async def test_get_all_team_models():
     mock_router.reset_mock()
     mock_litellm_teamtable.find_many.return_value = [mock_team1]
 
-    def mock_get_model_list_with_none(model_name):
+    def mock_get_model_list_with_none(model_name, team_id=None):
         if model_name == "gpt-4":
             return mock_models_gpt4
         # Return None for gpt-3.5-turbo to test None handling
@@ -458,3 +458,366 @@ def test_add_team_models_to_all_models():
         llm_router=llm_router,
     )
     assert result == {"gpt-4-model-2": {"team1"}}
+
+
+@pytest.mark.asyncio
+async def test_delete_deployment_type_mismatch():
+    """
+    Test that the _delete_deployment function handles type mismatches correctly.
+    Specifically test that models 12345678 and 12345679 are NOT deleted when
+    they exist in both combined_id_list (as integers) and router_model_ids (as strings).
+
+    This test reproduces the bug where type mismatch causes valid models to be deleted.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    # Create mock ProxyConfig instance
+    pc = ProxyConfig()
+
+    pc.get_config = MagicMock(
+        return_value={
+            "model_list": [
+                {
+                    "model_name": "openai-gpt-4o",
+                    "litellm_params": {"model": "gpt-4o"},
+                    "model_info": {"id": 12345678},
+                },
+                {
+                    "model_name": "openai-gpt-4o",
+                    "litellm_params": {"model": "gpt-4o"},
+                    "model_info": {"id": 12345679},
+                },
+            ]
+        }
+    )
+
+    # Mock llm_router with string IDs (this is the source of the type mismatch)
+    mock_llm_router = MagicMock()
+    mock_llm_router.get_model_ids.return_value = [
+        "a96e12e76b36a57cfae57a41288eb41567629cac89b4828c6f7074afc3534695",
+        "a40186dd0fdb9b7282380277d7f57044d29de95bfbfcd7f4322b3493702d5cd3",
+        "12345678",  # String ID
+        "12345679",  # String ID
+    ]
+
+    # Track which deployments were deleted
+    deleted_ids = []
+
+    def mock_delete_deployment(id):
+        deleted_ids.append(id)
+        return True  # Simulate successful deletion
+
+    mock_llm_router.delete_deployment = MagicMock(side_effect=mock_delete_deployment)
+
+    # Mock get_config to return empty config (no config models)
+    async def mock_get_config(config_file_path):
+        return {}
+
+    pc.get_config = MagicMock(side_effect=mock_get_config)
+
+    # Patch the global llm_router
+    with patch("litellm.proxy.proxy_server.llm_router", mock_llm_router), patch(
+        "litellm.proxy.proxy_server.user_config_file_path", "test_config.yaml"
+    ):
+
+        # Call the function under test
+        deleted_count = await pc._delete_deployment(db_models=[])
+
+        # Assertions: Models 12345678 and 12345679 should NOT be deleted
+        # because they exist in combined_id_list (as integers) even though
+        # router has them as strings
+
+        # The function should delete the other 2 models that are not in combined_id_list
+        assert deleted_count == 0, f"Expected 0 deletions, got {deleted_count}"
+
+        # Verify that 12345678 and 12345679 were NOT deleted
+        assert (
+            "12345678" not in deleted_ids
+        ), f"Model 12345678 should NOT be deleted. Deleted IDs: {deleted_ids}"
+        assert (
+            "12345679" not in deleted_ids
+        ), f"Model 12345679 should NOT be deleted. Deleted IDs: {deleted_ids}"
+
+
+@pytest.mark.asyncio
+async def test_get_config_from_file(tmp_path, monkeypatch):
+    """
+    Test the _get_config_from_file method of ProxyConfig class.
+    Tests various scenarios: valid file, non-existent file, no file path, None config.
+    """
+    import yaml
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    # Create a ProxyConfig instance
+    proxy_config = ProxyConfig()
+
+    # Test Case 1: Valid YAML config file exists
+    test_config = {
+        "model_list": [{"model_name": "gpt-4", "litellm_params": {"model": "gpt-4"}}],
+        "general_settings": {"master_key": "sk-test"},
+        "router_settings": {"enable_pre_call_checks": True},
+        "litellm_settings": {"drop_params": True},
+    }
+
+    config_file = tmp_path / "test_config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(test_config, f)
+
+    # Clear global user_config_file_path for this test
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_config_file_path", None)
+
+    result = await proxy_config._get_config_from_file(str(config_file))
+    assert result == test_config
+
+    # Verify that user_config_file_path was set
+    from litellm.proxy.proxy_server import user_config_file_path
+
+    assert user_config_file_path == str(config_file)
+
+    # Test Case 2: File path provided but file doesn't exist
+    non_existent_file = tmp_path / "non_existent.yaml"
+
+    with pytest.raises(Exception, match=f"Config file not found: {non_existent_file}"):
+        await proxy_config._get_config_from_file(str(non_existent_file))
+
+    # Test Case 3: No file path provided (should return default config)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_config_file_path", None)
+
+    expected_default = {
+        "model_list": [],
+        "general_settings": {},
+        "router_settings": {},
+        "litellm_settings": {},
+    }
+
+    result = await proxy_config._get_config_from_file(None)
+    assert result == expected_default
+
+    # Test Case 4: Empty YAML file (should raise exception for None config)
+    empty_file = tmp_path / "empty_config.yaml"
+    with open(empty_file, "w") as f:
+        f.write("")  # Write empty content which will result in None when loaded
+
+    with pytest.raises(Exception, match="Config cannot be None or Empty."):
+        await proxy_config._get_config_from_file(str(empty_file))
+
+    # Test Case 5: Using global user_config_file_path when no config_file_path provided
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_config_file_path", str(config_file)
+    )
+
+    result = await proxy_config._get_config_from_file(None)
+    assert result == test_config
+
+
+@pytest.mark.asyncio
+async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
+    """
+    Test that _add_proxy_budget_to_db only creates a user and no keys are added.
+    
+    This validates that generate_key_helper_fn is called with table_name="user" 
+    which should prevent key creation in LiteLLM_VerificationToken table.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    import litellm
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    # Set up required litellm settings
+    litellm.budget_duration = "30d"
+    litellm.max_budget = 100.0
+    
+    litellm_proxy_budget_name = "litellm-proxy-budget"
+
+    # Mock generate_key_helper_fn to capture its call arguments
+    mock_generate_key_helper = AsyncMock(return_value={
+        "user_id": litellm_proxy_budget_name,
+        "max_budget": 100.0,
+        "budget_duration": "30d",
+        "spend": 0,
+        "models": [],
+    })
+    
+    # Patch generate_key_helper_fn in proxy_server where it's being called from
+    with patch("litellm.proxy.proxy_server.generate_key_helper_fn", mock_generate_key_helper):
+        # Call the function under test
+        ProxyStartupEvent._add_proxy_budget_to_db(litellm_proxy_budget_name)
+        
+        # Allow async task to complete
+        import asyncio
+        await asyncio.sleep(0.1)
+        
+        # Verify that generate_key_helper_fn was called
+        mock_generate_key_helper.assert_called_once()
+        call_args = mock_generate_key_helper.call_args
+        
+        # Verify critical parameters that prevent key creation
+        assert call_args.kwargs["request_type"] == "user"
+        assert call_args.kwargs["table_name"] == "user"
+        assert call_args.kwargs["user_id"] == litellm_proxy_budget_name
+        assert call_args.kwargs["max_budget"] == 100.0
+        assert call_args.kwargs["budget_duration"] == "30d"
+        assert call_args.kwargs["query_type"] == "update_data"
+
+
+@pytest.mark.asyncio
+async def test_custom_ui_sso_sign_in_handler_config_loading():
+    """
+    Test that custom_ui_sso_sign_in_handler from config gets properly loaded into the global variable
+    """
+    import tempfile
+    from unittest.mock import MagicMock, patch
+
+    import yaml
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    # Create a test config with custom_ui_sso_sign_in_handler
+    test_config = {
+        "general_settings": {
+            "custom_ui_sso_sign_in_handler": "custom_hooks.custom_ui_sso_hook.custom_ui_sso_sign_in_handler"
+        },
+        "model_list": [],
+        "router_settings": {},
+        "litellm_settings": {}
+    }
+
+    # Create temporary config file
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        yaml.dump(test_config, f)
+        config_file_path = f.name
+
+    # Mock the get_instance_fn to return a mock handler
+    mock_custom_handler = MagicMock()
+    
+    try:
+        with patch("litellm.proxy.proxy_server.get_instance_fn", return_value=mock_custom_handler) as mock_get_instance:
+            # Create ProxyConfig instance and load config
+            proxy_config = ProxyConfig()
+            # Create a mock router since load_config requires it
+            mock_router = MagicMock()
+            await proxy_config.load_config(router=mock_router, config_file_path=config_file_path)
+            
+            # Verify get_instance_fn was called with correct parameters
+            mock_get_instance.assert_called_with(
+                value="custom_hooks.custom_ui_sso_hook.custom_ui_sso_sign_in_handler",
+                config_file_path=config_file_path
+            )
+            
+            # Verify the global variable was set
+            from litellm.proxy.proxy_server import user_custom_ui_sso_sign_in_handler
+            assert user_custom_ui_sso_sign_in_handler == mock_custom_handler
+            
+    finally:
+        # Clean up temporary file
+        import os
+        os.unlink(config_file_path)
+
+
+@pytest.mark.asyncio
+async def test_load_environment_variables_direct_and_os_environ():
+    """
+    Test _load_environment_variables method with direct values and os.environ/ prefixed values
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    
+    # Test config with both direct values and os.environ/ prefixed values
+    test_config = {
+        "environment_variables": {
+            "DIRECT_VAR": "direct_value",
+            "NUMERIC_VAR": 12345,
+            "BOOL_VAR": True,
+            "SECRET_VAR": "os.environ/ACTUAL_SECRET_VAR"
+        }
+    }
+    
+    # Mock get_secret_str to return a resolved value
+    mock_secret_value = "resolved_secret_value"
+    
+    with patch("litellm.proxy.proxy_server.get_secret_str", return_value=mock_secret_value) as mock_get_secret:
+        with patch.dict(os.environ, {}, clear=False):  # Don't clear existing env vars, just track changes
+            # Call the method under test
+            proxy_config._load_environment_variables(test_config)
+            
+            # Verify direct environment variables were set correctly
+            assert os.environ["DIRECT_VAR"] == "direct_value"
+            assert os.environ["NUMERIC_VAR"] == "12345"  # Should be converted to string
+            assert os.environ["BOOL_VAR"] == "True"  # Should be converted to string
+            
+            # Verify os.environ/ prefixed variable was resolved and set
+            assert os.environ["SECRET_VAR"] == mock_secret_value
+            
+            # Verify get_secret_str was called with the correct value
+            mock_get_secret.assert_called_once_with(secret_name="os.environ/ACTUAL_SECRET_VAR")
+
+
+@pytest.mark.asyncio
+async def test_load_environment_variables_litellm_license_and_edge_cases():
+    """
+    Test _load_environment_variables method with LITELLM_LICENSE special handling and edge cases
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    
+    # Test Case 1: LITELLM_LICENSE in environment_variables
+    test_config_with_license = {
+        "environment_variables": {
+            "LITELLM_LICENSE": "test_license_key",
+            "OTHER_VAR": "other_value"
+        }
+    }
+    
+    # Mock _license_check
+    mock_license_check = MagicMock()
+    mock_license_check.is_premium.return_value = True
+    
+    with patch("litellm.proxy.proxy_server._license_check", mock_license_check):
+        with patch.dict(os.environ, {}, clear=False):
+            # Call the method under test
+            proxy_config._load_environment_variables(test_config_with_license)
+            
+            # Verify LITELLM_LICENSE was set in environment
+            assert os.environ["LITELLM_LICENSE"] == "test_license_key"
+            
+            # Verify license check was updated
+            assert mock_license_check.license_str == "test_license_key"
+            mock_license_check.is_premium.assert_called_once()
+    
+    # Test Case 2: No environment_variables in config
+    test_config_no_env_vars = {}
+    
+    # This should not raise any errors and should return without doing anything
+    result = proxy_config._load_environment_variables(test_config_no_env_vars)
+    assert result is None  # Method returns None
+    
+    # Test Case 3: environment_variables is None
+    test_config_none_env_vars = {"environment_variables": None}
+    
+    # This should not raise any errors and should return without doing anything
+    result = proxy_config._load_environment_variables(test_config_none_env_vars)
+    assert result is None  # Method returns None
+    
+    # Test Case 4: os.environ/ prefix but get_secret_str returns None
+    test_config_secret_none = {
+        "environment_variables": {
+            "FAILED_SECRET": "os.environ/NONEXISTENT_SECRET"
+        }
+    }
+    
+    with patch("litellm.proxy.proxy_server.get_secret_str", return_value=None):
+        with patch.dict(os.environ, {}, clear=False):
+            # Call the method under test
+            proxy_config._load_environment_variables(test_config_secret_none)
+            
+            # Verify that the environment variable was not set when secret resolution fails
+            assert "FAILED_SECRET" not in os.environ

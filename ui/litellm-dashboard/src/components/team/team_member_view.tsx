@@ -18,6 +18,7 @@ import {
     TeamData,
 } from './team_info';
 import { PencilAltIcon, PlusIcon, TrashIcon } from "@heroicons/react/outline";
+import { formatNumberWithCommas } from '@/utils/dataUtils';
 
 interface TeamMembersComponentProps {
   teamData: TeamData;
@@ -50,7 +51,7 @@ const TeamMembersComponent: React.FC<TeamMembersComponentProps> = ({
       }
       
       // For decimal numbers, use toFixed and remove trailing zeros
-      return normalNumber.toFixed(8).replace(/\.?0+$/, '');
+      return formatNumberWithCommas(normalNumber, 8).replace(/\.?0+$/, '');
     }
     
     return '0';
@@ -67,7 +68,11 @@ const TeamMembersComponent: React.FC<TeamMembersComponentProps> = ({
     if (!userId) return null;
     const membership = teamData.team_memberships.find(tm => tm.user_id === userId);
     console.log(`membership=${membership}`);
-    return formatNumber(membership?.litellm_budget_table?.max_budget || null);
+    const maxBudget = membership?.litellm_budget_table?.max_budget;
+    if (maxBudget === null || maxBudget === undefined) {
+      return null;
+    }
+    return formatNumber(maxBudget);
   };
 
   return (
@@ -103,10 +108,10 @@ const TeamMembersComponent: React.FC<TeamMembersComponentProps> = ({
                   <Text className="font-mono">{member.role}</Text>
                 </TableCell>
                 <TableCell>
-                  <Text className="font-mono">${formatNumber(getUserSpend(member.user_id))}</Text>
+                  <Text className="font-mono">${formatNumberWithCommas(getUserSpend(member.user_id), 4)}</Text>
                 </TableCell>
                 <TableCell>
-                  <Text className="font-mono">{getUserBudget(member.user_id) ? `$${getUserBudget(member.user_id)}` : 'No Limit'}</Text>
+                  <Text className="font-mono">{getUserBudget(member.user_id) ? `$${formatNumberWithCommas(Number(getUserBudget(member.user_id)), 4)}` : 'No Limit'}</Text>
                 </TableCell>
                 <TableCell>
                   {canEditTeam && (
