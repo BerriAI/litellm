@@ -1076,29 +1076,35 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         from litellm.types.llms.base import HiddenParams
         from litellm.types.mcp import MCPPostCallResponseObject
+
         callbacks = self.get_combined_callback_list(
             dynamic_success_callbacks=self.dynamic_success_callbacks,
             global_callbacks=litellm.success_callback,
         )
-        post_mcp_tool_call_response_obj: MCPPostCallResponseObject = MCPPostCallResponseObject(
-            mcp_tool_call_response=response_obj,
-            hidden_params=HiddenParams()
+        post_mcp_tool_call_response_obj: MCPPostCallResponseObject = (
+            MCPPostCallResponseObject(
+                mcp_tool_call_response=response_obj, hidden_params=HiddenParams()
+            )
         )
         for callback in callbacks:
             try:
                 if isinstance(callback, CustomLogger):
-                    response: Optional[MCPPostCallResponseObject] = await callback.async_post_mcp_tool_call_hook(
-                        kwargs=kwargs,
-                        response_obj=post_mcp_tool_call_response_obj,
-                        start_time=start_time,
-                        end_time=end_time,
+                    response: Optional[MCPPostCallResponseObject] = (
+                        await callback.async_post_mcp_tool_call_hook(
+                            kwargs=kwargs,
+                            response_obj=post_mcp_tool_call_response_obj,
+                            start_time=start_time,
+                            end_time=end_time,
+                        )
                     )
                     ######################################################################
                     # if any of the callbacks modify the response, use the modified response
                     # current implementation returns the first modified response
                     ######################################################################
                     if response is not None:
-                        response_obj = self._parse_post_mcp_call_hook_response(response=response)
+                        response_obj = self._parse_post_mcp_call_hook_response(
+                            response=response
+                        )
             except Exception as e:
                 verbose_logger.exception(
                     "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {}".format(
@@ -1107,7 +1113,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
         return response_obj
 
-    def _parse_post_mcp_call_hook_response(self, response: Optional[MCPPostCallResponseObject]) -> Any:
+    def _parse_post_mcp_call_hook_response(
+        self, response: Optional[MCPPostCallResponseObject]
+    ) -> Any:
         """
         Parse the response from the post_mcp_tool_call_hook
 
@@ -1404,7 +1412,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 and result is not None
                 and self.stream is not True
             ):
-                if self._is_recognized_call_type_for_logging(logging_result=logging_result):
+                if self._is_recognized_call_type_for_logging(
+                    logging_result=logging_result
+                ):
                     ## HIDDEN PARAMS ##
                     hidden_params = getattr(logging_result, "_hidden_params", {})
                     if hidden_params:
@@ -1500,7 +1510,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return start_time, end_time, result
         except Exception as e:
             raise Exception(f"[Non-Blocking] LiteLLM.Success_Call Error: {str(e)}")
-    
+
     def _is_recognized_call_type_for_logging(
         self,
         logging_result: Any,
@@ -1523,9 +1533,7 @@ class Logging(LiteLLMLoggingBaseClass):
             or isinstance(logging_result, OpenAIFileObject)
             or isinstance(logging_result, LiteLLMRealtimeStreamLoggingObject)
             or isinstance(logging_result, OpenAIModerationResponse)
-            or (
-                self.call_type == CallTypes.call_mcp_tool.value
-            )
+            or (self.call_type == CallTypes.call_mcp_tool.value)
         ):
             return True
         return False
