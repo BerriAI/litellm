@@ -78,6 +78,8 @@ class MCPServerManager:
         """
         verbose_logger.debug("Loading MCP Servers from config-----")
         for server_name, server_config in mcp_servers_config.items():
+            if '-' in server_name:
+                raise Exception(f"Server name cannot contain '-' (hyphen). Please use '_' (underscore) instead. Found: {server_name}")
             _mcp_info: dict = server_config.get("mcp_info", None) or {}
             mcp_info = MCPInfo(**_mcp_info)
             mcp_info["server_name"] = server_name
