@@ -237,6 +237,7 @@ async def new_team(  # noqa: PLR0915
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
 ):
+    print(f"NEWWW TEAM DATA object_permission: {data.object_permission}")
     """
     Allow users to create a new team. Apply user permissions to their team.
 
@@ -406,11 +407,14 @@ async def new_team(  # noqa: PLR0915
 
             _model_id = model_dict.id
 
+
+        print(f"NEWWW TEAM DATA: {data}")
         ## Handle Object Permission - MCP, Vector Stores etc.
         object_permission_id = await _set_object_permission(
             data=data,
             prisma_client=prisma_client,
         )
+        print(f"NEWWW TEAM DATA object_permission_id: {object_permission_id}")
 
         ## Create Team Member Budget Table
         data_json = data.json()

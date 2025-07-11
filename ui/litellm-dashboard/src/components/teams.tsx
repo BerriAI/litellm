@@ -368,30 +368,26 @@ const Teams: React.FC<TeamProps> = ({
           formValues.metadata = JSON.stringify(metadata);
         }
         
-        // Transform allowed_vector_store_ids and allowed_mcp_server_ids into object_permission
-        if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
-          formValues.object_permission = {
-            vector_stores: formValues.allowed_vector_store_ids
-          };
-          delete formValues.allowed_vector_store_ids;
-        }
-
-        // Transform allowed_mcp_server_ids into object_permission
-        if (formValues.allowed_mcp_server_ids && formValues.allowed_mcp_server_ids.length > 0) {
-          if (!formValues.object_permission) {
-            formValues.object_permission = {};
+        // Transform allowed_vector_store_ids and allowed_mcp_servers_and_groups into object_permission
+        if (
+          (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) ||
+          (formValues.allowed_mcp_servers_and_groups && (formValues.allowed_mcp_servers_and_groups.servers?.length > 0 || formValues.allowed_mcp_servers_and_groups.accessGroups?.length > 0))
+        ) {
+          formValues.object_permission = {};
+          if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
+            formValues.object_permission.vector_stores = formValues.allowed_vector_store_ids;
+            delete formValues.allowed_vector_store_ids;
           }
-          formValues.object_permission.mcp_servers = formValues.allowed_mcp_server_ids;
-          delete formValues.allowed_mcp_server_ids;
-        }
-
-        // Transform allowed_mcp_access_groups into object_permission
-        if (formValues.allowed_mcp_access_groups && formValues.allowed_mcp_access_groups.length > 0) {
-          if (!formValues.object_permission) {
-            formValues.object_permission = {};
+          if (formValues.allowed_mcp_servers_and_groups) {
+            const { servers, accessGroups } = formValues.allowed_mcp_servers_and_groups;
+            if (servers && servers.length > 0) {
+              formValues.object_permission.mcp_servers = servers;
+            }
+            if (accessGroups && accessGroups.length > 0) {
+              formValues.object_permission.mcp_access_groups = accessGroups;
+            }
+            delete formValues.allowed_mcp_servers_and_groups;
           }
-          formValues.object_permission.mcp_access_groups = formValues.allowed_mcp_access_groups;
-          delete formValues.allowed_mcp_access_groups;
         }
         const response: any = await teamCreateCall(accessToken, formValues);
         if (teams !== null) {

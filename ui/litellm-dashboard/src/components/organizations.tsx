@@ -111,21 +111,20 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
 
       console.log(`values in organizations new create call: ${JSON.stringify(values)}`);
 
-      // Transform allowed_vector_store_ids into object_permission
-      if (values.allowed_vector_store_ids && values.allowed_vector_store_ids.length > 0) {
-        values.object_permission = {
-          vector_stores: values.allowed_vector_store_ids
-        };
-        delete values.allowed_vector_store_ids;
-      }
-
-      // Transform allowed_mcp_server_ids into object_permission
-      if (values.allowed_mcp_server_ids && values.allowed_mcp_server_ids.length > 0) {
-        if (!values.object_permission) {
-          values.object_permission = {};
+      // Transform allowed_vector_store_ids and allowed_mcp_server_ids into object_permission
+      if (
+        (values.allowed_vector_store_ids && values.allowed_vector_store_ids.length > 0) ||
+        (values.allowed_mcp_server_ids && values.allowed_mcp_server_ids.length > 0)
+      ) {
+        values.object_permission = {};
+        if (values.allowed_vector_store_ids && values.allowed_vector_store_ids.length > 0) {
+          values.object_permission.vector_stores = values.allowed_vector_store_ids;
+          delete values.allowed_vector_store_ids;
         }
-        values.object_permission.mcp_servers = values.allowed_mcp_server_ids;
-        delete values.allowed_mcp_server_ids;
+        if (values.allowed_mcp_server_ids && values.allowed_mcp_server_ids.length > 0) {
+          values.object_permission.mcp_servers = values.allowed_mcp_server_ids;
+          delete values.allowed_mcp_server_ids;
+        }
       }
 
       await organizationCreateCall(accessToken, values);
@@ -579,10 +578,10 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                       help="Select MCP servers this organization can access. Leave empty for access to all MCP servers"
                     >
                       <MCPServerSelector
-                        onChange={(values) => form.setFieldValue('allowed_vector_store_ids', values)}
-                        value={form.getFieldValue('allowed_vector_store_ids')}
+                        onChange={(values) => form.setFieldValue('allowed_mcp_server_ids', values)}
+                        value={form.getFieldValue('allowed_mcp_server_ids')}
                         accessToken={accessToken || ''}
-                        placeholder="Select vector stores (optional)"
+                        placeholder="Select MCP servers (optional)"
                       />
                     </Form.Item>
 

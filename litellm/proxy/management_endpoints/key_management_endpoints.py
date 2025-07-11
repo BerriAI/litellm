@@ -808,10 +808,12 @@ async def _set_object_permission(
     Creates the LiteLLM_ObjectPermissionTable record for the key.
     - Handles permissions for vector stores and mcp servers.
     """
+    from litellm._logging import verbose_proxy_logger
     if prisma_client is None:
         return data_json
 
     if "object_permission" in data_json:
+        verbose_proxy_logger.info(f"[object_permission] Creating object_permission: {data_json['object_permission']}")
         created_object_permission = (
             await prisma_client.db.litellm_objectpermissiontable.create(
                 data=data_json["object_permission"],
@@ -820,9 +822,11 @@ async def _set_object_permission(
         data_json["object_permission_id"] = (
             created_object_permission.object_permission_id
         )
-
+        verbose_proxy_logger.info(f"[object_permission] Set object_permission_id: {data_json['object_permission_id']}")
         # delete the object_permission from the data_json
         data_json.pop("object_permission")
+    else:
+        verbose_proxy_logger.info("[object_permission] No object_permission in data_json, skipping creation.")
     return data_json
 
 
