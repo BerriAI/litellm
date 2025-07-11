@@ -6,12 +6,18 @@ interface PremiumLoggingSettingsProps {
   value: any[];
   onChange: (settings: any[]) => void;
   premiumUser?: boolean;
+  disabledCallbacks?: string[];
+  onDisabledCallbacksChange?: (disabled: string[]) => void;
+  accessToken?: string;
 }
 
 export function PremiumLoggingSettings({
   value,
   onChange,
-  premiumUser = false
+  premiumUser = false,
+  disabledCallbacks,
+  onDisabledCallbacksChange,
+  accessToken
 }: PremiumLoggingSettingsProps) {
   if (!premiumUser) {
     return (
@@ -37,6 +43,9 @@ export function PremiumLoggingSettings({
     <LoggingSettings
       value={value}
       onChange={onChange}
+      disabledCallbacks={disabledCallbacks}
+      onDisabledCallbacksChange={onDisabledCallbacksChange}
+      accessToken={accessToken}
     />
   );
 }
