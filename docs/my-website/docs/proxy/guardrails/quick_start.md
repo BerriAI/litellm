@@ -486,7 +486,7 @@ guardrails:
       mode:
         tags:
             "User-Agent: claude-cli": "logging_only"                 # Claude CLI - only mask in logs
-        default: "logging_only"               # Default mode when no tags match
+        default: "pre_call"               # Default mode when no tags match
       api_base: os.environ/GUARDRAILS_AI_API_BASE # 👈 Guardrails AI API Base. Defaults to "http://0.0.0.0:8000"
       default_on: true
 ```
