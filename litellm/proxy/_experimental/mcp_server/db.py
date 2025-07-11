@@ -242,12 +242,21 @@ async def update_mcp_server(
     """
     Update a new mcp server record in the db
     """
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+    # json dumps mcp_info
+    mcp_info: Optional[str] = None
+    if data.mcp_info is not None:
+        mcp_info = safe_dumps(data.mcp_info)
+        del data.mcp_info
+    
     mcp_server_record = await prisma_client.db.litellm_mcpservertable.update(
         where={
             "server_id": data.server_id,
         },
         data={
             **data.model_dump(),
+            "mcp_info": mcp_info,
             "created_by": touched_by,
             "updated_by": touched_by,
         },
