@@ -119,6 +119,15 @@ export function ToolTestPanel({
     }
   };
 
+  const handleCopyToolName = async () => {
+    const success = await copyToClipboard(tool.name);
+    if (success) {
+      message.success('Tool name copied to clipboard');
+    } else {
+      message.error('Failed to copy tool name');
+    }
+  };
+
   return (
     <div className="space-y-4 h-full">
       {/* Compact Header */}
@@ -132,9 +141,31 @@ export function ToolTestPanel({
             />
           )}
           <div className="flex-1 min-w-0">
-            <h2 className="text-lg font-semibold text-gray-900">
-              Test Tool: <span className="font-mono text-blue-600">{tool.name}</span>
-            </h2>
+            <div className="flex items-center space-x-2 mb-1">
+              <h2 className="text-lg font-semibold text-gray-900">Test Tool:</h2>
+              <div 
+                className="group inline-flex items-center space-x-1 bg-slate-50 hover:bg-slate-100 px-3 py-1 rounded-md cursor-pointer transition-colors border border-slate-200"
+                onClick={handleCopyToolName}
+                title="Click to copy tool name"
+              >
+                <span className="font-mono text-slate-700 font-medium text-sm">
+                  {tool.name}
+                </span>
+                <svg 
+                  className="w-3 h-3 text-slate-400 group-hover:text-slate-600 transition-colors" 
+                  fill="none" 
+                  stroke="currentColor" 
+                  viewBox="0 0 24 24"
+                >
+                  <path 
+                    strokeLinecap="round" 
+                    strokeLinejoin="round" 
+                    strokeWidth={2} 
+                    d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" 
+                  />
+                </svg>
+              </div>
+            </div>
             <p className="text-xs text-gray-600">{tool.description}</p>
             <p className="text-xs text-gray-500">Provider: {tool.mcp_info.server_name}</p>
           </div>
