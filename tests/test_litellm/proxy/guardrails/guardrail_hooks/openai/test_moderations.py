@@ -34,6 +34,54 @@ async def test_openai_moderation_guardrail_init():
 
 
 @pytest.mark.asyncio
+async def test_openai_moderation_guardrail_adds_to_litellm_callbacks():
+    """Test that OpenAI moderation guardrail adds itself to litellm callbacks during initialization"""
+    import litellm
+    from litellm.proxy.guardrails.guardrail_hooks.openai import (
+        initialize_guardrail as openai_initialize_guardrail,
+    )
+    from litellm.types.guardrails import (
+        Guardrail,
+        LitellmParams,
+        SupportedGuardrailIntegrations,
+    )
+
+    # Clear existing callbacks for clean test
+    original_callbacks = litellm.callbacks.copy()
+    litellm.logging_callback_manager._reset_all_callbacks()
+    
+    try:
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+            guardrail_litellm_params = LitellmParams(
+                guardrail=SupportedGuardrailIntegrations.OPENAI_MODERATION,
+                api_key="test-key",
+                model="omni-moderation-latest",
+                mode="pre_call"
+            )
+            guardrail = openai_initialize_guardrail(
+                litellm_params=guardrail_litellm_params,
+                guardrail=Guardrail(
+                    guardrail_name="test-openai-moderation",
+                    litellm_params=guardrail_litellm_params
+                )
+            )
+            
+            # Check that the guardrail was added to litellm callbacks
+            assert guardrail in litellm.callbacks
+            assert len(litellm.callbacks) == 1
+            
+            # Verify it's the correct guardrail
+            callback = litellm.callbacks[0]
+            assert isinstance(callback, OpenAIModerationGuardrail)
+            assert callback.guardrail_name == "test-openai-moderation"
+    finally:
+        # Restore original callbacks
+        litellm.logging_callback_manager._reset_all_callbacks()
+        for callback in original_callbacks:
+            litellm.logging_callback_manager.add_litellm_callback(callback)
+
+
+@pytest.mark.asyncio
 async def test_openai_moderation_guardrail_safe_content():
     """Test OpenAI moderation guardrail with safe content"""
     with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
