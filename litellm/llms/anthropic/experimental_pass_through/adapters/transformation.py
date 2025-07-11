@@ -215,14 +215,14 @@ class LiteLLMAnthropicMessagesAdapter:
                                             )
                                             tool_message_list.append(tool_result)
 
+            if len(tool_message_list) > 0:
+                new_messages.extend(tool_message_list)
+
             if user_message is not None:
                 new_messages.append(user_message)
 
             if len(new_user_content_list) > 0:
                 new_messages.append({"role": "user", "content": new_user_content_list})  # type: ignore
-
-            if len(tool_message_list) > 0:
-                new_messages.extend(tool_message_list)
 
             ## ASSISTANT MESSAGE ##
             assistant_message_str: Optional[str] = None
@@ -401,7 +401,7 @@ class LiteLLMAnthropicMessagesAdapter:
                             type="tool_use",
                             id=tool_call.id,
                             name=tool_call.function.name or "",
-                            input=json.loads(tool_call.function.arguments),
+                            input=json.loads(tool_call.function.arguments) if tool_call.function.arguments else {},
                         )
                     )
             elif choice.message.content is not None:

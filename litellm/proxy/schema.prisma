@@ -155,6 +155,7 @@ model LiteLLM_UserTable {
 model LiteLLM_ObjectPermissionTable {
   object_permission_id  String         @id @default(uuid())
   mcp_servers           String[]       @default([])
+  mcp_access_groups     String[]       @default([])
   vector_stores         String[]       @default([])
   teams                 LiteLLM_TeamTable[]
   verification_tokens   LiteLLM_VerificationToken[]
@@ -176,6 +177,8 @@ model LiteLLM_MCPServerTable {
   updated_at   DateTime?      @default(now()) @updatedAt @map("updated_at")
   updated_by   String?
   mcp_info     Json?          @default("{}")
+  mcp_access_groups String[]
+
 }
 
 // Generate Tokens for Proxy

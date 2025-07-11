@@ -134,6 +134,7 @@ export interface MCPServer {
   updated_at: string;
   updated_by: string;
   teams?: Team[];
+  mcp_access_groups?: string[];
 }
 
 export interface MCPServerProps {

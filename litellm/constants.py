@@ -267,6 +267,7 @@ LITELLM_CHAT_PROVIDERS = [
     "featherless_ai",
     "nscale",
     "nebius",
+    "dashscope",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -393,6 +394,7 @@ openai_compatible_endpoints: List = [
     "api.featherless.ai/v1",
     "inference.api.nscale.com/v1",
     "api.studio.nebius.ai/v1",
+    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 ]
 
 
@@ -428,6 +430,7 @@ openai_compatible_providers: List = [
     "featherless_ai",
     "nscale",
     "nebius",
+    "dashscope"
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -438,6 +441,7 @@ openai_text_completion_compatible_providers: List = (
         "llamafile",
         "featherless_ai",
         "nebius",
+        "dashscope"
     ]
 )
 _openai_like_providers: List = [
@@ -609,6 +613,19 @@ nebius_models: List = [
     "meta-llama/Llama-3.3-70B-Instruct-fast",
     "Qwen/Qwen2.5-32B-Instruct-fast",
     "Qwen/Qwen2.5-Coder-32B-Instruct-fast",
+]
+
+dashscope_models: List = [
+    "qwen-turbo",
+    "qwen-plus",
+    "qwen-max",
+    "qwen-turbo-latest",
+    "qwen-plus-latest",
+    "qwen-max-latest",
+    "qwq-32b",
+    "qwen3-235b-a22b",
+    "qwen3-32b",
+    "qwen3-30b-a3b"
 ]
 
 nebius_embedding_models: List = [

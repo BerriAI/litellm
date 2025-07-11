@@ -7,7 +7,17 @@
 
 import json
 import os
-from typing import TYPE_CHECKING, Optional, Type, TypedDict
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Type,
+    TypedDict,
+    Union,
+)
 
 from fastapi import HTTPException
 
@@ -34,6 +44,19 @@ class GuardrailsAIResponse(TypedDict):
     validationPassed: bool
 
 
+class InferenceData(TypedDict):
+    name: str
+    shape: List[int]
+    data: List
+    datatype: str
+
+
+class GuardrailsAIResponsePreCall(TypedDict):
+    modelname: str
+    modelversion: str
+    outputs: List[InferenceData]
+
+
 class GuardrailsAI(CustomGuardrail):
     def __init__(
         self,
@@ -51,7 +74,11 @@ class GuardrailsAI(CustomGuardrail):
         )
         self.guardrails_ai_guard_name = guard_name
         self.optional_params = kwargs
-        supported_event_hooks = [GuardrailEventHooks.post_call]
+        supported_event_hooks = [
+            GuardrailEventHooks.post_call,
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.logging_only,
+        ]
         super().__init__(supported_event_hooks=supported_event_hooks, **kwargs)
 
     async def make_guardrails_ai_api_request(self, llm_output: str, request_data: dict):
@@ -84,6 +111,98 @@ class GuardrailsAI(CustomGuardrail):
                 },
             )
         return _json_response
+
+    async def make_guardrails_ai_api_request_pre_call_request(
+        self, text_input: str, request_data: dict
+    ) -> str:
+        from httpx import URL
+
+        data = {
+            "inputs": [
+                {
+                    "name": "text",
+                    "shape": [1],
+                    "data": [text_input],
+                    "datatype": "BYTES",  # not sure what this should be, but Guardrail's response sets BYTES for text response - https://github.com/guardrails-ai/detect_pii/blob/e4719a95a26f6caacb78d46ebb4768317032bee5/app.py#L40C31-L40C36
+                }
+            ]
+        }
+        _json_data = json.dumps(data)
+        response = await litellm.module_level_aclient.post(
+            url=str(
+                URL(self.guardrails_ai_api_base).join(
+                    f"guards/{self.guardrails_ai_guard_name}/validate"
+                )
+            ),
+            data=_json_data,
+            headers={
+                "Content-Type": "application/json",
+            },
+        )
+        verbose_proxy_logger.debug("guardrails_ai response: %s", response)
+        if response.status_code == 400:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Violated guardrail policy",
+                    "guardrails_ai_response": response.json(),
+                },
+            )
+
+        _json_response = GuardrailsAIResponsePreCall(**response.json())  # type: ignore
+        response = _json_response.get("outputs", [])[0].get("data", [])[0]
+        return response
+
+    async def process_input(self, data: dict, call_type: str) -> dict:
+        if call_type == "acompletion" or call_type == "completion":
+            from litellm.litellm_core_utils.prompt_templates.common_utils import (
+                get_last_user_message,
+                set_last_user_message,
+            )
+
+            if "messages" not in data:  # invalid request
+                return data
+
+            text = get_last_user_message(data["messages"])
+            if text is None:
+                return data
+            updated_text = await self.make_guardrails_ai_api_request_pre_call_request(
+                text_input=text, request_data=data
+            )
+            data["messages"] = set_last_user_message(data["messages"], updated_text)
+
+        return data
+
+    @log_guardrail_information
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: litellm.DualCache,
+        data: dict,
+        call_type: Literal[
+            "completion",
+            "text_completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+            "pass_through_endpoint",
+            "rerank",
+        ],
+    ) -> Optional[
+        Union[Exception, str, dict]
+    ]:  # raise exception if invalid, return a str for the user to receive - if rejected, or return a modified dictionary for passing into litellm
+
+        return await self.process_input(data=data, call_type=call_type)
+
+    async def async_logging_hook(
+        self, kwargs: dict, result: Any, call_type: str
+    ) -> Tuple[dict, Any]:
+
+        if call_type == "acompletion" or call_type == "completion":
+            kwargs = await self.process_input(data=kwargs, call_type=call_type)
+
+        return kwargs, result
 
     @log_guardrail_information
     async def async_post_call_success_hook(

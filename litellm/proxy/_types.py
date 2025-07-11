@@ -669,6 +669,7 @@ class ModelParams(LiteLLMPydanticObjectBase):
 
 class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     mcp_servers: Optional[List[str]] = None
+    mcp_access_groups: Optional[List[str]] = None
     vector_stores: Optional[List[str]] = None
 
 
@@ -848,6 +849,8 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     auth_type: Optional[MCPAuthType] = None
     url: str
     mcp_info: Optional[MCPInfo] = None
+    mcp_access_groups: List[str] = Field(default_factory=list)
+
 
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
@@ -859,6 +862,8 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     auth_type: Optional[MCPAuthType] = None
     url: str
     mcp_info: Optional[MCPInfo] = None
+    mcp_access_groups: List[str] = Field(default_factory=list)
+
 
 
 class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
@@ -876,6 +881,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     updated_at: Optional[datetime] = None
     updated_by: Optional[str] = None
     teams: List[Dict[str, Optional[str]]] = Field(default_factory=list)
+    mcp_access_groups: List[str] = Field(default_factory=list)
     mcp_info: Optional[MCPInfo] = None
 
 
@@ -1268,6 +1274,7 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
 
     object_permission_id: str
     mcp_servers: Optional[List[str]] = []
+    mcp_access_groups: Optional[List[str]] = []
     vector_stores: Optional[List[str]] = []
 
 

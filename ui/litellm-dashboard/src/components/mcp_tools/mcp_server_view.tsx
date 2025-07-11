@@ -18,6 +18,7 @@ import { MCPServer, handleTransport, handleAuth } from "./types";
 // TODO: Move Tools viewer from index file
 import { MCPToolsViewer } from ".";
 import MCPServerEdit from "./mcp_server_edit";
+import MCPServerCostDisplay from "./mcp_server_cost_display";
 import { getMaskedAndFullUrl } from "./utils";
 
 interface MCPServerViewProps {
@@ -115,6 +116,11 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                 </div>
               </Card>
             </Grid>
+            <Card className="mt-2">
+              <Title>Cost Configuration</Title>
+              <MCPServerCostDisplay costConfig={mcpServer.mcp_info?.mcp_server_cost_info} />
+            </Card>
+
           </TabPanel>
 
           {/* Tool Panel */}
@@ -185,6 +191,25 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                   <div>
                     <Text className="font-medium">Spec Version</Text>
                     <div>{mcpServer.spec_version}</div>
+                  </div>
+                  <div>
+                    <Text className="font-medium">Access Groups</Text>
+                    <div>
+                      {mcpServer.mcp_access_groups && mcpServer.mcp_access_groups.length > 0 ? (
+                        <div className="flex flex-wrap gap-2">
+                          {mcpServer.mcp_access_groups.map((group: any, index: number) => (
+                            <span 
+                              key={index}
+                              className="px-2 py-1 bg-gray-100 rounded-md text-sm"
+                            >
+                              {typeof group === 'string' ? group : group?.name ?? ''}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <Text className="text-gray-500">No access groups defined</Text>
+                      )}
+                    </div>
                   </div>
                 </div>
               )}
