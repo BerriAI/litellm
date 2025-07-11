@@ -7,6 +7,7 @@ from litellm.types.guardrails import (
     DynamicGuardrailParams,
     GuardrailEventHooks,
     LitellmParams,
+    Mode,
     PiiEntityType,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
@@ -19,7 +20,7 @@ class CustomGuardrail(CustomLogger):
         guardrail_name: Optional[str] = None,
         supported_event_hooks: Optional[List[GuardrailEventHooks]] = None,
         event_hook: Optional[
-            Union[GuardrailEventHooks, List[GuardrailEventHooks]]
+            Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]
         ] = None,
         default_on: bool = False,
         mask_request_content: bool = False,
@@ -40,7 +41,7 @@ class CustomGuardrail(CustomLogger):
         self.guardrail_name = guardrail_name
         self.supported_event_hooks = supported_event_hooks
         self.event_hook: Optional[
-            Union[GuardrailEventHooks, List[GuardrailEventHooks]]
+            Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]
         ] = event_hook
         self.default_on: bool = default_on
         self.mask_request_content: bool = mask_request_content
@@ -63,15 +64,16 @@ class CustomGuardrail(CustomLogger):
 
     def _validate_event_hook(
         self,
-        event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]],
+        event_hook: Optional[
+            Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]
+        ],
         supported_event_hooks: List[GuardrailEventHooks],
     ) -> None:
 
-        if event_hook is None:
-            return
-        if isinstance(event_hook, str):
-            event_hook = GuardrailEventHooks(event_hook)
-        if isinstance(event_hook, list):
+        def _validate_event_hook_list_is_in_supported_event_hooks(
+            event_hook: Union[List[GuardrailEventHooks], List[str]],
+            supported_event_hooks: List[GuardrailEventHooks],
+        ) -> None:
             for hook in event_hook:
                 if isinstance(hook, str):
                     hook = GuardrailEventHooks(hook)
@@ -79,6 +81,23 @@ class CustomGuardrail(CustomLogger):
                     raise ValueError(
                         f"Event hook {hook} is not in the supported event hooks {supported_event_hooks}"
                     )
+
+        if event_hook is None:
+            return
+        if isinstance(event_hook, str):
+            event_hook = GuardrailEventHooks(event_hook)
+        if isinstance(event_hook, list):
+            _validate_event_hook_list_is_in_supported_event_hooks(
+                event_hook, supported_event_hooks
+            )
+        elif isinstance(event_hook, Mode):
+            _validate_event_hook_list_is_in_supported_event_hooks(
+                list(event_hook.tags.values()), supported_event_hooks
+            )
+            if event_hook.default:
+                _validate_event_hook_list_is_in_supported_event_hooks(
+                    [event_hook.default], supported_event_hooks
+                )
         elif isinstance(event_hook, GuardrailEventHooks):
             if event_hook not in supported_event_hooks:
                 raise ValueError(
@@ -128,6 +147,20 @@ class CustomGuardrail(CustomLogger):
 
         if self.default_on is True:
             if self._event_hook_is_event_type(event_type):
+                if isinstance(self.event_hook, Mode):
+                    try:
+                        from litellm_enterprise.integrations.custom_guardrail import (
+                            EnterpriseCustomGuardrailHelper,
+                        )
+                    except ImportError:
+                        raise ImportError(
+                            "Setting tag-based guardrails is only available in litellm-enterprise. You must be a premium user to use this feature."
+                        )
+                    result = EnterpriseCustomGuardrailHelper._should_run_if_mode_by_tag(
+                        data, self.event_hook
+                    )
+                    if result is not None:
+                        return result
                 return True
             return False
 
@@ -140,6 +173,21 @@ class CustomGuardrail(CustomLogger):
 
         if not self._event_hook_is_event_type(event_type):
             return False
+
+        if isinstance(self.event_hook, Mode):
+            try:
+                from litellm_enterprise.integrations.custom_guardrail import (
+                    EnterpriseCustomGuardrailHelper,
+                )
+            except ImportError:
+                raise ImportError(
+                    "Setting tag-based guardrails is only available in litellm-enterprise. You must be a premium user to use this feature."
+                )
+            result = EnterpriseCustomGuardrailHelper._should_run_if_mode_by_tag(
+                data, self.event_hook
+            )
+            if result is not None:
+                return result
 
         return True
 
@@ -155,6 +203,8 @@ class CustomGuardrail(CustomLogger):
             return True
         if isinstance(self.event_hook, list):
             return event_type.value in self.event_hook
+        if isinstance(self.event_hook, Mode):
+            return event_type.value in self.event_hook.tags.values()
         return self.event_hook == event_type.value
 
     def get_guardrail_dynamic_request_body_params(self, request_data: dict) -> dict:
@@ -220,9 +270,15 @@ class CustomGuardrail(CustomLogger):
         """
         if isinstance(guardrail_json_response, Exception):
             guardrail_json_response = str(guardrail_json_response)
+        from litellm.types.utils import GuardrailMode
+
         slg = StandardLoggingGuardrailInformation(
             guardrail_name=self.guardrail_name,
-            guardrail_mode=self.event_hook,
+            guardrail_mode=(
+                GuardrailMode(**self.event_hook.model_dump())  # type: ignore
+                if isinstance(self.event_hook, Mode)
+                else self.event_hook
+            ),
             guardrail_response=guardrail_json_response,
             guardrail_status=guardrail_status,
             start_time=start_time,

@@ -389,6 +389,13 @@ class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
 
+class Mode(BaseModel):
+    tags: Dict[str, str] = Field(description="Tags for the guardrail mode")
+    default: Optional[str] = Field(
+        default=None, description="Default mode when no tags match"
+    )
+
+
 class LitellmParams(
     PresidioConfigModel,
     BedrockGuardrailConfigModel,
@@ -397,7 +404,7 @@ class LitellmParams(
     BaseLitellmParams,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
-    mode: Union[str, List[str]] = Field(
+    mode: Union[str, List[str], Mode] = Field(
         description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
     )
 
