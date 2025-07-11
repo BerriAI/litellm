@@ -92,14 +92,12 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
         
         <TabPanel>
           <div className="space-y-6">
-            <MCPServerCostConfig
-              value={costConfig}
-              onChange={setCostConfig}
-              serverId={mcpServer.server_id}
-              serverUrl={mcpServer.url}
-              accessToken={accessToken}
-              disabled={false}
-            />
+              <MCPServerCostConfig
+                value={costConfig}
+                onChange={setCostConfig}
+                tools={[]}
+                disabled={false}
+              />
             
             <div className="flex justify-end gap-2">
               <AntdButton onClick={onCancel}>Cancel</AntdButton>

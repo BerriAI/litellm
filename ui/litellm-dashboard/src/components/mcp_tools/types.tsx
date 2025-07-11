@@ -54,6 +54,7 @@ export interface InputSchemaProperty {
   // Define MCPServerCostInfo for cost tracking
   export interface MCPServerCostInfo {
     default_cost_per_query?: number | null;
+    tool_name_to_cost_per_query?: Record<string, number | null>;
   }
 
   // Define MCP provider info
