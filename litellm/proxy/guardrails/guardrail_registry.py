@@ -486,7 +486,7 @@ class InMemoryGuardrailHandler:
         mode = litellm_params.mode
         if mode is None:
             raise ValueError(
-                f"mode is required for guardrail {guardrail_type}. Please set mode to one of the following: {', '.join(GuardrailEventHooks)}"
+                f"mode is required for guardrail {guardrail_type} please set mode to one of the following: {', '.join(GuardrailEventHooks)}"
             )
 
         default_on = litellm_params.default_on
