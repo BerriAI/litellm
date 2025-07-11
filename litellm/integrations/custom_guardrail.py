@@ -96,7 +96,7 @@ class CustomGuardrail(CustomLogger):
             )
             if event_hook.default:
                 _validate_event_hook_list_is_in_supported_event_hooks(
-                    list(event_hook.default), supported_event_hooks
+                    [event_hook.default], supported_event_hooks
                 )
         elif isinstance(event_hook, GuardrailEventHooks):
             if event_hook not in supported_event_hooks:
@@ -130,36 +130,6 @@ class CustomGuardrail(CustomLogger):
 
         return False
 
-    def _should_run_if_mode_by_tag(self, data: dict) -> Optional[bool]:
-        """
-        Assumes check for event match is done in `should_run_guardrail`
-        Returns True if the guardrail should be run by tag
-        """
-
-        from litellm.litellm_core_utils.litellm_logging import (
-            StandardLoggingPayloadSetup,
-        )
-
-        if self.event_hook is None or not isinstance(self.event_hook, Mode):
-            return None
-
-        metadata: dict = data.get("litellm_metadata") or data.get("metadata", {})
-        proxy_server_request = data.get("proxy_server_request", {})
-
-        request_tags = StandardLoggingPayloadSetup._get_request_tags(
-            metadata=metadata,
-            proxy_server_request=proxy_server_request,
-        )
-
-        if request_tags and any(tag in self.event_hook.tags for tag in request_tags):
-            return True
-        elif self.event_hook.default and any(
-            tag in self.event_hook.default for tag in request_tags
-        ):
-            return True
-
-        return False
-
     def should_run_guardrail(self, data, event_type: GuardrailEventHooks) -> bool:
         """
         Returns True if the guardrail should be run on the event_type
@@ -178,7 +148,17 @@ class CustomGuardrail(CustomLogger):
         if self.default_on is True:
             if self._event_hook_is_event_type(event_type):
                 if isinstance(self.event_hook, Mode):
-                    result = self._should_run_if_mode_by_tag(data)
+                    try:
+                        from litellm_enterprise.integrations.custom_guardrail import (
+                            EnterpriseCustomGuardrailHelper,
+                        )
+                    except ImportError:
+                        raise ImportError(
+                            "Setting tag-based guardrails is only available in litellm-enterprise. You must be a premium user to use this feature."
+                        )
+                    result = EnterpriseCustomGuardrailHelper._should_run_if_mode_by_tag(
+                        data, self.event_hook
+                    )
                     if result is not None:
                         return result
                 return True
@@ -195,7 +175,17 @@ class CustomGuardrail(CustomLogger):
             return False
 
         if isinstance(self.event_hook, Mode):
-            result = self._should_run_if_mode_by_tag(data)
+            try:
+                from litellm_enterprise.integrations.custom_guardrail import (
+                    EnterpriseCustomGuardrailHelper,
+                )
+            except ImportError:
+                raise ImportError(
+                    "Setting tag-based guardrails is only available in litellm-enterprise. You must be a premium user to use this feature."
+                )
+            result = EnterpriseCustomGuardrailHelper._should_run_if_mode_by_tag(
+                data, self.event_hook
+            )
             if result is not None:
                 return result
 
