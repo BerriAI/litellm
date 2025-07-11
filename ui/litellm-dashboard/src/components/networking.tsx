@@ -4104,6 +4104,38 @@ export const getCallbacksCall = async (
   }
 };
 
+export const getCallbacksListCall = async (accessToken: String) => {
+  /**
+   * Get all active callbacks on the proxy
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/callbacks/list`
+      : `/callbacks/list`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Active callbacks list:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to get callbacks list:", error);
+    throw error;
+  }
+};
+
 export const getGeneralSettingsCall = async (accessToken: String) => {
   try {
     let url = proxyBaseUrl

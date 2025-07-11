@@ -171,6 +171,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
+  const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
   const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
   const [isCreateUserModalVisible, setIsCreateUserModalVisible] = useState(false);
   const [newlyCreatedUserId, setNewlyCreatedUserId] = useState<string | null>(null);
@@ -186,6 +187,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     setIsModalVisible(false);
     form.resetFields();
     setLoggingSettings([]);
+    setDisabledCallbacks([]);
   };
 
   const handleCancel = () => {
@@ -194,6 +196,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     setSelectedCreateKeyTeam(null);
     form.resetFields();
     setLoggingSettings([]);
+    setDisabledCallbacks([]);
   };
 
   useEffect(() => {
@@ -303,6 +306,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         metadata = {
           ...metadata,
           logging: loggingSettings.filter(config => config.callback_name)
+        };
+      }
+
+      // Add disabled callbacks to the metadata
+      if (disabledCallbacks.length > 0) {
+        metadata = {
+          ...metadata,
+          litellm_disabled_callbacks: disabledCallbacks
         };
       }
       
@@ -860,6 +871,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                           value={loggingSettings}
                           onChange={setLoggingSettings}
                           premiumUser={premiumUser}
+                          disabledCallbacks={disabledCallbacks}
+                          onDisabledCallbacksChange={setDisabledCallbacks}
+                          accessToken={accessToken}
                         />
                       </div>
                     </AccordionBody>
