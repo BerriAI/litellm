@@ -423,6 +423,7 @@ const sidebars = {
         "providers/clarifai",
         "providers/vllm",
         "providers/llamafile",
+        "providers/asksage",
         "providers/infinity",
         "providers/xinference",
         "providers/aiml",
