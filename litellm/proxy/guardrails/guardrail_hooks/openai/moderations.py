@@ -3,7 +3,18 @@
 OpenAI Moderation Guardrail Integration for LiteLLM
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncGenerator,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Type,
+    Union,
+    cast,
+)
 
 from fastapi import HTTPException
 
@@ -23,7 +34,7 @@ if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import AllMessageValues, OpenAIModerationResponse
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
-    from litellm.types.utils import ModelResponse
+    from litellm.types.utils import ModelResponse, ModelResponseStream
 
 
 class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
@@ -302,6 +313,74 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             self._check_moderation_result(moderation_response)
 
         return response
+
+    @log_guardrail_information
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: "UserAPIKeyAuth",
+        response: Any,
+        request_data: Dict[str, Any],
+    ) -> AsyncGenerator["ModelResponseStream", None]:
+        """
+        Process streaming response chunks for OpenAI moderation.
+
+        Collects all chunks from the stream, assembles them into a complete response,
+        and applies moderation check. If content violates moderation policy, raises HTTPException.
+        """
+        # Import here to avoid circular imports
+        from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
+        from litellm.main import stream_chunk_builder
+        from litellm.types.utils import TextCompletionResponse
+
+        verbose_proxy_logger.info(
+            "OpenAI Moderation: Running streaming response scan"
+        )
+
+        # Collect all chunks to process them together
+        all_chunks: List["ModelResponseStream"] = []
+        async for chunk in response:
+            all_chunks.append(chunk)
+
+        # Assemble the complete response from chunks
+        assembled_model_response: Optional[
+            Union["ModelResponse", TextCompletionResponse]
+        ] = stream_chunk_builder(
+            chunks=all_chunks,
+        )
+
+        if isinstance(assembled_model_response, (type(None), TextCompletionResponse)):
+            # If we can't assemble a ModelResponse or it's a text completion, 
+            # just yield the original chunks without moderation
+            verbose_proxy_logger.warning(
+                "OpenAI Moderation: Could not assemble ModelResponse from chunks, skipping moderation"
+            )
+            for chunk in all_chunks:
+                yield chunk
+            return
+
+        # Extract response text for moderation
+        response_text = self._extract_response_text(assembled_model_response)
+        if response_text:
+            verbose_proxy_logger.info(
+                f"OpenAI Moderation: Streaming response text: {response_text[:100]}..."  # Log first 100 chars
+            )
+            
+            # Make moderation request - this will raise HTTPException if content is flagged
+            moderation_response = await self.async_make_request(
+                input_text=response_text,
+            )
+            
+            # Check if content is flagged and raise exception if needed
+            self._check_moderation_result(moderation_response)
+
+        # If we reach here, content passed moderation - yield the original chunks
+        mock_response = MockResponseIterator(
+            model_response=assembled_model_response
+        )
+
+        # Return the reconstructed stream
+        async for chunk in mock_response:
+            yield chunk
 
     def _extract_response_text(self, response: "ModelResponse") -> Optional[str]:
         """
