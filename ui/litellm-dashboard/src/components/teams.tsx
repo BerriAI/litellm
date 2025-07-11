@@ -389,6 +389,15 @@ const Teams: React.FC<TeamProps> = ({
             delete formValues.allowed_mcp_servers_and_groups;
           }
         }
+
+        // Transform allowed_mcp_access_groups into object_permission
+        if (formValues.allowed_mcp_access_groups && formValues.allowed_mcp_access_groups.length > 0) {
+          if (!formValues.object_permission) {
+            formValues.object_permission = {};
+          }
+          formValues.object_permission.mcp_access_groups = formValues.allowed_mcp_access_groups;
+          delete formValues.allowed_mcp_access_groups;
+        }
         const response: any = await teamCreateCall(accessToken, formValues);
         if (teams !== null) {
           setTeams([...teams, response]);

@@ -334,6 +334,16 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         // Remove the original field as it's now part of object_permission
         delete formValues.allowed_mcp_servers_and_groups;
       }
+
+      // Transform allowed_mcp_access_groups into object_permission format
+      if (formValues.allowed_mcp_access_groups && formValues.allowed_mcp_access_groups.length > 0) {
+        if (!formValues.object_permission) {
+          formValues.object_permission = {};
+        }
+        formValues.object_permission.mcp_access_groups = formValues.allowed_mcp_access_groups;
+        // Remove the original field as it's now part of object_permission
+        delete formValues.allowed_mcp_access_groups;
+      }
       let response;
       if (keyOwner === "service_account") {
         response = await keyCreateServiceAccountCall(accessToken, formValues);
