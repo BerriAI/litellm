@@ -57,7 +57,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         guardrail_name: str,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-        model: Optional[str] = None,
+        model: Optional[Literal["omni-moderation-latest", "text-moderation-latest"]] = None,
         **kwargs,
     ):
         """Initialize OpenAI Moderation guardrail handler."""
@@ -82,7 +82,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         # Store configuration
         self.api_key = api_key or self._get_api_key()
         self.api_base = api_base or "https://api.openai.com/v1"
-        self.model = model or "omni-moderation-latest"
+        self.model: Literal["omni-moderation-latest", "text-moderation-latest"] = model or "omni-moderation-latest"
 
         if not self.api_key:
             raise ValueError("OpenAI Moderation: api_key is required. Set OPENAI_API_KEY environment variable or pass it in configuration.")
