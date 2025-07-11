@@ -1175,14 +1175,14 @@ const Teams: React.FC<TeamProps> = ({
                             label={
                               <span>
                                 Allowed MCP Servers{' '}
-                                <Tooltip title="Select which MCP servers or access groups this team can access by default. Leave empty for access to all.">
+                                <Tooltip title="Select which MCP servers or access groups this team can access by default. ">
                                   <InfoCircleOutlined style={{ marginLeft: '4px' }} />
                                 </Tooltip>
                               </span>
                             }
                             name="allowed_mcp_servers_and_groups"
                             className="mt-8"
-                            help="Select MCP servers or access groups this team can access. Leave empty for access to all."
+                            help="Select MCP servers or access groups this team can access. "
                           >
                             <PremiumMCPSelector
                               onChange={val => form.setFieldValue('allowed_mcp_servers_and_groups', val)}

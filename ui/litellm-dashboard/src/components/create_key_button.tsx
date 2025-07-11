@@ -789,14 +789,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         label={
                           <span>
                             Allowed MCP Servers{' '}
-                            <Tooltip title="Select which MCP servers or access groups this key can access. Leave empty for access to all.">
+                            <Tooltip title="Select which MCP servers or access groups this key can access. ">
                               <InfoCircleOutlined style={{ marginLeft: '4px' }} />
                             </Tooltip>
                           </span>
                         } 
                         name="allowed_mcp_servers_and_groups" 
                         className="mt-4"
-                        help="Select MCP servers or access groups this key can access. Leave empty for access to all."
+                        help="Select MCP servers or access groups this key can access. "
                       >
                         <PremiumMCPSelector
                           onChange={val => form.setFieldValue('allowed_mcp_servers_and_groups', val)}
