@@ -7,7 +7,7 @@
 
 import json
 import os
-from typing import TYPE_CHECKING, Optional, Type, TypedDict
+from typing import TYPE_CHECKING, Literal, Optional, Type, TypedDict, Union
 
 from fastapi import HTTPException
 
@@ -84,6 +84,39 @@ class GuardrailsAI(CustomGuardrail):
                 },
             )
         return _json_response
+
+    @log_guardrail_information
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: litellm.DualCache,
+        data: dict,
+        call_type: Literal[
+            "completion",
+            "text_completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+            "pass_through_endpoint",
+            "rerank",
+        ],
+    ) -> Optional[
+        Union[Exception, str, dict]
+    ]:  # raise exception if invalid, return a str for the user to receive - if rejected, or return a modified dictionary for passing into litellm
+        if call_type == "acompletion" or call_type == "completion":
+            from litellm.litellm_core_utils.prompt_templates.common_utils import (
+                get_str_from_messages,
+            )
+
+            if "messages" not in data:  # invalid request
+                return None
+
+            text = get_str_from_messages(data["messages"])
+            await self.make_guardrails_ai_api_request(
+                llm_output=text, request_data=data
+            )
+        return None
 
     @log_guardrail_information
     async def async_post_call_success_hook(
