@@ -24,6 +24,7 @@ import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy.auth.model_checks import get_mcp_server_ids
+from litellm.proxy._experimental.mcp_server.utils import validate_mcp_server_name
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 MCP_AVAILABLE: bool = True
@@ -345,13 +346,8 @@ if MCP_AVAILABLE:
         )
 
         # Server name validation: disallow '-'
-        if payload.alias and '-' in payload.alias:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": "Server name cannot contain '-' (hyphen). Please use '_' (underscore) instead."
-                },
-            )
+        if payload.alias:
+            validate_mcp_server_name(payload.alias, raise_http_exception=True)
 
         # AuthZ - restrict only proxy admins to create mcp servers
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
@@ -494,13 +490,8 @@ if MCP_AVAILABLE:
         )
 
         # Server name validation: disallow '-'
-        if payload.alias and '-' in payload.alias:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": "Server name cannot contain '-' (hyphen). Please use '_' (underscore) instead."
-                },
-            )
+        if payload.alias:
+            validate_mcp_server_name(payload.alias, raise_http_exception=True)
 
         # Authz - restrict only admins to delete mcp servers
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
