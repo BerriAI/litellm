@@ -110,7 +110,12 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
       <TabPanels className="mt-6">
         <TabPanel>
           <Form form={form} onFinish={handleSave} initialValues={mcpServer} layout="vertical">
-            <Form.Item label="MCP Server Name" name="alias">
+            <Form.Item label="MCP Server Name" name="alias" rules={[{
+              validator: (_, value) =>
+                value && value.includes('-')
+                  ? Promise.reject("Server name cannot contain '-' (hyphen). Please use '_' (underscore) instead.")
+                  : Promise.resolve(),
+            }]}>
               <TextInput />
             </Form.Item>
             <Form.Item label="Description" name="description">
