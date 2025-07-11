@@ -358,7 +358,6 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
       placeholder: "https://...",
       required: true
     },
-
     {
       key: "base_model",
       label: "Base Model",
@@ -370,7 +369,7 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
       type: "password",
       required: true
     }
-  ]
+  ],
   [Providers.Triton]: [{
     key: "api_key",
     label: "API Key",

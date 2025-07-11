@@ -1,5 +1,5 @@
 """
-This plugin searches for GradientAIokens.
+This plugin searches for DigitalOcean tokens.
 """
 
 import re
@@ -7,12 +7,12 @@ import re
 from detect_secrets.plugins.base import RegexBasedDetector
 
 
-class GradientAItector(RegexBasedDetector):
-    """Scans for various GradientAI Tokens."""
+class DigitaloceanDetector(RegexBasedDetector):
+    """Scans for various DigitalOcean Tokens."""
 
     @property
     def secret_type(self) -> str:
-        return "GradientAI Token"
+        return "DigitalOcean Token"
 
     @property
     def denylist(self) -> list[re.Pattern]:

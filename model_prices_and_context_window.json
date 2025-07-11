@@ -8393,14 +8393,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 159,
         "supports_assistant_prefill": true,
-        "supports_pdf_input": true,
-        "supports_prompt_caching": true,
-        "supports_response_schema": true,
-        "supports_tool_choice": true,
-        "supports_reasoning": true,
-        "supports_computer_use": true
+        "supports_tool_choice": true
     },
     "vertex_ai/claude-3-5-sonnet-v2@20241022": {
         "supports_computer_use": true,
@@ -8412,15 +8406,10 @@
         "litellm_provider": "vertex_ai-anthropic_models",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_vision": true,
-        "tool_use_system_prompt_tokens": 159,
-        "supports_assistant_prefill": true,
         "supports_pdf_input": true,
-        "supports_prompt_caching": true,
-        "supports_response_schema": true,
-        "supports_tool_choice": true,
-        "supports_reasoning": true,
-        "supports_computer_use": true
+        "supports_vision": true,
+        "supports_assistant_prefill": true,
+        "supports_tool_choice": true
     },
     "vertex_ai/claude-3-7-sonnet@20250219": {
         "supports_computer_use": true,
@@ -8434,15 +8423,15 @@
         "litellm_provider": "vertex_ai-anthropic_models",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_pdf_input": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159,
         "supports_assistant_prefill": true,
-        "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true,
+        "deprecation_date": "2025-06-01",
         "supports_reasoning": true,
-        "supports_computer_use": true
+        "supports_tool_choice": true
     },
     "vertex_ai/claude-opus-4": {
         "max_tokens": 32000,
@@ -11765,124 +11754,6 @@
         "supports_pdf_input": true,
         "supports_tool_choice": true
     },
-    "apac.anthropic.claude-3-5-sonnet-20240620-v1:0": {
-        "max_tokens": 4096,
-        "max_input_tokens": 200000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 3e-06,
-        "output_cost_per_token": 1.5e-05,
-        "litellm_provider": "bedrock",
-        "mode": "chat",
-        "supports_function_calling": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_pdf_input": true,
-        "supports_tool_choice": true
-    },
-    "apac.anthropic.claude-3-5-sonnet-20241022-v2:0": {
-        "max_tokens": 8192,
-        "max_input_tokens": 200000,
-        "max_output_tokens": 8192,
-        "input_cost_per_token": 3e-06,
-        "output_cost_per_token": 1.5e-05,
-        "cache_creation_input_token_cost": 3.75e-06,
-        "cache_read_input_token_cost": 3e-07,
-        "litellm_provider": "bedrock",
-        "mode": "chat",
-        "supports_function_calling": true,
-        "supports_vision": true,
-        "supports_assistant_prefill": true,
-        "supports_computer_use": true,
-        "supports_pdf_input": true,
-        "supports_prompt_caching": true,
-        "supports_response_schema": true,
-        "supports_tool_choice": true
-    },
-    "apac.anthropic.claude-sonnet-4-20250514-v1:0": {
-        "max_tokens": 64000,
-        "max_input_tokens": 200000,
-        "max_output_tokens": 64000,
-        "input_cost_per_token": 3e-06,
-        "output_cost_per_token": 1.5e-05,
-        "search_context_cost_per_query": {
-            "search_context_size_low": 0.01,
-            "search_context_size_medium": 0.01,
-            "search_context_size_high": 0.01
-        },
-        "cache_creation_input_token_cost": 3.75e-06,
-        "cache_read_input_token_cost": 3e-07,
-        "litellm_provider": "bedrock_converse",
-        "mode": "chat",
-        "supports_function_calling": true,
-        "supports_vision": true,
-        "tool_use_system_prompt_tokens": 159,
-        "supports_assistant_prefill": true,
-        "supports_pdf_input": true,
-        "supports_prompt_caching": true,
-        "supports_response_schema": true,
-        "supports_tool_choice": true,
-        "supports_reasoning": true,
-        "supports_computer_use": true
-    },
-    "apac.anthropic.claude-3-5-sonnet-20240620-v1:0": {
-        "max_tokens": 4096,
-        "max_input_tokens": 200000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 3e-06,
-        "output_cost_per_token": 1.5e-05,
-        "litellm_provider": "bedrock",
-        "mode": "chat",
-        "supports_function_calling": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_pdf_input": true,
-        "supports_tool_choice": true
-    },
-    "apac.anthropic.claude-3-5-sonnet-20241022-v2:0": {
-        "max_tokens": 8192,
-        "max_input_tokens": 200000,
-        "max_output_tokens": 8192,
-        "input_cost_per_token": 3e-06,
-        "output_cost_per_token": 1.5e-05,
-        "cache_creation_input_token_cost": 3.75e-06,
-        "cache_read_input_token_cost": 3e-07,
-        "litellm_provider": "bedrock",
-        "mode": "chat",
-        "supports_function_calling": true,
-        "supports_vision": true,
-        "supports_assistant_prefill": true,
-        "supports_computer_use": true,
-        "supports_pdf_input": true,
-        "supports_prompt_caching": true,
-        "supports_response_schema": true,
-        "supports_tool_choice": true
-    },
-    "apac.anthropic.claude-sonnet-4-20250514-v1:0": {
-        "max_tokens": 64000,
-        "max_input_tokens": 200000,
-        "max_output_tokens": 64000,
-        "input_cost_per_token": 3e-06,
-        "output_cost_per_token": 1.5e-05,
-        "search_context_cost_per_query": {
-            "search_context_size_low": 0.01,
-            "search_context_size_medium": 0.01,
-            "search_context_size_high": 0.01
-        },
-        "cache_creation_input_token_cost": 3.75e-06,
-        "cache_read_input_token_cost": 3e-07,
-        "litellm_provider": "bedrock_converse",
-        "mode": "chat",
-        "supports_function_calling": true,
-        "supports_vision": true,
-        "tool_use_system_prompt_tokens": 159,
-        "supports_assistant_prefill": true,
-        "supports_pdf_input": true,
-        "supports_prompt_caching": true,
-        "supports_response_schema": true,
-        "supports_tool_choice": true,
-        "supports_reasoning": true,
-        "supports_computer_use": true
-    },
     "eu.anthropic.claude-3-5-haiku-20241022-v1:0": {
         "max_tokens": 8192,
         "max_input_tokens": 200000,
@@ -12907,174 +12778,6 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": false
-    },
-    "meta.llama4-maverick-17b-instruct-v1:0": {
-        "max_tokens": 4096,
-        "max_input_tokens": 128000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 2.4e-07,
-        "input_cost_per_token_batches": 1.2e-07,
-        "output_cost_per_token": 9.7e-07,
-        "output_cost_per_token_batches": 4.85e-07,
-        "litellm_provider": "bedrock_converse",
-        "mode": "chat",
-        "supports_function_calling": true,
-        "supports_tool_choice": false,
-        "supported_modalities": [
-            "text",
-            "image"
-        ],
-        "supported_output_modalities": [
-            "text",
-            "code"
-        ]
-    },
-    "us.meta.llama4-maverick-17b-instruct-v1:0": {
-        "max_tokens": 4096,
-        "max_input_tokens": 128000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 2.4e-07,
-        "input_cost_per_token_batches": 1.2e-07,
-        "output_cost_per_token": 9.7e-07,
-        "output_cost_per_token_batches": 4.85e-07,
-        "litellm_provider": "bedrock_converse",
-        "mode": "chat",
-        "supports_function_calling": true,
-        "supports_tool_choice": false,
-        "supported_modalities": [
-            "text",
-            "image"
-        ],
-        "supported_output_modalities": [
-            "text",
-            "code"
-        ]
-    },
-    "meta.llama4-scout-17b-instruct-v1:0": {
-        "max_tokens": 4096,
-        "max_input_tokens": 128000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 1.7e-07,
-        "input_cost_per_token_batches": 8.5e-08,
-        "output_cost_per_token": 6.6e-07,
-        "output_cost_per_token_batches": 3.3e-07,
-        "litellm_provider": "bedrock_converse",
-        "mode": "chat",
-        "supports_function_calling": true,
-        "supports_tool_choice": false,
-        "supported_modalities": [
-            "text",
-            "image"
-        ],
-        "supported_output_modalities": [
-            "text",
-            "code"
-        ]
-    },
-    "us.meta.llama4-scout-17b-instruct-v1:0": {
-        "max_tokens": 4096,
-        "max_input_tokens": 128000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 1.7e-07,
-        "input_cost_per_token_batches": 8.5e-08,
-        "output_cost_per_token": 6.6e-07,
-        "output_cost_per_token_batches": 3.3e-07,
-        "litellm_provider": "bedrock_converse",
-        "mode": "chat",
-        "supports_function_calling": true,
-        "supports_tool_choice": false,
-        "supported_modalities": [
-            "text",
-            "image"
-        ],
-        "supported_output_modalities": [
-            "text",
-            "code"
-        ]
-    },
-    "meta.llama4-maverick-17b-instruct-v1:0": {
-        "max_tokens": 4096,
-        "max_input_tokens": 128000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 2.4e-07,
-        "input_cost_per_token_batches": 1.2e-07,
-        "output_cost_per_token": 9.7e-07,
-        "output_cost_per_token_batches": 4.85e-07,
-        "litellm_provider": "bedrock_converse",
-        "mode": "chat",
-        "supports_function_calling": true,
-        "supports_tool_choice": false,
-        "supported_modalities": [
-            "text",
-            "image"
-        ],
-        "supported_output_modalities": [
-            "text",
-            "code"
-        ]
-    },
-    "us.meta.llama4-maverick-17b-instruct-v1:0": {
-        "max_tokens": 4096,
-        "max_input_tokens": 128000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 2.4e-07,
-        "input_cost_per_token_batches": 1.2e-07,
-        "output_cost_per_token": 9.7e-07,
-        "output_cost_per_token_batches": 4.85e-07,
-        "litellm_provider": "bedrock_converse",
-        "mode": "chat",
-        "supports_function_calling": true,
-        "supports_tool_choice": false,
-        "supported_modalities": [
-            "text",
-            "image"
-        ],
-        "supported_output_modalities": [
-            "text",
-            "code"
-        ]
-    },
-    "meta.llama4-scout-17b-instruct-v1:0": {
-        "max_tokens": 4096,
-        "max_input_tokens": 128000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 1.7e-07,
-        "input_cost_per_token_batches": 8.5e-08,
-        "output_cost_per_token": 6.6e-07,
-        "output_cost_per_token_batches": 3.3e-07,
-        "litellm_provider": "bedrock_converse",
-        "mode": "chat",
-        "supports_function_calling": true,
-        "supports_tool_choice": false,
-        "supported_modalities": [
-            "text",
-            "image"
-        ],
-        "supported_output_modalities": [
-            "text",
-            "code"
-        ]
-    },
-    "us.meta.llama4-scout-17b-instruct-v1:0": {
-        "max_tokens": 4096,
-        "max_input_tokens": 128000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 1.7e-07,
-        "input_cost_per_token_batches": 8.5e-08,
-        "output_cost_per_token": 6.6e-07,
-        "output_cost_per_token_batches": 3.3e-07,
-        "litellm_provider": "bedrock_converse",
-        "mode": "chat",
-        "supports_function_calling": true,
-        "supports_tool_choice": false,
-        "supported_modalities": [
-            "text",
-            "image"
-        ],
-        "supported_output_modalities": [
-            "text",
-            "code"
-        ]
     },
     "512-x-512/50-steps/stability.stable-diffusion-xl-v0": {
         "max_tokens": 77,

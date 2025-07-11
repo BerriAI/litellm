@@ -3264,8 +3264,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 headers=headers,
                 encoding=encoding,
                 api_key=api_key,
-                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
-                client=client,
+                logging_obj=logging,
             )
 
         elif custom_llm_provider == "custom":

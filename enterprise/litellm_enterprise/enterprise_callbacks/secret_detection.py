@@ -123,8 +123,8 @@ _default_detect_secrets_config = {
             "path": _custom_plugins_path + "/defined_networking_api_token.py",
         },
         {
-            "name": "GradientAItector",
-            "path": _custom_plugins_path + "/gradient_aipy",
+            "name": "DigitaloceanDetector",
+            "path": _custom_plugins_path + "/digitalocean.py",
         },
         {
             "name": "DopplerApiTokenDetector",

@@ -4,6 +4,6 @@ COPY . /app
 WORKDIR /app
 RUN pip install -r requirements.txt
 
-EXPOSE 3000
+EXPOSE $PORT 
 
-CMD litellm --host 0.0.0.0 --port 3000 --workers 10 --config config.yaml
+CMD litellm --host 0.0.0.0 --port $PORT --workers 10 --config config.yaml

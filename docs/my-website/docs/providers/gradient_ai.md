@@ -1,11 +1,11 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# GradientAI GradientAI
+# GradientAI
 https://digitalocean.com/products/genai
 
 
-LiteLLM provides native support for GradientAI GenAI models.
+LiteLLM provides native support for GradientAI models.
 To use a GradientAI model, specify it as `gradient_ai/<model-name>` in your LiteLLM requests.
 
 

@@ -1,9 +1,9 @@
 # ✨ Secret Detection/Redaction (Enterprise-only)
-❓ Use this to REDACT API Keys, Secrets sent in requests to an LLM.
+❓ Use this to REDACT API Keys, Secrets sent in requests to an LLM. 
 
 Example if you want to redact the value of `OPENAI_API_KEY` in the following request
 
-#### Incoming Request
+#### Incoming Request 
 
 ```json
 {
@@ -31,13 +31,13 @@ Example if you want to redact the value of `OPENAI_API_KEY` in the following req
 
 **Usage**
 
-**Step 1** Add this to your config.yaml
+**Step 1** Add this to your config.yaml 
 
 ```yaml
 guardrails:
   - guardrail_name: "my-custom-name"
     litellm_params:
-      guardrail: "hide-secrets"  # supported values: "aporia", "lakera", ..
+      guardrail: "hide-secrets"  # supported values: "aporia", "lakera", .. 
       mode: "pre_call"
 ```
 
@@ -125,7 +125,7 @@ guardrails:
 
 **2. Start proxy**
 
-Run with `--detailed_debug` for more detailed logs. Use in dev only.
+Run with `--detailed_debug` for more detailed logs. Use in dev only. 
 
 ```bash
 litellm --config /path/to/config.yaml --detailed_debug
@@ -157,7 +157,7 @@ Look for this in your logs, to confirm your changes worked as expected.
 No secrets detected on input.
 ```
 
-### Default Config Used
+### Default Config Used 
 
 ```
 _default_detect_secrets_config = {
@@ -259,8 +259,8 @@ _default_detect_secrets_config = {
             "path": _custom_plugins_path + "/defined_networking_api_token.py",
         },
         {
-            "name": "GradientAIDetector",
-            "path": _custom_plugins_path + "/gradient_ai.py",
+            "name": "DigitaloceanDetector",
+            "path": _custom_plugins_path + "/digitalocean.py",
         },
         {
             "name": "DopplerApiTokenDetector",
