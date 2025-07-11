@@ -145,7 +145,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 label={
                   <span className="text-sm font-medium text-gray-700 flex items-center">
                     MCP Server Name
-                    <Tooltip title="Best practice: Use a descriptive name that indicates the server's purpose (e.g., 'GitHub Integration', 'Email Service')">
+                    <Tooltip title="Best practice: Use a descriptive name that indicates the server's purpose (e.g., 'GitHub_MCP', 'Email_Service'). Hyphens '-' are not allowed; use underscores '_' instead.">
                       <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                     </Tooltip>
                   </span>
@@ -153,10 +153,16 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 name="alias"
                 rules={[
                   { required: false, message: "Please enter a server name" },
+                  {
+                    validator: (_, value) =>
+                      value && value.includes('-')
+                        ? Promise.reject("Server name cannot contain '-' (hyphen). Please use '_' (underscore) instead.")
+                        : Promise.resolve(),
+                  },
                 ]}
               >
                 <TextInput 
-                  placeholder="e.g., GitHub MCP, Zapier MCP, etc." 
+                  placeholder="e.g., GitHub_MCP, Zapier_MCP, etc." 
                   className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                 />
               </Form.Item>

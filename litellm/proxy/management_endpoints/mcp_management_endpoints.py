@@ -24,6 +24,7 @@ import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy.auth.model_checks import get_mcp_server_ids
+from litellm.proxy._experimental.mcp_server.utils import validate_mcp_server_name
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 MCP_AVAILABLE: bool = True
@@ -344,6 +345,10 @@ if MCP_AVAILABLE:
             "Database not connected. Connect a database to your proxy"
         )
 
+        # Server name validation: disallow '-'
+        if payload.alias:
+            validate_mcp_server_name(payload.alias, raise_http_exception=True)
+
         # AuthZ - restrict only proxy admins to create mcp servers
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
             raise HTTPException(
@@ -483,6 +488,10 @@ if MCP_AVAILABLE:
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
         )
+
+        # Server name validation: disallow '-'
+        if payload.alias:
+            validate_mcp_server_name(payload.alias, raise_http_exception=True)
 
         # Authz - restrict only admins to delete mcp servers
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
