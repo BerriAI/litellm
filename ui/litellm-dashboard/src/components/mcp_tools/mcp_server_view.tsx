@@ -211,6 +211,10 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                       )}
                     </div>
                   </div>
+                  <div>
+                    <Text className="font-medium">Cost Configuration</Text>
+                    <MCPServerCostDisplay costConfig={mcpServer.mcp_info?.mcp_server_cost_info} />
+                  </div>
                 </div>
               )}
             </Card>
