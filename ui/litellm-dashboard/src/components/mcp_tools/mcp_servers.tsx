@@ -107,7 +107,7 @@ const MCPServers: React.FC<MCPServerProps> = ({
   const [editServer, setEditServer] = useState(false);
   const [selectedTeam, setSelectedTeam] = useState<string>("all");
   const [filteredServers, setFilteredServers] = useState<MCPServer[]>([]);
-  const [currentTeam, setCurrentTeam] = useState<string>("personal");
+  const [currentTeam, setCurrentTeam] = useState<string>("all");
   const [modelViewMode, setModelViewMode] = useState<string>("all");
 
   // Get unique teams from all servers
