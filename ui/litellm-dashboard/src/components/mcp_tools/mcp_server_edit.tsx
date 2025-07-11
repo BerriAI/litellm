@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Form, Select, Button as AntdButton, message } from "antd";
 import { Button, TextInput, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { MCPServer, MCPServerCostInfo } from "./types";
-import { updateMCPServer } from "../networking";
+import { updateMCPServer, testMCPToolsListRequest } from "../networking";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 
 interface MCPServerEditProps {
@@ -15,6 +15,8 @@ interface MCPServerEditProps {
 const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, onCancel, onSuccess }) => {
   const [form] = Form.useForm();
   const [costConfig, setCostConfig] = useState<MCPServerCostInfo>({});
+  const [tools, setTools] = useState<any[]>([]);
+  const [isLoadingTools, setIsLoadingTools] = useState(false);
 
   // Initialize cost config from existing server data
   useEffect(() => {
@@ -22,6 +24,46 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
       setCostConfig(mcpServer.mcp_info.mcp_server_cost_info);
     }
   }, [mcpServer]);
+
+  // Fetch tools when component mounts
+  useEffect(() => {
+    fetchTools();
+  }, [mcpServer, accessToken]);
+
+  const fetchTools = async () => {
+    if (!accessToken || !mcpServer.url) {
+      return;
+    }
+
+    setIsLoadingTools(true);
+    
+    try {
+      // Prepare the MCP server config from existing server data
+      const mcpServerConfig = {
+        server_id: mcpServer.server_id,
+        alias: mcpServer.alias,
+        url: mcpServer.url,
+        transport: mcpServer.transport,
+        spec_version: mcpServer.spec_version,
+        auth_type: mcpServer.auth_type,
+        mcp_info: mcpServer.mcp_info,
+      };
+
+      const toolsResponse = await testMCPToolsListRequest(accessToken, mcpServerConfig);
+      
+      if (toolsResponse.tools && !toolsResponse.error) {
+        setTools(toolsResponse.tools);
+      } else {
+        console.error("Failed to fetch tools:", toolsResponse.message);
+        setTools([]);
+      }
+    } catch (error) {
+      console.error("Tools fetch error:", error);
+      setTools([]);
+    } finally {
+      setIsLoadingTools(false);
+    }
+  };
 
   const handleSave = async (values: Record<string, any>) => {
     if (!accessToken) return;
@@ -95,8 +137,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
               <MCPServerCostConfig
                 value={costConfig}
                 onChange={setCostConfig}
-                tools={[]}
-                disabled={false}
+                tools={tools}
+                disabled={isLoadingTools}
               />
             
             <div className="flex justify-end gap-2">
