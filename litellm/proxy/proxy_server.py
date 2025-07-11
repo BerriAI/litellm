@@ -640,6 +640,8 @@ async def proxy_startup_event(app: FastAPI):
             proxy_logging_obj=proxy_logging_obj,
         )
 
+        await ProxyStartupEvent._update_default_team_member_budget()
+
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
 
@@ -1640,7 +1642,7 @@ class ProxyConfig:
         if credential_list_dict:
             credential_list = [CredentialItem(**cred) for cred in credential_list_dict]
         return credential_list
-    
+
     def _load_environment_variables(self, config: dict):
         ## ENVIRONMENT VARIABLES
         global premium_user
@@ -1655,7 +1657,9 @@ class ProxyConfig:
                 # ```
                 #########################################################
                 if isinstance(value, str) and value.startswith("os.environ/"):
-                    resolved_secret_string: Optional[str] = get_secret_str(secret_name=value)
+                    resolved_secret_string: Optional[str] = get_secret_str(
+                        secret_name=value
+                    )
                     if resolved_secret_string is not None:
                         os.environ[key] = resolved_secret_string
                 else:
@@ -1896,6 +1900,7 @@ class ProxyConfig:
                         raise Exception(
                             f"Invalid value set for upperbound_key_generate_params - value={value}"
                         )
+
                 else:
                     verbose_proxy_logger.debug(
                         f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}"
@@ -1974,10 +1979,13 @@ class ProxyConfig:
                     value=custom_sso, config_file_path=config_file_path
                 )
 
-            custom_ui_sso_sign_in_handler = general_settings.get("custom_ui_sso_sign_in_handler", None)
+            custom_ui_sso_sign_in_handler = general_settings.get(
+                "custom_ui_sso_sign_in_handler", None
+            )
             if custom_ui_sso_sign_in_handler is not None:
                 user_custom_ui_sso_sign_in_handler = get_instance_fn(
-                    value=custom_ui_sso_sign_in_handler, config_file_path=config_file_path
+                    value=custom_ui_sso_sign_in_handler,
+                    config_file_path=config_file_path,
                 )
 
             if enterprise_proxy_config is not None:
@@ -3355,6 +3363,23 @@ class ProxyStartupEvent:
                 },
             )
         )
+
+    @classmethod
+    async def _update_default_team_member_budget(cls):
+        """Update the default team member budget"""
+        if litellm.default_internal_user_params is None:
+            return
+
+        _teams = litellm.default_internal_user_params.get("teams") or []
+        if _teams and all(isinstance(team, dict) for team in _teams):
+            from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+                update_default_team_member_budget,
+            )
+
+            teams_pydantic_obj = [NewUserRequestTeam(**team) for team in _teams]
+            await update_default_team_member_budget(
+                teams=teams_pydantic_obj, user_api_key_dict=UserAPIKeyAuth(token=hash_token(master_key))  # type: ignore
+            )
 
     @classmethod
     async def initialize_scheduled_background_jobs(
@@ -6551,6 +6576,7 @@ def _get_model_group_info(
             )
             model_groups.append(model_group_info)
     return model_groups
+
 
 @router.get(
     "/model_group/info",
