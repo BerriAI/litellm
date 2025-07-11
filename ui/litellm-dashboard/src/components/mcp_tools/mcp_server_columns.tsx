@@ -3,6 +3,7 @@ import { MCPServer } from "./types";
 import { Icon } from "@tremor/react";
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { getMaskedAndFullUrl } from "./utils";
+import { Tooltip } from "antd";
 
 export const mcpServerColumns = (
   userRole: string,
@@ -64,7 +65,12 @@ export const mcpServerColumns = (
       if (Array.isArray(groups) && groups.length > 0) {
         // If string array
         if (typeof groups[0] === "string") {
-          return <span>{groups.join(", ")}</span>;
+          const joined = groups.join(", ");
+          return (
+            <Tooltip title={joined}>
+              <span className="max-w-[200px] truncate block">{joined.length > 30 ? `${joined.slice(0, 30)}...` : joined}</span>
+            </Tooltip>
+          );
         }
       }
       return <span className="text-gray-400 italic">None</span>;

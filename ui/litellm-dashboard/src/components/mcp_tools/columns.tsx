@@ -2,6 +2,7 @@ import React from "react";
 import { ColumnDef } from "@tanstack/react-table";
 import { MCPTool, InputSchema } from "./types";
 import { Button, Callout, Icon } from "@tremor/react"
+import { Tooltip } from "antd";
 
 const AuthBanner = ({needsAuth, authValue}: {needsAuth: boolean, authValue?: string | null}) => {
   if(!needsAuth || (needsAuth && authValue)) {
@@ -69,10 +70,11 @@ export const columns: ColumnDef<MCPTool>[] = [
     header: "Description",
     cell: ({ row }) => {
       const description = row.getValue("description") as string;
+      const truncated = description && description.length > 60 ? description.slice(0, 60) + "..." : description;
       return (
-        <div className="max-w-md">
-          <span className="text-sm text-gray-700">{description}</span>
-        </div>
+        <Tooltip title={description}>
+          <span className="text-sm text-gray-700 max-w-[300px] truncate block">{truncated}</span>
+        </Tooltip>
       );
     },
   },
