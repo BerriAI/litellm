@@ -22,10 +22,10 @@ export function PremiumMCPSelector({
       <div>
         <div className="flex flex-wrap gap-2 mb-3">
           <div className="inline-flex items-center px-3 py-1.5 rounded-lg bg-purple-50 border border-purple-200 text-purple-800 text-sm font-medium opacity-50">
-            28 premium-mcp-server-1
+            ✨ premium-mcp-server-1
           </div>
           <div className="inline-flex items-center px-3 py-1.5 rounded-lg bg-purple-50 border border-purple-200 text-purple-800 text-sm font-medium opacity-50">
-            28 premium-mcp-server-2
+            ✨ premium-mcp-server-2
           </div>
         </div>
         <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
