@@ -166,26 +166,9 @@ export function ToolTestPanel({
             <div className="bg-white border border-gray-200 rounded-lg p-6 shadow-sm">
               <div className="flex items-center justify-between mb-6">
                 <h3 className="text-lg font-semibold text-gray-900">Input Parameters</h3>
-                <div className="flex items-center space-x-2">
-                  <Tooltip title="Configure the input parameters for this tool call">
-                    <InfoCircleOutlined className="text-gray-400 hover:text-gray-600" />
-                  </Tooltip>
-                  {(result || error) && (
-                    <button
-                      onClick={() => {
-                        setViewMode('formatted');
-                        setDuration(null);
-                        setStartTime(null);
-                        // Clear results by calling parent with empty state
-                        // This would need to be handled by parent component
-                      }}
-                      className="text-xs text-blue-600 hover:text-blue-800 font-medium"
-                      title="Reset and test again"
-                    >
-                      Reset
-                    </button>
-                  )}
-                </div>
+                <Tooltip title="Configure the input parameters for this tool call">
+                  <InfoCircleOutlined className="text-gray-400 hover:text-gray-600" />
+                </Tooltip>
               </div>
               
               <Form form={form} onFinish={handleSubmit} layout="vertical" className={`${result || error ? 'space-y-2' : 'space-y-4'}`}>
@@ -342,6 +325,11 @@ export function ToolTestPanel({
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
                         <h4 className="text-sm font-medium text-green-900">Tool executed successfully</h4>
+                        {duration !== null && (
+                          <span className="text-xs text-green-600 ml-2">
+                            • {(duration / 1000).toFixed(2)}s
+                          </span>
+                        )}
                       </div>
 
                       <div className="flex items-center space-x-2">
@@ -380,20 +368,10 @@ export function ToolTestPanel({
                         </button>
                       </div>
                     </div>
-                    
-                    {/* Duration Metrics */}
-                    {duration !== null && (
-                      <div className="mt-2 pt-2 border-t border-green-200 text-xs text-green-700 flex items-center">
-                        <Tooltip title="Tool execution time">
-                          <div className="flex items-center">
-                            <ClockCircleOutlined className="mr-1" />
-                            <span>{(duration / 1000).toFixed(2)}s</span>
-                          </div>
-                        </Tooltip>
-                      </div>
-                    )}
                   </div>
                 )}
+
+
 
                 <div className="min-h-[400px] max-h-[500px] overflow-y-auto">
                   {isLoading && (
@@ -416,7 +394,14 @@ export function ToolTestPanel({
                           </svg>
                         </div>
                         <div className="flex-1">
-                          <h4 className="text-sm font-medium text-red-900 mb-2">Tool Call Failed</h4>
+                          <div className="flex items-center space-x-2 mb-2">
+                            <h4 className="text-sm font-medium text-red-900">Tool Call Failed</h4>
+                            {duration !== null && (
+                              <span className="text-xs text-red-600">
+                                • {(duration / 1000).toFixed(2)}s
+                              </span>
+                            )}
+                          </div>
                           <div className="bg-white border border-red-200 rounded-lg p-3 max-h-64 overflow-y-auto">
                             <pre className="text-xs whitespace-pre-wrap text-red-700 font-mono">{error.message}</pre>
                           </div>
