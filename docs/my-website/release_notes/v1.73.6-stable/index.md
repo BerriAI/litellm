@@ -20,13 +20,6 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 
-:::note
-
-Known issues:
-- Custom root path rendering error
-
-:::
-
 ## Deploy this version
 
 <Tabs>
@@ -36,7 +29,7 @@ Known issues:
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.73.6-stable
+ghcr.io/berriai/litellm:v1.73.6-stable.patch.1
 ```
 </TabItem>
 
