@@ -445,7 +445,8 @@ const sidebars = {
         "providers/petals",
         "providers/snowflake",
         "providers/featherless_ai",
-        "providers/nebius"
+        "providers/nebius",
+        "providers/dashscope"
       ],
     },
     {
