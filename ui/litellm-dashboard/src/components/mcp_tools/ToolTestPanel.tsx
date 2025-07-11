@@ -2,7 +2,7 @@ import React from "react";
 import { Button, Callout, TextInput } from "@tremor/react";
 import { MCPTool, InputSchema } from "./types";
 import { Modal, Form, Tooltip, message } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { InfoCircleOutlined, ClockCircleOutlined } from "@ant-design/icons";
 
 const AuthBanner = ({ needsAuth, authValue }: { needsAuth: boolean; authValue?: string | null }) => {
   if (!needsAuth || (needsAuth && authValue)) {
@@ -44,6 +44,8 @@ export function ToolTestPanel({
 }) {
   const [form] = Form.useForm();
   const [viewMode, setViewMode] = React.useState<'formatted' | 'json'>('formatted');
+  const [startTime, setStartTime] = React.useState<number | null>(null);
+  const [duration, setDuration] = React.useState<number | null>(null);
 
   // Create a placeholder schema if we only have the "tool_input_schema" string
   const schema: InputSchema = React.useMemo(() => {
@@ -64,8 +66,19 @@ export function ToolTestPanel({
   }, [tool.inputSchema]);
 
   const handleSubmit = (values: Record<string, any>) => {
+    const start = Date.now();
+    setStartTime(start);
+    setDuration(null);
     onSubmit(values);
   };
+
+  // Track when result changes to calculate duration
+  React.useEffect(() => {
+    if (startTime && (result || error)) {
+      const endTime = Date.now();
+      setDuration(endTime - startTime);
+    }
+  }, [result, error, startTime]);
 
   const copyToClipboard = async (text: string) => {
     try {
@@ -147,29 +160,48 @@ export function ToolTestPanel({
         <AuthBanner needsAuth={needsAuth} authValue={authValue} />
         
         {/* Content */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <div className={`grid gap-8 ${result || error ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-2'}`}>
           {/* Form Section */}
           <div className="space-y-6">
             <div className="bg-white border border-gray-200 rounded-lg p-6 shadow-sm">
               <div className="flex items-center justify-between mb-6">
                 <h3 className="text-lg font-semibold text-gray-900">Input Parameters</h3>
-                <Tooltip title="Configure the input parameters for this tool call">
-                  <InfoCircleOutlined className="text-gray-400 hover:text-gray-600" />
-                </Tooltip>
+                <div className="flex items-center space-x-2">
+                  <Tooltip title="Configure the input parameters for this tool call">
+                    <InfoCircleOutlined className="text-gray-400 hover:text-gray-600" />
+                  </Tooltip>
+                  {(result || error) && (
+                    <button
+                      onClick={() => {
+                        setViewMode('formatted');
+                        setDuration(null);
+                        setStartTime(null);
+                        // Clear results by calling parent with empty state
+                        // This would need to be handled by parent component
+                      }}
+                      className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+                      title="Reset and test again"
+                    >
+                      Reset
+                    </button>
+                  )}
+                </div>
               </div>
               
-              <Form form={form} onFinish={handleSubmit} layout="vertical" className="space-y-4">
+              <Form form={form} onFinish={handleSubmit} layout="vertical" className={`${result || error ? 'space-y-2' : 'space-y-4'}`}>
                 {typeof tool.inputSchema === "string" ? (
-                  <div className="space-y-4">
-                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                      <div className="flex items-start space-x-3">
-                        <InfoCircleOutlined className="text-blue-500 mt-0.5" />
-                        <div>
-                          <p className="text-sm font-medium text-blue-900">Dynamic Schema</p>
-                          <p className="text-xs text-blue-700 mt-1">This tool uses a dynamic input schema.</p>
+                  <div className={`${result || error ? 'space-y-2' : 'space-y-4'}`}>
+                    {!(result || error) && (
+                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                        <div className="flex items-start space-x-3">
+                          <InfoCircleOutlined className="text-blue-500 mt-0.5" />
+                          <div>
+                            <p className="text-sm font-medium text-blue-900">Dynamic Schema</p>
+                            <p className="text-xs text-blue-700 mt-1">This tool uses a dynamic input schema.</p>
+                          </div>
                         </div>
                       </div>
-                    </div>
+                    )}
                     <Form.Item
                       label={
                         <span className="text-sm font-medium text-gray-700">
@@ -186,19 +218,21 @@ export function ToolTestPanel({
                     </Form.Item>
                   </div>
                 ) : schema.properties === undefined ? (
-                  <div className="text-center py-12 bg-gray-50 rounded-lg border border-gray-200">
+                  <div className={`text-center ${result || error ? 'py-4' : 'py-12'} bg-gray-50 rounded-lg border border-gray-200`}>
                     <div className="max-w-sm mx-auto">
-                      <div className="mb-4">
-                        <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                      </div>
+                      {!(result || error) && (
+                        <div className="mb-4">
+                          <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                        </div>
+                      )}
                       <h4 className="text-sm font-medium text-gray-900 mb-1">No Parameters Required</h4>
                       <p className="text-xs text-gray-500">This tool can be called without any input parameters.</p>
                     </div>
                   </div>
                 ) : (
-                  <div className="space-y-4">
+                  <div className={`${result || error ? 'space-y-2' : 'space-y-4'}`}>
                     {Object.entries(schema.properties).map(([key, prop]) => (
                       <Form.Item
                         key={key}
@@ -206,7 +240,7 @@ export function ToolTestPanel({
                           <span className="text-sm font-medium text-gray-700 flex items-center">
                             {key}{" "}
                             {schema.required?.includes(key) && <span className="text-red-500">*</span>}
-                            {prop.description && (
+                            {prop.description && !result && !error && (
                               <Tooltip title={prop.description}>
                                 <InfoCircleOutlined className="ml-2 text-gray-400 hover:text-gray-600" />
                               </Tooltip>
@@ -250,7 +284,7 @@ export function ToolTestPanel({
                   </div>
                 )}
 
-                <div className="pt-6 border-t border-gray-100">
+                <div className={`${result || error ? 'pt-3 border-t border-gray-100' : 'pt-6 border-t border-gray-100'}`}>
                   <Button
                     onClick={() => form.submit()}
                     disabled={isLoading}
@@ -258,7 +292,7 @@ export function ToolTestPanel({
                     className="w-full"
                     loading={isLoading}
                   >
-                    {isLoading ? "Calling Tool..." : "Call Tool"}
+                    {isLoading ? "Calling Tool..." : (result || error) ? "Call Again" : "Call Tool"}
                   </Button>
                 </div>
               </Form>
@@ -266,7 +300,33 @@ export function ToolTestPanel({
           </div>
 
           {/* Result Section */}
-          <div className="space-y-6">
+          {!result && !error && !isLoading && (
+            <div className="space-y-6">
+              <div className="bg-white border border-gray-200 rounded-lg shadow-sm">
+                <div className="border-b border-gray-100 px-6 py-4">
+                  <h3 className="text-lg font-semibold text-gray-900">Tool Result</h3>
+                </div>
+                <div className="p-6">
+                  <div className="flex flex-col justify-center items-center h-64 text-gray-500">
+                    <div className="text-center max-w-sm">
+                      <div className="mb-4">
+                        <svg className="mx-auto h-16 w-16 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                      </div>
+                      <h4 className="text-sm font-medium text-gray-900 mb-2">Ready to Call Tool</h4>
+                      <p className="text-xs text-gray-500 leading-relaxed">
+                        Configure the input parameters on the left and click "Call Tool" to see the results here.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {/* Results when present - full width */}
+          {(result || error || isLoading) && (
             <div className="bg-white border border-gray-200 rounded-lg shadow-sm">
               <div className="border-b border-gray-100 px-6 py-4">
                 <h3 className="text-lg font-semibold text-gray-900">Tool Result</h3>
@@ -275,49 +335,63 @@ export function ToolTestPanel({
               <div className="p-6">
                 {/* Result Control Bar */}
                 {result && !isLoading && !error && (
-                  <div className="flex items-center justify-between mb-4 p-3 bg-green-50 border border-green-200 rounded-lg">
-                    <div className="flex items-center space-x-2">
-                      <svg className="h-5 w-5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                      <h4 className="text-sm font-medium text-green-900">Tool executed successfully</h4>
-                    </div>
-                    
-                    <div className="flex items-center space-x-2">
-                      <div className="flex bg-white rounded-lg border border-green-300 p-1">
-                        <button
-                          onClick={() => setViewMode('formatted')}
-                          className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
-                            viewMode === 'formatted'
-                              ? 'bg-green-100 text-green-800'
-                              : 'text-green-600 hover:text-green-800'
-                          }`}
+                  <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <svg className="h-5 w-5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <h4 className="text-sm font-medium text-green-900">Tool executed successfully</h4>
+                      </div>
+
+                      <div className="flex items-center space-x-2">
+                        <div className="flex bg-white rounded-lg border border-green-300 p-1">
+                          <button
+                            onClick={() => setViewMode('formatted')}
+                            className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                              viewMode === 'formatted'
+                                ? 'bg-green-100 text-green-800'
+                                : 'text-green-600 hover:text-green-800'
+                            }`}
+                          >
+                            Formatted
+                          </button>
+                          <button
+                            onClick={() => setViewMode('json')}
+                            className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                              viewMode === 'json'
+                                ? 'bg-green-100 text-green-800'
+                                : 'text-green-600 hover:text-green-800'
+                            }`}
+                          >
+                            JSON
+                          </button>
+                        </div>
+                        
+                        <button 
+                          onClick={handleCopyResult}
+                          className="p-1 hover:bg-green-100 rounded text-green-700"
+                          title="Copy response"
                         >
-                          Formatted
-                        </button>
-                        <button
-                          onClick={() => setViewMode('json')}
-                          className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
-                            viewMode === 'json'
-                              ? 'bg-green-100 text-green-800'
-                              : 'text-green-600 hover:text-green-800'
-                          }`}
-                        >
-                          JSON
+                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                          </svg>
                         </button>
                       </div>
-                      
-                      <button 
-                        onClick={handleCopyResult}
-                        className="p-1 hover:bg-green-100 rounded text-green-700"
-                        title="Copy response"
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                        </svg>
-                      </button>
                     </div>
+                    
+                    {/* Duration Metrics */}
+                    {duration !== null && (
+                      <div className="mt-2 pt-2 border-t border-green-200 text-xs text-green-700 flex items-center">
+                        <Tooltip title="Tool execution time">
+                          <div className="flex items-center">
+                            <ClockCircleOutlined className="mr-1" />
+                            <span>{(duration / 1000).toFixed(2)}s</span>
+                          </div>
+                        </Tooltip>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -495,25 +569,10 @@ export function ToolTestPanel({
                     </div>
                   )}
 
-                  {!result && !isLoading && !error && (
-                    <div className="flex flex-col justify-center items-center h-full py-16 text-gray-500">
-                      <div className="text-center max-w-sm">
-                        <div className="mb-4">
-                          <svg className="mx-auto h-16 w-16 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                          </svg>
-                        </div>
-                        <h4 className="text-sm font-medium text-gray-900 mb-2">Ready to Call Tool</h4>
-                        <p className="text-xs text-gray-500 leading-relaxed">
-                          Configure the input parameters on the left and click "Call Tool" to see the results here.
-                        </p>
-                      </div>
-                    </div>
-                  )}
                 </div>
               </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
     </Modal>
