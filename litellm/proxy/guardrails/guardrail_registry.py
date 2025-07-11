@@ -452,7 +452,7 @@ class InMemoryGuardrailHandler:
         config_file_path: Optional[str] = None,
     ) -> Optional[CustomGuardrail]:
         """
-        Initialize a Custom Guardrail from a Python file.
+        Initialize a Custom Guardrail from a python file.
 
         This initializes it by adding it to the litellm callback manager.
         """
