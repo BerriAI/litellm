@@ -861,23 +861,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     />
                   </Form.Item>
 
-                  <Accordion className="mt-4 mb-4">
-                    <AccordionHeader>
-                      <b>Logging Settings</b>
-                    </AccordionHeader>
-                    <AccordionBody>
-                      <div className="mt-4">
-                        <PremiumLoggingSettings
-                          value={loggingSettings}
-                          onChange={setLoggingSettings}
-                          premiumUser={premiumUser}
-                          disabledCallbacks={disabledCallbacks}
-                          onDisabledCallbacksChange={setDisabledCallbacks}
-                          accessToken={accessToken}
-                        />
-                      </div>
-                    </AccordionBody>
-                  </Accordion>
+
                   <Accordion className="mt-4 mb-4">
                     <AccordionHeader>
                     <div className="flex items-center gap-2">
@@ -908,6 +892,29 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                       />
                     </AccordionBody>
                   </Accordion>
+                </AccordionBody>
+              </Accordion>
+            </div>
+          )}
+
+          {/* Section 4: Logging Settings */}
+          {!isFormDisabled && (
+            <div className="mb-8">
+              <Accordion className="mt-4 mb-4">
+                <AccordionHeader>
+                  <b>Logging Settings</b>
+                </AccordionHeader>
+                <AccordionBody>
+                  <div className="mt-4">
+                    <PremiumLoggingSettings
+                      value={loggingSettings}
+                      onChange={setLoggingSettings}
+                      premiumUser={premiumUser}
+                      disabledCallbacks={disabledCallbacks}
+                      onDisabledCallbacksChange={setDisabledCallbacks}
+                      accessToken={accessToken}
+                    />
+                  </div>
                 </AccordionBody>
               </Accordion>
             </div>
