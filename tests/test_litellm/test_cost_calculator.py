@@ -248,13 +248,13 @@ def test_default_image_cost_calculator(monkeypatch):
         "input_cost_per_pixel": 10,
     }
 
-    monkeypatch.setattr(
-        litellm,
-        "model_cost",
-        {
-            "azure/bf9001cd7209f5734ecb4ab937a5a0e2ba5f119708bd68f184db362930f9dc7b": temp_object
-        },
-    )
+    # Mock get_model_info to return the temp_object for our test model
+    def mock_get_model_info(model, custom_llm_provider=None):
+        if "bf9001cd7209f5734ecb4ab937a5a0e2ba5f119708bd68f184db362930f9dc7b" in model:
+            return temp_object
+        raise Exception("Model not found")
+    
+    monkeypatch.setattr(litellm, "get_model_info", mock_get_model_info)
 
     args = {
         "model": "azure/bf9001cd7209f5734ecb4ab937a5a0e2ba5f119708bd68f184db362930f9dc7b",
