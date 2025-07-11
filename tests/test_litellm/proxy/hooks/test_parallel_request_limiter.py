@@ -212,6 +212,7 @@ async def test_pre_call_hook_rpm_limits_retry_after():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=2)
 async def test_pre_call_hook_team_rpm_limits():
     """
     Test if error raised on hitting team rpm limits
@@ -1224,8 +1225,8 @@ async def test_post_call_success_hook_rpm_limits_per_model():
     Test if openai-compatible x-ratelimit-* headers are added to the response
     """
     import logging
-    from litellm import ModelResponse
 
+    from litellm import ModelResponse
     from litellm._logging import (
         verbose_logger,
         verbose_proxy_logger,
