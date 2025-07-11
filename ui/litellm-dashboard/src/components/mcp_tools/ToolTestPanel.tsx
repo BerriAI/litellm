@@ -134,6 +134,7 @@ export function ToolTestPanel({
       <div className="flex items-center justify-between pb-3 border-b border-gray-200">
         <div className="flex items-center space-x-3">
           {tool.mcp_info.logo_url && (
+            // eslint-disable-next-line @next/next/no-img-element
             <img
               src={tool.mcp_info.logo_url}
               alt={`${tool.mcp_info.server_name} logo`}
@@ -312,7 +313,7 @@ export function ToolTestPanel({
                   </div>
                   <h4 className="text-sm font-medium text-gray-900 mb-1">Ready to Call Tool</h4>
                   <p className="text-xs text-gray-500 leading-relaxed">
-                    Configure the input parameters and click "Call Tool" to see the results here.
+                    Configure the input parameters and click &quot;Call Tool&quot; to see the results here.
                   </p>
                 </div>
               </div>
@@ -496,6 +497,7 @@ export function ToolTestPanel({
                                 </div>
                                 <div className="p-3">
                                   <div className="bg-gray-50 rounded p-3 border border-gray-200">
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
                                     <img
                                       src={content.url}
                                       alt="Tool result"
