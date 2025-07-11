@@ -1,7 +1,8 @@
 import React, { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { DataTable } from "../view_logs/table";
-import { columns, ToolTestPanel } from "./columns";
+import { columns } from "./columns";
+import { ToolTestPanel } from "./ToolTestPanel";
 import {
   MCPTool,
   MCPToolsViewerProps,
