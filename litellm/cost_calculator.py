@@ -681,9 +681,9 @@ def completion_cost(  # noqa: PLR0915
                     or isinstance(completion_response, dict)
                 ):  # tts returns a custom class
                     if isinstance(completion_response, dict):
-                        usage_obj: Optional[Union[dict, Usage]] = (
-                            completion_response.get("usage", {})
-                        )
+                        usage_obj: Optional[
+                            Union[dict, Usage]
+                        ] = completion_response.get("usage", {})
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
@@ -853,7 +853,10 @@ def completion_cost(  # noqa: PLR0915
                     from litellm.proxy._experimental.mcp_server.cost_calculator import (
                         MCPCostCalculator,
                     )
-                    return MCPCostCalculator.calculate_mcp_tool_call_cost(litellm_logging_obj=litellm_logging_obj)
+
+                    return MCPCostCalculator.calculate_mcp_tool_call_cost(
+                        litellm_logging_obj=litellm_logging_obj
+                    )
                 # Calculate cost based on prompt_tokens, completion_tokens
                 if (
                     "togethercomputer" in model
@@ -1167,7 +1170,7 @@ def default_image_cost_calculator(
     )
 
     # Try model with quality first, fall back to base model name
-    cost_info: Optional[dict] = None
+    cost_info: Optional[Union[dict, ModelInfo]] = None
     models_to_check: List[Optional[str]] = [
         model_name_with_quality,
         base_model_name,
@@ -1178,32 +1181,49 @@ def default_image_cost_calculator(
         model_name_without_custom_llm_provider,
     ]
 
-    # Azure custom deployments may use arbitrary deployment names that don't contain
-    # "gpt-image-1". In such cases, try falling back to the canonical
-    # `gpt-image-1` entry for Azure before raising an exception. This ensures cost
-    # tracking works even when users set `model="<custom-deployment-name>"` in
-    # their Azure portal.
-    if cost_info is None and custom_llm_provider == "azure":
-        # Within this block, custom_llm_provider is guaranteed to be "azure" (not None)
-        assert custom_llm_provider is not None
-        azure_base_model_name: str = f"{custom_llm_provider}/{size_str}/gpt-image-1"
-        azure_model_with_quality: str
-        if quality:
-            azure_model_with_quality = f"{quality}/{azure_base_model_name}"
-        else:
-            azure_model_with_quality = azure_base_model_name
-        models_to_check.extend([azure_model_with_quality, azure_base_model_name])
-
-        for _model in [azure_model_with_quality, azure_base_model_name]:
-            if _model is not None and _model in litellm.model_cost:
-                assert _model is not None  # mypy narrowing
-                cost_info = litellm.model_cost[_model]
-                break
-
+    # Try to find model info using get_model_info
     for _model_candidate in models_to_check:
-        if _model_candidate is not None and _model_candidate in litellm.model_cost:
-            cost_info = litellm.model_cost[_model_candidate]
-            break
+        if _model_candidate is not None:
+            try:
+                model_info = litellm.get_model_info(
+                    model=_model_candidate, custom_llm_provider=custom_llm_provider
+                )
+                if model_info:
+                    cost_info = model_info
+                    break
+            except Exception:
+                # Continue trying other model candidates
+                continue
+
+    # For Azure custom deployments, if we still haven't found the model,
+    # try to find a base model that supports token-based pricing
+    if cost_info is None and custom_llm_provider == "azure":
+        # Look for any token-based pricing model for the same size
+        # This is a more generic approach that doesn't hardcode "gpt-image-1"
+        size_based_models = [
+            f"{custom_llm_provider}/{size_str}/{model_name}"
+            for model_name in ["gpt-image-1", "dall-e-3", "dall-e-2"]
+        ]
+
+        for base_model in size_based_models:
+            azure_model_with_quality = (
+                f"{quality}/{base_model}" if quality else base_model
+            )
+            for candidate in [azure_model_with_quality, base_model]:
+                try:
+                    model_info = litellm.get_model_info(
+                        model=candidate, custom_llm_provider=custom_llm_provider
+                    )
+                    if model_info and (
+                        "input_cost_per_token" in model_info
+                        or "output_cost_per_token" in model_info
+                    ):
+                        cost_info = model_info
+                        break
+                except Exception:
+                    continue
+            if cost_info:
+                break
 
     if cost_info is None:
         raise Exception(
@@ -1213,8 +1233,19 @@ def default_image_cost_calculator(
     # Ensure n is never None for calculations
     n_value = n if n is not None else 1
 
-    # Decide pricing type
-    if "input_cost_per_token" in cost_info or "output_cost_per_token" in cost_info:
+    # Decide pricing type - check for non-null token pricing fields
+    if isinstance(cost_info, dict):
+        has_token_pricing = (
+            cost_info.get("input_cost_per_token") is not None
+            or cost_info.get("output_cost_per_token") is not None
+        )
+    else:
+        has_token_pricing = (
+            getattr(cost_info, "input_cost_per_token", None) is not None
+            or getattr(cost_info, "output_cost_per_token", None) is not None
+        )
+    
+    if has_token_pricing:
         return _calculate_token_based_image_cost(
             model=model,
             cost_info=cost_info,
@@ -1227,15 +1258,25 @@ def default_image_cost_calculator(
         )
     else:
         # Pixel-based pricing (legacy DALL-E models)
-        return cost_info.get("input_cost_per_pixel", 0) * height * width * n_value
+        if isinstance(cost_info, dict):
+            pixel_cost = cost_info.get("input_cost_per_pixel", 0)
+        else:
+            pixel_cost = getattr(cost_info, "input_cost_per_pixel", 0)
+        
+        # Ensure pixel_cost is numeric
+        if not isinstance(pixel_cost, (int, float)):
+            pixel_cost = 0
+            
+        return pixel_cost * height * width * n_value
 
 
 # ---------------- Token-based image cost helper ---------------- #
 
+
 def _calculate_token_based_image_cost(
     *,
     model: str,
-    cost_info: dict,
+    cost_info: Union[dict, ModelInfo],
     quality: Optional[str],
     height: int,
     width: int,
@@ -1252,8 +1293,15 @@ def _calculate_token_based_image_cost(
     the response `usage` field.
     """
 
-    # Validate that cost_info has token-based pricing fields
-    if not (cost_info.get("input_cost_per_token") or cost_info.get("output_cost_per_token")):
+    # Validate that cost_info has non-null token-based pricing fields
+    if isinstance(cost_info, dict):
+        input_cost_field = cost_info.get("input_cost_per_token")
+        output_cost_field = cost_info.get("output_cost_per_token")
+    else:
+        input_cost_field = getattr(cost_info, "input_cost_per_token", None)
+        output_cost_field = getattr(cost_info, "output_cost_per_token", None)
+    
+    if input_cost_field is None and output_cost_field is None:
         raise ValueError(
             f"Model {model} does not have token-based pricing configuration in cost_info"
         )
@@ -1263,16 +1311,22 @@ def _calculate_token_based_image_cost(
             "Token counts are required for token-based image cost calculation."
         )
 
-    input_cost_per_token = cost_info.get("input_cost_per_token", 0)
-    output_cost_per_token = cost_info.get("output_cost_per_token", 0)
-    
+    if isinstance(cost_info, dict):
+        input_cost_per_token = cost_info.get("input_cost_per_token", 0)
+        output_cost_per_token = cost_info.get("output_cost_per_token", 0)
+    else:
+        input_cost_per_token = getattr(cost_info, "input_cost_per_token", 0)
+        output_cost_per_token = getattr(cost_info, "output_cost_per_token", 0)
+
     # Validate that cost fields are not None and are valid numbers
     if input_cost_per_token is None:
         input_cost_per_token = 0
     if output_cost_per_token is None:
         output_cost_per_token = 0
-        
-    if not isinstance(input_cost_per_token, (int, float)) or not isinstance(output_cost_per_token, (int, float)):
+
+    if not isinstance(input_cost_per_token, (int, float)) or not isinstance(
+        output_cost_per_token, (int, float)
+    ):
         raise ValueError(
             f"Invalid cost configuration for model {model}: input_cost_per_token={input_cost_per_token}, output_cost_per_token={output_cost_per_token}"
         )
