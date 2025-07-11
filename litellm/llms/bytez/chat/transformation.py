@@ -405,7 +405,6 @@ def adapt_messages_to_bytez_standard(messages: List[Dict]):
         new_content = []
 
         for content_item in content:
-            content_item: dict
             type: Union[str, None] = content_item.get("type")
 
             if not type:
@@ -415,8 +414,6 @@ def adapt_messages_to_bytez_standard(messages: List[Dict]):
 
             if not content_item_map:
                 raise Exception(f"Prop `{type}` is not supported")
-
-            content_item_map: Dict[str, str]
 
             new_type = content_item_map["type"]
 
