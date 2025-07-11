@@ -2,6 +2,7 @@ import asyncio
 import json
 import sys
 import os
+import tempfile
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 import pytest
 
@@ -19,6 +20,57 @@ from litellm.google_genai import (
 from google.genai.types import ContentDict, PartDict, GenerateContentResponse
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
+
+
+@pytest.fixture(scope="session")
+def load_vertex_ai_credentials():
+    """Fixture to load Vertex AI credentials for all tests"""
+    # Define the path to the vertex_key.json file
+    print("loading vertex ai credentials")
+    filepath = os.path.dirname(os.path.abspath(__file__))
+    vertex_key_path = filepath + "/vertex_key.json"
+
+    # Read the existing content of the file or create an empty dictionary
+    try:
+        with open(vertex_key_path, "r") as file:
+            # Read the file content
+            print("Read vertexai file path")
+            content = file.read()
+
+            # If the file is empty or not valid JSON, create an empty dictionary
+            if not content or not content.strip():
+                service_account_key_data = {}
+            else:
+                # Attempt to load the existing JSON content
+                file.seek(0)
+                service_account_key_data = json.load(file)
+    except FileNotFoundError:
+        # If the file doesn't exist, create an empty dictionary
+        service_account_key_data = {}
+
+    # Update the service_account_key_data with environment variables
+    private_key_id = os.environ.get("VERTEX_AI_PRIVATE_KEY_ID", "")
+    private_key = os.environ.get("VERTEX_AI_PRIVATE_KEY", "")
+    private_key = private_key.replace("\\n", "\n")
+    service_account_key_data["private_key_id"] = private_key_id
+    service_account_key_data["private_key"] = private_key
+
+    # Create a temporary file
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as temp_file:
+        # Write the updated content to the temporary files
+        json.dump(service_account_key_data, temp_file, indent=2)
+
+    # Export the temporary file as GOOGLE_APPLICATION_CREDENTIALS
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)
+    
+    # Yield the path for tests that might need it
+    yield os.path.abspath(temp_file.name)
+    
+    # Cleanup: remove the temporary file after all tests complete
+    try:
+        os.unlink(temp_file.name)
+    except OSError:
+        pass  # File might already be deleted
 
 
 class TestCustomLogger(CustomLogger):

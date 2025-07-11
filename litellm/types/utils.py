@@ -33,10 +33,15 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 import litellm
-from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+from litellm.types.llms.base import (
+    BaseLiteLLMOpenAIResponseObject,
+    LiteLLMPydanticObjectBase,
+)
+from litellm.types.mcp import MCPServerCostInfo
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
 from .guardrails import GuardrailEventHooks
+from .llms.base import HiddenParams
 from .llms.openai import (
     Batch,
     ChatCompletionAnnotation,
@@ -61,28 +66,6 @@ else:
 
 def _generate_id():  # private helper function
     return "chatcmpl-" + str(uuid.uuid4())
-
-
-class LiteLLMPydanticObjectBase(BaseModel):
-    """
-    Implements default functions, all pydantic objects should have.
-    """
-
-    def json(self, **kwargs):  # type: ignore
-        try:
-            return self.model_dump(**kwargs)  # noqa
-        except Exception:
-            # if using pydantic v1
-            return self.dict(**kwargs)
-
-    def fields_set(self):
-        try:
-            return self.model_fields_set  # noqa
-        except Exception:
-            # if using pydantic v1
-            return self.__fields_set__
-
-    model_config = ConfigDict(protected_namespaces=())
 
 
 class LiteLLMCommonStrings(Enum):
@@ -181,7 +164,12 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     litellm_provider: Required[str]
     mode: Required[
         Literal[
-            "completion", "embedding", "image_generation", "chat", "audio_transcription"
+            "completion",
+            "embedding",
+            "image_generation",
+            "chat",
+            "audio_transcription",
+            "responses",
         ]
     ]
     tpm: Optional[int]
@@ -276,6 +264,8 @@ class CallTypes(Enum):
     responses = "responses"
     aresponses = "aresponses"
     alist_input_items = "alist_input_items"
+    llm_passthrough_route = "llm_passthrough_route"
+    allm_passthrough_route = "allm_passthrough_route"
 
     #########################################################
     # Google GenAI Native Call Types
@@ -284,6 +274,11 @@ class CallTypes(Enum):
     agenerate_content = "agenerate_content"
     generate_content_stream = "generate_content_stream"
     agenerate_content_stream = "agenerate_content_stream"
+
+    #########################################################
+    # MCP Call Types
+    #########################################################
+    call_mcp_tool = "call_mcp_tool"
 
 
 CallTypesLiteral = Literal[
@@ -479,40 +474,6 @@ class ChatCompletionDeltaToolCall(OpenAIObject):
         setattr(self, key, value)
 
 
-class HiddenParams(OpenAIObject):
-    original_response: Optional[Union[str, Any]] = None
-    model_id: Optional[str] = None  # used in Router for individual deployments
-    api_base: Optional[str] = None  # returns api base used for making completion call
-    _response_ms: Optional[float] = None
-
-    model_config = ConfigDict(extra="allow", protected_namespaces=())
-
-    def get(self, key, default=None):
-        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
-        return getattr(self, key, default)
-
-    def __getitem__(self, key):
-        # Allow dictionary-style access to attributes
-        return getattr(self, key)
-
-    def __setitem__(self, key, value):
-        # Allow dictionary-style assignment of attributes
-        setattr(self, key, value)
-
-    def json(self, **kwargs):  # type: ignore
-        try:
-            return self.model_dump()  # noqa
-        except Exception:
-            # if using pydantic v1
-            return self.dict()
-
-    def model_dump(self, **kwargs):
-        # Override model_dump to include private attributes
-        data = super().model_dump(**kwargs)
-        data["_response_ms"] = self._response_ms
-        return data
-
-
 class ChatCompletionMessageToolCall(OpenAIObject):
     def __init__(
         self,
@@ -623,7 +584,7 @@ class Message(OpenAIObject):
     def __init__(
         self,
         content: Optional[str] = None,
-        role: Literal["assistant"] = "assistant",
+        role: Literal["assistant", "user", "system", "tool", "function"] = "assistant",
         function_call=None,
         tool_calls: Optional[list] = None,
         audio: Optional[ChatCompletionAudioResponse] = None,
@@ -927,13 +888,18 @@ class Usage(CompletionUsage):
 
     server_tool_use: Optional[ServerToolUse] = None
 
+    prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+    """Breakdown of tokens used in the prompt."""
+
     def __init__(
         self,
         prompt_tokens: Optional[int] = None,
         completion_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
         reasoning_tokens: Optional[int] = None,
-        prompt_tokens_details: Optional[Union[PromptTokensDetailsWrapper, dict]] = None,
+        prompt_tokens_details: Optional[
+            Union[PromptTokensDetailsWrapper, PromptTokensDetails, dict]
+        ] = None,
         completion_tokens_details: Optional[
             Union[CompletionTokensDetailsWrapper, dict]
         ] = None,
@@ -961,12 +927,17 @@ class Usage(CompletionUsage):
 
         # handle prompt_tokens_details
         _prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+
         if prompt_tokens_details:
             if isinstance(prompt_tokens_details, dict):
                 _prompt_tokens_details = PromptTokensDetailsWrapper(
                     **prompt_tokens_details
                 )
             elif isinstance(prompt_tokens_details, PromptTokensDetails):
+                _prompt_tokens_details = PromptTokensDetailsWrapper(
+                    **prompt_tokens_details.model_dump()
+                )
+            elif isinstance(prompt_tokens_details, PromptTokensDetailsWrapper):
                 _prompt_tokens_details = prompt_tokens_details
 
         ## DEEPSEEK MAPPING ##
@@ -1843,6 +1814,18 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
     (this is to render the logo on the logs page on litellm ui)
     """
 
+    namespaced_tool_name: Optional[str]
+    """
+    Namespaced tool name of the MCP tool that the tool call was made to
+
+    Includes the server name prefix if it exists - eg. `deepwiki-mcp/get_page_content`
+    """
+
+    mcp_server_cost_info: Optional[MCPServerCostInfo]
+    """
+    Cost per query for the MCP server tool call
+    """
+
 
 class StandardLoggingVectorStoreRequest(TypedDict, total=False):
     """
@@ -1970,9 +1953,16 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     error_message: Optional[str]
 
 
+class GuardrailMode(TypedDict, total=False):
+    tags: Optional[Dict[str, str]]
+    default: Optional[str]
+
+
 class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_name: Optional[str]
-    guardrail_mode: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]]
+    guardrail_mode: Optional[
+        Union[GuardrailEventHooks, List[GuardrailEventHooks], GuardrailMode]
+    ]
     guardrail_request: Optional[dict]
     guardrail_response: Optional[Union[dict, str, List[dict]]]
     guardrail_status: Literal["success", "failure"]
@@ -2074,6 +2064,9 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langfuse_secret_key: Optional[str]
     langfuse_host: Optional[str]
 
+    # Langfuse prompt version
+    langfuse_prompt_version: Optional[int]
+
     # GCS dynamic params
     gcs_bucket_name: Optional[str]
     gcs_path_service_account: Optional[str]
@@ -2089,6 +2082,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     # Arize dynamic params
     arize_api_key: Optional[str]
     arize_space_key: Optional[str]
+    arize_space_id: Optional[str]
 
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
@@ -2113,6 +2107,7 @@ all_litellm_params = [
     "prompt_id",
     "provider_specific_header",
     "prompt_variables",
+    "prompt_version",
     "api_base",
     "force_timeout",
     "logger_fn",
@@ -2276,6 +2271,7 @@ class LlmProviders(str, Enum):
     VOLCENGINE = "volcengine"
     CODESTRAL = "codestral"
     TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
+    DASHSCOPE = "dashscope"
     DEEPSEEK = "deepseek"
     SAMBANOVA = "sambanova"
     MARITALK = "maritalk"
@@ -2301,12 +2297,14 @@ class LlmProviders(str, Enum):
     NEBIUS = "nebius"
     INFINITY = "infinity"
     DEEPGRAM = "deepgram"
+    ELEVENLABS = "elevenlabs"
     NOVITA = "novita"
     AIOHTTP_OPENAI = "aiohttp_openai"
     LANGFUSE = "langfuse"
     HUMANLOOP = "humanloop"
     TOPAZ = "topaz"
     ASSEMBLYAI = "assemblyai"
+    GITHUB_COPILOT = "github_copilot"
     SNOWFLAKE = "snowflake"
     LLAMA = "meta_llama"
     NSCALE = "nscale"
@@ -2512,3 +2510,12 @@ class CallbacksByType(TypedDict):
     success: List[str]
     failure: List[str]
     success_and_failure: List[str]
+
+
+CostResponseTypes = Union[
+    ModelResponse,
+    TextCompletionResponse,
+    EmbeddingResponse,
+    ImageResponse,
+    TranscriptionResponse,
+]

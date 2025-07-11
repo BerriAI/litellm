@@ -1,3 +1,9 @@
+export interface Team {
+  team_id: string;
+  team_alias?: string;
+  organization_id?: string | null;
+}
+
 // Default no auth value
 export const AUTH_TYPE = {
   NONE: "none",
@@ -45,10 +51,18 @@ export interface InputSchemaProperty {
     required?: string[];
   }
   
+  // Define MCPServerCostInfo for cost tracking
+  export interface MCPServerCostInfo {
+    default_cost_per_query?: number | null;
+    tool_name_to_cost_per_query?: Record<string, number | null>;
+  }
+
   // Define MCP provider info
   export interface MCPInfo {
     server_name: string;
+    description?: string;
     logo_url?: string;
+    mcp_server_cost_info?: MCPServerCostInfo | null;
   }
   
   // Define the structure for a single MCP tool
@@ -114,10 +128,13 @@ export interface MCPServer {
   transport?: string | null;
   spec_version?: string | null;
   auth_type?: string | null;
+  mcp_info?: MCPInfo | null;
   created_at: string;
   created_by: string;
   updated_at: string;
   updated_by: string;
+  teams?: Team[];
+  mcp_access_groups?: string[];
 }
 
 export interface MCPServerProps {

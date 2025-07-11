@@ -215,14 +215,32 @@ async def create_mcp_server(
     """
     Create a new mcp server record in the db
     """
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
     if data.server_id is None:
         data.server_id = str(uuid.uuid4())
+    
+    # Convert model to dict and handle JSON fields
+    data_dict = data.model_dump()
+    
+    # Handle mcp_info serialization
+    mcp_info: Optional[str] = None
+    if data.mcp_info is not None:
+        mcp_info = safe_dumps(data.mcp_info)
+        del data_dict["mcp_info"]
+    
+    # Handle mcp_access_groups - it's already a List[str], no need to serialize
+    mcp_access_groups: Optional[list] = None
+    if data.mcp_access_groups is not None:
+        mcp_access_groups = data.mcp_access_groups
+        del data_dict["mcp_access_groups"]
 
     mcp_server_record = await prisma_client.db.litellm_mcpservertable.create(
         data={
-            **data.model_dump(),
+            **data_dict,
             "created_by": touched_by,
             "updated_by": touched_by,
+            "mcp_info": mcp_info,
+            "mcp_access_groups": mcp_access_groups,
         }
     )
     return mcp_server_record
@@ -234,14 +252,33 @@ async def update_mcp_server(
     """
     Update a new mcp server record in the db
     """
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+    
+    # Convert model to dict and handle JSON fields
+    data_dict = data.model_dump()
+    
+    # Handle mcp_info serialization
+    mcp_info: Optional[str] = None
+    if data.mcp_info is not None:
+        mcp_info = safe_dumps(data.mcp_info)
+        del data_dict["mcp_info"]
+    
+    # Handle mcp_access_groups - it's already a List[str], no need to serialize
+    mcp_access_groups: Optional[list] = None
+    if data.mcp_access_groups is not None:
+        mcp_access_groups = data.mcp_access_groups
+        del data_dict["mcp_access_groups"]
+
     mcp_server_record = await prisma_client.db.litellm_mcpservertable.update(
         where={
             "server_id": data.server_id,
         },
         data={
-            **data.model_dump(),
+            **data_dict,
             "created_by": touched_by,
             "updated_by": touched_by,
+            "mcp_info": mcp_info,
+            "mcp_access_groups": mcp_access_groups,
         },
     )
     return mcp_server_record

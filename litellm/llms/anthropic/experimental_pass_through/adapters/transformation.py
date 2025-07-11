@@ -1,5 +1,15 @@
 import json
-from typing import Any, AsyncIterator, List, Literal, Optional, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
@@ -44,6 +54,9 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import Choices, ModelResponse, Usage
 
 from .streaming_iterator import AnthropicStreamWrapper
+
+if TYPE_CHECKING:
+    from litellm.types.llms.anthropic import ContentBlockContentBlockDict
 
 
 class AnthropicAdapter:
@@ -96,9 +109,11 @@ class AnthropicAdapter:
         )
 
     def translate_completion_output_params_streaming(
-        self, completion_stream: Any
+        self, completion_stream: Any, model: str
     ) -> Union[AsyncIterator[bytes], None]:
-        anthropic_wrapper = AnthropicStreamWrapper(completion_stream=completion_stream)
+        anthropic_wrapper = AnthropicStreamWrapper(
+            completion_stream=completion_stream, model=model
+        )
         # Return the SSE-wrapped version for proper event formatting
         return anthropic_wrapper.async_anthropic_sse_wrapper()
 
@@ -200,14 +215,14 @@ class LiteLLMAnthropicMessagesAdapter:
                                             )
                                             tool_message_list.append(tool_result)
 
+            if len(tool_message_list) > 0:
+                new_messages.extend(tool_message_list)
+
             if user_message is not None:
                 new_messages.append(user_message)
 
             if len(new_user_content_list) > 0:
                 new_messages.append({"role": "user", "content": new_user_content_list})  # type: ignore
-
-            if len(tool_message_list) > 0:
-                new_messages.extend(tool_message_list)
 
             ## ASSISTANT MESSAGE ##
             assistant_message_str: Optional[str] = None
@@ -386,7 +401,7 @@ class LiteLLMAnthropicMessagesAdapter:
                             type="tool_use",
                             id=tool_call.id,
                             name=tool_call.function.name or "",
-                            input=json.loads(tool_call.function.arguments),
+                            input=json.loads(tool_call.function.arguments) if tool_call.function.arguments else {},
                         )
                     )
             elif choice.message.content is not None:
@@ -437,12 +452,40 @@ class LiteLLMAnthropicMessagesAdapter:
 
         return translated_obj
 
+    def _translate_streaming_openai_chunk_to_anthropic_content_block(
+        self, choices: List[OpenAIStreamingChoice]
+    ) -> Tuple[
+        Literal["text", "tool_use"],
+        "ContentBlockContentBlockDict",
+    ]:
+        import uuid
+
+        from litellm.types.llms.anthropic import TextBlock, ToolUseBlock
+
+        for choice in choices:
+            if choice.delta.content is not None and len(choice.delta.content) > 0:
+                return "text", TextBlock(type="text", text="")
+            elif (
+                choice.delta.tool_calls is not None
+                and len(choice.delta.tool_calls) > 0
+                and choice.delta.tool_calls[0].function is not None
+            ):
+                return "tool_use", ToolUseBlock(
+                    type="tool_use",
+                    id=choice.delta.tool_calls[0].id or str(uuid.uuid4()),
+                    name=choice.delta.tool_calls[0].function.name or "",
+                    input={},
+                )
+
+        return "text", TextBlock(type="text", text="")
+
     def _translate_streaming_openai_chunk_to_anthropic(
         self, choices: List[OpenAIStreamingChoice]
     ) -> Tuple[
         Literal["text_delta", "input_json_delta"],
         Union[ContentTextBlockDelta, ContentJsonBlockDelta],
     ]:
+
         text: str = ""
         partial_json: Optional[str] = None
         for choice in choices:
@@ -465,7 +508,7 @@ class LiteLLMAnthropicMessagesAdapter:
             return "text_delta", ContentTextBlockDelta(type="text_delta", text=text)
 
     def translate_streaming_openai_response_to_anthropic(
-        self, response: ModelResponse
+        self, response: ModelResponse, current_content_block_index: int
     ) -> Union[ContentBlockDelta, MessageBlockDelta]:
         ## base case - final chunk w/ finish reason
         if response.choices[0].finish_reason is not None:
@@ -501,6 +544,6 @@ class LiteLLMAnthropicMessagesAdapter:
         )
         return ContentBlockDelta(
             type="content_block_delta",
-            index=response.choices[0].index,
+            index=current_content_block_index,
             delta=content_block_delta,
         )

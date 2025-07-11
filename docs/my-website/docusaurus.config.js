@@ -1,6 +1,5 @@
 // @ts-check
 // Note: type annotations allow type checking and IDEs autocompletion
-require('dotenv').config();
 
 // @ts-ignore
 const lightCodeTheme = require('prism-react-renderer/themes/github');
@@ -181,6 +180,11 @@ const config = {
           {
             href: 'https://github.com/BerriAI/litellm',
             label: 'GitHub',
+            position: 'right',
+          },
+          {
+            href: 'https://join.slack.com/share/enQtOTE0ODczMzk2Nzk4NC01YjUxNjY2YjBlYTFmNDRiZTM3NDFiYTM3MzVkODFiMDVjOGRjMmNmZTZkZTMzOWQzZGQyZWIwYjQ0MWExYmE3',
+            label: 'Slack',
             position: 'right',
           },
           {

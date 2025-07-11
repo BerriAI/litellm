@@ -1,20 +1,18 @@
 model_list:
-  - model_name: azure_ai/*
+  - model_name: anthropic/*
     litellm_params:
-      model: azure_ai/*
+      model: anthropic/*
+  - model_name: openai/*
+    litellm_params:
+      model: openai/*
 
-
-mcp_servers:
-  deepwiki_mcp:
-    url: "https://mcp.deepwiki.com/mcp"
-    transport: "http"
-
-general_settings:
-  store_model_in_db: true
-  store_prompts_in_spend_logs: true
+guardrails:
+  - guardrail_name: "bedrock-pre-guard"
+    litellm_params:
+      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
+      mode: "during_call"
+      guardrailIdentifier: ff6ujrregl1q
+      guardrailVersion: "DRAFT"
 
 litellm_settings:
-  callbacks: ["langfuse", "datadog"]
-  cache: True
-  cache_params:        # set cache params for redis
-    type: redis
+  callbacks: ["datadog_llm_observability"]

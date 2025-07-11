@@ -37,6 +37,10 @@ import ObjectPermissionsView from "../object_permissions_view";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import PremiumVectorStoreSelector from "../common_components/PremiumVectorStoreSelector";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
+import EditLoggingSettings from "./EditLoggingSettings";
+import LoggingSettingsView from "../logging_settings_view";
+import { fetchMCPAccessGroups } from "../networking";
 
 export interface TeamMembership {
   user_id: string;
@@ -113,7 +117,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   is_proxy_admin,
   userModels,
   editTeam,
-  premiumUser = false
+  premiumUser = false,
+  onUpdate
 }) => {
   const [teamData, setTeamData] = useState<TeamData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -122,6 +127,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
   const [isEditing, setIsEditing] = useState(false);
+  const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
+  const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
 
   console.log("userModels in team info", userModels);
 
@@ -145,6 +152,18 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     fetchTeamInfo();
   }, [teamId, accessToken]);
 
+  const fetchMcpAccessGroups = async () => {
+    if (!accessToken) return;
+    if (mcpAccessGroupsLoaded) return;
+    try {
+      const groups = await fetchMCPAccessGroups(accessToken);
+      setMcpAccessGroups(groups);
+      setMcpAccessGroupsLoaded(true);
+    } catch (error) {
+      console.error("Failed to fetch MCP access groups:", error);
+    }
+  };
+
   const handleMemberCreate = async (values: any) => {
     try {
       if (accessToken == null) return;
@@ -160,7 +179,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       message.success("Team member added successfully");
       setIsAddMemberModalVisible(false);
       form.resetFields();
-      fetchTeamInfo();
+      
+      // Fetch updated team info
+      const updatedTeamData = await teamInfoCall(accessToken, teamId);
+      setTeamData(updatedTeamData);
+      
+      // Notify parent component of the update
+      onUpdate(updatedTeamData);
     } catch (error: any) {
       let errMsg = "Failed to add team member";
   
@@ -195,7 +220,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       message.success("Team member updated successfully");
       setIsEditMemberModalVisible(false);
-      fetchTeamInfo();
+      
+      // Fetch updated team info
+      const updatedTeamData = await teamInfoCall(accessToken, teamId);
+      setTeamData(updatedTeamData);
+      
+      // Notify parent component of the update
+      onUpdate(updatedTeamData);
     } catch (error: any) {
       let errMsg = "Failed to update team member";
       if (error?.raw?.detail?.includes("Assigning team admins is a premium feature")) {
@@ -219,10 +250,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         return;
       }
 
-      const response = await teamMemberDeleteCall(accessToken, teamId, member);
+      await teamMemberDeleteCall(accessToken, teamId, member);
 
       message.success("Team member removed successfully");
-      fetchTeamInfo();
+      
+      // Fetch updated team info
+      const updatedTeamData = await teamInfoCall(accessToken, teamId);
+      setTeamData(updatedTeamData);
+      
+      // Notify parent component of the update
+      onUpdate(updatedTeamData);
     } catch (error) {
       message.error("Failed to remove team member");
       console.error("Error removing team member:", error);
@@ -251,7 +288,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         budget_duration: values.budget_duration,
         metadata: {
           ...parsedMetadata,
-          guardrails: values.guardrails || []
+          guardrails: values.guardrails || [],
+          logging: values.logging_settings || []
         },
         organization_id: values.organization_id,
       };
@@ -265,13 +303,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }
 
       // Handle object_permission updates
-      if (values.vector_stores !== undefined || values.mcp_servers !== undefined) {
-        updateData.object_permission = {
-          ...teamData?.team_info.object_permission,
-          vector_stores: values.vector_stores || [],
-          mcp_servers: values.mcp_servers || []
-        };
-      }
+      const { servers, accessGroups } = values.mcp_servers_and_groups || { servers: [], accessGroups: [] };
+      if (!updateData.object_permission) updateData.object_permission = {};
+      updateData.object_permission.mcp_servers = servers;
+      updateData.object_permission.mcp_access_groups = accessGroups;
+      delete values.mcp_servers_and_groups;
       
       const response = await teamUpdateCall(accessToken, updateData);
       
@@ -322,14 +358,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               <Card>
                 <Text>Budget Status</Text>
                 <div className="mt-2">
-                  <Title>${info.spend.toFixed(6)}</Title>
-                  <Text>of {info.max_budget === null ? "Unlimited" : `$${info.max_budget}`}</Text>
+                  <Title>${formatNumberWithCommas(info.spend, 4)}</Title>
+                  <Text>of {info.max_budget === null ? "Unlimited" : `$${formatNumberWithCommas(info.max_budget, 4)}`}</Text>
                   {info.budget_duration && (
                     <Text className="text-gray-500">Reset: {info.budget_duration}</Text>
                   )}
                   <br/>
                   {info.team_member_budget_table && (
-                    <Text className="text-gray-500">Team Member Budget: ${info.team_member_budget_table.max_budget}</Text>
+                    <Text className="text-gray-500">Team Member Budget: ${formatNumberWithCommas(info.team_member_budget_table.max_budget, 4)}</Text>
                   )}
                 </div>
               </Card>
@@ -364,6 +400,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 objectPermission={info.object_permission} 
                 variant="card"
                 accessToken={accessToken}
+              />
+
+              <LoggingSettingsView 
+                loggingConfigs={info.metadata?.logging || []}
+                variant="card"
               />
             </Grid>
           </TabPanel>
@@ -418,10 +459,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     max_budget: info.max_budget,
                     budget_duration: info.budget_duration,
                     guardrails: info.metadata?.guardrails || [],
-                    metadata: info.metadata ? JSON.stringify(info.metadata, null, 2) : "",
+                    metadata: info.metadata
+                      ? JSON.stringify((({ logging, ...rest }) => rest)(info.metadata), null, 2)
+                      : "",
+                    logging_settings: info.metadata?.logging || [],
                     organization_id: info.organization_id,
                     vector_stores: info.object_permission?.vector_stores || [],
-                    mcp_servers: info.object_permission?.mcp_servers || []
+                    mcp_servers: info.object_permission?.mcp_servers || [],
+                    mcp_access_groups: info.object_permission?.mcp_servers || [],
+                    mcp_servers_and_groups: info.object_permission?.mcp_servers || []
                   }}
                   layout="vertical"
                 >
@@ -441,7 +487,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <Select.Option key="all-proxy-models" value="all-proxy-models">
                         All Proxy Models
                       </Select.Option>
-                      {userModels.map((model, idx) => (
+                      {Array.from(new Set(userModels)).map((model, idx) => (
                         <Select.Option key={idx} value={model}>
                           {getModelDisplayName(model)}
                         </Select.Option>
@@ -516,18 +562,25 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     />
                   </Form.Item>
 
-                  <Form.Item label="MCP Servers" name="mcp_servers">
+                  <Form.Item label="MCP Servers / Access Groups" name="mcp_servers_and_groups">
                     <MCPServerSelector
-                      onChange={(values) => form.setFieldValue('mcp_servers', values)}
-                      value={form.getFieldValue('mcp_servers')}
-                      accessToken={accessToken || ""}
-                      placeholder="Select MCP servers"
+                      onChange={val => form.setFieldValue('mcp_servers_and_groups', val)}
+                      value={form.getFieldValue('mcp_servers_and_groups')}
+                      accessToken={accessToken || ''}
+                      placeholder="Select MCP servers or access groups (optional)"
                     />
                   </Form.Item>
-                  
                   <Form.Item label="Organization ID" name="organization_id">
                     <Input type=""/>
                   </Form.Item>
+
+                  <Form.Item label="Logging Settings" name="logging_settings">
+                    <EditLoggingSettings
+                      value={form.getFieldValue('logging_settings')}
+                      onChange={(values) => form.setFieldValue('logging_settings', values)}
+                    />
+                  </Form.Item>
+                  
 
                   <Form.Item label="Metadata" name="metadata">
                     <Input.TextArea rows={10} />
@@ -575,7 +628,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </div>
                   <div>
                     <Text className="font-medium">Team Budget</Text>
-                      <div>Max Budget: {info.max_budget !== null ? `$${info.max_budget}` : 'No Limit'}</div>
+                      <div>Max Budget: {info.max_budget !== null ? `$${formatNumberWithCommas(info.max_budget, 4)}` : 'No Limit'}</div>
                     <div>Budget Reset: {info.budget_duration || 'Never'}</div>
                   </div>
                   <div>
@@ -604,6 +657,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     variant="inline"
                     className="pt-4 border-t border-gray-200"
                     accessToken={accessToken}
+                  />
+
+                  <LoggingSettingsView 
+                    loggingConfigs={info.metadata?.logging || []}
+                    variant="inline"
+                    className="pt-4 border-t border-gray-200"
                   />
                 </div>
               )}

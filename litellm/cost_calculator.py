@@ -2,8 +2,9 @@
 ## File for 'response_cost' calculation in Logging
 import time
 from functools import lru_cache
-from typing import Any, List, Literal, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union, cast
 
+from httpx import Response
 from pydantic import BaseModel
 
 import litellm
@@ -27,6 +28,9 @@ from litellm.llms.anthropic.cost_calculation import (
 )
 from litellm.llms.azure.cost_calculation import (
     cost_per_token as azure_openai_cost_per_token,
+)
+from litellm.llms.bedrock.cost_calculation import (
+    cost_per_token as bedrock_cost_per_token,
 )
 from litellm.llms.bedrock.image.cost_calculator import (
     cost_calculator as bedrock_image_cost_calculator,
@@ -92,6 +96,13 @@ from litellm.utils import (
     _cached_get_model_info_helper,
     token_counter,
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging as LitellmLoggingObject,
+    )
+else:
+    LitellmLoggingObject = Any
 
 
 def _cost_per_token_custom_pricing_helper(
@@ -318,6 +329,8 @@ def cost_per_token(  # noqa: PLR0915
             )
     elif custom_llm_provider == "anthropic":
         return anthropic_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "bedrock":
+        return bedrock_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "openai":
         return openai_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "databricks":
@@ -590,6 +603,7 @@ def completion_cost(  # noqa: PLR0915
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams] = None,
     litellm_model_name: Optional[str] = None,
     router_model_id: Optional[str] = None,
+    litellm_logging_obj: Optional[LitellmLoggingObject] = None,
 ) -> float:
     """
     Calculate the cost of a given completion call fot GPT-3.5-turbo, llama2, any litellm supported llm.
@@ -655,9 +669,10 @@ def completion_cost(  # noqa: PLR0915
         potential_model_names = [selected_model]
         if model is not None:
             potential_model_names.append(model)
+
         for idx, model in enumerate(potential_model_names):
             try:
-                verbose_logger.info(
+                verbose_logger.debug(
                     f"selected model name for cost calculation: {model}"
                 )
 
@@ -832,6 +847,11 @@ def completion_cost(  # noqa: PLR0915
                         custom_llm_provider=custom_llm_provider,
                         litellm_model_name=model,
                     )
+                elif call_type == CallTypes.call_mcp_tool.value:
+                    from litellm.proxy._experimental.mcp_server.cost_calculator import (
+                        MCPCostCalculator,
+                    )
+                    return MCPCostCalculator.calculate_mcp_tool_call_cost(litellm_logging_obj=litellm_logging_obj)
                 # Calculate cost based on prompt_tokens, completion_tokens
                 if (
                     "togethercomputer" in model
@@ -964,6 +984,7 @@ def response_cost_calculator(
         ResponsesAPIResponse,
         LiteLLMRealtimeStreamLoggingObject,
         OpenAIModerationResponse,
+        Response,
     ],
     model: str,
     custom_llm_provider: Optional[str],
@@ -993,6 +1014,7 @@ def response_cost_calculator(
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams] = None,
     litellm_model_name: Optional[str] = None,
     router_model_id: Optional[str] = None,
+    litellm_logging_obj: Optional[LitellmLoggingObject] = None,
 ) -> float:
     """
     Returns
@@ -1025,6 +1047,7 @@ def response_cost_calculator(
                 standard_built_in_tools_params=standard_built_in_tools_params,
                 litellm_model_name=litellm_model_name,
                 router_model_id=router_model_id,
+                litellm_logging_obj=litellm_logging_obj,
             )
         return response_cost
     except Exception as e:
@@ -1176,7 +1199,7 @@ def batch_cost_calculator(
         model=model, custom_llm_provider=custom_llm_provider
     )
 
-    verbose_logger.info(
+    verbose_logger.debug(
         "Calculating batch cost per token. model=%s, custom_llm_provider=%s",
         model,
         custom_llm_provider,
