@@ -15,7 +15,7 @@ Endpoints here:
 """
 
 import importlib
-from typing import Iterable, List, Optional, Dict, cast
+from typing import Dict, Iterable, List, Optional, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from fastapi.responses import JSONResponse
@@ -23,9 +23,7 @@ from fastapi.responses import JSONResponse
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
-from litellm.proxy.auth.model_checks import (
-    get_mcp_server_ids,
-)
+from litellm.proxy.auth.model_checks import get_mcp_server_ids
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 MCP_AVAILABLE: bool = True
@@ -39,10 +37,10 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.db import (
         create_mcp_server,
         delete_mcp_server,
-        get_mcp_servers,
         get_all_mcp_servers,
         get_all_mcp_servers_for_user,
         get_mcp_server,
+        get_mcp_servers,
         update_mcp_server,
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -244,6 +242,7 @@ if MCP_AVAILABLE:
                         auth_type=_server_config.auth_type,
                         created_at=datetime.now(),
                         updated_at=datetime.now(),
+                        mcp_info=_server_config.mcp_info,
                     )
                 )
 
@@ -262,6 +261,7 @@ if MCP_AVAILABLE:
                 updated_at=server.updated_at,
                 updated_by=server.updated_by,
                 mcp_access_groups=server.mcp_access_groups if server.mcp_access_groups is not None else [],
+                mcp_info=server.mcp_info,
                 teams=cast(List[Dict[str, str | None]], server_to_teams_map.get(server.server_id, []))
             )
             for server in LIST_MCP_SERVERS

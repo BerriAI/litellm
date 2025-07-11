@@ -18,6 +18,7 @@ import { MCPServer, handleTransport, handleAuth } from "./types";
 // TODO: Move Tools viewer from index file
 import { MCPToolsViewer } from ".";
 import MCPServerEdit from "./mcp_server_edit";
+import MCPServerCostDisplay from "./mcp_server_cost_display";
 import { getMaskedAndFullUrl } from "./utils";
 
 interface MCPServerViewProps {
@@ -115,6 +116,11 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                 </div>
               </Card>
             </Grid>
+            <Card className="mt-2">
+              <Title>Cost Configuration</Title>
+              <MCPServerCostDisplay costConfig={mcpServer.mcp_info?.mcp_server_cost_info} />
+            </Card>
+
           </TabPanel>
 
           {/* Tool Panel */}
