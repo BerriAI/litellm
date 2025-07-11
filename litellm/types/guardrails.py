@@ -390,6 +390,10 @@ class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
         default=None, description="Recipe for output (LLM response)"
     )
 
+    model: Optional[str] = Field(
+        default=None, description="Optional field if guardrail requires a 'model' parameter"
+    )
+
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
 
@@ -406,7 +410,6 @@ class LitellmParams(
     LakeraV2GuardrailConfigModel,
     LassoGuardrailConfigModel,
     BaseLitellmParams,
-    OpenAIModerationGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(

@@ -1,5 +1,6 @@
 from typing import TYPE_CHECKING
 
+import litellm
 from litellm.proxy.guardrails.guardrail_hooks.openai.moderations import (
     OpenAIModerationGuardrail,
 )
@@ -24,6 +25,10 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
             "event_hook": litellm_params.mode,
             "model": litellm_params.model,
         },
+    )
+
+    litellm.logging_callback_manager.add_litellm_callback(
+        openai_moderation_guardrail
     )
 
     return openai_moderation_guardrail
