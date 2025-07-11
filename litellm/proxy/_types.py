@@ -1727,6 +1727,12 @@ class UserAPIKeyAuth(
     
     @classmethod
     def _safe_hash_litellm_api_key(cls, api_key: str) -> str:
+        """
+        Helper to ensure all logged keys are hashed
+        Covers:
+        1. Regular API keys from LiteLLM DB
+        2. JWT tokens used for connecting to LiteLLM API
+        """
         if api_key.startswith("sk-"):
             return hash_token(api_key)
         from litellm.proxy.auth.handle_jwt import JWTHandler
