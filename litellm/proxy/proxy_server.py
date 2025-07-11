@@ -3382,6 +3382,7 @@ class ProxyStartupEvent:
                 proxy_logging_obj=proxy_logging_obj,
                 prisma_client=prisma_client,
             )
+
             scheduler.add_job(
                 budget_reset_job.reset_budget,
                 "interval",
