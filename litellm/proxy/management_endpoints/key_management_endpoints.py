@@ -2593,10 +2593,24 @@ async def _list_key_helper(
     # Prepare response
     key_list: List[Union[str, UserAPIKeyAuth]] = []
     for key in keys:
+        key_dict = key.dict()
+        # Patch: Attach object_permission if object_permission_id is set
+        object_permission_id = key_dict.get("object_permission_id")
+        if object_permission_id:
+            object_permission = await prisma_client.db.litellm_objectpermissiontable.find_unique(
+                where={"object_permission_id": object_permission_id},
+            )
+            if object_permission:
+                # Convert to dict if needed
+                try:
+                    object_permission = object_permission.model_dump()
+                except Exception:
+                    object_permission = object_permission.dict()
+                key_dict["object_permission"] = object_permission
         if return_full_object is True:
-            key_list.append(UserAPIKeyAuth(**key.dict()))  # Return full key object
+            key_list.append(UserAPIKeyAuth(**key_dict))  # Return full key object
         else:
-            _token = key.dict().get("token")
+            _token = key_dict.get("token")
             key_list.append(_token)  # Return only the token
 
     return KeyListResponseObject(
