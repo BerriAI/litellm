@@ -25,6 +25,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     get_server_name_prefix_tool_mcp,
     is_tool_name_prefixed,
     normalize_server_name,
+    validate_mcp_server_name,
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -78,6 +79,7 @@ class MCPServerManager:
         """
         verbose_logger.debug("Loading MCP Servers from config-----")
         for server_name, server_config in mcp_servers_config.items():
+            validate_mcp_server_name(server_name)
             _mcp_info: dict = server_config.get("mcp_info", None) or {}
             mcp_info = MCPInfo(**_mcp_info)
             mcp_info["server_name"] = server_name
