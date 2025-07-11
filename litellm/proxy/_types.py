@@ -1720,12 +1720,19 @@ class UserAPIKeyAuth(
     @classmethod
     def check_api_key(cls, values):
         if values.get("api_key") is not None:
-            values.update({"token": hash_token(values.get("api_key"))})
-            if isinstance(values.get("api_key"), str) and values.get(
-                "api_key"
-            ).startswith("sk-"):
-                values.update({"api_key": hash_token(values.get("api_key"))})
+            values.update({"token": cls._safe_hash_litellm_api_key(values.get("api_key"))})
+            if isinstance(values.get("api_key"), str):
+                values.update({"api_key": cls._safe_hash_litellm_api_key(values.get("api_key"))})
         return values
+    
+    @classmethod
+    def _safe_hash_litellm_api_key(cls, api_key: str) -> str:
+        if api_key.startswith("sk-"):
+            return hash_token(api_key)
+        from litellm.proxy.auth.handle_jwt import JWTHandler
+        if JWTHandler.is_jwt(token=api_key):
+            return f"hashed-jwt-{hash_token(token=api_key)}"
+        return api_key
 
 
 class UserInfoResponse(LiteLLMPydanticObjectBase):
