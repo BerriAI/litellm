@@ -48,6 +48,27 @@ class ResetBudgetJob:
             ### RESET ENDUSER (Customer) BUDGET and corresponding Budget duration ###
             await self.reset_budget_for_litellm_budget_table()
 
+    async def reset_budget_for_litellm_team_members(
+        self, budgets_to_reset: List[LiteLLM_BudgetTableFull]
+    ):
+        """
+        Resets the budget for all LiteLLM Team Members if their budget has expired
+        """
+        return await self.prisma_client.db.litellm_teammembership.update_many(
+            where={
+                "budget_id": {
+                    "in": [
+                        budget.budget_id
+                        for budget in budgets_to_reset
+                        if budget.budget_id is not None
+                    ]
+                }
+            },
+            data={
+                "spend": 0,
+            },
+        )
+
     async def reset_budget_for_litellm_budget_table(self):
         """
         Resets the budget for all LiteLLM End-Users (Customers), and Team Members if their budget has expired
@@ -87,21 +108,8 @@ class ResetBudgetJob:
                     ],
                 )
 
-                team_members_to_reset = (
-                    await self.prisma_client.db.litellm_teammembership.update_many(
-                        where={
-                            "budget_id": {
-                                "in": [
-                                    budget.budget_id
-                                    for budget in budgets_to_reset
-                                    if budget.budget_id is not None
-                                ]
-                            }
-                        },
-                        data={
-                            "spend": 0,
-                        },
-                    )
+                await self.reset_budget_for_litellm_team_members(
+                    budgets_to_reset=budgets_to_reset
                 )
 
             if endusers_to_reset is not None and len(endusers_to_reset) > 0:
@@ -148,7 +156,7 @@ class ResetBudgetJob:
                 self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
                     service=ServiceTypes.RESET_BUDGET_JOB,
                     duration=end_time - start_time,
-                    call_type="reset_budget_endusers",
+                    call_type="reset_budget_budget_table",
                     start_time=start_time,
                     end_time=end_time,
                     event_metadata={
