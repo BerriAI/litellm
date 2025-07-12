@@ -6000,6 +6000,7 @@ def trim_messages(
     """
     # Initialize max_tokens
     # if users pass in max tokens, trim to this amount
+    original_messages = messages
     messages = copy.deepcopy(messages)
     try:
         if max_tokens is None:
@@ -6028,6 +6029,7 @@ def trim_messages(
             if message["role"] != "tool":
                 break
             tool_messages.append(message)
+        tool_messages.reverse()
         # # Remove the collected tool messages from the original list
         if len(tool_messages):
             messages = messages[: -len(tool_messages)]
@@ -6037,7 +6039,7 @@ def trim_messages(
 
         # Do nothing if current tokens under messages
         if current_tokens < max_tokens:
-            return messages
+            return messages + tool_messages
 
         #### Trimming messages if current_tokens > max_tokens
         print_verbose(
@@ -6082,7 +6084,7 @@ def trim_messages(
         verbose_logger.exception(
             "Got exception while token trimming - {}".format(str(e))
         )
-        return messages
+        return original_messages
 
 
 from litellm.caching.in_memory_cache import InMemoryCache
