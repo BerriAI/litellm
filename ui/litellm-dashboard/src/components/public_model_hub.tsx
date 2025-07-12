@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from "react";
-import { modelHubPublicModelsCall, proxyBaseUrl, getUiConfig } from "./networking";
+import { modelHubPublicModelsCall, proxyBaseUrl, getUiConfig, getPublicModelHubInfo } from "./networking";
 import { ModelDataTable } from "./model_dashboard/table";
 import { ColumnDef } from "@tanstack/react-table";
 import {
@@ -39,6 +39,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
   const [pageTitle, setPageTitle] = useState<string>("LiteLLM Gateway");
   const [customDocsDescription, setCustomDocsDescription] = useState<string | null>(null);
   const [litellmVersion, setLitellmVersion] = useState<string>("");
+  const [usefulLinks, setUsefulLinks] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState<boolean>(true);
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [selectedProvider, setSelectedProvider] = useState<string>("");
@@ -72,15 +73,16 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
       }
     };
 
-    const fetchDiscoveryData = async () => {
-      const discoveryData = await getUiConfig();
-      console.log("Discovery Data:", discoveryData);
-      setPageTitle(discoveryData.docs_title);
-      setCustomDocsDescription(discoveryData.custom_docs_description);
-      setLitellmVersion(discoveryData.litellm_version);
+    const fetchPublicModelHubInfo = async () => {
+      const publicModelHubInfo = await getPublicModelHubInfo();
+      console.log("Public Model Hub Info:", publicModelHubInfo);
+      setPageTitle(publicModelHubInfo.docs_title);
+      setCustomDocsDescription(publicModelHubInfo.custom_docs_description);
+      setLitellmVersion(publicModelHubInfo.litellm_version);
+      setUsefulLinks(publicModelHubInfo.useful_links || {});
     };
 
-    fetchDiscoveryData();
+    fetchPublicModelHubInfo();
 
     fetchPublicData();
   }, []);
@@ -147,18 +149,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
     return matchesSearch && matchesProvider && matchesMode && matchesFeature;
   }) || [];
 
-  const handleServiceUrlClick = () => {
-    window.open(proxyBaseUrl || window.location.origin, '_blank');
-  };
 
-  const handleTroubleshootingClick = () => {
-    window.open('https://docs.litellm.ai/docs/troubleshooting', '_blank');
-  };
-
-  const handleLatencyDashboardClick = () => {
-    // Add your latency dashboard URL here
-    window.open('#', '_blank');
-  };
 
   const showModal = (model: ModelGroupInfo) => {
     setSelectedModel(model);
@@ -443,32 +434,23 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
           </Card>
 
         {/* Useful Links */}
-        <Card className="mb-10 p-8">
-          <Title className="text-3xl font-semibold mb-6">Useful Links</Title>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            <button
-              onClick={handleServiceUrlClick}
-              className="flex items-center space-x-3 text-blue-600 hover:text-blue-800 transition-colors p-4 rounded-lg hover:bg-blue-50"
-            >
-              <ExternalLinkIcon className="w-5 h-5" />
-              <Text className="text-base font-medium">Service URL</Text>
-            </button>
-            <button
-              onClick={handleLatencyDashboardClick}
-              className="flex items-center space-x-3 text-blue-600 hover:text-blue-800 transition-colors p-4 rounded-lg hover:bg-blue-50"
-            >
-              <ExternalLinkIcon className="w-5 h-5" />
-              <Text className="text-base font-medium">Latency Dashboard</Text>
-            </button>
-            <button
-              onClick={handleTroubleshootingClick}
-              className="flex items-center space-x-3 text-blue-600 hover:text-blue-800 transition-colors p-4 rounded-lg hover:bg-blue-50"
-            >
-              <ExternalLinkIcon className="w-5 h-5" />
-              <Text className="text-base font-medium">Troubleshooting</Text>
-            </button>
-          </div>
-        </Card>
+        {usefulLinks && Object.keys(usefulLinks).length > 0 && (
+          <Card className="mb-10 p-8">
+            <Title className="text-3xl font-semibold mb-6">Useful Links</Title>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+              {Object.entries(usefulLinks || {}).map(([title, url]) => (
+                <button
+                  key={title}
+                  onClick={() => window.open(url, '_blank')}
+                  className="flex items-center space-x-3 text-blue-600 hover:text-blue-800 transition-colors p-4 rounded-lg hover:bg-blue-50"
+                >
+                  <ExternalLinkIcon className="w-5 h-5" />
+                  <Text className="text-base font-medium">{title}</Text>
+                </button>
+              ))}
+            </div>
+          </Card>
+        )}
 
         {/* Health and Endpoint Status */}
         <Card className="mb-10 p-8">

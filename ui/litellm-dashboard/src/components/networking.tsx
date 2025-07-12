@@ -107,12 +107,16 @@ export interface CredentialItem {
   };
 }
 
-export interface LiteLLMWellKnownUiConfig {
-  server_root_path: string;
-  proxy_base_url: string | null;
+export interface PublicModelHubInfo {
   docs_title: string;
   custom_docs_description: string | null;
   litellm_version: string;
+  useful_links: Record<string, string>;
+}
+
+export interface LiteLLMWellKnownUiConfig {
+  server_root_path: string;
+  proxy_base_url: string | null;
 }
 
 export interface CredentialsResponse {
@@ -178,6 +182,15 @@ export const getUiConfig = async () => {
    */
   console.log("jsonData in getUiConfig:", jsonData);
   updateProxyBaseUrl(jsonData.server_root_path, jsonData.proxy_base_url);
+  return jsonData;
+};
+
+export const getPublicModelHubInfo = async () => {
+  const url = defaultProxyBaseUrl
+    ? `${defaultProxyBaseUrl}/public/model_hub/info`
+    : `/public/model_hub/info`;
+  const response = await fetch(url);
+  const jsonData: PublicModelHubInfo = await response.json();
   return jsonData;
 };
 

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.types.proxy.public_endpoints.public_endpoints import PublicModelHubInfo
 from litellm.types.router import ModelGroupInfo
 
 router = APIRouter()
@@ -33,3 +34,27 @@ async def public_model_hub():
         )
 
     return model_groups
+
+
+@router.get(
+    "/public/model_hub/info",
+    tags=["public", "model management"],
+    response_model=PublicModelHubInfo,
+)
+async def public_model_hub_info():
+    import litellm
+    from litellm.proxy.proxy_server import _title, version
+
+    try:
+        from litellm_enterprise.proxy.proxy_server import EnterpriseProxyConfig
+
+        custom_docs_description = EnterpriseProxyConfig.get_custom_docs_description()
+    except Exception:
+        custom_docs_description = None
+
+    return PublicModelHubInfo(
+        docs_title=_title,
+        custom_docs_description=custom_docs_description,
+        litellm_version=version,
+        useful_links=litellm.public_model_groups_links,
+    )
