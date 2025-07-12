@@ -4,6 +4,7 @@ import {
   Modal,
   message,
   Select,
+  Tooltip,
 } from "antd";
 import {
   TabPanel,
@@ -33,6 +34,7 @@ import { isAdminRole } from "@/utils/roles";
 import { MCPServerView } from "./mcp_server_view";
 import CreateMCPServer from "./create_mcp_server";
 import MCPConnect from "./mcp_connect";
+import { QuestionCircleOutlined } from '@ant-design/icons';
 
 const { Option } = Select;
 
@@ -291,7 +293,12 @@ const MCPServers: React.FC<MCPServerProps> = ({
                     </Option>
                   ))}
                 </Select>
-                <Text className="text-lg font-semibold text-gray-900 ml-6">Access Group:</Text>
+                <Text className="text-lg font-semibold text-gray-900 ml-6">
+                  Access Group:
+                  <Tooltip title="An MCP Access Group is a set of users or teams that have permission to access specific MCP servers. Use access groups to control and organize who can connect to which servers.">
+                    <QuestionCircleOutlined style={{ marginLeft: 4, color: '#888' }} />
+                  </Tooltip>
+                </Text>
                 <Select
                   value={selectedMcpAccessGroup}
                   onChange={handleMcpAccessGroupChange}
