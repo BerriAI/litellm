@@ -160,7 +160,9 @@ class MCPServerManager:
             _mcp_info: MCPInfo = mcp_server.mcp_info or {}
             
             # Use helper to deserialize environment dictionary
-            env_dict = _deserialize_env_dict(mcp_server.env)
+            # Safely access env field which may not exist on Prisma model objects
+            env_data = getattr(mcp_server, 'env', None)
+            env_dict = _deserialize_env_dict(env_data)
             
             new_server = MCPServer(
                 server_id=mcp_server.server_id,
@@ -175,8 +177,8 @@ class MCPServerManager:
                     mcp_server_cost_info=_mcp_info.get("mcp_server_cost_info", None),
                 ),
                 # Stdio-specific fields
-                command=mcp_server.command,
-                args=mcp_server.args,
+                command=getattr(mcp_server, 'command', None),
+                args=getattr(mcp_server, 'args', None) or [],
                 env=env_dict,
             )
             self.registry[mcp_server.server_id] = new_server
