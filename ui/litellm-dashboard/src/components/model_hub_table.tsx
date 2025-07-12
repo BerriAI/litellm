@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { modelHubCall, makeModelGroupPublic, modelHubPublicModelsCall, proxyBaseUrl } from "./networking";
+import { modelHubCall, makeModelGroupPublic, modelHubPublicModelsCall, getProxyBaseUrl } from "./networking";
 import { getConfigFieldSetting, updateConfigFieldSetting } from "./networking";
 import { ModelDataTable } from "./model_dashboard/table";
 import { modelHubColumns } from "./model_hub_table_columns";
@@ -13,9 +13,10 @@ import {
   Badge,
   Flex,
 } from "@tremor/react";
-import { Modal, message } from "antd";
+import { Modal, message, Tooltip } from "antd";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { Table as TableInstance } from '@tanstack/react-table';
+import { Copy } from "lucide-react";
 
 interface ModelHubTableProps {
   accessToken: string | null;
@@ -284,32 +285,38 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
       {publicPage == false ? (
         <div className="w-full m-2 mt-2 p-8">
           <div className="flex justify-between items-center mb-6">
-            <Title className="text-center">Model Hub - Table View</Title>
-            <div className="flex items-center space-x-4">
-              <Text>Model Hub URL:</Text>
-              <Text className="bg-gray-200 px-2 py-1 rounded">{`${proxyBaseUrl}/ui/model_hub_table`}</Text>
+            <div className="flex flex-col items-start">
+            <Title className="text-center">Model Hub</Title>
+            <p className="text-sm text-gray-600">
+              A list of all public model names personally available to you.
+            </p>
+            </div>
+                          <div className="flex items-center space-x-4">
+                <Text>Model Hub URL:</Text>
+                <div className="flex items-center bg-gray-200 px-2 py-1 rounded">
+                  <Text className="mr-2">{`${getProxyBaseUrl()}/ui/model_hub_table`}</Text>
+                  <button
+                    onClick={() => copyToClipboard(`${getProxyBaseUrl()}/ui/model_hub_table`)}
+                    className="p-1 hover:bg-gray-300 rounded transition-colors"
+                    title="Copy URL"
+                  >
+                    <Copy size={16} className="text-gray-600" />
+                  </button>
+                </div>
             
-            {publicPage == false ? (
-              premiumUser ? (
-                <Button 
-                  className="ml-4" 
-                  onClick={() => handleMakePublicPage()}
-                  disabled={selectedModels.size === 0}
-                >
-                  ✨ Make Public
-                </Button>
-              ) : (
-                <Button className="ml-4">
-                  <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
-                    ✨ Make Public
-                  </a>
-                </Button>
-              )
-            ) : (
-              <div className="flex items-center space-x-4">
-                <Text>Filter by key:</Text>
-                <Text className="bg-gray-200 px-2 py-1 rounded">{`/ui/model_hub_table?key=<YOUR_KEY>`}</Text>
-              </div>
+            {publicPage == false && (
+              <Tooltip 
+              title={selectedModels.size === 0 ? "Select models to make them publicly known" : ""}
+              placement="top"
+            >
+              <Button 
+                className="ml-4" 
+                onClick={() => handleMakePublicPage()}
+                disabled={selectedModels.size === 0}
+              >
+                Make Public
+              </Button>
+            </Tooltip>
             )}
           </div>
           </div>
@@ -432,7 +439,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
           <div className="flex justify-between mb-4">
             <Text className="text-base mr-2">Shareable Link:</Text>
             <Text className="max-w-sm ml-2 bg-gray-200 pr-2 pl-2 pt-1 pb-1 text-center rounded">
-              {`${proxyBaseUrl}/model_hub_table`}
+              {`${getProxyBaseUrl()}/ui/model_hub_table`}
             </Text>
           </div>
           <div className="flex justify-end">
