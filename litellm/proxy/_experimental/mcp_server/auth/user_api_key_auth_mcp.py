@@ -395,7 +395,7 @@ class MCPRequestHandler:
         return object_permissions.mcp_access_groups or []
 
     @staticmethod
-    def get_mcp_access_groups_from_headers(headers: Headers) -> Optional[list[str]]:
+    def get_mcp_access_groups_from_headers(headers: Headers) -> Optional[List[str]]:
         """
         Extract and parse the x-mcp-access-groups header as a list of strings.
         """
