@@ -160,7 +160,9 @@ class MCPServerManager:
             _mcp_info: MCPInfo = mcp_server.mcp_info or {}
             
             # Use helper to deserialize environment dictionary
-            env_dict = _deserialize_env_dict(mcp_server.env)
+            # Safely access env field which may not exist on Prisma model objects
+            env_data = getattr(mcp_server, 'env', None)
+            env_dict = _deserialize_env_dict(env_data)
             
             new_server = MCPServer(
                 server_id=mcp_server.server_id,
