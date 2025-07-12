@@ -408,7 +408,7 @@ class MCPRequestHandler:
         return None
 
     @staticmethod
-    def get_mcp_access_groups_from_scope(scope: Scope) -> Optional[list[str]]:
+    def get_mcp_access_groups_from_scope(scope: Scope) -> Optional[List[str]]:
         """
         Extract and parse the x-mcp-access-groups header from an ASGI scope.
         """

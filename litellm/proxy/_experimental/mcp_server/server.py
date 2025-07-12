@@ -165,7 +165,7 @@ if MCP_AVAILABLE:
     ########################################################
 
     @server.list_tools()
-    async def list_tools() -> list[MCPTool]:
+    async def list_tools() -> List[MCPTool]:
         """
         List all available tools
         """
