@@ -65,9 +65,9 @@ for chunk in response:
 
 ## Important Notes
 - Temperature is between 0 and 1
-- Temperature close to 0 (<0.3) can only produce n=1 results
-- `tool_choice` doesn't support `required` option
-- `functions` parameter is not supported (use `tools` instead)
+- Temperature close to 0 (<0.3) can only produce n=1 results (automatically handled)
+- `tool_choice` doesn't support `required` option (will be dropped or raise error based on `drop_params` setting)
+- `functions` parameter is not supported (automatically filtered out - use `tools` instead)
 - All models support up to their respective context window limits
 
 ## Pricing
