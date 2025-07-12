@@ -15,9 +15,6 @@ const MCPServerCostDisplay: React.FC<MCPServerCostDisplayProps> = ({ costConfig 
     return (
       <div className="mt-6 pt-6 border-t border-gray-200">
         <div className="space-y-4">
-          <div>
-            <Text className="font-medium text-lg">Cost Configuration</Text>
-          </div>
           <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
             <Text className="text-gray-600">
               No cost configuration set for this server. Tool calls will be charged at $0.00 per tool call.
@@ -31,9 +28,6 @@ const MCPServerCostDisplay: React.FC<MCPServerCostDisplayProps> = ({ costConfig 
   return (
     <div className="mt-6 pt-6 border-t border-gray-200">
       <div className="space-y-4">
-        <div>
-          <Text className="font-medium text-lg">Cost Configuration</Text>
-        </div>
         
         {hasDefaultCost && costConfig?.default_cost_per_query !== undefined && costConfig?.default_cost_per_query !== null && (
           <div>
