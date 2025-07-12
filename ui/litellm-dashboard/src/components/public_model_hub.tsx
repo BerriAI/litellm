@@ -9,7 +9,9 @@ import {
   Button,
 } from "@tremor/react";
 import { message, Tag, Tooltip, Modal } from "antd";
+import { CopyOutlined } from "@ant-design/icons";
 import { ExternalLinkIcon, SearchIcon, EyeIcon, CogIcon } from "@heroicons/react/outline";
+import { Copy, Info } from "lucide-react";
 import { Table as TableInstance } from '@tanstack/react-table';
 // Simple approach without react-markdown dependency
 
@@ -541,7 +543,19 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
 
       {/* Model Details Modal */}
       <Modal
-        title={selectedModel?.model_group || "Model Details"}
+        title={
+          <div className="flex items-center space-x-2">
+            <span>{selectedModel?.model_group || "Model Details"}</span>
+            {selectedModel && (
+              <Tooltip title="Copy model name">
+                <Copy
+                  onClick={() => copyToClipboard(selectedModel.model_group)}
+                  className="cursor-pointer text-gray-500 hover:text-blue-500 w-4 h-4"
+                />
+              </Tooltip>
+            )}
+          </div>
+        }
         width={1000}
         open={isModalVisible}
         footer={null}
@@ -555,7 +569,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
               <Text className="text-lg font-semibold mb-4">Model Overview</Text>
               <div className="grid grid-cols-2 gap-4 mb-4">
                 <div>
-                  <Text className="font-medium">Model Group:</Text>
+                  <Text className="font-medium">Model Name:</Text>
                   <Text>{selectedModel.model_group}</Text>
                 </div>
                 <div>
