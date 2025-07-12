@@ -25,6 +25,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     get_server_name_prefix_tool_mcp,
     is_tool_name_prefixed,
     normalize_server_name,
+    validate_mcp_server_name,
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -35,7 +36,33 @@ from litellm.proxy._types import (
     MCPTransportType,
     UserAPIKeyAuth,
 )
+from litellm.types.mcp import MCPStdioConfig
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
+
+
+def _deserialize_env_dict(env_data: Any) -> Optional[Dict[str, str]]:
+    """
+    Helper function to deserialize environment dictionary from database storage.
+    Handles both JSON string and dictionary formats.
+    
+    Args:
+        env_data: The environment data from database (could be JSON string or dict)
+        
+    Returns:
+        Dict[str, str] or None: Deserialized environment dictionary
+    """
+    if not env_data:
+        return None
+        
+    if isinstance(env_data, str):
+        try:
+            return json.loads(env_data)
+        except (json.JSONDecodeError, TypeError):
+            # If it's not valid JSON, return as-is (shouldn't happen but safety)
+            return None
+    else:
+        # Already a dictionary
+        return env_data
 
 
 class MCPServerManager:
@@ -78,6 +105,7 @@ class MCPServerManager:
         """
         verbose_logger.debug("Loading MCP Servers from config-----")
         for server_name, server_config in mcp_servers_config.items():
+            validate_mcp_server_name(server_name)
             _mcp_info: dict = server_config.get("mcp_info", None) or {}
             mcp_info = MCPInfo(**_mcp_info)
             mcp_info["server_name"] = server_name
@@ -86,7 +114,7 @@ class MCPServerManager:
             # Generate stable server ID based on parameters
             server_id = self._generate_stable_server_id(
                 server_name=server_name,
-                url=server_config["url"],
+                url=server_config.get("url", None) or "",
                 transport=server_config.get("transport", MCPTransport.http),
                 spec_version=server_config.get("spec_version", MCPSpecVersion.mar_2025),
                 auth_type=server_config.get("auth_type", None),
@@ -95,7 +123,10 @@ class MCPServerManager:
             new_server = MCPServer(
                 server_id=server_id,
                 name=server_name,
-                url=server_config["url"],
+                url=server_config.get("url", None) or "",
+                command=server_config.get("command", None) or "",
+                args=server_config.get("args", None) or [],
+                env=server_config.get("env", None) or {},
                 # TODO: utility fn the default values
                 transport=server_config.get("transport", MCPTransport.http),
                 spec_version=server_config.get("spec_version", MCPSpecVersion.mar_2025),
@@ -127,6 +158,10 @@ class MCPServerManager:
     def add_update_server(self, mcp_server: LiteLLM_MCPServerTable):
         if mcp_server.server_id not in self.get_registry():
             _mcp_info: MCPInfo = mcp_server.mcp_info or {}
+            
+            # Use helper to deserialize environment dictionary
+            env_dict = _deserialize_env_dict(mcp_server.env)
+            
             new_server = MCPServer(
                 server_id=mcp_server.server_id,
                 name=mcp_server.alias or mcp_server.server_id,
@@ -139,6 +174,10 @@ class MCPServerManager:
                     description=mcp_server.description,
                     mcp_server_cost_info=_mcp_info.get("mcp_server_cost_info", None),
                 ),
+                # Stdio-specific fields
+                command=mcp_server.command,
+                args=mcp_server.args,
+                env=env_dict,
             )
             self.registry[mcp_server.server_id] = new_server
             verbose_logger.debug(
@@ -225,13 +264,36 @@ class MCPServerManager:
             MCPClient: Configured MCP client instance
         """
         transport = server.transport or MCPTransport.sse
-        return MCPClient(
-            server_url=server.url,
-            transport_type=transport,
-            auth_type=server.auth_type,
-            auth_value=mcp_auth_header or server.authentication_token,
-            timeout=60.0,
-        )
+        
+        # Handle stdio transport
+        if transport == MCPTransport.stdio:
+            # For stdio, we need to get the stdio config from the server
+            stdio_config: Optional[MCPStdioConfig] = None
+            if server.command and server.args is not None:
+                stdio_config = MCPStdioConfig(
+                    command=server.command,
+                    args=server.args,
+                    env=server.env or {}
+                )
+            
+            return MCPClient(
+                server_url="",  # Not used for stdio
+                transport_type=transport,
+                auth_type=server.auth_type,
+                auth_value=mcp_auth_header or server.authentication_token,
+                timeout=60.0,
+                stdio_config=stdio_config,
+            )
+        else:
+            # For HTTP/SSE transports
+            server_url = server.url or ""
+            return MCPClient(
+                server_url=server_url,
+                transport_type=transport,
+                auth_type=server.auth_type,
+                auth_value=mcp_auth_header or server.authentication_token,
+                timeout=60.0,
+            )
 
     async def _get_tools_from_server(self, server: MCPServer, mcp_auth_header: Optional[str] = None) -> List[MCPTool]:
         """

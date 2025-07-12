@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { modelHubCall } from "./networking";
+import { modelHubCall, makeModelGroupPublic, modelHubPublicModelsCall, proxyBaseUrl } from "./networking";
 import { getConfigFieldSetting, updateConfigFieldSetting } from "./networking";
 import { ModelDataTable } from "./model_dashboard/table";
 import { modelHubColumns } from "./model_hub_table_columns";
+import PublicModelHub from "./public_model_hub";
 import {
   Card,
   Text,
@@ -55,16 +56,13 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [selectedProvider, setSelectedProvider] = useState<string>("");
   const [selectedMode, setSelectedMode] = useState<string>("");
+  const [selectedFeature, setSelectedFeature] = useState<string>("");
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
   const router = useRouter();
   const tableRef = useRef<TableInstance<any>>(null);
 
   useEffect(() => {
-    if (!accessToken) {
-      return;
-    }
-
-    const fetchData = async () => {
+    const fetchData = async (accessToken: string) => {
       try {
         setLoading(true);
         const _modelHubData = await modelHubCall(accessToken);
@@ -88,7 +86,28 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
       }
     };
 
-    fetchData();
+    const fetchPublicData = async () => {
+      try {
+        setLoading(true);
+        const _modelHubData = await modelHubPublicModelsCall();
+        console.log("ModelHubData:", _modelHubData);
+        console.log("First model structure:", _modelHubData[0]);
+        console.log("Model has model_group?", _modelHubData[0]?.model_group);
+        console.log("Model has providers?", _modelHubData[0]?.providers);
+        setModelHubData(_modelHubData);
+        setPublicPageAllowed(true);
+      } catch (error) {
+        console.error("There was an error fetching the public model data", error);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    if (accessToken) {
+      fetchData(accessToken);
+    } else if (publicPage) {
+      fetchPublicData();
+    }
   }, [accessToken, publicPage]);
 
   const showModal = (model: ModelGroupInfo) => {
@@ -104,11 +123,30 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
     if (!accessToken) {
       return;
     }
-    updateConfigFieldSetting(accessToken, "enable_public_model_hub", true).then(
-      (data) => {
+    
+    try {
+      // Get the selected model groups or use all if none are selected
+      const modelGroupsToMakePublic = selectedModels.size > 0 
+        ? Array.from(selectedModels)
+        : modelHubData?.map(model => model.model_group) || [];
+      
+      if (modelGroupsToMakePublic.length > 0) {
+        // Call the endpoint to make the selected model groups public
+        await makeModelGroupPublic(accessToken, modelGroupsToMakePublic);
+        
+        // Show success message
+        message.success(`Successfully made ${modelGroupsToMakePublic.length} model group(s) public!`);
+        
+        // Route to the model hub table
+        router.push(`/ui/model_hub_table`);
+      } else {
+        // Show the modal if no model groups available
         setIsPublicPageModalVisible(true);
       }
-    );
+    } catch (error) {
+      console.error("Error making model groups public:", error);
+      message.error("Failed to make model groups public. Please try again.");
+    }
   };
 
   const handleOk = () => {
@@ -164,11 +202,44 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
     return Array.from(modes);
   };
 
+  const getUniqueFeatures = (data: ModelGroupInfo[]) => {
+    const features = new Set<string>();
+    data.forEach(model => {
+      // Find all properties that start with 'supports_' and are true
+      Object.entries(model)
+        .filter(([key, value]) => key.startsWith('supports_') && value === true)
+        .forEach(([key]) => {
+          // Format the feature name (remove 'supports_' prefix and convert to title case)
+          const featureName = key
+            .replace(/^supports_/, '')
+            .split('_')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(' ');
+          features.add(featureName);
+        });
+    });
+    return Array.from(features).sort();
+  };
+
   const filteredData = modelHubData?.filter(model => {
     const matchesSearch = model.model_group.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesProvider = selectedProvider === "" || model.providers.includes(selectedProvider);
     const matchesMode = selectedMode === "" || model.mode === selectedMode;
-    return matchesSearch && matchesProvider && matchesMode;
+    
+    // Check if model has the selected feature
+    const matchesFeature = selectedFeature === "" || 
+      Object.entries(model)
+        .filter(([key, value]) => key.startsWith('supports_') && value === true)
+        .some(([key]) => {
+          const featureName = key
+            .replace(/^supports_/, '')
+            .split('_')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(' ');
+          return featureName === selectedFeature;
+        });
+    
+    return matchesSearch && matchesProvider && matchesMode && matchesFeature;
   }) || [];
 
   const handleRowSelection = (modelGroup: string, isSelected: boolean) => {
@@ -198,17 +269,33 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   // Clear selections when filters change to avoid confusion
   useEffect(() => {
     setSelectedModels(new Set());
-  }, [searchTerm, selectedProvider, selectedMode]);
+  }, [searchTerm, selectedProvider, selectedMode, selectedFeature]);
 
+  console.log("publicPage: ", publicPage);
+  console.log("publicPageAllowed: ", publicPageAllowed);
+  
+  // If this is a public page, use the dedicated PublicModelHub component
+  if (publicPage && publicPageAllowed) {
+    return <PublicModelHub accessToken={accessToken} />;
+  }
+  
   return (
     <div className="w-full mx-4 h-[75vh]">
-      {(publicPage && publicPageAllowed) || publicPage == false ? (
+      {publicPage == false ? (
         <div className="w-full m-2 mt-2 p-8">
           <div className="flex justify-between items-center mb-6">
             <Title className="text-center">Model Hub - Table View</Title>
+            <div className="flex items-center space-x-4">
+              <Text>Model Hub URL:</Text>
+              <Text className="bg-gray-200 px-2 py-1 rounded">{`${proxyBaseUrl}/ui/model_hub_table`}</Text>
+            
             {publicPage == false ? (
               premiumUser ? (
-                <Button className="ml-4" onClick={() => handleMakePublicPage()}>
+                <Button 
+                  className="ml-4" 
+                  onClick={() => handleMakePublicPage()}
+                  disabled={selectedModels.size === 0}
+                >
                   ✨ Make Public
                 </Button>
               ) : (
@@ -224,6 +311,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                 <Text className="bg-gray-200 px-2 py-1 rounded">{`/ui/model_hub_table?key=<YOUR_KEY>`}</Text>
               </div>
             )}
+          </div>
           </div>
 
           {/* Filters */}
@@ -265,6 +353,19 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                   ))}
                 </select>
               </div>
+              <div>
+                <Text className="text-sm font-medium mb-2">Features:</Text>
+                <select
+                  value={selectedFeature}
+                  onChange={(e) => setSelectedFeature(e.target.value)}
+                  className="border rounded px-3 py-2 text-sm text-gray-600 w-48 h-10"
+                >
+                  <option value="" className="text-sm text-gray-600">All Features</option>
+                  {modelHubData && getUniqueFeatures(modelHubData).map(feature => (
+                    <option key={feature} value={feature} className="text-sm text-gray-800">{feature}</option>
+                  ))}
+                </select>
+              </div>
             </div>
           </Card>
 
@@ -278,6 +379,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
               handleSelectAll,
               showModal,
               copyToClipboard,
+              publicPage,
             )}
             data={filteredData}
             isLoading={loading}
@@ -330,7 +432,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
           <div className="flex justify-between mb-4">
             <Text className="text-base mr-2">Shareable Link:</Text>
             <Text className="max-w-sm ml-2 bg-gray-200 pr-2 pl-2 pt-1 pb-1 text-center rounded">
-              {`<proxy_base_url>/ui/model_hub_table?key=<YOUR_API_KEY>`}
+              {`${proxyBaseUrl}/model_hub_table`}
             </Text>
           </div>
           <div className="flex justify-end">

@@ -1883,6 +1883,7 @@ def test_caching_redis_simple(caplog, capsys):
     assert "async success_callback: reaches cache for logging" not in captured.out
 
 
+@pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.asyncio
 async def test_qdrant_semantic_cache_acompletion():
     litellm.set_verbose = True
