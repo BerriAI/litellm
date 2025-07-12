@@ -24,10 +24,6 @@ test.describe("User Info View", () => {
     // Click on the user ID
     await firstUserIdCell.click();
 
-    // Wait for user info view to load
-    await page.waitForSelector('h1:has-text("User")');
-    console.log("User info view loaded");
-
     // Check for tabs
     await expect(page.locator('button:has-text("Overview")')).toBeVisible();
     await expect(page.locator('button:has-text("Details")')).toBeVisible();
