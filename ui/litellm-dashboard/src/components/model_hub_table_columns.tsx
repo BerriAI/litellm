@@ -243,14 +243,14 @@ export const modelHubColumns = (
     accessorKey: "public",
     enableSorting: true,
     sortingFn: (rowA, rowB) => {
-      const publicA = rowA.original.public === true ? 1 : 0;
-      const publicB = rowB.original.public === true ? 1 : 0;
+      const publicA = rowA.original.is_public_model_group === true ? 1 : 0;
+      const publicB = rowB.original.is_public_model_group === true ? 1 : 0;
       return publicA - publicB;
     },
     cell: ({ row }) => {
       const model = row.original;
       
-      return model.public === true ? (
+      return model.is_public_model_group === true ? (
         <Badge color="green" size="xs">Yes</Badge>
       ) : (
         <Badge color="gray" size="xs">No</Badge>
