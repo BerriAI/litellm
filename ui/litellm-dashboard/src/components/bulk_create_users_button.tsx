@@ -538,7 +538,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
 
   return (
     <>
-      <TremorButton className="mx-auto mb-0" onClick={() => setIsModalVisible(true)}>
+      <TremorButton className="mb-0" onClick={() => setIsModalVisible(true)}>
         + Bulk Invite Users
       </TremorButton>
 
