@@ -23,8 +23,8 @@ from fastapi.responses import JSONResponse
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
-from litellm.proxy.auth.model_checks import get_mcp_server_ids
 from litellm.proxy._experimental.mcp_server.utils import validate_mcp_server_name
+from litellm.proxy.auth.model_checks import get_mcp_server_ids
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 MCP_AVAILABLE: bool = True
@@ -244,6 +244,10 @@ if MCP_AVAILABLE:
                         created_at=datetime.now(),
                         updated_at=datetime.now(),
                         mcp_info=_server_config.mcp_info,
+                        # Stdio-specific fields
+                        command=_server_config.command,
+                        args=_server_config.args,
+                        env=_server_config.env,
                     )
                 )
 
@@ -263,7 +267,11 @@ if MCP_AVAILABLE:
                 updated_by=server.updated_by,
                 mcp_access_groups=server.mcp_access_groups if server.mcp_access_groups is not None else [],
                 mcp_info=server.mcp_info,
-                teams=cast(List[Dict[str, str | None]], server_to_teams_map.get(server.server_id, []))
+                teams=cast(List[Dict[str, str | None]], server_to_teams_map.get(server.server_id, [])),
+                # Stdio-specific fields
+                command=server.command,
+                args=server.args,
+                env=server.env,
             )
             for server in LIST_MCP_SERVERS
         ]

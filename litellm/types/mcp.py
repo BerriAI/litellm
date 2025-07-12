@@ -18,6 +18,7 @@ else:
 class MCPTransport(str, enum.Enum):
     sse = "sse"
     http = "http"
+    stdio = "stdio"
 
 
 class MCPSpecVersion(str, enum.Enum):
@@ -32,7 +33,7 @@ class MCPAuth(str, enum.Enum):
 
 
 # MCP Literals
-MCPTransportType = Literal[MCPTransport.sse, MCPTransport.http]
+MCPTransportType = Literal[MCPTransport.sse, MCPTransport.http, MCPTransport.stdio]
 MCPSpecVersionType = Literal[MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025]
 MCPAuthType = Optional[
     Literal[MCPAuth.none, MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.basic]
@@ -49,6 +50,23 @@ class MCPServerCostInfo(TypedDict, total=False):
     tool_name_to_cost_per_query: Optional[Dict[str, float]]
     """
     Granular, set a custom cost for each tool in the MCP server
+    """
+
+
+class MCPStdioConfig(TypedDict, total=False):
+    command: str
+    """
+    Command to run the MCP server (e.g., 'npx', 'python', 'node')
+    """
+
+    args: List[str]
+    """
+    Arguments to pass to the command
+    """
+
+    env: Optional[Dict[str, str]]
+    """
+    Environment variables to set when running the command
     """
 
 

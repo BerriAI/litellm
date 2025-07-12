@@ -1,5 +1,5 @@
 import uuid
-from typing import Iterable, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set, Union
 
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -11,6 +11,38 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.utils import PrismaClient
+
+
+def _prepare_mcp_server_data(
+    data: Union[NewMCPServerRequest, UpdateMCPServerRequest]
+) -> Dict[str, Any]:
+    """
+    Helper function to prepare MCP server data for database operations.
+    Handles JSON field serialization for mcp_info and env fields.
+    
+    Args:
+        data: NewMCPServerRequest or UpdateMCPServerRequest object
+        
+    Returns:
+        Dict with properly serialized JSON fields
+    """
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+    # Convert model to dict
+    data_dict = data.model_dump()
+    
+    # Handle mcp_info serialization
+    if data.mcp_info is not None:
+        data_dict["mcp_info"] = safe_dumps(data.mcp_info)
+    
+    # Handle env serialization
+    if data.env is not None:
+        data_dict["env"] = safe_dumps(data.env)
+    
+    # mcp_access_groups is already List[str], no serialization needed
+    
+    
+    return data_dict
 
 
 async def get_all_mcp_servers(
@@ -215,35 +247,21 @@ async def create_mcp_server(
     """
     Create a new mcp server record in the db
     """
-    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
     if data.server_id is None:
         data.server_id = str(uuid.uuid4())
     
-    # Convert model to dict and handle JSON fields
-    data_dict = data.model_dump()
+    # Use helper to prepare data with proper JSON serialization
+    data_dict = _prepare_mcp_server_data(data)
     
-    # Handle mcp_info serialization
-    mcp_info: Optional[str] = None
-    if data.mcp_info is not None:
-        mcp_info = safe_dumps(data.mcp_info)
-        del data_dict["mcp_info"]
-    
-    # Handle mcp_access_groups - it's already a List[str], no need to serialize
-    mcp_access_groups: Optional[list] = None
-    if data.mcp_access_groups is not None:
-        mcp_access_groups = data.mcp_access_groups
-        del data_dict["mcp_access_groups"]
+    # Add audit fields
+    data_dict["created_by"] = touched_by
+    data_dict["updated_by"] = touched_by
 
-    mcp_server_record = await prisma_client.db.litellm_mcpservertable.create(
-        data={
-            **data_dict,
-            "created_by": touched_by,
-            "updated_by": touched_by,
-            "mcp_info": mcp_info,
-            "mcp_access_groups": mcp_access_groups,
-        }
+    new_mcp_server = await prisma_client.db.litellm_mcpservertable.create(
+        data=data_dict  # type: ignore
     )
-    return mcp_server_record
+
+    return new_mcp_server
 
 
 async def update_mcp_server(
@@ -252,33 +270,14 @@ async def update_mcp_server(
     """
     Update a new mcp server record in the db
     """
-    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+    # Use helper to prepare data with proper JSON serialization
+    data_dict = _prepare_mcp_server_data(data)
     
-    # Convert model to dict and handle JSON fields
-    data_dict = data.model_dump()
-    
-    # Handle mcp_info serialization
-    mcp_info: Optional[str] = None
-    if data.mcp_info is not None:
-        mcp_info = safe_dumps(data.mcp_info)
-        del data_dict["mcp_info"]
-    
-    # Handle mcp_access_groups - it's already a List[str], no need to serialize
-    mcp_access_groups: Optional[list] = None
-    if data.mcp_access_groups is not None:
-        mcp_access_groups = data.mcp_access_groups
-        del data_dict["mcp_access_groups"]
+    # Add audit fields
+    data_dict["updated_by"] = touched_by
 
-    mcp_server_record = await prisma_client.db.litellm_mcpservertable.update(
-        where={
-            "server_id": data.server_id,
-        },
-        data={
-            **data_dict,
-            "created_by": touched_by,
-            "updated_by": touched_by,
-            "mcp_info": mcp_info,
-            "mcp_access_groups": mcp_access_groups,
-        },
+    updated_mcp_server = await prisma_client.db.litellm_mcpservertable.update(
+        where={"server_id": data.server_id}, data=data_dict  # type: ignore
     )
-    return mcp_server_record
+
+    return updated_mcp_server
