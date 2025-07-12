@@ -1620,7 +1620,6 @@ def _is_streaming_request(
     ):
         return True
     #########################################################
-
     return False
 
 
@@ -6665,6 +6664,8 @@ class ProviderConfigManager:
             return litellm.DeepSeekChatConfig()
         elif litellm.LlmProviders.GROQ == provider:
             return litellm.GroqChatConfig()
+        elif litellm.LlmProviders.BYTEZ == provider:
+            return litellm.BytezChatConfig()
         elif litellm.LlmProviders.DATABRICKS == provider:
             return litellm.DatabricksConfig()
         elif litellm.LlmProviders.XAI == provider:

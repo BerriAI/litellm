@@ -341,6 +341,9 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "empower"
         elif model == "*":
             custom_llm_provider = "openai"
+        # bytez models
+        elif model.startswith("bytez/"):
+            custom_llm_provider = "bytez"
         if not custom_llm_provider:
             if litellm.suppress_debug_info is False:
                 print()  # noqa
