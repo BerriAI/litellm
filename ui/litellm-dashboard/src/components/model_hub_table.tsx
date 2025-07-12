@@ -289,32 +289,19 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
               <Text>Model Hub URL:</Text>
               <Text className="bg-gray-200 px-2 py-1 rounded">{`${getProxyBaseUrl()}/ui/model_hub_table`}</Text>
             
-            {publicPage == false ? (
-              premiumUser ? (
-                <Tooltip 
-                  title={selectedModels.size === 0 ? "Select models to make them publicly known" : ""}
-                  placement="top"
-                >
-                  <Button 
-                    className="ml-4" 
-                    onClick={() => handleMakePublicPage()}
-                    disabled={selectedModels.size === 0}
-                  >
-                    ✨ Make Public
-                  </Button>
-                </Tooltip>
-              ) : (
-                <Button className="ml-4">
-                  <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
-                    ✨ Make Public
-                  </a>
-                </Button>
-              )
-            ) : (
-              <div className="flex items-center space-x-4">
-                <Text>Filter by key:</Text>
-                <Text className="bg-gray-200 px-2 py-1 rounded">{`/ui/model_hub_table?key=<YOUR_KEY>`}</Text>
-              </div>
+            {publicPage == false && (
+              <Tooltip 
+              title={selectedModels.size === 0 ? "Select models to make them publicly known" : ""}
+              placement="top"
+            >
+              <Button 
+                className="ml-4" 
+                onClick={() => handleMakePublicPage()}
+                disabled={selectedModels.size === 0}
+              >
+                Make Public
+              </Button>
+            </Tooltip>
             )}
           </div>
           </div>
