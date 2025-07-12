@@ -294,7 +294,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
       open={visible}
       onCancel={handleClose}
       footer={null}
-      width={800}
+      width={1200}
       maskClosable={false}
     >
       <Form form={form} layout="vertical">
