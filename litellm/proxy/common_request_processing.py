@@ -108,7 +108,6 @@ async def create_streaming_response(
     final_status_code = default_status_code
 
     try:
-
         # Handle coroutine that returns a generator
         if asyncio.iscoroutine(generator):
             generator = await generator
@@ -164,7 +163,6 @@ async def create_streaming_response(
             with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
                 yield first_chunk_value
         async for chunk in generator:
-
             with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
                 yield chunk
 
@@ -467,7 +465,6 @@ class ProxyBaseLLMRequestProcessing:
             if route_type == "allm_passthrough_route":
                 # Check if response is an async generator
                 if self._is_streaming_response(response):
-
                     if asyncio.iscoroutine(response):
                         generator = await response
                     else:
