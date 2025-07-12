@@ -152,19 +152,19 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
     form.resetFields()
   }
 
-  // if (!premiumUser) {
-  //   return (
-  //     <div>
-  //       <Text>
-  //         This is a LiteLLM Enterprise feature, and requires a valid key to use. Get a trial key{" "}
-  //         <a href="https://www.litellm.ai/#pricing" target="_blank" rel="noopener noreferrer">
-  //           here
-  //         </a>
-  //         .
-  //       </Text>
-  //     </div>
-  //   )
-  // }
+  if (!premiumUser) {
+    return (
+      <div>
+        <Text>
+          This is a LiteLLM Enterprise feature, and requires a valid key to use. Get a trial key{" "}
+          <a href="https://www.litellm.ai/#pricing" target="_blank" rel="noopener noreferrer">
+            here
+          </a>
+          .
+        </Text>
+      </div>
+    )
+  }
 
   return (
     <div className="w-full mx-4 h-[75vh]">
