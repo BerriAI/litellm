@@ -4,6 +4,7 @@ import { modelHubCall, makeModelGroupPublic, modelHubPublicModelsCall, proxyBase
 import { getConfigFieldSetting, updateConfigFieldSetting } from "./networking";
 import { ModelDataTable } from "./model_dashboard/table";
 import { modelHubColumns } from "./model_hub_table_columns";
+import PublicModelHub from "./public_model_hub";
 import {
   Card,
   Text,
@@ -272,9 +273,15 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
 
   console.log("publicPage: ", publicPage);
   console.log("publicPageAllowed: ", publicPageAllowed);
+  
+  // If this is a public page, use the dedicated PublicModelHub component
+  if (publicPage && publicPageAllowed) {
+    return <PublicModelHub accessToken={accessToken} />;
+  }
+  
   return (
     <div className="w-full mx-4 h-[75vh]">
-      {(publicPage && publicPageAllowed) || publicPage == false ? (
+      {publicPage == false ? (
         <div className="w-full m-2 mt-2 p-8">
           <div className="flex justify-between items-center mb-6">
             <Title className="text-center">Model Hub - Table View</Title>
