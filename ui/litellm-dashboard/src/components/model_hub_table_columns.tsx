@@ -20,7 +20,7 @@ interface ModelHubData {
   supports_vision: boolean;
   supports_function_calling: boolean;
   supported_openai_params?: string[];
-  public?: boolean;
+  is_public_model_group: boolean;
   [key: string]: any;
 }
 
@@ -211,7 +211,7 @@ export const modelHubColumns = (
   },
   {
     header: "Public",
-    accessorKey: "public",
+    accessorKey: "is_public_model_group",
     enableSorting: true,
     sortingFn: (rowA, rowB) => {
       const publicA = rowA.original.is_public_model_group === true ? 1 : 0;
@@ -257,7 +257,7 @@ export const modelHubColumns = (
   if (publicPage) {
     return allColumns.filter(column => {
       // Remove the public column
-      if ('accessorKey' in column && column.accessorKey === "public") return false;
+      if ('accessorKey' in column && column.accessorKey === "is_public_model_group") return false;
       
       return true;
     });
