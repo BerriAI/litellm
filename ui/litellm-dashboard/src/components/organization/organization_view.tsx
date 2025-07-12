@@ -23,7 +23,7 @@ import {
 import NumericalInput from "../shared/numerical_input";
 import { Button, Form, Input, Select, message, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
+import { ArrowLeftIcon, PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import {
   Member,
@@ -226,9 +226,9 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     <div className="w-full h-screen p-4 bg-white">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <Button onClick={onClose} className="mb-4">
-            ← Back
-          </Button>
+          <TremorButton icon={ArrowLeftIcon} onClick={onClose} variant="light" className="mb-4">
+            Back to Organizations
+          </TremorButton>
           <Title>{orgData.organization_alias}</Title>
           <Text className="text-gray-500 font-mono">
             {orgData.organization_id}
