@@ -52,76 +52,93 @@ async def test_anthropic_basic_completion_with_headers():
             # Wait for spend to be logged
             await asyncio.sleep(15)
 
-            # Check spend logs for this specific request
-            async with session.get(
-                f"http://0.0.0.0:4000/spend/logs?request_id={litellm_call_id}",
-                headers={"Authorization": "Bearer sk-1234"},
-            ) as spend_response:
-                print("text spend response")
-                print(f"Spend response: {spend_response}")
-                spend_data = await spend_response.json()
-                print(f"Spend data: {spend_data}")
-                assert spend_data is not None, "Should have spend data for the request"
+            # Check spend logs for this specific request with retry logic
+            spend_data = None
+            max_retries = 2
+            for attempt in range(max_retries):
+                print(f"Attempt {attempt + 1}/{max_retries} to check spend logs")
+                
+                async with session.get(
+                    f"http://0.0.0.0:4000/spend/logs?request_id={litellm_call_id}",
+                    headers={"Authorization": "Bearer sk-1234"},
+                ) as spend_response:
+                    print("text spend response")
+                    print(f"Spend response: {spend_response}")
+                    spend_data = await spend_response.json()
+                    print(f"Spend data: {spend_data}")
+                    
+                    # Check if spend data exists and has entries
+                    if spend_data and len(spend_data) > 0:
+                        print("Spend logs found!")
+                        break
+                    else:
+                        print("Spend logs not found yet...")
+                        if attempt < max_retries - 1:  # Don't wait after the last attempt
+                            print("Waiting 10 seconds before retry...")
+                            await asyncio.sleep(10)
+            
+            assert spend_data is not None, "Should have spend data for the request"
+            assert len(spend_data) > 0, "Should have at least one spend log entry"
 
-                log_entry = spend_data[
-                    0
-                ]  # Get the first (and should be only) log entry
+            log_entry = spend_data[
+                0
+            ]  # Get the first (and should be only) log entry
 
-                # Basic existence checks
-                assert spend_data is not None, "Should have spend data for the request"
-                assert isinstance(log_entry, dict), "Log entry should be a dictionary"
+            # Basic existence checks
+            assert spend_data is not None, "Should have spend data for the request"
+            assert isinstance(log_entry, dict), "Log entry should be a dictionary"
 
-                # Request metadata assertions
-                assert (
-                    log_entry["request_id"] == litellm_call_id
-                ), "Request ID should match"
-                assert (
-                    log_entry["call_type"] == "pass_through_endpoint"
-                ), "Call type should be pass_through_endpoint"
-                assert (
-                    log_entry["api_base"] == "https://api.anthropic.com/v1/messages"
-                ), "API base should be Anthropic's endpoint"
+            # Request metadata assertions
+            assert (
+                log_entry["request_id"] == litellm_call_id
+            ), "Request ID should match"
+            assert (
+                log_entry["call_type"] == "pass_through_endpoint"
+            ), "Call type should be pass_through_endpoint"
+            assert (
+                log_entry["api_base"] == "https://api.anthropic.com/v1/messages"
+            ), "API base should be Anthropic's endpoint"
 
-                # Token and spend assertions
-                assert log_entry["spend"] > 0, "Spend value should not be None"
-                assert isinstance(
-                    log_entry["spend"], (int, float)
-                ), "Spend should be a number"
-                assert log_entry["total_tokens"] > 0, "Should have some tokens"
-                assert (
-                    log_entry["prompt_tokens"] == anthropic_api_input_tokens
-                ), f"Should have prompt tokens matching anthropic api. Expected {anthropic_api_input_tokens} but got {log_entry['prompt_tokens']}"
-                assert (
-                    log_entry["completion_tokens"] == anthropic_api_output_tokens
-                ), f"Should have completion tokens matching anthropic api. Expected {anthropic_api_output_tokens} but got {log_entry['completion_tokens']}"
-                assert (
-                    log_entry["total_tokens"]
-                    == log_entry["prompt_tokens"] + log_entry["completion_tokens"]
-                ), "Total tokens should equal prompt + completion"
+            # Token and spend assertions
+            assert log_entry["spend"] > 0, "Spend value should not be None"
+            assert isinstance(
+                log_entry["spend"], (int, float)
+            ), "Spend should be a number"
+            assert log_entry["total_tokens"] > 0, "Should have some tokens"
+            assert (
+                log_entry["prompt_tokens"] == anthropic_api_input_tokens
+            ), f"Should have prompt tokens matching anthropic api. Expected {anthropic_api_input_tokens} but got {log_entry['prompt_tokens']}"
+            assert (
+                log_entry["completion_tokens"] == anthropic_api_output_tokens
+            ), f"Should have completion tokens matching anthropic api. Expected {anthropic_api_output_tokens} but got {log_entry['completion_tokens']}"
+            assert (
+                log_entry["total_tokens"]
+                == log_entry["prompt_tokens"] + log_entry["completion_tokens"]
+            ), "Total tokens should equal prompt + completion"
 
-                # Time assertions
-                assert all(
-                    key in log_entry
-                    for key in ["startTime", "endTime", "completionStartTime"]
-                ), "Should have all time fields"
-                assert (
-                    log_entry["startTime"] < log_entry["endTime"]
-                ), "Start time should be before end time"
+            # Time assertions
+            assert all(
+                key in log_entry
+                for key in ["startTime", "endTime", "completionStartTime"]
+            ), "Should have all time fields"
+            assert (
+                log_entry["startTime"] < log_entry["endTime"]
+            ), "Start time should be before end time"
 
-                # Metadata assertions
-                assert (
-                    str(log_entry["cache_hit"]).lower() != "true"
-                ), "Cache should be off"
-                assert log_entry["request_tags"] == [
-                    "test-tag-1",
-                    "test-tag-2",
-                ], "Tags should match input"
-                assert (
-                    "user_api_key" in log_entry["metadata"]
-                ), "Should have user API key in metadata"
+            # Metadata assertions
+            assert (
+                str(log_entry["cache_hit"]).lower() != "true"
+            ), "Cache should be off"
+            assert log_entry["request_tags"] == [
+                "test-tag-1",
+                "test-tag-2",
+            ], "Tags should match input"
+            assert (
+                "user_api_key" in log_entry["metadata"]
+            ), "Should have user API key in metadata"
 
-                assert "claude" in log_entry["model"]
-                assert log_entry["custom_llm_provider"] == "anthropic"
+            assert "claude" in log_entry["model"]
+            assert log_entry["custom_llm_provider"] == "anthropic"
 
 
 @pytest.mark.asyncio
@@ -192,73 +209,90 @@ async def test_anthropic_streaming_with_headers():
             # Wait for spend to be logged
             await asyncio.sleep(20)
 
-            # Check spend logs for this specific request
-            async with session.get(
-                f"http://0.0.0.0:4000/spend/logs?request_id={litellm_call_id}",
-                headers={"Authorization": "Bearer sk-1234"},
-            ) as spend_response:
-                spend_data = await spend_response.json()
-                print(f"Spend data: {spend_data}")
-                assert spend_data is not None, "Should have spend data for the request"
+            # Check spend logs for this specific request with retry logic
+            spend_data = None
+            max_retries = 2
+            for attempt in range(max_retries):
+                print(f"Attempt {attempt + 1}/{max_retries} to check spend logs")
+                
+                async with session.get(
+                    f"http://0.0.0.0:4000/spend/logs?request_id={litellm_call_id}",
+                    headers={"Authorization": "Bearer sk-1234"},
+                ) as spend_response:
+                    spend_data = await spend_response.json()
+                    print(f"Spend data: {spend_data}")
+                    
+                    # Check if spend data exists and has entries
+                    if spend_data and len(spend_data) > 0:
+                        print("Spend logs found!")
+                        break
+                    else:
+                        print("Spend logs not found yet...")
+                        if attempt < max_retries - 1:  # Don't wait after the last attempt
+                            print("Waiting 10 seconds before retry...")
+                            await asyncio.sleep(10)
+            
+            assert spend_data is not None, "Should have spend data for the request"
+            assert len(spend_data) > 0, "Should have at least one spend log entry"
 
-                log_entry = spend_data[
-                    0
-                ]  # Get the first (and should be only) log entry
+            log_entry = spend_data[
+                0
+            ]  # Get the first (and should be only) log entry
 
-                # Basic existence checks
-                assert spend_data is not None, "Should have spend data for the request"
-                assert isinstance(log_entry, dict), "Log entry should be a dictionary"
+            # Basic existence checks
+            assert spend_data is not None, "Should have spend data for the request"
+            assert isinstance(log_entry, dict), "Log entry should be a dictionary"
 
-                # Request metadata assertions
-                assert (
-                    log_entry["request_id"] == litellm_call_id
-                ), "Request ID should match"
-                assert (
-                    log_entry["call_type"] == "pass_through_endpoint"
-                ), "Call type should be pass_through_endpoint"
-                # assert (
-                #     log_entry["api_base"] == "https://api.anthropic.com/v1/messages"
-                # ), "API base should be Anthropic's endpoint"
+            # Request metadata assertions
+            assert (
+                log_entry["request_id"] == litellm_call_id
+            ), "Request ID should match"
+            assert (
+                log_entry["call_type"] == "pass_through_endpoint"
+            ), "Call type should be pass_through_endpoint"
+            # assert (
+            #     log_entry["api_base"] == "https://api.anthropic.com/v1/messages"
+            # ), "API base should be Anthropic's endpoint"
 
-                # Token and spend assertions
-                assert log_entry["spend"] > 0, "Spend value should not be None"
-                assert isinstance(
-                    log_entry["spend"], (int, float)
-                ), "Spend should be a number"
-                assert log_entry["total_tokens"] > 0, "Should have some tokens"
-                assert (
-                    log_entry["prompt_tokens"] == anthropic_api_input_tokens
-                ), f"Should have prompt tokens matching anthropic api. Expected {anthropic_api_input_tokens} but got {log_entry['prompt_tokens']}"
-                assert (
-                    log_entry["completion_tokens"] == anthropic_api_output_tokens
-                ), f"Should have completion tokens matching anthropic api. Expected {anthropic_api_output_tokens} but got {log_entry['completion_tokens']}"
-                assert (
-                    log_entry["total_tokens"]
-                    == log_entry["prompt_tokens"] + log_entry["completion_tokens"]
-                ), "Total tokens should equal prompt + completion"
+            # Token and spend assertions
+            assert log_entry["spend"] > 0, "Spend value should not be None"
+            assert isinstance(
+                log_entry["spend"], (int, float)
+            ), "Spend should be a number"
+            assert log_entry["total_tokens"] > 0, "Should have some tokens"
+            assert (
+                log_entry["prompt_tokens"] == anthropic_api_input_tokens
+            ), f"Should have prompt tokens matching anthropic api. Expected {anthropic_api_input_tokens} but got {log_entry['prompt_tokens']}"
+            assert (
+                log_entry["completion_tokens"] == anthropic_api_output_tokens
+            ), f"Should have completion tokens matching anthropic api. Expected {anthropic_api_output_tokens} but got {log_entry['completion_tokens']}"
+            assert (
+                log_entry["total_tokens"]
+                == log_entry["prompt_tokens"] + log_entry["completion_tokens"]
+            ), "Total tokens should equal prompt + completion"
 
-                # Time assertions
-                assert all(
-                    key in log_entry
-                    for key in ["startTime", "endTime", "completionStartTime"]
-                ), "Should have all time fields"
-                assert (
-                    log_entry["startTime"] < log_entry["endTime"]
-                ), "Start time should be before end time"
+            # Time assertions
+            assert all(
+                key in log_entry
+                for key in ["startTime", "endTime", "completionStartTime"]
+            ), "Should have all time fields"
+            assert (
+                log_entry["startTime"] < log_entry["endTime"]
+            ), "Start time should be before end time"
 
-                # Metadata assertions
-                assert (
-                    str(log_entry["cache_hit"]).lower() != "true"
-                ), "Cache should be off"
-                assert log_entry["request_tags"] == [
-                    "test-tag-stream-1",
-                    "test-tag-stream-2",
-                ], "Tags should match input"
-                assert (
-                    "user_api_key" in log_entry["metadata"]
-                ), "Should have user API key in metadata"
+            # Metadata assertions
+            assert (
+                str(log_entry["cache_hit"]).lower() != "true"
+            ), "Cache should be off"
+            assert log_entry["request_tags"] == [
+                "test-tag-stream-1",
+                "test-tag-stream-2",
+            ], "Tags should match input"
+            assert (
+                "user_api_key" in log_entry["metadata"]
+            ), "Should have user API key in metadata"
 
-                assert "claude" in log_entry["model"]
+            assert "claude" in log_entry["model"]
 
-                assert log_entry["end_user"] == "test-user-1"
-                assert log_entry["custom_llm_provider"] == "anthropic"
+            assert log_entry["end_user"] == "test-user-1"
+            assert log_entry["custom_llm_provider"] == "anthropic"
