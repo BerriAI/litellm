@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, Coroutine, Dict, Iterable, List, Literal, Optional, Union
+from typing import Any, Coroutine, Dict, Iterable, List, Literal, Optional, Tuple, Union
 
 import httpx
 
@@ -64,6 +64,198 @@ def mock_responses_api_response(
     )
 
 
+class MCPResponsesAPIHelper:
+    """Helper class with static methods for MCP integration with Responses API."""
+    
+    @staticmethod
+    def _parse_mcp_tools(tools: Optional[Iterable[ToolParam]]) -> Tuple[List[Dict[str, Any]], List[Any]]:
+        """
+        Parse tools and separate MCP tools with litellm_proxy from other tools.
+        
+        Returns:
+            Tuple of (mcp_tools_with_litellm_proxy, other_tools)
+        """
+        mcp_tools_with_litellm_proxy: List[Dict[str, Any]] = []
+        other_tools: List[Any] = []
+        
+        if tools:
+            for tool in tools:
+                if (isinstance(tool, dict) and 
+                    tool.get("type") == "mcp" and 
+                    tool.get("server_url") == "litellm_proxy"):
+                    mcp_tools_with_litellm_proxy.append(tool)
+                else:
+                    other_tools.append(tool)
+        
+        return mcp_tools_with_litellm_proxy, other_tools
+    
+    @staticmethod
+    async def _get_mcp_tools_from_manager(user_api_key_auth: Any) -> List[Any]:
+        """Get available tools from the MCP server manager."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+        
+        return await global_mcp_server_manager.list_tools(user_api_key_auth=user_api_key_auth)
+    
+    @staticmethod
+    def _transform_mcp_tools_to_openai(mcp_tools: List[Any]) -> List[Any]:
+        """Transform MCP tools to OpenAI-compatible format."""
+        from litellm.experimental_mcp_client.tools import transform_mcp_tool_to_openai_tool
+        
+        openai_tools = []
+        for mcp_tool in mcp_tools:
+            openai_tool = transform_mcp_tool_to_openai_tool(mcp_tool)
+            openai_tools.append(openai_tool)
+        
+        return openai_tools
+    
+    @staticmethod
+    def _should_auto_execute_tools(
+        mcp_tools_with_litellm_proxy: List[Dict[str, Any]], 
+        response: ResponsesAPIResponse
+    ) -> bool:
+        """Check if we should auto-execute tool calls."""
+        return (
+            mcp_tools_with_litellm_proxy and 
+            isinstance(response, ResponsesAPIResponse) and
+            any(tool.get("require_approval") == "never" for tool in mcp_tools_with_litellm_proxy)
+        )
+    
+    @staticmethod
+    def _extract_tool_calls_from_response(response: ResponsesAPIResponse) -> List[Any]:
+        """Extract tool calls from the response output."""
+        tool_calls = []
+        for output_item in response.output:
+            # Check if this is a function call output item
+            if (isinstance(output_item, dict) and 
+                output_item.get("type") == "function_call"):
+                tool_calls.append(output_item)
+            elif hasattr(output_item, 'type') and output_item.type == "function_call":
+                # Handle pydantic model case
+                tool_calls.append(output_item)
+        
+        return tool_calls
+    
+    @staticmethod
+    def _extract_tool_call_details(tool_call) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        """Extract tool name, arguments, and call_id from a tool call."""
+        if isinstance(tool_call, dict):
+            tool_name = tool_call.get("name")
+            tool_arguments = tool_call.get("arguments")
+            tool_call_id = tool_call.get("call_id") or tool_call.get("id")
+        else:
+            tool_name = getattr(tool_call, "name", None)
+            tool_arguments = getattr(tool_call, "arguments", None)
+            tool_call_id = getattr(tool_call, "call_id", None) or getattr(tool_call, "id", None)
+        
+        return tool_name, tool_arguments, tool_call_id
+    
+    @staticmethod
+    def _parse_tool_arguments(tool_arguments: Any) -> Dict[str, Any]:
+        """Parse tool arguments, handling both string and dict formats."""
+        import json
+        
+        if isinstance(tool_arguments, str):
+            try:
+                return json.loads(tool_arguments)
+            except json.JSONDecodeError:
+                return {}
+        else:
+            return tool_arguments or {}
+    
+    @staticmethod
+    async def _execute_tool_calls(
+        tool_calls: List[Any], 
+        user_api_key_auth: Any
+    ) -> List[Dict[str, Any]]:
+        """Execute tool calls and return results."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+        
+        tool_results = []
+        for tool_call in tool_calls:
+            try:
+                tool_name, tool_arguments, tool_call_id = MCPResponsesAPIHelper._extract_tool_call_details(tool_call)
+                
+                if not tool_name:
+                    verbose_logger.warning(f"Tool call missing name: {tool_call}")
+                    continue
+                
+                parsed_arguments = MCPResponsesAPIHelper._parse_tool_arguments(tool_arguments)
+                
+                result = await global_mcp_server_manager.call_tool(
+                    name=tool_name,
+                    arguments=parsed_arguments,
+                    user_api_key_auth=user_api_key_auth,
+                )
+                
+                # Format result for inclusion in response
+                result_text = str(result.content[0].text) if result.content else "Tool executed successfully"
+                tool_results.append({
+                    "tool_call_id": tool_call_id,
+                    "result": result_text
+                })
+                
+            except Exception as e:
+                verbose_logger.exception(f"Error executing MCP tool call: {e}")
+                tool_results.append({
+                    "tool_call_id": tool_call_id if 'tool_call_id' in locals() else "unknown",
+                    "result": f"Error executing tool: {str(e)}"
+                })
+        
+        return tool_results
+    
+    @staticmethod
+    def _create_follow_up_input(response: ResponsesAPIResponse, tool_results: List[Dict[str, Any]]) -> List[Any]:
+        """Create follow-up input with tool results in proper format."""
+        follow_up_input = []
+        
+        # Add the original response (assistant message with tool calls)
+        # Transform response output back to input format for follow-up
+        for output_item in response.output:
+            if isinstance(output_item, dict):
+                if output_item.get("type") == "function_call":
+                    # Add function call to input
+                    follow_up_input.append({
+                        "type": "function_call",
+                        "call_id": output_item.get("call_id") or output_item.get("id"),
+                        "name": output_item.get("name"),
+                        "arguments": output_item.get("arguments")
+                    })
+                elif output_item.get("type") == "message":
+                    # Add message content
+                    follow_up_input.append({
+                        "type": "message",
+                        "role": output_item.get("role", "assistant"),
+                        "content": output_item.get("content", "")
+                    })
+        
+        # Add tool results
+        for tool_result in tool_results:
+            follow_up_input.append({
+                "type": "function_call_output",
+                "call_id": tool_result["tool_call_id"],
+                "output": tool_result["result"]
+            })
+        
+        return follow_up_input
+    
+    @staticmethod
+    async def _make_follow_up_call(
+        follow_up_input: List[Any],
+        model: str,
+        all_tools: Optional[List[Any]],
+        response_id: str,
+        **call_params: Any
+    ) -> ResponsesAPIResponse:
+        """Make follow-up response API call with tool results."""
+        return await aresponses(
+            input=follow_up_input,
+            model=model,
+            tools=all_tools,  # Keep tools for potential future calls
+            previous_response_id=response_id,  # Link to previous response
+            **call_params
+        )
+
+
 async def aresponses_api_with_mcp(
     input: Union[str, ResponseInputParam],
     model: str,
@@ -104,195 +296,73 @@ async def aresponses_api_with_mcp(
     3. Call the standard responses API
     4. If require_approval="never" and tool calls are returned, automatically execute them
     """
-    from litellm.experimental_mcp_client.tools import transform_mcp_tool_to_openai_tool
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
-    from litellm.types.utils import ChatCompletionMessageToolCall
-    from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
-    import json
+    from litellm.proxy._types import UserAPIKeyAuth
     
-    # Check if we have MCP tools with server_url="litellm_proxy"
-    mcp_tools_with_litellm_proxy = []
-    other_tools = []
+    # Parse MCP tools and separate from other tools
+    mcp_tools_with_litellm_proxy, other_tools = MCPResponsesAPIHelper._parse_mcp_tools(tools)
     
-    if tools:
-        for tool in tools:
-            if (isinstance(tool, dict) and 
-                tool.get("type") == "mcp" and 
-                tool.get("server_url") == "litellm_proxy"):
-                mcp_tools_with_litellm_proxy.append(tool)
-            else:
-                other_tools.append(tool)
-    
-    # If we have MCP tools with litellm_proxy, get available tools from MCP manager
+    # Get available tools from MCP manager if we have MCP tools
     openai_tools = []
     if mcp_tools_with_litellm_proxy:
-        from litellm.proxy._types import UserAPIKeyAuth
         user_api_key_auth = kwargs.get("user_api_key_auth")
-        
-        # Get tools from MCP server manager
-        mcp_tools = await global_mcp_server_manager.list_tools(user_api_key_auth=user_api_key_auth)
-        
-        # Transform MCP tools to OpenAI format
-        for mcp_tool in mcp_tools:
-            openai_tool = transform_mcp_tool_to_openai_tool(mcp_tool)
-            openai_tools.append(openai_tool)
+        mcp_tools = await MCPResponsesAPIHelper._get_mcp_tools_from_manager(user_api_key_auth)
+        openai_tools = MCPResponsesAPIHelper._transform_mcp_tools_to_openai(mcp_tools)
     
     # Combine with other tools
     all_tools = openai_tools + other_tools if (openai_tools or other_tools) else None
+    
+    # Prepare call parameters for reuse
+    call_params = {
+        "include": include,
+        "instructions": instructions,
+        "max_output_tokens": max_output_tokens,
+        "prompt": prompt,
+        "metadata": metadata,
+        "parallel_tool_calls": parallel_tool_calls,
+        "reasoning": reasoning,
+        "store": store,
+        "background": background,
+        "stream": stream,
+        "temperature": temperature,
+        "text": text,
+        "tool_choice": tool_choice,
+        "top_p": top_p,
+        "truncation": truncation,
+        "user": user,
+        "extra_headers": extra_headers,
+        "extra_query": extra_query,
+        "extra_body": extra_body,
+        "timeout": timeout,
+        "custom_llm_provider": custom_llm_provider,
+        **kwargs,
+    }
     
     # Make initial response API call
     response = await aresponses(
         input=input,
         model=model,
-        include=include,
-        instructions=instructions,
-        max_output_tokens=max_output_tokens,
-        prompt=prompt,
-        metadata=metadata,
-        parallel_tool_calls=parallel_tool_calls,
-        previous_response_id=previous_response_id,
-        reasoning=reasoning,
-        store=store,
-        background=background,
-        stream=stream,
-        temperature=temperature,
-        text=text,
-        tool_choice=tool_choice,
         tools=all_tools,
-        top_p=top_p,
-        truncation=truncation,
-        user=user,
-        extra_headers=extra_headers,
-        extra_query=extra_query,
-        extra_body=extra_body,
-        timeout=timeout,
-        custom_llm_provider=custom_llm_provider,
-        **kwargs,
+        previous_response_id=previous_response_id,
+        **call_params
     )
     
     # Check if we need to auto-execute tool calls
-    if (mcp_tools_with_litellm_proxy and 
-        isinstance(response, ResponsesAPIResponse) and
-        any(tool.get("require_approval") == "never" for tool in mcp_tools_with_litellm_proxy)):
-        
-        # Check if response contains tool calls
-        tool_calls = []
-        for output_item in response.output:
-            # Check if this is a function call output item
-            if (isinstance(output_item, dict) and 
-                output_item.get("type") == "function_call"):
-                tool_calls.append(output_item)
-            elif hasattr(output_item, 'type') and output_item.type == "function_call":
-                # Handle pydantic model case
-                tool_calls.append(output_item)
+    if MCPResponsesAPIHelper._should_auto_execute_tools(mcp_tools_with_litellm_proxy, response):
+        tool_calls = MCPResponsesAPIHelper._extract_tool_calls_from_response(response)
         
         if tool_calls:
-            # Execute tool calls automatically
-            tool_results = []
-            for tool_call in tool_calls:
-                try:
-                    # Extract tool call details from responses API format
-                    if isinstance(tool_call, dict):
-                        tool_name = tool_call.get("name")
-                        tool_arguments = tool_call.get("arguments")
-                        tool_call_id = tool_call.get("call_id") or tool_call.get("id")
-                    else:
-                        tool_name = getattr(tool_call, "name", None)
-                        tool_arguments = getattr(tool_call, "arguments", None)
-                        tool_call_id = getattr(tool_call, "call_id", None) or getattr(tool_call, "id", None)
-                    
-                    if not tool_name:
-                        verbose_logger.warning(f"Tool call missing name: {tool_call}")
-                        continue
-                    
-                    # Parse arguments if they're a string
-                    if isinstance(tool_arguments, str):
-                        try:
-                            parsed_arguments = json.loads(tool_arguments)
-                        except json.JSONDecodeError:
-                            parsed_arguments = {}
-                    else:
-                        parsed_arguments = tool_arguments or {}
-                    
-                    result = await global_mcp_server_manager.call_tool(
-                        name=tool_name,
-                        arguments=parsed_arguments,
-                        user_api_key_auth=user_api_key_auth,
-                    )
-                    
-                    # Format result for inclusion in response
-                    result_text = str(result.content[0].text) if result.content else "Tool executed successfully"
-                    tool_results.append({
-                        "tool_call_id": tool_call_id,
-                        "result": result_text
-                    })
-                    
-                except Exception as e:
-                    verbose_logger.exception(f"Error executing MCP tool call: {e}")
-                    tool_results.append({
-                        "tool_call_id": tool_call_id if 'tool_call_id' in locals() else "unknown",
-                        "result": f"Error executing tool: {str(e)}"
-                    })
+            user_api_key_auth = kwargs.get("user_api_key_auth")
+            tool_results = await MCPResponsesAPIHelper._execute_tool_calls(tool_calls, user_api_key_auth)
             
             if tool_results:
-                # Create follow-up input with tool results in proper format
-                follow_up_input = []
+                follow_up_input = MCPResponsesAPIHelper._create_follow_up_input(response, tool_results)
                 
-                # Add the original response (assistant message with tool calls)
-                # Transform response output back to input format for follow-up
-                for output_item in response.output:
-                    if isinstance(output_item, dict):
-                        if output_item.get("type") == "function_call":
-                            # Add function call to input
-                            follow_up_input.append({
-                                "type": "function_call",
-                                "call_id": output_item.get("call_id") or output_item.get("id"),
-                                "name": output_item.get("name"),
-                                "arguments": output_item.get("arguments")
-                            })
-                        elif output_item.get("type") == "message":
-                            # Add message content
-                            follow_up_input.append({
-                                "type": "message",
-                                "role": output_item.get("role", "assistant"),
-                                "content": output_item.get("content", "")
-                            })
-                
-                # Add tool results
-                for tool_result in tool_results:
-                    follow_up_input.append({
-                        "type": "function_call_output",
-                        "call_id": tool_result["tool_call_id"],
-                        "output": tool_result["result"]
-                    })
-                
-                # Make a follow-up call with the tool results
-                final_response = await aresponses(
-                    input=follow_up_input,
+                final_response = await MCPResponsesAPIHelper._make_follow_up_call(
+                    follow_up_input=follow_up_input,
                     model=model,
-                    include=include,
-                    instructions=instructions,
-                    max_output_tokens=max_output_tokens,
-                    prompt=prompt,
-                    metadata=metadata,
-                    parallel_tool_calls=parallel_tool_calls,
-                    previous_response_id=response.id,  # Link to previous response
-                    reasoning=reasoning,
-                    store=store,
-                    background=background,
-                    stream=stream,
-                    temperature=temperature,
-                    text=text,
-                    tools=all_tools,  # Keep tools for potential future calls
-                    top_p=top_p,
-                    truncation=truncation,
-                    user=user,
-                    extra_headers=extra_headers,
-                    extra_query=extra_query,
-                    extra_body=extra_body,
-                    timeout=timeout,
-                    custom_llm_provider=custom_llm_provider,
-                    **kwargs,
+                    all_tools=all_tools,
+                    response_id=response.id,
+                    **call_params
                 )
                 
                 return final_response
