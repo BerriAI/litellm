@@ -19,11 +19,13 @@ import { Modal, message, Tooltip } from "antd";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { Table as TableInstance } from '@tanstack/react-table';
 import { Copy } from "lucide-react";
+import { isAdminRole } from "../utils/roles";
 
 interface ModelHubTableProps {
   accessToken: string | null;
   publicPage: boolean;
   premiumUser: boolean;
+  userRole: string | null;
 }
 
 interface ModelGroupInfo {
@@ -49,6 +51,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   accessToken,
   publicPage,
   premiumUser,
+  userRole,
 }) => {
   const [publicPageAllowed, setPublicPageAllowed] = useState<boolean>(false);
   const [modelHubData, setModelHubData] = useState<ModelGroupInfo[] | null>(null);
@@ -216,7 +219,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                   </button>
                 </div>
             
-            {publicPage == false && (
+            {publicPage == false && isAdminRole(userRole || "") && (
               <Button 
                 className="ml-4" 
                 onClick={() => handleMakePublicPage()}
