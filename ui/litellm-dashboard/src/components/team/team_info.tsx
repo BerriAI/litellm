@@ -33,7 +33,12 @@ import {
 import { Button, Form, Input, Select, message, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Select as Select2 } from "antd";
-import { PencilAltIcon, PlusIcon, TrashIcon } from "@heroicons/react/outline";
+import {
+  ArrowLeftIcon,
+  PencilAltIcon,
+  PlusIcon,
+  TrashIcon,
+} from "@heroicons/react/outline";
 import MemberModal from "./edit_membership";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
@@ -360,9 +365,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <Button onClick={onClose} className="mb-4">
-            ← Back
-          </Button>
+          <TremorButton
+            icon={ArrowLeftIcon}
+            variant="light"
+            onClick={onClose}
+            className="mb-4"
+          >
+            Back to Teams
+          </TremorButton>
           <Title>{info.team_alias}</Title>
           <Text className="text-gray-500 font-mono">{info.team_id}</Text>
         </div>

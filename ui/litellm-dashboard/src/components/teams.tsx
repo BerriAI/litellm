@@ -551,15 +551,14 @@ const Teams: React.FC<TeamProps> = ({
     <div className="w-full mx-4 h-[75vh]">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
-          {(userRole == "Admin" || userRole == "Org Admin") &&
-          !selectedTeamId ? (
+          {(userRole == "Admin" || userRole == "Org Admin") && (
             <Button
               className="w-fit"
               onClick={() => setIsTeamModalVisible(true)}
             >
               + Create New Team
             </Button>
-          ) : null}
+          )}
           {selectedTeamId ? (
             <TeamInfoView
               teamId={selectedTeamId}
@@ -1127,368 +1126,6 @@ const Teams: React.FC<TeamProps> = ({
                         )}
                       </Card>
                     </Col>
-                    {userRole == "Admin" || userRole == "Org Admin" ? (
-                      <Col numColSpan={1}>
-                        <Modal
-                          title="Create Team"
-                          visible={isTeamModalVisible}
-                          width={1000}
-                          footer={null}
-                          onOk={handleOk}
-                          onCancel={handleCancel}
-                        >
-                          <Form
-                            form={form}
-                            onFinish={handleCreate}
-                            labelCol={{ span: 8 }}
-                            wrapperCol={{ span: 16 }}
-                            labelAlign="left"
-                          >
-                            <>
-                              <Form.Item
-                                label="Team Name"
-                                name="team_alias"
-                                rules={[
-                                  {
-                                    required: true,
-                                    message: "Please input a team name",
-                                  },
-                                ]}
-                              >
-                                <TextInput placeholder="" />
-                              </Form.Item>
-                              <Form.Item
-                                label={
-                                  <span>
-                                    Organization{" "}
-                                    <Tooltip
-                                      title={
-                                        <span>
-                                          Organizations can have multiple teams.
-                                          Learn more about{" "}
-                                          <a
-                                            href="https://docs.litellm.ai/docs/proxy/user_management_heirarchy"
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            style={{
-                                              color: "#1890ff",
-                                              textDecoration: "underline",
-                                            }}
-                                            onClick={(e) => e.stopPropagation()}
-                                          >
-                                            user management hierarchy
-                                          </a>
-                                        </span>
-                                      }
-                                    >
-                                      <InfoCircleOutlined
-                                        style={{ marginLeft: "4px" }}
-                                      />
-                                    </Tooltip>
-                                  </span>
-                                }
-                                name="organization_id"
-                                initialValue={
-                                  currentOrg ? currentOrg.organization_id : null
-                                }
-                                className="mt-8"
-                              >
-                                <Select2
-                                  showSearch
-                                  allowClear
-                                  placeholder="Search or select an Organization"
-                                  onChange={(value) => {
-                                    form.setFieldValue(
-                                      "organization_id",
-                                      value
-                                    );
-                                    setCurrentOrgForCreateTeam(
-                                      organizations?.find(
-                                        (org) => org.organization_id === value
-                                      ) || null
-                                    );
-                                  }}
-                                  filterOption={(input, option) => {
-                                    if (!option) return false;
-                                    const optionValue =
-                                      option.children?.toString() || "";
-                                    return optionValue
-                                      .toLowerCase()
-                                      .includes(input.toLowerCase());
-                                  }}
-                                  optionFilterProp="children"
-                                >
-                                  {organizations?.map((org) => (
-                                    <Select2.Option
-                                      key={org.organization_id}
-                                      value={org.organization_id}
-                                    >
-                                      <span className="font-medium">
-                                        {org.organization_alias}
-                                      </span>{" "}
-                                      <span className="text-gray-500">
-                                        ({org.organization_id})
-                                      </span>
-                                    </Select2.Option>
-                                  ))}
-                                </Select2>
-                              </Form.Item>
-                              <Form.Item
-                                label={
-                                  <span>
-                                    Models{" "}
-                                    <Tooltip title="These are the models that your selected team has access to">
-                                      <InfoCircleOutlined
-                                        style={{ marginLeft: "4px" }}
-                                      />
-                                    </Tooltip>
-                                  </span>
-                                }
-                                name="models"
-                              >
-                                <Select2
-                                  mode="multiple"
-                                  placeholder="Select models"
-                                  style={{ width: "100%" }}
-                                >
-                                  <Select2.Option
-                                    key="all-proxy-models"
-                                    value="all-proxy-models"
-                                  >
-                                    All Proxy Models
-                                  </Select2.Option>
-                                  {modelsToPick.map((model) => (
-                                    <Select2.Option key={model} value={model}>
-                                      {getModelDisplayName(model)}
-                                    </Select2.Option>
-                                  ))}
-                                </Select2>
-                              </Form.Item>
-
-                              <Form.Item
-                                label="Max Budget (USD)"
-                                name="max_budget"
-                              >
-                                <NumericalInput
-                                  step={0.01}
-                                  precision={2}
-                                  width={200}
-                                />
-                              </Form.Item>
-                              <Form.Item
-                                className="mt-8"
-                                label="Reset Budget"
-                                name="budget_duration"
-                              >
-                                <Select2 defaultValue={null} placeholder="n/a">
-                                  <Select2.Option value="24h">
-                                    daily
-                                  </Select2.Option>
-                                  <Select2.Option value="7d">
-                                    weekly
-                                  </Select2.Option>
-                                  <Select2.Option value="30d">
-                                    monthly
-                                  </Select2.Option>
-                                </Select2>
-                              </Form.Item>
-                              <Form.Item
-                                label="Tokens per minute Limit (TPM)"
-                                name="tpm_limit"
-                              >
-                                <NumericalInput step={1} width={400} />
-                              </Form.Item>
-                              <Form.Item
-                                label="Requests per minute Limit (RPM)"
-                                name="rpm_limit"
-                              >
-                                <NumericalInput step={1} width={400} />
-                              </Form.Item>
-
-                              <Accordion
-                                className="mt-20 mb-8"
-                                onClick={() => {
-                                  if (!mcpAccessGroupsLoaded) {
-                                    fetchMcpAccessGroups();
-                                    setMcpAccessGroupsLoaded(true);
-                                  }
-                                }}
-                              >
-                                <AccordionHeader>
-                                  <b>Additional Settings</b>
-                                </AccordionHeader>
-                                <AccordionBody>
-                                  <Form.Item
-                                    label="Team ID"
-                                    name="team_id"
-                                    help="ID of the team you want to create. If not provided, it will be generated automatically."
-                                  >
-                                    <TextInput
-                                      onChange={(e) => {
-                                        e.target.value = e.target.value.trim();
-                                      }}
-                                    />
-                                  </Form.Item>
-                                  <Form.Item
-                                    label="Team Member Budget (USD)"
-                                    name="team_member_budget"
-                                    normalize={(value) =>
-                                      value ? Number(value) : undefined
-                                    }
-                                    tooltip="This is the individual budget for a user in the team."
-                                  >
-                                    <NumericalInput
-                                      step={0.01}
-                                      precision={2}
-                                      width={200}
-                                    />
-                                  </Form.Item>
-                                  <Form.Item
-                                    label="Team Member Key Duration"
-                                    name="team_member_key_duration"
-                                    tooltip="Set a limit to the duration of a team member's key."
-                                  >
-                                    <Select2
-                                      defaultValue={null}
-                                      placeholder="n/a"
-                                    >
-                                      <Select2.Option value="1d">
-                                        1 day
-                                      </Select2.Option>
-                                      <Select2.Option value="1w">
-                                        1 week
-                                      </Select2.Option>
-                                      <Select2.Option value="1mo">
-                                        1 month
-                                      </Select2.Option>
-                                    </Select2>
-                                  </Form.Item>
-                                  <Form.Item
-                                    label="Metadata"
-                                    name="metadata"
-                                    help="Additional team metadata. Enter metadata as JSON object."
-                                  >
-                                    <Input.TextArea rows={4} />
-                                  </Form.Item>
-                                  <Form.Item
-                                    label={
-                                      <span>
-                                        Guardrails{" "}
-                                        <Tooltip title="Setup your first guardrail">
-                                          <a
-                                            href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            onClick={(e) => e.stopPropagation()}
-                                          >
-                                            <InfoCircleOutlined
-                                              style={{ marginLeft: "4px" }}
-                                            />
-                                          </a>
-                                        </Tooltip>
-                                      </span>
-                                    }
-                                    name="guardrails"
-                                    className="mt-8"
-                                    help="Select existing guardrails or enter new ones"
-                                  >
-                                    <Select2
-                                      mode="tags"
-                                      style={{ width: "100%" }}
-                                      placeholder="Select or enter guardrails"
-                                      options={guardrailsList.map((name) => ({
-                                        value: name,
-                                        label: name,
-                                      }))}
-                                    />
-                                  </Form.Item>
-                                  <Form.Item
-                                    label={
-                                      <span>
-                                        Allowed Vector Stores{" "}
-                                        <Tooltip title="Select which vector stores this team can access by default. Leave empty for access to all vector stores">
-                                          <InfoCircleOutlined
-                                            style={{ marginLeft: "4px" }}
-                                          />
-                                        </Tooltip>
-                                      </span>
-                                    }
-                                    name="allowed_vector_store_ids"
-                                    className="mt-8"
-                                    help="Select vector stores this team can access. Leave empty for access to all vector stores"
-                                  >
-                                    <PremiumVectorStoreSelector
-                                      onChange={(values) =>
-                                        form.setFieldValue(
-                                          "allowed_vector_store_ids",
-                                          values
-                                        )
-                                      }
-                                      value={form.getFieldValue(
-                                        "allowed_vector_store_ids"
-                                      )}
-                                      accessToken={accessToken || ""}
-                                      placeholder="Select vector stores (optional)"
-                                      premiumUser={premiumUser}
-                                    />
-                                  </Form.Item>
-                                  <Form.Item
-                                    label={
-                                      <span>
-                                        Allowed MCP Servers{" "}
-                                        <Tooltip title="Select which MCP servers or access groups this team can access by default. ">
-                                          <InfoCircleOutlined
-                                            style={{ marginLeft: "4px" }}
-                                          />
-                                        </Tooltip>
-                                      </span>
-                                    }
-                                    name="allowed_mcp_servers_and_groups"
-                                    className="mt-8"
-                                    help="Select MCP servers or access groups this team can access. "
-                                  >
-                                    <PremiumMCPSelector
-                                      onChange={(val) =>
-                                        form.setFieldValue(
-                                          "allowed_mcp_servers_and_groups",
-                                          val
-                                        )
-                                      }
-                                      value={form.getFieldValue(
-                                        "allowed_mcp_servers_and_groups"
-                                      )}
-                                      accessToken={accessToken || ""}
-                                      placeholder="Select MCP servers or access groups (optional)"
-                                      premiumUser={premiumUser}
-                                    />
-                                  </Form.Item>
-                                </AccordionBody>
-                              </Accordion>
-
-                              <Accordion className="mt-8 mb-8">
-                                <AccordionHeader>
-                                  <b>Logging Settings</b>
-                                </AccordionHeader>
-                                <AccordionBody>
-                                  <div className="mt-4">
-                                    <PremiumLoggingSettings
-                                      value={loggingSettings}
-                                      onChange={setLoggingSettings}
-                                      premiumUser={premiumUser}
-                                    />
-                                  </div>
-                                </AccordionBody>
-                              </Accordion>
-                            </>
-                            <div
-                              style={{ textAlign: "right", marginTop: "10px" }}
-                            >
-                              <Button2 htmlType="submit">Create Team</Button2>
-                            </div>
-                          </Form>
-                        </Modal>
-                      </Col>
-                    ) : null}
                   </Grid>
                 </TabPanel>
                 <TabPanel>
@@ -1508,6 +1145,328 @@ const Teams: React.FC<TeamProps> = ({
                 )}
               </TabPanels>
             </TabGroup>
+          )}
+          {(userRole == "Admin" || userRole == "Org Admin") && (
+            <Modal
+              title="Create Team"
+              visible={isTeamModalVisible}
+              width={1000}
+              footer={null}
+              onOk={handleOk}
+              onCancel={handleCancel}
+            >
+              <Form
+                form={form}
+                onFinish={handleCreate}
+                labelCol={{ span: 8 }}
+                wrapperCol={{ span: 16 }}
+                labelAlign="left"
+              >
+                <>
+                  <Form.Item
+                    label="Team Name"
+                    name="team_alias"
+                    rules={[
+                      {
+                        required: true,
+                        message: "Please input a team name",
+                      },
+                    ]}
+                  >
+                    <TextInput placeholder="" />
+                  </Form.Item>
+                  <Form.Item
+                    label={
+                      <span>
+                        Organization{" "}
+                        <Tooltip
+                          title={
+                            <span>
+                              Organizations can have multiple teams. Learn more
+                              about{" "}
+                              <a
+                                href="https://docs.litellm.ai/docs/proxy/user_management_heirarchy"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{
+                                  color: "#1890ff",
+                                  textDecoration: "underline",
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                user management hierarchy
+                              </a>
+                            </span>
+                          }
+                        >
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="organization_id"
+                    initialValue={
+                      currentOrg ? currentOrg.organization_id : null
+                    }
+                    className="mt-8"
+                  >
+                    <Select2
+                      showSearch
+                      allowClear
+                      placeholder="Search or select an Organization"
+                      onChange={(value) => {
+                        form.setFieldValue("organization_id", value);
+                        setCurrentOrgForCreateTeam(
+                          organizations?.find(
+                            (org) => org.organization_id === value
+                          ) || null
+                        );
+                      }}
+                      filterOption={(input, option) => {
+                        if (!option) return false;
+                        const optionValue = option.children?.toString() || "";
+                        return optionValue
+                          .toLowerCase()
+                          .includes(input.toLowerCase());
+                      }}
+                      optionFilterProp="children"
+                    >
+                      {organizations?.map((org) => (
+                        <Select2.Option
+                          key={org.organization_id}
+                          value={org.organization_id}
+                        >
+                          <span className="font-medium">
+                            {org.organization_alias}
+                          </span>{" "}
+                          <span className="text-gray-500">
+                            ({org.organization_id})
+                          </span>
+                        </Select2.Option>
+                      ))}
+                    </Select2>
+                  </Form.Item>
+                  <Form.Item
+                    label={
+                      <span>
+                        Models{" "}
+                        <Tooltip title="These are the models that your selected team has access to">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="models"
+                  >
+                    <Select2
+                      mode="multiple"
+                      placeholder="Select models"
+                      style={{ width: "100%" }}
+                    >
+                      <Select2.Option
+                        key="all-proxy-models"
+                        value="all-proxy-models"
+                      >
+                        All Proxy Models
+                      </Select2.Option>
+                      {modelsToPick.map((model) => (
+                        <Select2.Option key={model} value={model}>
+                          {getModelDisplayName(model)}
+                        </Select2.Option>
+                      ))}
+                    </Select2>
+                  </Form.Item>
+
+                  <Form.Item label="Max Budget (USD)" name="max_budget">
+                    <NumericalInput step={0.01} precision={2} width={200} />
+                  </Form.Item>
+                  <Form.Item
+                    className="mt-8"
+                    label="Reset Budget"
+                    name="budget_duration"
+                  >
+                    <Select2 defaultValue={null} placeholder="n/a">
+                      <Select2.Option value="24h">daily</Select2.Option>
+                      <Select2.Option value="7d">weekly</Select2.Option>
+                      <Select2.Option value="30d">monthly</Select2.Option>
+                    </Select2>
+                  </Form.Item>
+                  <Form.Item
+                    label="Tokens per minute Limit (TPM)"
+                    name="tpm_limit"
+                  >
+                    <NumericalInput step={1} width={400} />
+                  </Form.Item>
+                  <Form.Item
+                    label="Requests per minute Limit (RPM)"
+                    name="rpm_limit"
+                  >
+                    <NumericalInput step={1} width={400} />
+                  </Form.Item>
+
+                  <Accordion
+                    className="mt-20 mb-8"
+                    onClick={() => {
+                      if (!mcpAccessGroupsLoaded) {
+                        fetchMcpAccessGroups();
+                        setMcpAccessGroupsLoaded(true);
+                      }
+                    }}
+                  >
+                    <AccordionHeader>
+                      <b>Additional Settings</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <Form.Item
+                        label="Team ID"
+                        name="team_id"
+                        help="ID of the team you want to create. If not provided, it will be generated automatically."
+                      >
+                        <TextInput
+                          onChange={(e) => {
+                            e.target.value = e.target.value.trim();
+                          }}
+                        />
+                      </Form.Item>
+                      <Form.Item
+                        label="Team Member Budget (USD)"
+                        name="team_member_budget"
+                        normalize={(value) =>
+                          value ? Number(value) : undefined
+                        }
+                        tooltip="This is the individual budget for a user in the team."
+                      >
+                        <NumericalInput step={0.01} precision={2} width={200} />
+                      </Form.Item>
+                      <Form.Item
+                        label="Team Member Key Duration"
+                        name="team_member_key_duration"
+                        tooltip="Set a limit to the duration of a team member's key."
+                      >
+                        <Select2 defaultValue={null} placeholder="n/a">
+                          <Select2.Option value="1d">1 day</Select2.Option>
+                          <Select2.Option value="1w">1 week</Select2.Option>
+                          <Select2.Option value="1mo">1 month</Select2.Option>
+                        </Select2>
+                      </Form.Item>
+                      <Form.Item
+                        label="Metadata"
+                        name="metadata"
+                        help="Additional team metadata. Enter metadata as JSON object."
+                      >
+                        <Input.TextArea rows={4} />
+                      </Form.Item>
+                      <Form.Item
+                        label={
+                          <span>
+                            Guardrails{" "}
+                            <Tooltip title="Setup your first guardrail">
+                              <a
+                                href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <InfoCircleOutlined
+                                  style={{ marginLeft: "4px" }}
+                                />
+                              </a>
+                            </Tooltip>
+                          </span>
+                        }
+                        name="guardrails"
+                        className="mt-8"
+                        help="Select existing guardrails or enter new ones"
+                      >
+                        <Select2
+                          mode="tags"
+                          style={{ width: "100%" }}
+                          placeholder="Select or enter guardrails"
+                          options={guardrailsList.map((name) => ({
+                            value: name,
+                            label: name,
+                          }))}
+                        />
+                      </Form.Item>
+                      <Form.Item
+                        label={
+                          <span>
+                            Allowed Vector Stores{" "}
+                            <Tooltip title="Select which vector stores this team can access by default. Leave empty for access to all vector stores">
+                              <InfoCircleOutlined
+                                style={{ marginLeft: "4px" }}
+                              />
+                            </Tooltip>
+                          </span>
+                        }
+                        name="allowed_vector_store_ids"
+                        className="mt-8"
+                        help="Select vector stores this team can access. Leave empty for access to all vector stores"
+                      >
+                        <PremiumVectorStoreSelector
+                          onChange={(values) =>
+                            form.setFieldValue(
+                              "allowed_vector_store_ids",
+                              values
+                            )
+                          }
+                          value={form.getFieldValue("allowed_vector_store_ids")}
+                          accessToken={accessToken || ""}
+                          placeholder="Select vector stores (optional)"
+                          premiumUser={premiumUser}
+                        />
+                      </Form.Item>
+                      <Form.Item
+                        label={
+                          <span>
+                            Allowed MCP Servers{" "}
+                            <Tooltip title="Select which MCP servers or access groups this team can access by default. ">
+                              <InfoCircleOutlined
+                                style={{ marginLeft: "4px" }}
+                              />
+                            </Tooltip>
+                          </span>
+                        }
+                        name="allowed_mcp_servers_and_groups"
+                        className="mt-8"
+                        help="Select MCP servers or access groups this team can access. "
+                      >
+                        <PremiumMCPSelector
+                          onChange={(val) =>
+                            form.setFieldValue(
+                              "allowed_mcp_servers_and_groups",
+                              val
+                            )
+                          }
+                          value={form.getFieldValue(
+                            "allowed_mcp_servers_and_groups"
+                          )}
+                          accessToken={accessToken || ""}
+                          placeholder="Select MCP servers or access groups (optional)"
+                          premiumUser={premiumUser}
+                        />
+                      </Form.Item>
+                    </AccordionBody>
+                  </Accordion>
+
+                  <Accordion className="mt-8 mb-8">
+                    <AccordionHeader>
+                      <b>Logging Settings</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <div className="mt-4">
+                        <PremiumLoggingSettings
+                          value={loggingSettings}
+                          onChange={setLoggingSettings}
+                          premiumUser={premiumUser}
+                        />
+                      </div>
+                    </AccordionBody>
+                  </Accordion>
+                </>
+                <div style={{ textAlign: "right", marginTop: "10px" }}>
+                  <Button2 htmlType="submit">Create Team</Button2>
+                </div>
+              </Form>
+            </Modal>
           )}
         </Col>
       </Grid>
