@@ -4,24 +4,6 @@ import { MCPTool, InputSchema } from "./types";
 import { Form, Tooltip, message } from "antd";
 import { InfoCircleOutlined, ClockCircleOutlined } from "@ant-design/icons";
 
-const AuthBanner = ({ needsAuth, authValue }: { needsAuth: boolean; authValue?: string | null }) => {
-  if (!needsAuth || (needsAuth && authValue)) {
-    return (
-      <Callout title="Authentication" color="green" className="mb-3">
-        This tool does not require authentication or has authentication added.
-      </Callout>
-    );
-  }
-
-  if (needsAuth && !authValue) {
-    return (
-      <Callout title="Authentication required" color="yellow" className="mb-3">
-        Please provide authentication details if this tool call requires auth.
-      </Callout>
-    );
-  }
-  return null;
-};
 
 export function ToolTestPanel({
   tool,
@@ -183,9 +165,7 @@ export function ToolTestPanel({
         </Button>
       </div>
 
-      {/* Auth Banner */}
-      <AuthBanner needsAuth={needsAuth} authValue={authValue} />
-      
+
       {/* Two Column Layout - Always Side by Side */}
       <div className="grid grid-cols-2 gap-4 h-full">
         {/* Left Column - Input Parameters */}
