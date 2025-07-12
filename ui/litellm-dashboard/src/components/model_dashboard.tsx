@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef } from "react";
 import {
   Card,
   Title,
@@ -12,16 +12,16 @@ import {
   Text,
   Grid,
   Col,
-} from '@tremor/react'
+} from "@tremor/react";
 import {
   CredentialItem,
   credentialListCall,
   CredentialsResponse,
-} from './networking'
+} from "./networking";
 
-import { handleAddModelSubmit } from './add_model/handle_add_model_submit'
-import CredentialsPanel from '@/components/model_add/credentials'
-import { getDisplayModelName } from './view_model/model_name_display'
+import { handleAddModelSubmit } from "./add_model/handle_add_model_submit";
+import CredentialsPanel from "@/components/model_add/credentials";
+import { getDisplayModelName } from "./view_model/model_name_display";
 import {
   TabPanel,
   TabPanels,
@@ -29,13 +29,9 @@ import {
   TabList,
   Tab,
   Icon,
-} from '@tremor/react'
-import {
-  Select,
-  SelectItem,
-  DateRangePickerValue,
-} from '@tremor/react'
-import UsageDatePicker from './shared/usage_date_picker'
+} from "@tremor/react";
+import { Select, SelectItem, DateRangePickerValue } from "@tremor/react";
+import UsageDatePicker from "./shared/usage_date_picker";
 import {
   modelInfoCall,
   Model,
@@ -51,83 +47,75 @@ import {
   adminGlobalActivityExceptions,
   adminGlobalActivityExceptionsPerDeployment,
   allEndUsersCall,
-} from './networking'
-import { BarChart, AreaChart } from '@tremor/react'
-import {
-  Popover,
-  Form,
-  InputNumber,
-  message,
-} from 'antd'
-import { Button } from '@tremor/react'
-import { Typography } from 'antd'
-import {
-  RefreshIcon,
-  FilterIcon,
-} from '@heroicons/react/outline'
-import { InfoCircleOutlined } from '@ant-design/icons'
-import type { UploadProps } from 'antd'
-import TimeToFirstToken from './model_metrics/time_to_first_token'
-import { Team } from './key_team_helpers/key_list'
-import TeamInfoView from './team/team_info'
+} from "./networking";
+import { BarChart, AreaChart } from "@tremor/react";
+import { Popover, Form, InputNumber, message } from "antd";
+import { Button } from "@tremor/react";
+import { Typography } from "antd";
+import { RefreshIcon, FilterIcon } from "@heroicons/react/outline";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import type { UploadProps } from "antd";
+import TimeToFirstToken from "./model_metrics/time_to_first_token";
+import { Team } from "./key_team_helpers/key_list";
+import TeamInfoView from "./team/team_info";
 import {
   Providers,
   provider_map,
   getPlaceholder,
   getProviderModels,
-} from './provider_info_helpers'
-import ModelInfoView from './model_info_view'
-import AddModelTab from './add_model/add_model_tab'
-import { ModelDataTable } from './model_dashboard/table'
-import { columns } from './model_dashboard/columns'
-import HealthCheckComponent from './model_dashboard/HealthCheckComponent'
-import PassThroughSettings from './pass_through_settings'
-import { all_admin_roles } from '@/utils/roles'
-import { Table as TableInstance } from '@tanstack/react-table'
+} from "./provider_info_helpers";
+import ModelInfoView from "./model_info_view";
+import AddModelTab from "./add_model/add_model_tab";
+import { ModelDataTable } from "./model_dashboard/table";
+import { columns } from "./model_dashboard/columns";
+import HealthCheckComponent from "./model_dashboard/HealthCheckComponent";
+import PassThroughSettings from "./pass_through_settings";
+import { all_admin_roles } from "@/utils/roles";
+import { Table as TableInstance } from "@tanstack/react-table";
 
 interface ModelDashboardProps {
-  accessToken: string | null
-  token: string | null
-  userRole: string | null
-  userID: string | null
-  modelData: any
-  keys: any[] | null
-  setModelData: any
-  premiumUser: boolean
-  teams: Team[] | null
+  accessToken: string | null;
+  token: string | null;
+  userRole: string | null;
+  userID: string | null;
+  modelData: any;
+  keys: any[] | null;
+  setModelData: any;
+  premiumUser: boolean;
+  teams: Team[] | null;
 }
 
 interface RetryPolicyObject {
-  [key: string]: { [retryPolicyKey: string]: number } | undefined
+  [key: string]: { [retryPolicyKey: string]: number } | undefined;
 }
 
 interface GlobalExceptionActivityData {
-  sum_num_rate_limit_exceptions: number
-  daily_data: { date: string; num_rate_limit_exceptions: number }[]
+  sum_num_rate_limit_exceptions: number;
+  daily_data: { date: string; num_rate_limit_exceptions: number }[];
 }
 
 //["OpenAI", "Azure OpenAI", "Anthropic", "Gemini (Google AI Studio)", "Amazon Bedrock", "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)"]
 
 interface ProviderFields {
-  field_name: string
-  field_type: string
-  field_description: string
-  field_value: string
+  field_name: string;
+  field_type: string;
+  field_description: string;
+  field_value: string;
 }
 
 interface ProviderSettings {
-  name: string
-  fields: ProviderFields[]
+  name: string;
+  fields: ProviderFields[];
 }
 
 const retry_policy_map: Record<string, string> = {
-  'BadRequestError (400)': 'BadRequestErrorRetries',
-  'AuthenticationError  (401)': 'AuthenticationErrorRetries',
-  'TimeoutError (408)': 'TimeoutErrorRetries',
-  'RateLimitError (429)': 'RateLimitErrorRetries',
-  'ContentPolicyViolationError (400)': 'ContentPolicyViolationErrorRetries',
-  'InternalServerError (500)': 'InternalServerErrorRetries',
-}
+  "BadRequestError (400)": "BadRequestErrorRetries",
+  "AuthenticationError  (401)": "AuthenticationErrorRetries",
+  "TimeoutError (408)": "TimeoutErrorRetries",
+  "RateLimitError (429)": "RateLimitErrorRetries",
+  "ContentPolicyViolationError (400)": "ContentPolicyViolationErrorRetries",
+  "InternalServerError (500)": "InternalServerErrorRetries",
+};
 
 const ModelDashboard: React.FC<ModelDashboardProps> = ({
   accessToken,
@@ -140,127 +128,128 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   premiumUser,
   teams,
 }) => {
-  const [form] = Form.useForm()
-  const [modelMap, setModelMap] = useState<any>(null)
-  const [lastRefreshed, setLastRefreshed] = useState('')
+  const [form] = Form.useForm();
+  const [modelMap, setModelMap] = useState<any>(null);
+  const [lastRefreshed, setLastRefreshed] = useState("");
 
-  const [providerModels, setProviderModels] = useState<Array<string>>([]) // Explicitly typing providerModels as a string array
+  const [providerModels, setProviderModels] = useState<Array<string>>([]); // Explicitly typing providerModels as a string array
 
   const [providerSettings, setProviderSettings] = useState<ProviderSettings[]>(
     []
-  )
+  );
   const [selectedProvider, setSelectedProvider] = useState<Providers>(
     Providers.OpenAI
-  )
-  const [healthCheckResponse, setHealthCheckResponse] = useState<any>(null)
+  );
+  const [healthCheckResponse, setHealthCheckResponse] = useState<any>(null);
   const [isHealthCheckLoading, setIsHealthCheckLoading] =
-    useState<boolean>(false)
-  const [editModalVisible, setEditModalVisible] = useState<boolean>(false)
+    useState<boolean>(false);
+  const [editModalVisible, setEditModalVisible] = useState<boolean>(false);
 
-  const [selectedModel, setSelectedModel] = useState<any>(null)
+  const [selectedModel, setSelectedModel] = useState<any>(null);
   const [availableModelGroups, setAvailableModelGroups] = useState<
     Array<string>
-  >([])
+  >([]);
   const [availableModelAccessGroups, setAvailableModelAccessGroups] = useState<
     Array<string>
-  >([])
+  >([]);
   const [selectedModelGroup, setSelectedModelGroup] = useState<string | null>(
     null
-  )
-  const [modelMetrics, setModelMetrics] = useState<any[]>([])
+  );
+  const [modelMetrics, setModelMetrics] = useState<any[]>([]);
   const [modelMetricsCategories, setModelMetricsCategories] = useState<any[]>(
     []
-  )
-  const [streamingModelMetrics, setStreamingModelMetrics] = useState<any[]>([])
+  );
+  const [streamingModelMetrics, setStreamingModelMetrics] = useState<any[]>([]);
   const [streamingModelMetricsCategories, setStreamingModelMetricsCategories] =
-    useState<any[]>([])
-  const [modelExceptions, setModelExceptions] = useState<any[]>([])
-  const [allExceptions, setAllExceptions] = useState<any[]>([])
-  const [slowResponsesData, setSlowResponsesData] = useState<any[]>([])
+    useState<any[]>([]);
+  const [modelExceptions, setModelExceptions] = useState<any[]>([]);
+  const [allExceptions, setAllExceptions] = useState<any[]>([]);
+  const [slowResponsesData, setSlowResponsesData] = useState<any[]>([]);
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
     from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
     to: new Date(),
-  })
+  });
 
   const [modelGroupRetryPolicy, setModelGroupRetryPolicy] =
-    useState<RetryPolicyObject | null>(null)
-  const [defaultRetry, setDefaultRetry] = useState<number>(0)
+    useState<RetryPolicyObject | null>(null);
+  const [defaultRetry, setDefaultRetry] = useState<number>(0);
 
   const [globalExceptionData, setGlobalExceptionData] =
-    useState<GlobalExceptionActivityData>({} as GlobalExceptionActivityData)
+    useState<GlobalExceptionActivityData>({} as GlobalExceptionActivityData);
   const [globalExceptionPerDeployment, setGlobalExceptionPerDeployment] =
-    useState<any[]>([])
+    useState<any[]>([]);
 
-  const [showAdvancedFilters, setShowAdvancedFilters] = useState<boolean>(false)
-  const [selectedAPIKey, setSelectedAPIKey] = useState<any | null>(null)
-  const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null)
+  const [showAdvancedFilters, setShowAdvancedFilters] =
+    useState<boolean>(false);
+  const [selectedAPIKey, setSelectedAPIKey] = useState<any | null>(null);
+  const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null);
 
-  const [allEndUsers, setAllEndUsers] = useState<any[]>([])
+  const [allEndUsers, setAllEndUsers] = useState<any[]>([]);
 
-  const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([])
+  const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([]);
 
   // Add state for advanced settings visibility
   const [showAdvancedSettings, setShowAdvancedSettings] =
-    useState<boolean>(false)
+    useState<boolean>(false);
 
   // Add these state variables
-  const [selectedModelId, setSelectedModelId] = useState<string | null>(null)
-  const [editModel, setEditModel] = useState<boolean>(false)
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+  const [editModel, setEditModel] = useState<boolean>(false);
 
-  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null)
-  const [selectedTeam, setSelectedTeam] = useState<string | null>(null)
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
+  const [selectedTeam, setSelectedTeam] = useState<string | null>(null);
 
   const [selectedTeamFilter, setSelectedTeamFilter] = useState<string | null>(
     null
-  )
+  );
   const [selectedModelAccessGroupFilter, setSelectedModelAccessGroupFilter] =
-    useState<string | null>(null)
+    useState<string | null>(null);
 
   // Add new state for current team and model view mode
-  const [currentTeam, setCurrentTeam] = useState<string>('personal') // 'personal' or team_id
-  const [modelViewMode, setModelViewMode] = useState<'current_team' | 'all'>(
-    'current_team'
-  )
+  const [currentTeam, setCurrentTeam] = useState<string>("personal"); // 'personal' or team_id
+  const [modelViewMode, setModelViewMode] = useState<"current_team" | "all">(
+    "current_team"
+  );
 
-  const [showColumnDropdown, setShowColumnDropdown] = useState(false)
+  const [showColumnDropdown, setShowColumnDropdown] = useState(false);
 
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false)
-  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
-  const dropdownRef = useRef<HTMLDivElement>(null)
-  const tableRef = useRef<TableInstance<any>>(null)
-  const [selectedTabIndex, setSelectedTabIndex] = useState(0)
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const tableRef = useRef<TableInstance<any>>(null);
+  const [selectedTabIndex, setSelectedTabIndex] = useState(0);
 
   const setProviderModelsFn = (provider: Providers) => {
-    const _providerModels = getProviderModels(provider, modelMap)
-    setProviderModels(_providerModels)
-    console.log(`providerModels: ${_providerModels}`)
-  }
+    const _providerModels = getProviderModels(provider, modelMap);
+    setProviderModels(_providerModels);
+    console.log(`providerModels: ${_providerModels}`);
+  };
 
   const updateModelMetrics = async (
     modelGroup: string | null,
     startTime: Date | undefined,
     endTime: Date | undefined
   ) => {
-    console.log('Updating model metrics for group:', modelGroup)
+    console.log("Updating model metrics for group:", modelGroup);
     if (!accessToken || !userID || !userRole || !startTime || !endTime) {
-      return
+      return;
     }
     console.log(
-      'inside updateModelMetrics - startTime:',
+      "inside updateModelMetrics - startTime:",
       startTime,
-      'endTime:',
+      "endTime:",
       endTime
-    )
-    setSelectedModelGroup(modelGroup)
+    );
+    setSelectedModelGroup(modelGroup);
 
-    let selected_token = selectedAPIKey?.token
+    let selected_token = selectedAPIKey?.token;
     if (selected_token === undefined) {
-      selected_token = null
+      selected_token = null;
     }
 
-    let selected_customer = selectedCustomer
+    let selected_customer = selectedCustomer;
     if (selected_customer === undefined) {
-      selected_customer = null
+      selected_customer = null;
     }
 
     try {
@@ -273,25 +262,25 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         endTime.toISOString(),
         selected_token,
         selected_customer
-      )
-      console.log('Model metrics response:', modelMetricsResponse)
+      );
+      console.log("Model metrics response:", modelMetricsResponse);
 
       // Assuming modelMetricsResponse now contains the metric data for the specified model group
-      setModelMetrics(modelMetricsResponse.data)
-      setModelMetricsCategories(modelMetricsResponse.all_api_bases)
+      setModelMetrics(modelMetricsResponse.data);
+      setModelMetricsCategories(modelMetricsResponse.all_api_bases);
 
       const streamingModelMetricsResponse = await streamingModelMetricsCall(
         accessToken,
         modelGroup,
         startTime.toISOString(),
         endTime.toISOString()
-      )
+      );
 
       // Assuming modelMetricsResponse now contains the metric data for the specified model group
-      setStreamingModelMetrics(streamingModelMetricsResponse.data)
+      setStreamingModelMetrics(streamingModelMetricsResponse.data);
       setStreamingModelMetricsCategories(
         streamingModelMetricsResponse.all_api_bases
-      )
+      );
 
       const modelExceptionsResponse = await modelExceptionsCall(
         accessToken,
@@ -302,10 +291,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         endTime.toISOString(),
         selected_token,
         selected_customer
-      )
-      console.log('Model exceptions response:', modelExceptionsResponse)
-      setModelExceptions(modelExceptionsResponse.data)
-      setAllExceptions(modelExceptionsResponse.exception_types)
+      );
+      console.log("Model exceptions response:", modelExceptionsResponse);
+      setModelExceptions(modelExceptionsResponse.data);
+      setAllExceptions(modelExceptionsResponse.exception_types);
 
       const slowResponses = await modelMetricsSlowResponsesCall(
         accessToken,
@@ -316,51 +305,51 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         endTime.toISOString(),
         selected_token,
         selected_customer
-      )
+      );
 
-      console.log('slowResponses:', slowResponses)
+      console.log("slowResponses:", slowResponses);
 
-      setSlowResponsesData(slowResponses)
+      setSlowResponsesData(slowResponses);
 
       if (modelGroup) {
         const dailyExceptions = await adminGlobalActivityExceptions(
           accessToken,
-          startTime?.toISOString().split('T')[0],
-          endTime?.toISOString().split('T')[0],
+          startTime?.toISOString().split("T")[0],
+          endTime?.toISOString().split("T")[0],
           modelGroup
-        )
+        );
 
-        setGlobalExceptionData(dailyExceptions)
+        setGlobalExceptionData(dailyExceptions);
 
         const dailyExceptionsPerDeplyment =
           await adminGlobalActivityExceptionsPerDeployment(
             accessToken,
-            startTime?.toISOString().split('T')[0],
-            endTime?.toISOString().split('T')[0],
+            startTime?.toISOString().split("T")[0],
+            endTime?.toISOString().split("T")[0],
             modelGroup
-          )
+          );
 
-        setGlobalExceptionPerDeployment(dailyExceptionsPerDeplyment)
+        setGlobalExceptionPerDeployment(dailyExceptionsPerDeplyment);
       }
     } catch (error) {
-      console.error('Failed to fetch model metrics', error)
+      console.error("Failed to fetch model metrics", error);
     }
-  }
+  };
 
   const fetchCredentials = async (accessToken: string) => {
     try {
       const response: CredentialsResponse =
-        await credentialListCall(accessToken)
-      console.log(`credentials: ${JSON.stringify(response)}`)
-      setCredentialsList(response.credentials)
+        await credentialListCall(accessToken);
+      console.log(`credentials: ${JSON.stringify(response)}`);
+      setCredentialsList(response.credentials);
     } catch (error) {
-      console.error('Error fetching credentials:', error)
+      console.error("Error fetching credentials:", error);
     }
-  }
+  };
 
   useEffect(() => {
-    updateModelMetrics(selectedModelGroup, dateValue.from, dateValue.to)
-  }, [selectedAPIKey, selectedCustomer, selectedTeam])
+    updateModelMetrics(selectedModelGroup, dateValue.from, dateValue.to);
+  }, [selectedAPIKey, selectedCustomer, selectedTeam]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -368,104 +357,104 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         dropdownRef.current &&
         !dropdownRef.current.contains(event.target as Node)
       ) {
-        setIsDropdownOpen(false)
+        setIsDropdownOpen(false);
       }
-    }
+    };
 
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [])
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   function formatCreatedAt(createdAt: string | null) {
     if (createdAt) {
-      const date = new Date(createdAt)
-      const options = { month: 'long', day: 'numeric', year: 'numeric' }
-      return date.toLocaleDateString('en-US')
+      const date = new Date(createdAt);
+      const options = { month: "long", day: "numeric", year: "numeric" };
+      return date.toLocaleDateString("en-US");
     }
-    return null
+    return null;
   }
 
   const handleEditClick = (model: any) => {
-    setSelectedModel(model)
-    setEditModalVisible(true)
-  }
+    setSelectedModel(model);
+    setEditModalVisible(true);
+  };
 
   const handleEditCancel = () => {
-    setEditModalVisible(false)
-    setSelectedModel(null)
-  }
+    setEditModalVisible(false);
+    setSelectedModel(null);
+  };
 
   const uploadProps: UploadProps = {
-    name: 'file',
-    accept: '.json',
+    name: "file",
+    accept: ".json",
     beforeUpload: (file) => {
-      if (file.type === 'application/json') {
-        const reader = new FileReader()
+      if (file.type === "application/json") {
+        const reader = new FileReader();
         reader.onload = (e) => {
           if (e.target) {
-            const jsonStr = e.target.result as string
+            const jsonStr = e.target.result as string;
             console.log(
               `Resetting vertex_credentials to JSON; jsonStr: ${jsonStr}`
-            )
-            form.setFieldsValue({ vertex_credentials: jsonStr })
+            );
+            form.setFieldsValue({ vertex_credentials: jsonStr });
             console.log(
-              'Form values right after setting:',
+              "Form values right after setting:",
               form.getFieldsValue()
-            )
+            );
           }
-        }
-        reader.readAsText(file)
+        };
+        reader.readAsText(file);
       }
       // Prevent upload
-      return false
+      return false;
     },
     onChange(info) {
-      console.log('Upload onChange triggered with values:', info)
-      console.log('Current form values:', form.getFieldsValue())
+      console.log("Upload onChange triggered with values:", info);
+      console.log("Current form values:", form.getFieldsValue());
 
-      if (info.file.status !== 'uploading') {
-        console.log(info.file, info.fileList)
+      if (info.file.status !== "uploading") {
+        console.log(info.file, info.fileList);
       }
-      if (info.file.status === 'done') {
-        message.success(`${info.file.name} file uploaded successfully`)
-      } else if (info.file.status === 'error') {
-        message.error(`${info.file.name} file upload failed.`)
+      if (info.file.status === "done") {
+        message.success(`${info.file.name} file uploaded successfully`);
+      } else if (info.file.status === "error") {
+        message.error(`${info.file.name} file upload failed.`);
       }
     },
-  }
+  };
 
   const handleRefreshClick = () => {
     // Update the 'lastRefreshed' state to the current date and time
-    const currentDate = new Date()
-    setLastRefreshed(currentDate.toLocaleString())
-  }
+    const currentDate = new Date();
+    setLastRefreshed(currentDate.toLocaleString());
+  };
 
   const handleSaveRetrySettings = async () => {
     if (!accessToken) {
-      console.error('Access token is missing')
-      return
+      console.error("Access token is missing");
+      return;
     }
 
-    console.log('new modelGroupRetryPolicy:', modelGroupRetryPolicy)
+    console.log("new modelGroupRetryPolicy:", modelGroupRetryPolicy);
 
     try {
       const payload = {
         router_settings: {
           model_group_retry_policy: modelGroupRetryPolicy,
         },
-      }
+      };
 
-      await setCallbacksCall(accessToken, payload)
-      message.success('Retry settings saved successfully')
+      await setCallbacksCall(accessToken, payload);
+      message.success("Retry settings saved successfully");
     } catch (error) {
-      console.error('Failed to save retry settings:', error)
-      message.error('Failed to save retry settings')
+      console.error("Failed to save retry settings:", error);
+      message.error("Failed to save retry settings");
     }
-  }
+  };
 
   useEffect(() => {
     if (!accessToken || !token || !userRole || !userID) {
-      return
+      return;
     }
     const fetchData = async () => {
       try {
@@ -474,54 +463,54 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           accessToken,
           userID,
           userRole
-        )
-        console.log('Model data response:', modelDataResponse.data)
-        setModelData(modelDataResponse)
-        const _providerSettings = await modelSettingsCall(accessToken)
+        );
+        console.log("Model data response:", modelDataResponse.data);
+        setModelData(modelDataResponse);
+        const _providerSettings = await modelSettingsCall(accessToken);
         if (_providerSettings) {
-          setProviderSettings(_providerSettings)
+          setProviderSettings(_providerSettings);
         }
 
         // loop through modelDataResponse and get all`model_name` values
-        let all_model_groups: Set<string> = new Set()
+        let all_model_groups: Set<string> = new Set();
         for (let i = 0; i < modelDataResponse.data.length; i++) {
-          const model = modelDataResponse.data[i]
-          all_model_groups.add(model.model_name)
+          const model = modelDataResponse.data[i];
+          all_model_groups.add(model.model_name);
         }
-        console.log('all_model_groups:', all_model_groups)
-        let _array_model_groups = Array.from(all_model_groups)
+        console.log("all_model_groups:", all_model_groups);
+        let _array_model_groups = Array.from(all_model_groups);
         // sort _array_model_groups alphabetically
-        _array_model_groups = _array_model_groups.sort()
+        _array_model_groups = _array_model_groups.sort();
 
-        setAvailableModelGroups(_array_model_groups)
+        setAvailableModelGroups(_array_model_groups);
 
-        let all_model_access_groups: Set<string> = new Set()
+        let all_model_access_groups: Set<string> = new Set();
         for (let i = 0; i < modelDataResponse.data.length; i++) {
-          const model = modelDataResponse.data[i]
-          let model_info: any | null = model.model_info
+          const model = modelDataResponse.data[i];
+          let model_info: any | null = model.model_info;
           if (model_info) {
-            let access_groups = model_info.access_groups
+            let access_groups = model_info.access_groups;
             if (access_groups) {
               for (let j = 0; j < access_groups.length; j++) {
-                all_model_access_groups.add(access_groups[j])
+                all_model_access_groups.add(access_groups[j]);
               }
             }
           }
         }
 
-        setAvailableModelAccessGroups(Array.from(all_model_access_groups))
+        setAvailableModelAccessGroups(Array.from(all_model_access_groups));
 
-        console.log('array_model_groups:', _array_model_groups)
-        let _initial_model_group = 'all'
+        console.log("array_model_groups:", _array_model_groups);
+        let _initial_model_group = "all";
         if (_array_model_groups.length > 0) {
           // set selectedModelGroup to the last model group
           _initial_model_group =
-            _array_model_groups[_array_model_groups.length - 1]
-          console.log('_initial_model_group:', _initial_model_group)
+            _array_model_groups[_array_model_groups.length - 1];
+          console.log("_initial_model_group:", _initial_model_group);
           //setSelectedModelGroup(_initial_model_group);
         }
 
-        console.log('selectedModelGroup:', selectedModelGroup)
+        console.log("selectedModelGroup:", selectedModelGroup);
 
         const modelMetricsResponse = await modelMetricsCall(
           accessToken,
@@ -532,26 +521,26 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           dateValue.to?.toISOString(),
           selectedAPIKey?.token,
           selectedCustomer
-        )
+        );
 
-        console.log('Model metrics response:', modelMetricsResponse)
+        console.log("Model metrics response:", modelMetricsResponse);
         // Sort by latency (avg_latency_per_token)
 
-        setModelMetrics(modelMetricsResponse.data)
-        setModelMetricsCategories(modelMetricsResponse.all_api_bases)
+        setModelMetrics(modelMetricsResponse.data);
+        setModelMetricsCategories(modelMetricsResponse.all_api_bases);
 
         const streamingModelMetricsResponse = await streamingModelMetricsCall(
           accessToken,
           _initial_model_group,
           dateValue.from?.toISOString(),
           dateValue.to?.toISOString()
-        )
+        );
 
         // Assuming modelMetricsResponse now contains the metric data for the specified model group
-        setStreamingModelMetrics(streamingModelMetricsResponse.data)
+        setStreamingModelMetrics(streamingModelMetricsResponse.data);
         setStreamingModelMetricsCategories(
           streamingModelMetricsResponse.all_api_bases
-        )
+        );
 
         const modelExceptionsResponse = await modelExceptionsCall(
           accessToken,
@@ -562,10 +551,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           dateValue.to?.toISOString(),
           selectedAPIKey?.token,
           selectedCustomer
-        )
-        console.log('Model exceptions response:', modelExceptionsResponse)
-        setModelExceptions(modelExceptionsResponse.data)
-        setAllExceptions(modelExceptionsResponse.exception_types)
+        );
+        console.log("Model exceptions response:", modelExceptionsResponse);
+        setModelExceptions(modelExceptionsResponse.data);
+        setAllExceptions(modelExceptionsResponse.exception_types);
 
         const slowResponses = await modelMetricsSlowResponsesCall(
           accessToken,
@@ -576,75 +565,78 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           dateValue.to?.toISOString(),
           selectedAPIKey?.token,
           selectedCustomer
-        )
+        );
 
         const dailyExceptions = await adminGlobalActivityExceptions(
           accessToken,
-          dateValue.from?.toISOString().split('T')[0],
-          dateValue.to?.toISOString().split('T')[0],
+          dateValue.from?.toISOString().split("T")[0],
+          dateValue.to?.toISOString().split("T")[0],
           _initial_model_group
-        )
+        );
 
-        setGlobalExceptionData(dailyExceptions)
+        setGlobalExceptionData(dailyExceptions);
 
         const dailyExceptionsPerDeplyment =
           await adminGlobalActivityExceptionsPerDeployment(
             accessToken,
-            dateValue.from?.toISOString().split('T')[0],
-            dateValue.to?.toISOString().split('T')[0],
+            dateValue.from?.toISOString().split("T")[0],
+            dateValue.to?.toISOString().split("T")[0],
             _initial_model_group
-          )
+          );
 
-        setGlobalExceptionPerDeployment(dailyExceptionsPerDeplyment)
+        setGlobalExceptionPerDeployment(dailyExceptionsPerDeplyment);
 
-        console.log('dailyExceptions:', dailyExceptions)
+        console.log("dailyExceptions:", dailyExceptions);
 
-        console.log('dailyExceptionsPerDeplyment:', dailyExceptionsPerDeplyment)
+        console.log(
+          "dailyExceptionsPerDeplyment:",
+          dailyExceptionsPerDeplyment
+        );
 
-        console.log('slowResponses:', slowResponses)
+        console.log("slowResponses:", slowResponses);
 
-        setSlowResponsesData(slowResponses)
+        setSlowResponsesData(slowResponses);
 
-        let all_end_users_data = await allEndUsersCall(accessToken)
+        let all_end_users_data = await allEndUsersCall(accessToken);
 
-        setAllEndUsers(all_end_users_data?.end_users)
+        setAllEndUsers(all_end_users_data?.end_users);
 
         const routerSettingsInfo = await getCallbacksCall(
           accessToken,
           userID,
           userRole
-        )
+        );
 
-        let router_settings = routerSettingsInfo.router_settings
+        let router_settings = routerSettingsInfo.router_settings;
 
-        console.log('routerSettingsInfo:', router_settings)
+        console.log("routerSettingsInfo:", router_settings);
 
-        let model_group_retry_policy = router_settings.model_group_retry_policy
-        let default_retries = router_settings.num_retries
+        let model_group_retry_policy = router_settings.model_group_retry_policy;
+        let default_retries = router_settings.num_retries;
 
-        console.log('model_group_retry_policy:', model_group_retry_policy)
-        console.log('default_retries:', default_retries)
-        setModelGroupRetryPolicy(model_group_retry_policy)
-        setDefaultRetry(default_retries)
+        console.log("model_group_retry_policy:", model_group_retry_policy);
+        console.log("default_retries:", default_retries);
+        setModelGroupRetryPolicy(model_group_retry_policy);
+        setDefaultRetry(default_retries);
       } catch (error) {
-        console.error('There was an error fetching the model data', error)
+        console.error("There was an error fetching the model data", error);
       }
-    }
+    };
 
     if (accessToken && token && userRole && userID) {
-      fetchData()
+      fetchData();
     }
 
     const fetchModelMap = async () => {
-      const data = await modelCostMap(accessToken)
-      console.log(`received model cost map data: ${Object.keys(data)}`)
-      setModelMap(data)
-    }
+      const data = await modelCostMap(accessToken);
+      console.log(`received model cost map data: ${Object.keys(data)}`);
+      setModelMap(data);
+    };
     if (modelMap == null) {
-      fetchModelMap()
+      fetchModelMap();
     }
 
-    handleRefreshClick()
+    handleRefreshClick();
   }, [
     accessToken,
     token,
@@ -653,32 +645,32 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     modelMap,
     lastRefreshed,
     selectedTeam,
-  ])
+  ]);
 
   if (!modelData) {
-    return <div>Loading...</div>
+    return <div>Loading...</div>;
   }
 
   if (!accessToken || !token || !userRole || !userID) {
-    return <div>Loading...</div>
+    return <div>Loading...</div>;
   }
-  let all_models_on_proxy: any[] = []
-  let all_providers: string[] = []
+  let all_models_on_proxy: any[] = [];
+  let all_providers: string[] = [];
 
   // loop through model data and edit each row
   for (let i = 0; i < modelData.data.length; i++) {
-    let curr_model = modelData.data[i]
-    let litellm_model_name = curr_model?.litellm_params?.model
-    let custom_llm_provider = curr_model?.litellm_params?.custom_llm_provider
-    let model_info = curr_model?.model_info
+    let curr_model = modelData.data[i];
+    let litellm_model_name = curr_model?.litellm_params?.model;
+    let custom_llm_provider = curr_model?.litellm_params?.custom_llm_provider;
+    let model_info = curr_model?.model_info;
 
-    let defaultProvider = 'openai'
-    let provider = ''
-    let input_cost = 'Undefined'
-    let output_cost = 'Undefined'
-    let max_tokens = 'Undefined'
-    let max_input_tokens = 'Undefined'
-    let cleanedLitellmParams = {}
+    let defaultProvider = "openai";
+    let provider = "";
+    let input_cost = "Undefined";
+    let output_cost = "Undefined";
+    let max_tokens = "Undefined";
+    let max_input_tokens = "Undefined";
+    let cleanedLitellmParams = {};
 
     const getProviderFromModel = (model: string) => {
       /**
@@ -686,83 +678,83 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
        * - check if model in model map
        * - return it's litellm_provider, if so
        */
-      console.log(`GET PROVIDER CALLED! - ${modelMap}`)
+      console.log(`GET PROVIDER CALLED! - ${modelMap}`);
       if (modelMap !== null && modelMap !== undefined) {
-        if (typeof modelMap == 'object' && model in modelMap) {
-          return modelMap[model]['litellm_provider']
+        if (typeof modelMap == "object" && model in modelMap) {
+          return modelMap[model]["litellm_provider"];
         }
       }
-      return 'openai'
-    }
+      return "openai";
+    };
 
     // Check if litellm_model_name is null or undefined
     if (litellm_model_name) {
       // Split litellm_model_name based on "/"
-      let splitModel = litellm_model_name.split('/')
+      let splitModel = litellm_model_name.split("/");
 
       // Get the first element in the split
-      let firstElement = splitModel[0]
+      let firstElement = splitModel[0];
 
       // If there is only one element, default provider to openai
-      provider = custom_llm_provider
+      provider = custom_llm_provider;
       if (!provider) {
         provider =
           splitModel.length === 1
             ? getProviderFromModel(litellm_model_name)
-            : firstElement
+            : firstElement;
       }
     } else {
       // litellm_model_name is null or undefined, default provider to openai
-      provider = '-'
+      provider = "-";
     }
 
     if (model_info) {
-      input_cost = model_info?.input_cost_per_token
-      output_cost = model_info?.output_cost_per_token
-      max_tokens = model_info?.max_tokens
-      max_input_tokens = model_info?.max_input_tokens
+      input_cost = model_info?.input_cost_per_token;
+      output_cost = model_info?.output_cost_per_token;
+      max_tokens = model_info?.max_tokens;
+      max_input_tokens = model_info?.max_input_tokens;
     }
 
     if (curr_model?.litellm_params) {
       cleanedLitellmParams = Object.fromEntries(
         Object.entries(curr_model?.litellm_params).filter(
-          ([key]) => key !== 'model' && key !== 'api_base'
+          ([key]) => key !== "model" && key !== "api_base"
         )
-      )
+      );
     }
 
-    modelData.data[i].provider = provider
-    modelData.data[i].input_cost = input_cost
-    modelData.data[i].output_cost = output_cost
-    modelData.data[i].litellm_model_name = litellm_model_name
-    all_providers.push(provider)
+    modelData.data[i].provider = provider;
+    modelData.data[i].input_cost = input_cost;
+    modelData.data[i].output_cost = output_cost;
+    modelData.data[i].litellm_model_name = litellm_model_name;
+    all_providers.push(provider);
 
     // Convert Cost in terms of Cost per 1M tokens
     if (modelData.data[i].input_cost) {
       modelData.data[i].input_cost = (
         Number(modelData.data[i].input_cost) * 1000000
-      ).toFixed(2)
+      ).toFixed(2);
     }
 
     if (modelData.data[i].output_cost) {
       modelData.data[i].output_cost = (
         Number(modelData.data[i].output_cost) * 1000000
-      ).toFixed(2)
+      ).toFixed(2);
     }
 
-    modelData.data[i].max_tokens = max_tokens
-    modelData.data[i].max_input_tokens = max_input_tokens
-    modelData.data[i].api_base = curr_model?.litellm_params?.api_base
-    modelData.data[i].cleanedLitellmParams = cleanedLitellmParams
+    modelData.data[i].max_tokens = max_tokens;
+    modelData.data[i].max_input_tokens = max_input_tokens;
+    modelData.data[i].api_base = curr_model?.litellm_params?.api_base;
+    modelData.data[i].cleanedLitellmParams = cleanedLitellmParams;
 
-    all_models_on_proxy.push(curr_model.model_name)
+    all_models_on_proxy.push(curr_model.model_name);
 
-    console.log(modelData.data[i])
+    console.log(modelData.data[i]);
   }
   // when users click request access show pop up to allow them to request access
 
-  if (userRole && userRole == 'Admin Viewer') {
-    const { Title, Paragraph } = Typography
+  if (userRole && userRole == "Admin Viewer") {
+    const { Title, Paragraph } = Typography;
     return (
       <div>
         <Title level={1}>Access Denied</Title>
@@ -770,23 +762,23 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           Ask your proxy admin for access to view all models
         </Paragraph>
       </div>
-    )
+    );
   }
 
   const runHealthCheck = async () => {
     try {
-      message.info('Running health check...')
-      setIsHealthCheckLoading(true)
-      setHealthCheckResponse(null)
-      const response = await healthCheckCall(accessToken)
-      setHealthCheckResponse(response)
+      message.info("Running health check...");
+      setIsHealthCheckLoading(true);
+      setHealthCheckResponse(null);
+      const response = await healthCheckCall(accessToken);
+      setHealthCheckResponse(response);
     } catch (error) {
-      console.error('Error running health check:', error)
-      setHealthCheckResponse('Error running health check')
+      console.error("Error running health check:", error);
+      setHealthCheckResponse("Error running health check");
     } finally {
-      setIsHealthCheckLoading(false)
+      setIsHealthCheckLoading(false);
     }
-  }
+  };
 
   const FilterByContent = (
     <div>
@@ -799,7 +791,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               key="all-keys"
               value="all-keys"
               onClick={() => {
-                setSelectedAPIKey(null)
+                setSelectedAPIKey(null);
               }}
             >
               All Keys
@@ -807,22 +799,22 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             {keys?.map((key: any, index: number) => {
               if (
                 key &&
-                key['key_alias'] !== null &&
-                key['key_alias'].length > 0
+                key["key_alias"] !== null &&
+                key["key_alias"].length > 0
               ) {
                 return (
                   <SelectItem
                     key={index}
                     value={String(index)}
                     onClick={() => {
-                      setSelectedAPIKey(key)
+                      setSelectedAPIKey(key);
                     }}
                   >
-                    {key['key_alias']}
+                    {key["key_alias"]}
                   </SelectItem>
-                )
+                );
               }
-              return null
+              return null;
             })}
           </Select>
 
@@ -833,7 +825,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               key="all-customers"
               value="all-customers"
               onClick={() => {
-                setSelectedCustomer(null)
+                setSelectedCustomer(null);
               }}
             >
               All Customers
@@ -844,12 +836,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   key={index}
                   value={user}
                   onClick={() => {
-                    setSelectedCustomer(user)
+                    setSelectedCustomer(user);
                   }}
                 >
                   {user}
                 </SelectItem>
-              )
+              );
             })}
           </Select>
 
@@ -858,9 +850,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           <Select
             className="w-64 relative z-50"
             defaultValue="all"
-            value={selectedTeamFilter ?? 'all'}
+            value={selectedTeamFilter ?? "all"}
             onValueChange={(value) =>
-              setSelectedTeamFilter(value === 'all' ? null : value)
+              setSelectedTeamFilter(value === "all" ? null : value)
             }
           >
             <SelectItem value="all">All Teams</SelectItem>
@@ -883,9 +875,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           <Select
             className="w-64 relative z-50"
             defaultValue="all"
-            value={selectedTeamFilter ?? 'all'}
+            value={selectedTeamFilter ?? "all"}
             onValueChange={(value) =>
-              setSelectedTeamFilter(value === 'all' ? null : value)
+              setSelectedTeamFilter(value === "all" ? null : value)
             }
           >
             <SelectItem value="all">All Teams</SelectItem>
@@ -902,29 +894,29 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         </div>
       )}
     </div>
-  )
+  );
 
   const customTooltip = (props: any) => {
-    const { payload, active } = props
-    if (!active || !payload) return null
+    const { payload, active } = props;
+    if (!active || !payload) return null;
 
     // Extract the date from the first item in the payload array
-    const date = payload[0]?.payload?.date
+    const date = payload[0]?.payload?.date;
 
     // Sort the payload array by category.value in descending order
-    let sortedPayload = payload.sort((a: any, b: any) => b.value - a.value)
+    let sortedPayload = payload.sort((a: any, b: any) => b.value - a.value);
 
     // Only show the top 5, the 6th one should be called "X other categories" depending on how many categories were not shown
     if (sortedPayload.length > 5) {
-      let remainingItems = sortedPayload.length - 5
-      sortedPayload = sortedPayload.slice(0, 5)
+      let remainingItems = sortedPayload.length - 5;
+      sortedPayload = sortedPayload.slice(0, 5);
       sortedPayload.push({
         dataKey: `${remainingItems} other deployments`,
         value: payload
           .slice(5)
           .reduce((acc: number, curr: any) => acc + curr.value, 0),
-        color: 'gray',
-      })
+        color: "gray",
+      });
     }
 
     return (
@@ -933,11 +925,11 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           <p className="text-tremor-content-emphasis mb-2">Date: {date}</p>
         )}
         {sortedPayload.map((category: any, idx: number) => {
-          const roundedValue = parseFloat(category.value.toFixed(5))
+          const roundedValue = parseFloat(category.value.toFixed(5));
           const displayValue =
             roundedValue === 0 && category.value > 0
-              ? '<0.00001'
-              : roundedValue.toFixed(5)
+              ? "<0.00001"
+              : roundedValue.toFixed(5);
           return (
             <div key={idx} className="flex justify-between">
               <div className="flex items-center space-x-2">
@@ -950,35 +942,35 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 {displayValue}
               </p>
             </div>
-          )
+          );
         })}
       </div>
-    )
-  }
+    );
+  };
 
   const handleOk = () => {
     form
       .validateFields()
       .then((values) => {
-        handleAddModelSubmit(values, accessToken, form, handleRefreshClick)
+        handleAddModelSubmit(values, accessToken, form, handleRefreshClick);
       })
       .catch((error) => {
-        console.error('Validation failed:', error)
-      })
-  }
+        console.error("Validation failed:", error);
+      });
+  };
 
-  console.log(`selectedProvider: ${selectedProvider}`)
-  console.log(`providerModels.length: ${providerModels.length}`)
+  console.log(`selectedProvider: ${selectedProvider}`);
+  console.log(`providerModels.length: ${providerModels.length}`);
 
   const providerKey = Object.keys(Providers).find(
     (key) => (Providers as { [index: string]: any })[key] === selectedProvider
-  )
+  );
 
-  let dynamicProviderForm: ProviderSettings | undefined = undefined
+  let dynamicProviderForm: ProviderSettings | undefined = undefined;
   if (providerKey && providerSettings) {
     dynamicProviderForm = providerSettings.find(
       (provider) => provider.name === provider_map[providerKey]
-    )
+    );
   }
 
   // If a team is selected, render TeamInfoView in full page layout
@@ -989,21 +981,21 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           teamId={selectedTeamId}
           onClose={() => setSelectedTeamId(null)}
           accessToken={accessToken}
-          is_team_admin={userRole === 'Admin'}
-          is_proxy_admin={userRole === 'Proxy Admin'}
+          is_team_admin={userRole === "Admin"}
+          is_proxy_admin={userRole === "Proxy Admin"}
           userModels={all_models_on_proxy}
           editTeam={false}
           onUpdate={handleRefreshClick}
         />
       </div>
-    )
+    );
   }
 
   return (
     <div className="w-full mx-4 h-[75vh]">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
-          {all_admin_roles.includes(userRole || '') && (
+          {all_admin_roles.includes(userRole || "") && (
             <Button className="w-fit" onClick={() => setSelectedTabIndex(1)}>
               + Create New Model
             </Button>
@@ -1013,8 +1005,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               modelId={selectedModelId}
               editModel={true}
               onClose={() => {
-                setSelectedModelId(null)
-                setEditModel(false)
+                setSelectedModelId(null);
+                setEditModel(false);
               }}
               modelData={modelData.data.find(
                 (model: any) => model.model_info.id === selectedModelId
@@ -1033,10 +1025,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       ? updatedModel
                       : model
                   ),
-                }
-                setModelData(updatedModelData)
+                };
+                setModelData(updatedModelData);
                 // Trigger a refresh to update UI
-                handleRefreshClick()
+                handleRefreshClick();
               }}
               modelAccessGroups={availableModelAccessGroups}
             />
@@ -1148,15 +1140,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                       ))}
                                   </Select>
                                 </div>
-                                {modelViewMode === 'current_team' && (
+                                {modelViewMode === "current_team" && (
                                   <div className="flex items-start gap-2 mt-2 bg-gray-50 rounded">
                                     <InfoCircleOutlined className="text-gray-400 mt-0.5 flex-shrink-0 text-xs" />
                                     <div className="text-xs text-gray-500">
-                                      {currentTeam === 'personal' ? (
+                                      {currentTeam === "personal" ? (
                                         <span>
                                           To access these models: Create a
                                           Virtual Key without selecting a team
-                                          on the{' '}
+                                          on the{" "}
                                           <a
                                             href="/?login=success&page=api-keys"
                                             className="text-gray-600 hover:text-gray-800 underline"
@@ -1168,7 +1160,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                         <span>
                                           To access these models: Create a
                                           Virtual Key and select Team as &quot;
-                                          {currentTeam}&quot; on the{' '}
+                                          {currentTeam}&quot; on the{" "}
                                           <a
                                             href="/?login=success&page=api-keys"
                                             className="text-gray-600 hover:text-gray-800 underline"
@@ -1193,7 +1185,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                   value={modelViewMode}
                                   onValueChange={(value) =>
                                     setModelViewMode(
-                                      value as 'current_team' | 'all'
+                                      value as "current_team" | "all"
                                     )
                                   }
                                 >
@@ -1225,13 +1217,13 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                   <Text>Filter by Public Model Name:</Text>
                                   <Select
                                     className="w-64"
-                                    defaultValue={selectedModelGroup ?? 'all'}
+                                    defaultValue={selectedModelGroup ?? "all"}
                                     onValueChange={(value) =>
                                       setSelectedModelGroup(
-                                        value === 'all' ? 'all' : value
+                                        value === "all" ? "all" : value
                                       )
                                     }
-                                    value={selectedModelGroup ?? 'all'}
+                                    value={selectedModelGroup ?? "all"}
                                   >
                                     <SelectItem value="all">
                                       All Models
@@ -1250,11 +1242,11 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                     className="w-64"
                                     defaultValue="all"
                                     value={
-                                      selectedModelAccessGroupFilter ?? 'all'
+                                      selectedModelAccessGroupFilter ?? "all"
                                     }
                                     onValueChange={(value) =>
                                       setSelectedModelAccessGroupFilter(
-                                        value === 'all' ? null : value
+                                        value === "all" ? null : value
                                       )
                                     }
                                   >
@@ -1279,34 +1271,34 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             {/* Results Count */}
                             <div className="flex justify-between items-center">
                               <Text className="text-sm text-gray-700">
-                                Showing{' '}
+                                Showing{" "}
                                 {modelData && modelData.data.length > 0
                                   ? modelData.data.filter((model: any) => {
                                       const modelNameMatch =
-                                        selectedModelGroup === 'all' ||
+                                        selectedModelGroup === "all" ||
                                         model.model_name ===
                                           selectedModelGroup ||
-                                        !selectedModelGroup
+                                        !selectedModelGroup;
                                       const accessGroupMatch =
                                         selectedModelAccessGroupFilter ===
-                                          'all' ||
+                                          "all" ||
                                         model.model_info[
-                                          'access_groups'
+                                          "access_groups"
                                         ]?.includes(
                                           selectedModelAccessGroupFilter
                                         ) ||
-                                        !selectedModelAccessGroupFilter
-                                      let teamAccessMatch = true
-                                      if (modelViewMode === 'current_team') {
-                                        if (currentTeam === 'personal') {
+                                        !selectedModelAccessGroupFilter;
+                                      let teamAccessMatch = true;
+                                      if (modelViewMode === "current_team") {
+                                        if (currentTeam === "personal") {
                                           teamAccessMatch =
                                             model.model_info?.direct_access ===
-                                            true
+                                            true;
                                         } else {
                                           teamAccessMatch =
                                             model.model_info?.access_via_team_ids?.includes(
                                               currentTeam
-                                            ) === true
+                                            ) === true;
                                         }
                                       }
 
@@ -1314,9 +1306,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                         modelNameMatch &&
                                         accessGroupMatch &&
                                         teamAccessMatch
-                                      )
+                                      );
                                     }).length
-                                  : 0}{' '}
+                                  : 0}{" "}
                                 results
                               </Text>
                             </div>
@@ -1340,31 +1332,31 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           data={modelData.data.filter((model: any) => {
                             // Model name filter
                             const modelNameMatch =
-                              selectedModelGroup === 'all' ||
+                              selectedModelGroup === "all" ||
                               model.model_name === selectedModelGroup ||
-                              !selectedModelGroup
+                              !selectedModelGroup;
 
                             // Model access group filter
                             const accessGroupMatch =
-                              selectedModelAccessGroupFilter === 'all' ||
-                              model.model_info['access_groups']?.includes(
+                              selectedModelAccessGroupFilter === "all" ||
+                              model.model_info["access_groups"]?.includes(
                                 selectedModelAccessGroupFilter
                               ) ||
-                              !selectedModelAccessGroupFilter
+                              !selectedModelAccessGroupFilter;
 
                             // Team access filter based on current team and view mode
-                            let teamAccessMatch = true
-                            if (modelViewMode === 'current_team') {
-                              if (currentTeam === 'personal') {
+                            let teamAccessMatch = true;
+                            if (modelViewMode === "current_team") {
+                              if (currentTeam === "personal") {
                                 // Show only models with direct access
                                 teamAccessMatch =
-                                  model.model_info?.direct_access === true
+                                  model.model_info?.direct_access === true;
                               } else {
                                 // Show only models accessible by the current team
                                 teamAccessMatch =
                                   model.model_info?.access_via_team_ids?.includes(
                                     currentTeam
-                                  ) === true
+                                  ) === true;
                               }
                             }
                             // For 'all' mode, show all models (teamAccessMatch remains true)
@@ -1373,7 +1365,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               modelNameMatch &&
                               accessGroupMatch &&
                               teamAccessMatch
-                            )
+                            );
                           })}
                           isLoading={false}
                           table={tableRef}
@@ -1432,12 +1424,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                         value={dateValue}
                         className="mr-2"
                         onValueChange={(value) => {
-                          setDateValue(value)
+                          setDateValue(value);
                           updateModelMetrics(
                             selectedModelGroup,
                             value.from,
                             value.to
-                          )
+                          );
                         }}
                       />
                     </Col>
@@ -1477,7 +1469,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                         trigger="click"
                         content={FilterByContent}
                         overlayStyle={{
-                          width: '20vw',
+                          width: "20vw",
                         }}
                       >
                         <Button
@@ -1486,7 +1478,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           variant="secondary"
                           className="mt-4 ml-2"
                           style={{
-                            border: 'none',
+                            border: "none",
                           }}
                           onClick={() => setShowAdvancedFilters(true)}
                         ></Button>
@@ -1505,7 +1497,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           <TabPanels>
                             <TabPanel>
                               <p className="text-gray-500 italic">
-                                {' '}
+                                {" "}
                                 (seconds/token)
                               </p>
                               <Text className="text-gray-500 italic mt-1 mb-1">
@@ -1549,7 +1541,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                 Success Responses
                               </TableHeaderCell>
                               <TableHeaderCell>
-                                Slow Responses{' '}
+                                Slow Responses{" "}
                                 <p>Success Responses taking 600+s</p>
                               </TableHeaderCell>
                             </TableRow>
@@ -1591,20 +1583,20 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                         <Col>
                           <Subtitle
                             style={{
-                              fontSize: '15px',
-                              fontWeight: 'normal',
-                              color: '#535452',
+                              fontSize: "15px",
+                              fontWeight: "normal",
+                              color: "#535452",
                             }}
                           >
-                            Num Rate Limit Errors{' '}
+                            Num Rate Limit Errors{" "}
                             {globalExceptionData.sum_num_rate_limit_exceptions}
                           </Subtitle>
                           <BarChart
                             className="h-40"
                             data={globalExceptionData.daily_data}
                             index="date"
-                            colors={['rose']}
-                            categories={['num_rate_limit_exceptions']}
+                            colors={["rose"]}
+                            categories={["num_rate_limit_exceptions"]}
                             onValueChange={(v) => console.log(v)}
                           />
                         </Col>
@@ -1620,18 +1612,18 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               <Title>
                                 {globalActivity.api_base
                                   ? globalActivity.api_base
-                                  : 'Unknown API Base'}
+                                  : "Unknown API Base"}
                               </Title>
                               <Grid numItems={1}>
                                 <Col>
                                   <Subtitle
                                     style={{
-                                      fontSize: '15px',
-                                      fontWeight: 'normal',
-                                      color: '#535452',
+                                      fontSize: "15px",
+                                      fontWeight: "normal",
+                                      color: "#535452",
                                     }}
                                   >
-                                    Num Rate Limit Errors (429){' '}
+                                    Num Rate Limit Errors (429){" "}
                                     {
                                       globalActivity.sum_num_rate_limit_exceptions
                                     }
@@ -1640,8 +1632,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                     className="h-40"
                                     data={globalActivity.daily_data}
                                     index="date"
-                                    colors={['rose']}
-                                    categories={['num_rate_limit_exceptions']}
+                                    colors={["rose"]}
+                                    categories={["num_rate_limit_exceptions"]}
                                     onValueChange={(v) => console.log(v)}
                                   />
                                 </Col>
@@ -1678,12 +1670,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                     <Col>
                                       <Subtitle
                                         style={{
-                                          fontSize: '15px',
-                                          fontWeight: 'normal',
-                                          color: '#535452',
+                                          fontSize: "15px",
+                                          fontWeight: "normal",
+                                          color: "#535452",
                                         }}
                                       >
-                                        Num Rate Limit Errors{' '}
+                                        Num Rate Limit Errors{" "}
                                         {
                                           globalActivity.sum_num_rate_limit_exceptions
                                         }
@@ -1692,9 +1684,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                         className="h-40"
                                         data={globalActivity.daily_data}
                                         index="date"
-                                        colors={['rose']}
+                                        colors={["rose"]}
                                         categories={[
-                                          'num_rate_limit_exceptions',
+                                          "num_rate_limit_exceptions",
                                         ]}
                                         onValueChange={(v) => console.log(v)}
                                       />
@@ -1749,9 +1741,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             let retryCount =
                               modelGroupRetryPolicy?.[selectedModelGroup!]?.[
                                 retryPolicyKey
-                              ]
+                              ];
                             if (retryCount == null) {
-                              retryCount = defaultRetry
+                              retryCount = defaultRetry;
                             }
 
                             return (
@@ -1774,7 +1766,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                           const prevRetryPolicy =
                                             prevModelGroupRetryPolicy?.[
                                               selectedModelGroup!
-                                            ] ?? {}
+                                            ] ?? {};
                                           return {
                                             ...(prevModelGroupRetryPolicy ??
                                               {}),
@@ -1782,14 +1774,14 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                               ...prevRetryPolicy,
                                               [retryPolicyKey!]: value,
                                             },
-                                          } as RetryPolicyObject
+                                          } as RetryPolicyObject;
                                         }
-                                      )
+                                      );
                                     }}
                                   />
                                 </td>
                               </tr>
-                            )
+                            );
                           }
                         )}
                       </tbody>
@@ -1808,7 +1800,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         </Col>
       </Grid>
     </div>
-  )
-}
+  );
+};
 
-export default ModelDashboard
+export default ModelDashboard;
