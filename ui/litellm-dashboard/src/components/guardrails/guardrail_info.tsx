@@ -25,14 +25,13 @@ import { getGuardrailLogoAndName, guardrail_provider_map } from "./guardrail_inf
 import PiiConfiguration from "./pii_configuration"
 import GuardrailProviderFields from "./guardrail_provider_fields"
 import GuardrailOptionalParams from "./guardrail_optional_params"
-import { PlusIcon } from "@heroicons/react/outline"
+import { ArrowLeftIcon } from "@heroicons/react/outline"
 
 export interface GuardrailInfoProps {
   guardrailId: string
   onClose: () => void
   accessToken: string | null
   isAdmin: boolean
-  onCreateNewGuardrail: () => void
 }
 
 interface ProviderParam {
@@ -51,13 +50,7 @@ interface ProviderParamsResponse {
   [provider: string]: { [key: string]: ProviderParam }
 }
 
-const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
-  guardrailId,
-  onClose,
-  accessToken,
-  isAdmin,
-  onCreateNewGuardrail,
-}) => {
+const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose, accessToken, isAdmin }) => {
   const [guardrailData, setGuardrailData] = useState<any>(null)
   const [guardrailProviderSpecificParams, setGuardrailProviderSpecificParams] = useState<any>(null)
   const [loading, setLoading] = useState(true)
@@ -325,19 +318,12 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
 
   return (
     <div className="p-4">
-      <div className="flex justify-between items-center mb-6">
-        <div>
-          <Button onClick={onClose} className="mb-4">
-            ← Back
-          </Button>
-          <Title>{guardrailData.guardrail_name || "Unnamed Guardrail"}</Title>
-          <Text className="text-gray-500 font-mono">{guardrailData.guardrail_id}</Text>
-        </div>
-        <div>
-          <TremorButton icon={PlusIcon} onClick={onCreateNewGuardrail}>
-            Create New Guardrail
-          </TremorButton>
-        </div>
+      <div>
+        <TremorButton icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
+          Back to Guardrails
+        </TremorButton>
+        <Title>{guardrailData.guardrail_name || "Unnamed Guardrail"}</Title>
+        <Text className="text-gray-500 font-mono">{guardrailData.guardrail_id}</Text>
       </div>
 
       <TabGroup>
