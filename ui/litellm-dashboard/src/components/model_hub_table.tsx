@@ -202,9 +202,15 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
           <div className="flex justify-between items-center mb-6">
             <div className="flex flex-col items-start">
             <Title className="text-center">Model Hub</Title>
+            {isAdminRole(userRole || "") ? (
+              <p className="text-sm text-gray-600">
+                Make models public for developers to know what models are available on the proxy.
+              </p>
+            ): (
             <p className="text-sm text-gray-600">
               A list of all public model names personally available to you.
             </p>
+            )}
             </div>
                           <div className="flex items-center space-x-4">
                 <Text>Model Hub URL:</Text>
