@@ -669,6 +669,7 @@ class ModelParams(LiteLLMPydanticObjectBase):
 
 class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     mcp_servers: Optional[List[str]] = None
+    mcp_access_groups: Optional[List[str]] = None
     vector_stores: Optional[List[str]] = None
 
 
@@ -848,6 +849,8 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     auth_type: Optional[MCPAuthType] = None
     url: str
     mcp_info: Optional[MCPInfo] = None
+    mcp_access_groups: List[str] = Field(default_factory=list)
+
 
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
@@ -859,6 +862,8 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     auth_type: Optional[MCPAuthType] = None
     url: str
     mcp_info: Optional[MCPInfo] = None
+    mcp_access_groups: List[str] = Field(default_factory=list)
+
 
 
 class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
@@ -876,6 +881,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     updated_at: Optional[datetime] = None
     updated_by: Optional[str] = None
     teams: List[Dict[str, Optional[str]]] = Field(default_factory=list)
+    mcp_access_groups: List[str] = Field(default_factory=list)
     mcp_info: Optional[MCPInfo] = None
 
 
@@ -1268,6 +1274,7 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
 
     object_permission_id: str
     mcp_servers: Optional[List[str]] = []
+    mcp_access_groups: Optional[List[str]] = []
     vector_stores: Optional[List[str]] = []
 
 
@@ -1713,12 +1720,25 @@ class UserAPIKeyAuth(
     @classmethod
     def check_api_key(cls, values):
         if values.get("api_key") is not None:
-            values.update({"token": hash_token(values.get("api_key"))})
-            if isinstance(values.get("api_key"), str) and values.get(
-                "api_key"
-            ).startswith("sk-"):
-                values.update({"api_key": hash_token(values.get("api_key"))})
+            values.update({"token": cls._safe_hash_litellm_api_key(values.get("api_key"))})
+            if isinstance(values.get("api_key"), str):
+                values.update({"api_key": cls._safe_hash_litellm_api_key(values.get("api_key"))})
         return values
+    
+    @classmethod
+    def _safe_hash_litellm_api_key(cls, api_key: str) -> str:
+        """
+        Helper to ensure all logged keys are hashed
+        Covers:
+        1. Regular API keys from LiteLLM DB
+        2. JWT tokens used for connecting to LiteLLM API
+        """
+        if api_key.startswith("sk-"):
+            return hash_token(api_key)
+        from litellm.proxy.auth.handle_jwt import JWTHandler
+        if JWTHandler.is_jwt(token=api_key):
+            return f"hashed-jwt-{hash_token(token=api_key)}"
+        return api_key
 
 
 class UserInfoResponse(LiteLLMPydanticObjectBase):

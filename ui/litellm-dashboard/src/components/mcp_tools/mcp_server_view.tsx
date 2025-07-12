@@ -153,50 +153,68 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                   onSuccess={handleSuccess}
                 />
               ) : (
-                <div className="space-y-6">
-                  <div className="space-y-4">
-                    <div>
-                      <Text className="font-medium">Server Name</Text>
-                      <div>{mcpServer.alias}</div>
+                <div className="space-y-4">
+                  <div>
+                    <Text className="font-medium">Server Name</Text>
+                    <div>{mcpServer.alias}</div>
+                  </div>
+                  <div>
+                    <Text className="font-medium">Description</Text>
+                    <div>{mcpServer.description}</div>
+                  </div>
+                  <div>
+                    <Text className="font-medium">URL</Text>
+                    <div className="font-mono break-all overflow-wrap-anywhere max-w-full flex items-center gap-2">
+                      {renderUrlWithToggle(mcpServer.url, showFullUrl)}
+                      {hasToken && (
+                        <button
+                          onClick={() => setShowFullUrl(!showFullUrl)}
+                          className="p-1 hover:bg-gray-100 rounded"
+                        >
+                          <Icon
+                            icon={showFullUrl ? EyeOffIcon : EyeIcon}
+                            size="sm"
+                            className="text-gray-500"
+                          />
+                        </button>
+                      )}
                     </div>
+                  </div>
+                  <div>
+                    <Text className="font-medium">Transport</Text>
+                    <div>{handleTransport(mcpServer.transport)}</div>
+                  </div>
+                  <div>
+                    <Text className="font-medium">Auth Type</Text>
+                    <div>{handleAuth(mcpServer.auth_type)}</div>
+                  </div>
+                  <div>
+                    <Text className="font-medium">Spec Version</Text>
+                    <div>{mcpServer.spec_version}</div>
+                  </div>
+                  <div>
+                    <Text className="font-medium">Access Groups</Text>
                     <div>
-                      <Text className="font-medium">Description</Text>
-                      <div>{mcpServer.description}</div>
+                      {mcpServer.mcp_access_groups && mcpServer.mcp_access_groups.length > 0 ? (
+                        <div className="flex flex-wrap gap-2">
+                          {mcpServer.mcp_access_groups.map((group: any, index: number) => (
+                            <span 
+                              key={index}
+                              className="px-2 py-1 bg-gray-100 rounded-md text-sm"
+                            >
+                              {typeof group === 'string' ? group : group?.name ?? ''}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <Text className="text-gray-500">No access groups defined</Text>
+                      )}
                     </div>
-                    <div>
-                      <Text className="font-medium">URL</Text>
-                      <div className="font-mono break-all overflow-wrap-anywhere max-w-full flex items-center gap-2">
-                        {renderUrlWithToggle(mcpServer.url, showFullUrl)}
-                        {hasToken && (
-                          <button
-                            onClick={() => setShowFullUrl(!showFullUrl)}
-                            className="p-1 hover:bg-gray-100 rounded"
-                          >
-                            <Icon
-                              icon={showFullUrl ? EyeOffIcon : EyeIcon}
-                              size="sm"
-                              className="text-gray-500"
-                            />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    <div>
-                      <Text className="font-medium">Transport</Text>
-                      <div>{handleTransport(mcpServer.transport)}</div>
-                    </div>
-                    <div>
-                      <Text className="font-medium">Auth Type</Text>
-                      <div>{handleAuth(mcpServer.auth_type)}</div>
-                    </div>
-                    <div>
-                      <Text className="font-medium">Spec Version</Text>
-                      <div>{mcpServer.spec_version}</div>
-                    </div>
-                                    </div>
-
-                  {/* Cost Configuration Section */}
-                  <MCPServerCostDisplay costConfig={mcpServer.mcp_info?.mcp_server_cost_info} />
+                  </div>
+                  <div>
+                    <Text className="font-medium">Cost Configuration</Text>
+                    <MCPServerCostDisplay costConfig={mcpServer.mcp_info?.mcp_server_cost_info} />
+                  </div>
                 </div>
               )}
             </Card>

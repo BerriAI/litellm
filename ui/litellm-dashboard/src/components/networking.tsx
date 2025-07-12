@@ -93,6 +93,7 @@ export interface Organization {
   object_permission?: {
     object_permission_id: string;
     mcp_servers: string[];
+    mcp_access_groups?: string[];
     vector_stores: string[];
   };
 }
@@ -4833,6 +4834,38 @@ export const fetchMCPServers = async (accessToken: string) => {
     return data;
   } catch (error) {
     console.error("Failed to fetch MCP servers:", error);
+    throw error;
+  }
+};
+
+export const fetchMCPAccessGroups = async (accessToken: string) => {
+  try {
+    // Construct base URL
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/v1/mcp/access_groups`
+      : `/v1/mcp/access_groups`;
+
+    console.log("Fetching MCP access groups from:", url);
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Fetched MCP access groups:", data);
+    return data.access_groups || [];
+  } catch (error) {
+    console.error("Failed to fetch MCP access groups:", error);
     throw error;
   }
 };

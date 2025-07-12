@@ -10,6 +10,8 @@ Endpoints here:
 - PUT `/v1/mcp/server` -  Edits an existing mcp server.
 - DELETE `/v1/mcp/server/{server_id}` - Deletes the mcp server given `server_id`.
 - GET `/v1/mcp/tools - lists all the tools available for a key
+- GET `/v1/mcp/access_groups` - lists all available MCP access groups
+
 """
 
 import importlib
@@ -22,6 +24,7 @@ import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy.auth.model_checks import get_mcp_server_ids
+from litellm.proxy._experimental.mcp_server.utils import validate_mcp_server_name
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 MCP_AVAILABLE: bool = True
@@ -109,6 +112,43 @@ if MCP_AVAILABLE:
 
         return {"tools": tools}
 
+    @router.get(
+        "/access_groups",
+        tags=["mcp"],
+        dependencies=[Depends(user_api_key_auth)],
+    )
+    async def get_mcp_access_groups(
+            user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """
+        Get all available MCP access groups from the database
+        """
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "Database not connected. Connect a database to your proxy"
+                },
+            )
+
+        try:
+            # Get all MCP servers and extract their access groups
+            mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many()
+            # Extract all unique access groups
+            access_groups = set()
+            for server in mcp_servers:
+                if server.mcp_access_groups:
+                    access_groups.update(server.mcp_access_groups)
+            
+            # Convert to sorted list
+            access_groups_list = sorted(list(access_groups))
+            
+            return {"access_groups": access_groups_list}
+        except Exception as e:
+            verbose_proxy_logger.debug(f"Error getting MCP access groups: {e}")
+            return {"access_groups": []}
 
     ## FastAPI Routes
     @router.get(
@@ -221,6 +261,7 @@ if MCP_AVAILABLE:
                 created_by=server.created_by,
                 updated_at=server.updated_at,
                 updated_by=server.updated_by,
+                mcp_access_groups=server.mcp_access_groups if server.mcp_access_groups is not None else [],
                 mcp_info=server.mcp_info,
                 teams=cast(List[Dict[str, str | None]], server_to_teams_map.get(server.server_id, []))
             )
@@ -303,6 +344,10 @@ if MCP_AVAILABLE:
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy"
         )
+
+        # Server name validation: disallow '-'
+        if payload.alias:
+            validate_mcp_server_name(payload.alias, raise_http_exception=True)
 
         # AuthZ - restrict only proxy admins to create mcp servers
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
@@ -443,6 +488,10 @@ if MCP_AVAILABLE:
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
         )
+
+        # Server name validation: disallow '-'
+        if payload.alias:
+            validate_mcp_server_name(payload.alias, raise_http_exception=True)
 
         # Authz - restrict only admins to delete mcp servers
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:

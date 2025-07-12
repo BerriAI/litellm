@@ -1,13 +1,10 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-
 import {
   Modal,
-  Tooltip,
   message,
   Select,
-  Space,
-  Typography
+  Tooltip,
 } from "antd";
 import {
   TabPanel,
@@ -16,8 +13,6 @@ import {
   TabList,
   Tab,
 } from "@tremor/react";
-import { LinkIcon } from "lucide-react";
-
 import {
   Grid,
   Col,
@@ -26,7 +21,6 @@ import {
 } from "@tremor/react";
 import { DataTable } from "../view_logs/table";
 import { mcpServerColumns } from "./mcp_server_columns";
-
 import {
   deleteMCPServer,
   fetchMCPServers,
@@ -35,31 +29,27 @@ import {
   MCPServer,
   MCPServerProps,
   Team,
-  handleAuth,
-  handleTransport,
 } from "./types";
 import { isAdminRole } from "@/utils/roles";
 import { MCPServerView } from "./mcp_server_view";
 import CreateMCPServer from "./create_mcp_server";
 import MCPConnect from "./mcp_connect";
+import { QuestionCircleOutlined } from '@ant-design/icons';
 
 const { Option } = Select;
 
-interface DeleteModalProps {
+const DeleteModal: React.FC<{
   isModalOpen: boolean;
   title: string;
   confirmDelete: () => void;
   cancelDelete: () => void;
-}
-
-const DeleteModal: React.FC<DeleteModalProps> = ({
+}> = ({
   isModalOpen,
   title,
   confirmDelete,
   cancelDelete,
 }) => {
   if (!isModalOpen) return null;
-
   return (
     <Modal
       open={isModalOpen}
@@ -82,7 +72,6 @@ const MCPServers: React.FC<MCPServerProps> = ({
   userRole,
   userID,
 }) => {
-  // Query to fetch MCP tools
   const {
     data: mcpServers,
     isLoading: isLoadingServers,
@@ -96,26 +85,21 @@ const MCPServers: React.FC<MCPServerProps> = ({
     enabled: !!accessToken,
   }) as { data: MCPServer[]; isLoading: boolean; refetch: () => void };
 
-  const createMCPServer = (newMcpServer: any) => {
-    refetch();
-  };
-
   // state
   const [serverIdToDelete, setServerToDelete] = useState<string | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
   const [editServer, setEditServer] = useState(false);
   const [selectedTeam, setSelectedTeam] = useState<string>("all");
+  const [selectedMcpAccessGroup, setSelectedMcpAccessGroup] = useState<string>("all");
   const [filteredServers, setFilteredServers] = useState<MCPServer[]>([]);
-  const [currentTeam, setCurrentTeam] = useState<string>("all");
-  const [modelViewMode, setModelViewMode] = useState<string>("all");
+
 
   // Get unique teams from all servers
   const uniqueTeams = React.useMemo(() => {
     if (!mcpServers) return [];
     const teamsSet = new Set<string>();
     const uniqueTeamsArray: Team[] = [];
-    
     mcpServers.forEach((server: MCPServer) => {
       if (server.teams) {
         server.teams.forEach((team: Team) => {
@@ -130,48 +114,63 @@ const MCPServers: React.FC<MCPServerProps> = ({
     return uniqueTeamsArray;
   }, [mcpServers]);
 
+  // Get unique MCP access groups from all servers
+  const uniqueMcpAccessGroups = React.useMemo(() => {
+    if (!mcpServers) return [];
+    return Array.from(new Set(
+      mcpServers.flatMap(server => server.mcp_access_groups)
+    ));
+  }, [mcpServers]);
+
   // Handle team filter change
   const handleTeamChange = (teamId: string) => {
     setSelectedTeam(teamId);
-    setCurrentTeam(teamId);
-    
-    if (!mcpServers) return;
-    
-    if (teamId === "all") {
-      setFilteredServers(mcpServers);
-    } else if (teamId === "personal") {
-      // For now, show empty list for personal servers
-      setFilteredServers([]);
-    } else {
-      const filtered = mcpServers.filter(server => 
-        server.teams?.some(team => team.team_id === teamId)
-      );
-      setFilteredServers(filtered);
-    }
+    filterServers(teamId, selectedMcpAccessGroup);
   };
 
-  React.useEffect(() => {
-    if (mcpServers) {
-      // Filter servers based on current team selection
-      if (currentTeam === "all") {
-        setFilteredServers(mcpServers);
-      } else if (currentTeam === "personal") {
-        // For now, show empty list for personal servers
-        setFilteredServers([]);
-      } else {
-        const filtered = mcpServers.filter(server => 
-          server.teams?.some(team => team.team_id === currentTeam)
-        );
-        setFilteredServers(filtered);
-      }
+  // Handle MCP access group filter change
+  const handleMcpAccessGroupChange = (group: string) => {
+    setSelectedMcpAccessGroup(group);
+    filterServers(selectedTeam, group);
+  };
+
+  // Filtering logic for both team and access group
+  const filterServers = (teamId: string, group: string) => {
+    if (!mcpServers) return setFilteredServers([]);
+    let filtered = mcpServers;
+    if (teamId === "personal") {
+      setFilteredServers([]);
+      return;
     }
-  }, [mcpServers, currentTeam]);
+    if (teamId !== "all") {
+      filtered = filtered.filter(server =>
+        server.teams?.some(team => team.team_id === teamId)
+      );
+    }
+    if (group !== "all") {
+      filtered = filtered.filter(server =>
+        server.mcp_access_groups?.some((g: any) =>
+          typeof g === 'string' ? g === group : g && g.name === group
+        )
+      );
+    }
+    setFilteredServers(filtered);
+  };
+
+  // Initial and effect-based filtering
+  useEffect(() => {
+    filterServers(selectedTeam, selectedMcpAccessGroup);
+    // eslint-disable-next-line
+  }, [mcpServers]);
 
   const columns = React.useMemo(
     () =>
       mcpServerColumns(
         userRole ?? "",
-        (serverId: string) => setSelectedServerId(serverId),
+        (serverId: string) => {
+          setSelectedServerId(serverId);
+          setEditServer(false);
+        },
         (serverId: string) => {
           setSelectedServerId(serverId);
           setEditServer(true);
@@ -182,7 +181,6 @@ const MCPServers: React.FC<MCPServerProps> = ({
   );
 
   function handleDelete(server_id: string) {
-    // Set the team to delete and open the confirmation modal
     setServerToDelete(server_id);
     setIsDeleteModalOpen(true);
   }
@@ -191,30 +189,21 @@ const MCPServers: React.FC<MCPServerProps> = ({
     if (serverIdToDelete == null || accessToken == null) {
       return;
     }
-
     try {
       await deleteMCPServer(accessToken, serverIdToDelete);
-      // Successfully completed the deletion. Update the state to trigger a rerender.
       message.success("Deleted MCP Server successfully");
       refetch();
     } catch (error) {
       console.error("Error deleting the mcp server:", error);
-      // Handle any error situations, such as displaying an error message to the user.
     }
-
-    // Close the confirmation modal and reset the serverToDelete
     setIsDeleteModalOpen(false);
     setServerToDelete(null);
   };
 
   const cancelDelete = () => {
-    // Close the confirmation modal and reset the serverToDelete
     setIsDeleteModalOpen(false);
     setServerToDelete(null);
   };
-
-  // Check if user is internal or admin
-  const canAccessMCPServers = isAdminRole(userRole!) || (userRole && userRole.includes('internal'));
 
   if (!accessToken || !userRole || !userID) {
     return (
@@ -228,7 +217,7 @@ const MCPServers: React.FC<MCPServerProps> = ({
     selectedServerId ? (
       <MCPServerView
         mcpServer={
-          mcpServers.find(
+          filteredServers.find(
             (server: MCPServer) => server.server_id === selectedServerId
           ) || {
             server_id: '',
@@ -267,7 +256,7 @@ const MCPServers: React.FC<MCPServerProps> = ({
             <CreateMCPServer
               userRole={userRole}
               accessToken={accessToken}
-              onCreateSuccess={createMCPServer}
+              onCreateSuccess={refetch}
             />
           )}
         </div>
@@ -277,7 +266,7 @@ const MCPServers: React.FC<MCPServerProps> = ({
               <div className="flex items-center gap-4">
                 <Text className="text-lg font-semibold text-gray-900">Current Team:</Text>
                 <Select 
-                  value={currentTeam}
+                  value={selectedTeam}
                   onChange={handleTeamChange}
                   style={{ width: 300 }}
                 >
@@ -300,6 +289,32 @@ const MCPServers: React.FC<MCPServerProps> = ({
                         <span className="font-medium">
                           {team.team_alias || team.team_id}
                         </span>
+                      </div>
+                    </Option>
+                  ))}
+                </Select>
+                <Text className="text-lg font-semibold text-gray-900 ml-6">
+                  Access Group:
+                  <Tooltip title="An MCP Access Group is a set of users or teams that have permission to access specific MCP servers. Use access groups to control and organize who can connect to which servers.">
+                    <QuestionCircleOutlined style={{ marginLeft: 4, color: '#888' }} />
+                  </Tooltip>
+                </Text>
+                <Select
+                  value={selectedMcpAccessGroup}
+                  onChange={handleMcpAccessGroupChange}
+                  style={{ width: 300 }}
+                >
+                  <Option value="all">
+                    <div className="flex items-center gap-2">
+                      <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                      <span className="font-medium">All Access Groups</span>
+                    </div>
+                  </Option>
+                  {uniqueMcpAccessGroups.map((group) => (
+                    <Option key={group} value={group}>
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                        <span className="font-medium">{group}</span>
                       </div>
                     </Option>
                   ))}
