@@ -1,18 +1,7 @@
 """
 Translate from OpenAI's `/v1/chat/completions` to Groq's `/v1/chat/completions`
 """
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Coroutine,
-    List,
-    Literal,
-    Optional,
-    Tuple,
-    Union,
-    cast,
-    overload,
-)
+from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
 
 import httpx
 from pydantic import BaseModel
