@@ -355,6 +355,9 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseUsageBlock,
 )
 from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+    ModelGroupInfoProxy,
+)
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     LiteLLM_UpperboundKeyGenerateParams,
@@ -1640,7 +1643,7 @@ class ProxyConfig:
         if credential_list_dict:
             credential_list = [CredentialItem(**cred) for cred in credential_list_dict]
         return credential_list
-    
+
     def _load_environment_variables(self, config: dict):
         ## ENVIRONMENT VARIABLES
         global premium_user
@@ -1655,7 +1658,9 @@ class ProxyConfig:
                 # ```
                 #########################################################
                 if isinstance(value, str) and value.startswith("os.environ/"):
-                    resolved_secret_string: Optional[str] = get_secret_str(secret_name=value)
+                    resolved_secret_string: Optional[str] = get_secret_str(
+                        secret_name=value
+                    )
                     if resolved_secret_string is not None:
                         os.environ[key] = resolved_secret_string
                 else:
@@ -1974,10 +1979,13 @@ class ProxyConfig:
                     value=custom_sso, config_file_path=config_file_path
                 )
 
-            custom_ui_sso_sign_in_handler = general_settings.get("custom_ui_sso_sign_in_handler", None)
+            custom_ui_sso_sign_in_handler = general_settings.get(
+                "custom_ui_sso_sign_in_handler", None
+            )
             if custom_ui_sso_sign_in_handler is not None:
                 user_custom_ui_sso_sign_in_handler = get_instance_fn(
-                    value=custom_ui_sso_sign_in_handler, config_file_path=config_file_path
+                    value=custom_ui_sso_sign_in_handler,
+                    config_file_path=config_file_path,
                 )
 
             if enterprise_proxy_config is not None:
@@ -6530,8 +6538,8 @@ async def model_info_v1(  # noqa: PLR0915
 
 def _get_model_group_info(
     llm_router: Router, all_models_str: List[str], model_group: Optional[str]
-) -> List[ModelGroupInfo]:
-    model_groups: List[ModelGroupInfo] = []
+) -> List[ModelGroupInfoProxy]:
+    model_groups: List[ModelGroupInfoProxy] = []
     # ensure all_models_str is a set
     all_models_str_set = set(all_models_str)
 
@@ -6542,14 +6550,22 @@ def _get_model_group_info(
         _model_group_info = llm_router.get_model_group_info(model_group=model)
 
         if _model_group_info is not None:
-            model_groups.append(_model_group_info)
+            model_groups.append(ModelGroupInfoProxy(**_model_group_info.model_dump()))
         else:
-            model_group_info = ModelGroupInfo(
+            model_group_info = ModelGroupInfoProxy(
                 model_group=model,
                 providers=[],
             )
             model_groups.append(model_group_info)
+
+    ## check for public model groups
+    if litellm.public_model_groups is not None:
+        for mg in model_groups:
+            if mg.model_group in litellm.public_model_groups:
+                mg.is_public_model_group = True
+
     return model_groups
+
 
 @router.get(
     "/model_group/info",
@@ -6772,7 +6788,7 @@ async def model_group_info(
         infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
         llm_router=llm_router,
     )
-    model_groups: List[ModelGroupInfo] = _get_model_group_info(
+    model_groups: List[ModelGroupInfoProxy] = _get_model_group_info(
         llm_router=llm_router, all_models_str=all_models_str, model_group=model_group
     )
 

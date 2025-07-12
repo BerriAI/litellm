@@ -108,6 +108,13 @@ export interface CredentialItem {
   };
 }
 
+export interface PublicModelHubInfo {
+  docs_title: string;
+  custom_docs_description: string | null;
+  litellm_version: string;
+  useful_links: Record<string, string>;
+}
+
 export interface LiteLLMWellKnownUiConfig {
   server_root_path: string;
   proxy_base_url: string | null;
@@ -148,6 +155,21 @@ export function setGlobalLitellmHeaderName(
   globalLitellmHeaderName = headerName;
 }
 
+export const makeModelGroupPublic = async (accessToken: string, modelGroups: string[]) => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/model_group/make_public` : `/model_group/make_public`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model_groups: modelGroups,
+    }),
+  });
+  return response.json();
+};
+
 export const getUiConfig = async () => {
   console.log("Getting UI config");
   /**Special route to get the proxy base url and server root path */
@@ -161,6 +183,15 @@ export const getUiConfig = async () => {
    */
   console.log("jsonData in getUiConfig:", jsonData);
   updateProxyBaseUrl(jsonData.server_root_path, jsonData.proxy_base_url);
+  return jsonData;
+};
+
+export const getPublicModelHubInfo = async () => {
+  const url = defaultProxyBaseUrl
+    ? `${defaultProxyBaseUrl}/public/model_hub/info`
+    : `/public/model_hub/info`;
+  const response = await fetch(url);
+  const jsonData: PublicModelHubInfo = await response.json();
   return jsonData;
 };
 
@@ -1767,6 +1798,17 @@ export const modelInfoV1Call = async (accessToken: String, modelId: String) => {
     console.error("Failed to create key:", error);
     throw error;
   }
+};
+
+export const modelHubPublicModelsCall = async () => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/public/model_hub` : `/public/model_hub`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+  return response.json();
 };
 
 export const modelHubCall = async (accessToken: String) => {
@@ -4576,6 +4618,7 @@ export const healthCheckHistoryCall = async (
     throw error;
   }
 };
+
 
 export const latestHealthChecksCall = async (accessToken: String) => {
   /**
