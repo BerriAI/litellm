@@ -225,7 +225,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
             <Button 
               size="xs"
               variant="light"
-              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left"
               onClick={() => showModal(row.original)}
             >
               {row.original.model_group}
