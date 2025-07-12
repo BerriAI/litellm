@@ -111,6 +111,7 @@ mcp_servers:
 <Tabs>
 <TabItem value="openai" label="OpenAI API">
 
+### Quick Start
 #### Connect via OpenAI Responses API
 
 Use the OpenAI Responses API to connect to your LiteLLM MCP server:
@@ -196,8 +197,6 @@ Use tools directly from Cursor IDE with LiteLLM MCP:
 
 </TabItem>
 </Tabs>
-
-## Segregating MCP Server Access
 
 ### Specific MCP Servers
 
@@ -291,7 +290,7 @@ This configuration in Cursor IDE settings will limit tool access to only the spe
 </TabItem>
 </Tabs>
 
-### Using Access Groups
+### Grouping MCPs (Access Groups)
 
 MCP Access Groups allow you to group multiple MCP servers together for easier management.
 
