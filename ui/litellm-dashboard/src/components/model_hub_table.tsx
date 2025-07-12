@@ -13,7 +13,7 @@ import {
   Badge,
   Flex,
 } from "@tremor/react";
-import { Modal, message } from "antd";
+import { Modal, message, Tooltip } from "antd";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { Table as TableInstance } from '@tanstack/react-table';
 
@@ -291,13 +291,18 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
             
             {publicPage == false ? (
               premiumUser ? (
-                <Button 
-                  className="ml-4" 
-                  onClick={() => handleMakePublicPage()}
-                  disabled={selectedModels.size === 0}
+                <Tooltip 
+                  title={selectedModels.size === 0 ? "Select models to make them publicly known" : ""}
+                  placement="top"
                 >
-                  ✨ Make Public
-                </Button>
+                  <Button 
+                    className="ml-4" 
+                    onClick={() => handleMakePublicPage()}
+                    disabled={selectedModels.size === 0}
+                  >
+                    ✨ Make Public
+                  </Button>
+                </Tooltip>
               ) : (
                 <Button className="ml-4">
                   <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
