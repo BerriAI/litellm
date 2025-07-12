@@ -51,12 +51,14 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
     ...accessGroups.map(group => ({
       label: group,
       value: group,
-      isAccessGroup: true
+      isAccessGroup: true,
+      searchText: `${group} Access Group`
     })),
     ...mcpServers.map(server => ({
       label: `${server.alias || server.server_id} (${server.server_id})`,
       value: server.server_id,
-      isAccessGroup: false
+      isAccessGroup: false,
+      searchText: `${server.alias || server.server_id} ${server.server_id} MCP Server`
     }))
   ];
 
@@ -82,15 +84,19 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
         value={selectedValues}
         loading={loading}
         className={className}
-        optionFilterProp="label"
         showSearch
         style={{ width: '100%' }}
         disabled={disabled}
+        filterOption={(input, option) => {
+          const searchText = options.find(opt => opt.value === option?.value)?.searchText || '';
+          return searchText.toLowerCase().includes(input.toLowerCase());
+        }}
       >
         {options.map(opt => (
           <Select.Option
             key={opt.value}
             value={opt.value}
+            label={opt.label}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span style={{
@@ -98,12 +104,12 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
                 width: 8,
                 height: 8,
                 borderRadius: '50%',
-                background: opt.isAccessGroup ? '#1890ff' : '#52c41a',
+                background: opt.isAccessGroup ? '#52c41a' : '#1890ff',
                 flexShrink: 0,
               }} />
               <span style={{ flex: 1 }}>{opt.label}</span>
               <span style={{ 
-                color: opt.isAccessGroup ? '#1890ff' : '#52c41a', 
+                color: opt.isAccessGroup ? '#52c41a' : '#1890ff', 
                 fontSize: '12px',
                 fontWeight: 500,
                 opacity: 0.8
