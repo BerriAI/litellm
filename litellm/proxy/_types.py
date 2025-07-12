@@ -852,8 +852,8 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     mcp_access_groups: List[str] = Field(default_factory=list)
     # Stdio-specific fields
     command: Optional[str] = None
-    args: Optional[List[str]] = None
-    env: Optional[Dict[str, str]] = None
+    args: List[str] = Field(default_factory=list)
+    env: Dict[str, str] = Field(default_factory=dict)
     
     @model_validator(mode="before")
     @classmethod
@@ -884,8 +884,8 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     mcp_access_groups: List[str] = Field(default_factory=list)
     # Stdio-specific fields
     command: Optional[str] = None
-    args: Optional[List[str]] = None
-    env: Optional[Dict[str, str]] = None
+    args: List[str] = Field(default_factory=list)
+    env: Dict[str, str] = Field(default_factory=dict)
     
     @model_validator(mode="before")
     @classmethod
@@ -923,8 +923,8 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     mcp_info: Optional[MCPInfo] = None
     # Stdio-specific fields
     command: Optional[str] = None
-    args: Optional[List[str]] = None
-    env: Optional[Dict[str, str]] = None
+    args: List[str] = Field(default_factory=list)
+    env: Dict[str, str] = Field(default_factory=dict)
 
 
 class NewUserRequestTeam(LiteLLMPydanticObjectBase):

@@ -80,7 +80,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   // Get unique MCP access groups from all servers
   const uniqueMcpAccessGroups = React.useMemo(() => {
     if (!mcpServers) return []
-    return Array.from(new Set(mcpServers.flatMap((server) => server.mcp_access_groups)))
+    return Array.from(new Set(mcpServers.flatMap((server) => server.mcp_access_groups).filter((group): group is string => group != null)))
   }, [mcpServers])
 
   // Handle team filter change
@@ -198,6 +198,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         accessToken={accessToken}
         userID={userID}
         userRole={userRole}
+        availableAccessGroups={uniqueMcpAccessGroups}
       />
     ) : (
       <div className="w-full h-full">
@@ -281,6 +282,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         onCreateSuccess={handleCreateSuccess}
         isModalVisible={isModalVisible}
         setModalVisible={setModalVisible}
+        availableAccessGroups={uniqueMcpAccessGroups}
       />
       <Title>MCP Servers</Title>
       <Text className="text-tremor-content mt-2">Configure and manage your MCP servers</Text>

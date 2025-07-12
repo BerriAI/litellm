@@ -617,9 +617,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
     <Card className="w-full rounded-xl shadow-md overflow-hidden">
       <div className="flex h-[80vh] w-full gap-4">
         {/* Left Sidebar with Controls */}
-        <div className="w-1/4 p-4 bg-gray-50">
+        <div className="w-1/4 p-4 bg-gray-50 overflow-y-auto">
           <Title className="text-xl font-semibold mb-6 mt-2">Configurations</Title>
-            <div className="space-y-6">
+            <div className="space-y-4">
               <div>
                 <Text className="font-medium block mb-2 text-gray-700 flex items-center">
                   <KeyOutlined className="mr-2" /> API Key Source
@@ -799,7 +799,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 />
               </div>
               
-              <div className="space-y-2 mt-6">
+              <div className="space-y-2 mt-4">
                 <TremorButton
                   onClick={clearChatHistory}
                   className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
