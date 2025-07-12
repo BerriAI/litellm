@@ -1,4 +1,4 @@
-from typing import Optional, List, Union
+from typing import List, Optional, Union
 
 import httpx
 
@@ -23,15 +23,3 @@ class BytezError(BaseLLMException):
             message=message,
             headers=headers,
         )
-
-
-def validate_environment(
-    api_key: Optional[str] = None, messages: Union[List, None] = None
-) -> None:
-    if not messages:
-        raise Exception(
-            "kwarg `messages` must be an array of messages that follow the openai chat standard"
-        )
-
-    if not api_key:
-        raise Exception("Missing api_key, make sure you pass in your api key")
