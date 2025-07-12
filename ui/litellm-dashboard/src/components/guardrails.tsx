@@ -116,6 +116,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
         onGuardrailUpdated={fetchGuardrails}
         isAdmin={isAdmin}
         onShowGuardrailInfo={setIsViewingGuardrailInfo}
+        onCreateNewGuardrail={handleAddGuardrail}
       />
 
       <AddGuardrailForm
