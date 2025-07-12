@@ -2233,6 +2233,13 @@ def prometheus_label_factory(
             if key in supported_enum_labels:
                 filtered_labels[key] = value
 
+    # Add custom tags if configured
+    if enum_values.tags is not None:
+        custom_tag_labels = get_custom_labels_from_tags(enum_values.tags)
+        for key, value in custom_tag_labels.items():
+            if key in supported_enum_labels:
+                filtered_labels[key] = value
+
     for label in supported_enum_labels:
         if label not in filtered_labels:
             filtered_labels[label] = None
@@ -2265,5 +2272,29 @@ def get_custom_labels_from_metadata(metadata: dict) -> Dict[str, str]:
 
         if value is not None and isinstance(value, str):
             result[original_key.replace(".", "_")] = value
+
+    return result
+
+
+def get_custom_labels_from_tags(tags: List[str]) -> Dict[str, str]:
+    """
+    Get custom labels from tags based on admin configuration
+    """
+    configured_tags = litellm.custom_prometheus_tags
+    if configured_tags is None or len(configured_tags) == 0:
+        return {}
+
+    result: Dict[str, str] = {}
+
+    # Map each configured tag to its presence in the request tags
+    for configured_tag in configured_tags:
+        # Create a safe prometheus label name
+        label_name = f"tag_{configured_tag}".replace("-", "_").replace(".", "_")
+
+        # Check if this tag is present in the request tags
+        if configured_tag in tags:
+            result[label_name] = "true"
+        else:
+            result[label_name] = "false"
 
     return result

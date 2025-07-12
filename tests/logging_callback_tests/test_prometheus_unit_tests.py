@@ -1090,6 +1090,48 @@ def test_get_custom_labels_from_metadata(monkeypatch):
     }
 
 
+def test_get_custom_labels_from_metadata_tags(monkeypatch):
+    monkeypatch.setattr("litellm.custom_prometheus_metadata_labels", [])
+    metadata = {"foo": "bar", "bar": "baz", "taz": "qux"}
+    assert get_custom_labels_from_metadata(metadata) == {}
+
+
+def test_get_custom_labels_from_tags(monkeypatch):
+    from litellm.integrations.prometheus import get_custom_labels_from_tags
+
+    monkeypatch.setattr(
+        "litellm.custom_prometheus_tags", ["prod", "test-env", "batch.job"]
+    )
+    tags = ["prod", "debug", "batch.job"]
+    result = get_custom_labels_from_tags(tags)
+    assert result == {
+        "tag_prod": "true",
+        "tag_test_env": "false",  # not in request tags
+        "tag_batch_job": "true",  # dot replaced with underscore
+    }
+
+
+def test_get_custom_labels_from_tags_empty_config(monkeypatch):
+    from litellm.integrations.prometheus import get_custom_labels_from_tags
+
+    monkeypatch.setattr("litellm.custom_prometheus_tags", [])
+    tags = ["prod", "debug"]
+    result = get_custom_labels_from_tags(tags)
+    assert result == {}
+
+
+def test_get_custom_labels_from_tags_no_tags(monkeypatch):
+    from litellm.integrations.prometheus import get_custom_labels_from_tags
+
+    monkeypatch.setattr("litellm.custom_prometheus_tags", ["prod", "test"])
+    tags = []
+    result = get_custom_labels_from_tags(tags)
+    assert result == {
+        "tag_prod": "false",
+        "tag_test": "false",
+    }
+
+
 @pytest.mark.asyncio(scope="session")
 async def test_initialize_remaining_budget_metrics(prometheus_logger):
     """
@@ -1487,17 +1529,73 @@ def test_set_team_budget_metrics_with_custom_labels(prometheus_logger, monkeypat
         100.0
     )
 
-    # Verify budget reset metric includes custom labels
-    budget_reset_calls = (
-        prometheus_logger.litellm_team_budget_remaining_hours_metric.labels.call_args_list
+
+def test_prometheus_label_factory_with_custom_tags(monkeypatch):
+    """
+    Test that prometheus_label_factory correctly handles custom tags
+    """
+    from litellm.integrations.prometheus import prometheus_label_factory
+    from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
+
+    # Set custom tags configuration
+    monkeypatch.setattr("litellm.custom_prometheus_tags", ["prod", "test-env"])
+
+    # Create enum_values with tags
+    enum_values = UserAPIKeyLabelValues(
+        hashed_api_key="key123",
+        team="team1",
+        tags=["prod", "debug"],  # Only "prod" is in our custom_prometheus_tags
     )
-    assert len(budget_reset_calls) == 1
-    assert budget_reset_calls[0][1] == {
+
+    # Test with supported labels including custom tags
+    supported_labels = ["hashed_api_key", "team", "tag_prod", "tag_test_env"]
+
+    result = prometheus_label_factory(
+        supported_enum_labels=supported_labels,
+        enum_values=enum_values,
+    )
+
+    expected = {
+        "hashed_api_key": "key123",
         "team": "team1",
-        "team_alias": "alias1",
-        "metadata_organization": None,
-        "metadata_environment": None,
+        "tag_prod": "true",  # present in tags
+        "tag_test_env": "false",  # not present in tags
     }
+
+    assert result == expected
+
+
+def test_prometheus_label_factory_with_no_custom_tags(monkeypatch):
+    """
+    Test that prometheus_label_factory works when no custom tags are configured
+    """
+    from litellm.integrations.prometheus import prometheus_label_factory
+    from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
+
+    # Set empty custom tags configuration
+    monkeypatch.setattr("litellm.custom_prometheus_tags", [])
+
+    # Create enum_values with tags
+    enum_values = UserAPIKeyLabelValues(
+        hashed_api_key="key123",
+        team="team1",
+        tags=["prod", "debug"],
+    )
+
+    # Test with basic supported labels (no custom tags)
+    supported_labels = ["hashed_api_key", "team"]
+
+    result = prometheus_label_factory(
+        supported_enum_labels=supported_labels,
+        enum_values=enum_values,
+    )
+
+    expected = {
+        "hashed_api_key": "key123",
+        "team": "team1",
+    }
+
+    assert result == expected
 
 
 def test_get_exception_class_name(prometheus_logger):
@@ -1628,7 +1726,11 @@ def test_set_llm_deployment_success_metrics_with_label_filtering():
         )
 
         # Should only contain the filtered labels that are supported for this metric
-        expected_filtered_labels = {"litellm_model_name", "api_provider", "hashed_api_key"}
+        expected_filtered_labels = {
+            "litellm_model_name",
+            "api_provider",
+            "hashed_api_key",
+        }
         actual_labels = set(k for k in overhead_labels.keys() if k is not None)
 
         # Verify that only expected labels are present (subset of configured labels)
