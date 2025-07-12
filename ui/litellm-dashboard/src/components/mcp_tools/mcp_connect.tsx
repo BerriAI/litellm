@@ -72,8 +72,9 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
     };
     if (useServerHeader && serverName) {
       const formattedServerName = serverName.replace(/\s+/g, '_');
-      headers["x-mcp-servers"] = [formattedServerName];
-      headers["x-mcp-access-groups"] = [accessGroups.join(",")];
+      // Include both server name and access groups in the same header
+      const serverAndGroups = [formattedServerName, ...accessGroups].join(',');
+      headers["x-mcp-servers"] = [serverAndGroups];
     }
     return headers;
   };
@@ -97,26 +98,19 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
               checked={useServerHeader}
               onChange={setUseServerHeader}
             />
-            <Text className="text-sm">Segregate tools to just use a specific MCP Server e.g. {serverName} tools</Text>
+            <Text className="text-sm">Limit tools to specific MCP servers or MCP groups by passing the <code>x-mcp-servers</code> header</Text>
           </div>
           {useServerHeader && (
             <Alert
               className="mt-2"
               type="info"
               showIcon
-              message="MCP Server Header Format"
+              message="Two Options"
               description={
                 <div>
-                  <p>Specify one or more MCP servers using a comma-separated list inside an array:</p>
-                  <ul>
-                    <li><strong>Single server:</strong> ["Server1"]</li>
-                    <li><strong>Multiple servers:</strong> ["Server1,Server2,Server3"]</li>
-                  </ul>
-                  <p>Note: Server names with spaces will be automatically converted to use underscores.</p>
-                    <div className="mt-2">
-                      <b>New:</b> You can also restrict by access group(s) using the <code>x-mcp-access-groups</code> header:<br />
-                      <code>"x-mcp-access-groups": ["{accessGroups.join(",")}"]</code>
-                    </div>
+                  <p><strong>Option 1:</strong> Get a specific server: <code>["{serverName.replace(/\s+/g, '_')}"]</code></p>
+                  <p><strong>Option 2:</strong> Get a group of MCPs: <code>["dev-group"]</code></p>
+                  <p className="mt-2 text-sm text-gray-600">You can also mix both: <code>["Server1,dev-group"]</code></p>
                 </div>
               }
             />
@@ -180,7 +174,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
       // Format server names (replace spaces with underscores)
       const formattedServers = serverHeaders[type].map(s => s.replace(/\s+/g, '_'));
       
-      // Use comma-separated format
+      // Use comma-separated format (can include both servers and access groups)
       headers["x-mcp-servers"] = [formattedServers.join(',')];
     }
     
@@ -300,8 +294,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
-                "x-mcp-servers": ["Zapier_MCP"],
-                "x-mcp-access-groups": ["dev"]
+                "x-mcp-servers": ["Zapier_MCP,dev"]
             }
         }
     ],
@@ -389,8 +382,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
-                "x-mcp-servers": ["Zapier_MCP"],
-                "x-mcp-access-groups": ["dev"]
+                "x-mcp-servers": ["Zapier_MCP,dev"]
             }
         }
     ],
@@ -453,8 +445,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
       "server_url": "${proxyBaseUrl}/mcp",
       "headers": {
         "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
-        "x-mcp-servers": ["Zapier_MCP"],
-        "x-mcp-access-groups": ["dev"]
+        "x-mcp-servers": ["Zapier_MCP,dev"]
       }
     }
   }

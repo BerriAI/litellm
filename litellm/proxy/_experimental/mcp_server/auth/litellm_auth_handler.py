@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import List, Optional
 
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 
@@ -12,12 +12,10 @@ class MCPAuthenticatedUser(AuthenticatedUser):
     This class handles:
     1. User API key authentication information
     2. MCP authentication header
-    3. MCP server configuration
-    4. MCP access groups configuration
+    3. MCP server configuration (can include access groups)
     """
 
-    def __init__(self, user_api_key_auth: UserAPIKeyAuth, mcp_auth_header: Optional[str] = None, mcp_servers: Optional[List[str]] = None, mcp_access_groups: Optional[List[str]] = None):
+    def __init__(self, user_api_key_auth: UserAPIKeyAuth, mcp_auth_header: Optional[str] = None, mcp_servers: Optional[List[str]] = None):
         self.user_api_key_auth = user_api_key_auth
         self.mcp_auth_header = mcp_auth_header
         self.mcp_servers = mcp_servers
-        self.mcp_access_groups = mcp_access_groups
