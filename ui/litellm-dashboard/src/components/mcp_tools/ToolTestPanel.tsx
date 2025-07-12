@@ -47,11 +47,59 @@ export function ToolTestPanel({
     return tool.inputSchema as InputSchema;
   }, [tool.inputSchema]);
 
+  // Check if this is a nested params structure and extract the actual parameters
+  const actualSchema: InputSchema = React.useMemo(() => {
+    if (schema.properties && schema.properties.params && 
+        schema.properties.params.type === "object" && 
+        schema.properties.params.properties) {
+      // This is a nested params structure, extract the actual parameters
+      return {
+        type: "object",
+        properties: schema.properties.params.properties,
+        required: schema.properties.params.required || [],
+      };
+    }
+    return schema;
+  }, [schema]);
+
   const handleSubmit = (values: Record<string, any>) => {
     const start = Date.now();
     setStartTime(start);
     setDuration(null);
-    onSubmit(values);
+    
+    // Convert form values to proper types based on schema
+    const convertedValues: Record<string, any> = {};
+    const schemaToUse = actualSchema;
+    
+    Object.entries(values).forEach(([key, value]) => {
+      const prop = schemaToUse.properties?.[key];
+      if (prop && value !== null && value !== undefined && value !== "") {
+        switch (prop.type) {
+          case "boolean":
+            convertedValues[key] = value === "true" || value === true;
+            break;
+          case "number":
+            convertedValues[key] = Number(value);
+            break;
+          case "string":
+            convertedValues[key] = String(value);
+            break;
+          default:
+            convertedValues[key] = value;
+        }
+      } else if (value !== null && value !== undefined && value !== "") {
+        convertedValues[key] = value;
+      }
+    });
+    
+    // If this was a nested params structure, wrap the values back in params
+    const submitValues = (schema.properties && schema.properties.params && 
+                         schema.properties.params.type === "object" && 
+                         schema.properties.params.properties) 
+      ? { params: convertedValues } 
+      : convertedValues;
+    
+    onSubmit(submitValues);
   };
 
   // Track when result changes to calculate duration
@@ -199,7 +247,7 @@ export function ToolTestPanel({
                     />
                   </Form.Item>
                 </div>
-              ) : schema.properties === undefined ? (
+              ) : actualSchema.properties === undefined ? (
                 <div className="text-center py-6 bg-gray-50 rounded-lg border border-gray-200">
                   <div className="max-w-sm mx-auto">
                     <h4 className="text-sm font-medium text-gray-900 mb-1">No Parameters Required</h4>
@@ -208,13 +256,13 @@ export function ToolTestPanel({
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {Object.entries(schema.properties).map(([key, prop]) => (
+                  {Object.entries(actualSchema.properties).map(([key, prop]) => (
                     <Form.Item
                       key={key}
                       label={
                         <span className="text-sm font-medium text-gray-700 flex items-center">
                           {key}{" "}
-                          {schema.required?.includes(key) && <span className="text-red-500">*</span>}
+                          {actualSchema.required?.includes(key) && <span className="text-red-500">*</span>}
                           {prop.description && (
                             <Tooltip title={prop.description}>
                               <InfoCircleOutlined className="ml-2 text-gray-400 hover:text-gray-600" />
@@ -225,13 +273,29 @@ export function ToolTestPanel({
                       name={key}
                       rules={[
                         {
-                          required: schema.required?.includes(key),
+                          required: actualSchema.required?.includes(key),
                           message: `Please enter ${key}`,
                         },
                       ]}
                       className="mb-3"
                     >
-                      {prop.type === "string" && (
+                      {prop.type === "string" && prop.enum && (
+                        <select
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm transition-colors"
+                          defaultValue={prop.default}
+                        >
+                          {!actualSchema.required?.includes(key) && (
+                            <option value="">Select {key}</option>
+                          )}
+                          {prop.enum.map((value) => (
+                            <option key={value} value={value}>
+                              {value}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+
+                      {prop.type === "string" && !prop.enum && (
                         <TextInput
                           placeholder={prop.description || `Enter ${key}`}
                           className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
@@ -247,13 +311,16 @@ export function ToolTestPanel({
                       )}
 
                       {prop.type === "boolean" && (
-                        <div className="flex items-center space-x-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
-                          <input
-                            type="checkbox"
-                            className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded transition-colors"
-                          />
-                          <span className="text-sm text-gray-700">Enable this option</span>
-                        </div>
+                        <select
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm transition-colors"
+                          defaultValue={prop.default?.toString() || ""}
+                        >
+                          {!actualSchema.required?.includes(key) && (
+                            <option value="">Select {key}</option>
+                          )}
+                          <option value="true">True</option>
+                          <option value="false">False</option>
+                        </select>
                       )}
                     </Form.Item>
                   ))}
