@@ -20,7 +20,7 @@ interface ModelGroupInfo {
   supports_vision: boolean;
   supports_function_calling: boolean;
   supported_openai_params?: string[];
-  public?: boolean;
+  is_public_model_group: boolean;
   [key: string]: any;
 }
 
@@ -90,14 +90,20 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
 
   const handleFilteredDataChange = useCallback((newFilteredData: ModelGroupInfo[]) => {
     setFilteredData(newFilteredData);
-    // Clear selections when filtered data changes to avoid confusion
-    setSelectedModels(new Set());
+    // Keep existing selections when filters change - don't clear them
   }, []);
 
-  // Initialize filtered data when modal opens
+  // Initialize filtered data and preselect already public models when modal opens
   useEffect(() => {
     if (visible && modelHubData.length > 0) {
       setFilteredData(modelHubData);
+      
+      // Preselect models that are already public
+      const alreadyPublicModels = modelHubData
+        .filter(model => model.is_public_model_group === true)
+        .map(model => model.model_group);
+      
+      setSelectedModels(new Set(alreadyPublicModels));
     }
   }, [visible, modelHubData]);
 
@@ -205,7 +211,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
         
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
           <Text className="text-sm text-yellow-800">
-            <strong>Warning:</strong> Once you make these models public, they will be accessible to anyone with access to the public model hub. This action cannot be undone through this interface.
+            <strong>Warning:</strong> Once you make these models public, anyone who can go to the <code>/ui/model_hub_table</code> will be able to know they exist on the proxy.
           </Text>
         </div>
 

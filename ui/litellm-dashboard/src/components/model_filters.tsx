@@ -15,7 +15,7 @@ interface ModelGroupInfo {
   supports_vision: boolean;
   supports_function_calling: boolean;
   supported_openai_params?: string[];
-  public?: boolean;
+  is_public_model_group: boolean;
   [key: string]: any;
 }
 
