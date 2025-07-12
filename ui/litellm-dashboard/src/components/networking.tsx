@@ -147,6 +147,21 @@ export function setGlobalLitellmHeaderName(
   globalLitellmHeaderName = headerName;
 }
 
+export const makeModelGroupPublic = async (accessToken: string, modelGroups: string[]) => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/model_group/make_public` : `/model_group/make_public`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model_groups: modelGroups,
+    }),
+  });
+  return response.json();
+};
+
 export const getUiConfig = async () => {
   console.log("Getting UI config");
   /**Special route to get the proxy base url and server root path */
@@ -1766,6 +1781,17 @@ export const modelInfoV1Call = async (accessToken: String, modelId: String) => {
     console.error("Failed to create key:", error);
     throw error;
   }
+};
+
+export const modelHubPublicModelsCall = async () => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/public/model_hub` : `/public/model_hub`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+  return response.json();
 };
 
 export const modelHubCall = async (accessToken: String) => {

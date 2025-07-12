@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { modelHubCall } from "./networking";
+import { modelHubCall, makeModelGroupPublic, modelHubPublicModelsCall } from "./networking";
 import { getConfigFieldSetting, updateConfigFieldSetting } from "./networking";
 import { ModelDataTable } from "./model_dashboard/table";
 import { modelHubColumns } from "./model_hub_table_columns";
@@ -60,11 +60,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   const tableRef = useRef<TableInstance<any>>(null);
 
   useEffect(() => {
-    if (!accessToken) {
-      return;
-    }
-
-    const fetchData = async () => {
+    const fetchData = async (accessToken: string) => {
       try {
         setLoading(true);
         const _modelHubData = await modelHubCall(accessToken);
@@ -88,7 +84,18 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
       }
     };
 
-    fetchData();
+    const fetchPublicData = async () => {
+      const _modelHubData = await modelHubPublicModelsCall();
+      console.log("ModelHubData:", _modelHubData);
+      setModelHubData(_modelHubData.data);
+      setPublicPageAllowed(true);
+    }
+
+    if (accessToken) {
+      fetchData(accessToken);
+    } else if (publicPage) {
+      fetchPublicData();
+    }
   }, [accessToken, publicPage]);
 
   const showModal = (model: ModelGroupInfo) => {
@@ -104,11 +111,33 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
     if (!accessToken) {
       return;
     }
-    updateConfigFieldSetting(accessToken, "enable_public_model_hub", true).then(
-      (data) => {
+    
+    try {
+      // First, enable the public model hub setting
+      await updateConfigFieldSetting(accessToken, "enable_public_model_hub", true);
+      
+      // Get the selected model groups or use all if none are selected
+      const modelGroupsToMakePublic = selectedModels.size > 0 
+        ? Array.from(selectedModels)
+        : modelHubData?.map(model => model.model_group) || [];
+      
+      if (modelGroupsToMakePublic.length > 0) {
+        // Call the endpoint to make the selected model groups public
+        await makeModelGroupPublic(accessToken, modelGroupsToMakePublic);
+        
+        // Show success message
+        message.success(`Successfully made ${modelGroupsToMakePublic.length} model group(s) public!`);
+        
+        // Route to the model hub table
+        router.push(`/model_hub_table?key=${accessToken}`);
+      } else {
+        // Show the modal if no model groups available
         setIsPublicPageModalVisible(true);
       }
-    );
+    } catch (error) {
+      console.error("Error making model groups public:", error);
+      message.error("Failed to make model groups public. Please try again.");
+    }
   };
 
   const handleOk = () => {
@@ -200,6 +229,8 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
     setSelectedModels(new Set());
   }, [searchTerm, selectedProvider, selectedMode]);
 
+  console.log("publicPage: ", publicPage);
+  console.log("publicPageAllowed: ", publicPageAllowed);
   return (
     <div className="w-full mx-4 h-[75vh]">
       {(publicPage && publicPageAllowed) || publicPage == false ? (

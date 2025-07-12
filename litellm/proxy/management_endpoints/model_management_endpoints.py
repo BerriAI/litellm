@@ -957,7 +957,7 @@ async def update_model(
 
 
 @router.post(
-    "/model_groups/make_public",
+    "/model_group/make_public",
     description="Update which model groups are public",
     tags=["model management"],
     dependencies=[Depends(user_api_key_auth)],
