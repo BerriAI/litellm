@@ -574,19 +574,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
               >
                 {modelHubData && getUniqueProviders(modelHubData).map(provider => (
                   <Select.Option key={provider} value={provider}>
-                    <div className="flex items-center space-x-2">
-                      {getProviderLogoAndName(provider).logo && (
-                        <img 
-                          src={getProviderLogoAndName(provider).logo} 
-                          alt={provider} 
-                          className="w-5 h-5 flex-shrink-0 object-contain"
-                          onError={(e) => {
-                            (e.target as HTMLImageElement).style.display = 'none';
-                          }}
-                        />
-                      )}
-                      <span className="capitalize">{provider}</span>
-                    </div>
+                    {provider}
                   </Select.Option>
                 ))}
               </Select>
