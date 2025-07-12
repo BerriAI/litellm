@@ -1,4 +1,4 @@
-THIS SHOULD BE A LINTER ERRORimport pytest
+import pytest
 import json
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -91,6 +91,12 @@ async def test_aresponses_api_with_mcp_tool_execution():
         mock_tool_result.content = [MagicMock()]
         mock_tool_result.content[0].text = "Tool executed successfully"
         
+        with patch('litellm.responses.main.MCPResponsesAPIHelper._execute_tool_calls') as mock_execute_tools:
+            mock_execute_tools.return_value = [{
+                "tool_call_id": "call_123",
+                "result": "Tool executed successfully"
+            }]
+            
             with patch('litellm.responses.main.aresponses') as mock_aresponses:
                 # First response with tool call
                 first_response = ResponsesAPIResponse(
@@ -174,9 +180,9 @@ async def test_aresponses_api_with_mcp_tool_execution():
 def test_responses_api_with_mcp_sync():
     """Test synchronous version of responses_api_with_mcp"""
     
-    # Mock the global MCP server manager
-    with patch('litellm.responses.main.global_mcp_server_manager') as mock_manager:
-        mock_manager.list_tools = AsyncMock(return_value=[])
+    # Mock the helper class methods
+    with patch('litellm.responses.main.MCPResponsesAPIHelper._get_mcp_tools_from_manager') as mock_get_tools:
+        mock_get_tools.return_value = []
         
         # Mock the regular aresponses function
         with patch('litellm.responses.main.aresponses') as mock_aresponses:
@@ -225,7 +231,7 @@ def test_responses_api_with_mcp_sync():
 async def test_non_mcp_tools_passthrough():
     """Test that non-MCP tools are passed through normally"""
     
-    with patch('litellm.responses.main.global_mcp_server_manager') as mock_manager:
+    with patch('litellm.responses.main.MCPResponsesAPIHelper._get_mcp_tools_from_manager') as mock_get_tools:
         with patch('litellm.responses.main.aresponses') as mock_aresponses:
             mock_response = ResponsesAPIResponse(
                 id="resp_test_passthrough_123",
@@ -270,7 +276,7 @@ async def test_non_mcp_tools_passthrough():
             )
             
             # Verify MCP manager was not called since no MCP tools
-            mock_manager.list_tools.assert_not_called()
+            mock_get_tools.assert_not_called()
             
             # Verify aresponses was called with the regular tools
             mock_aresponses.assert_called_once()
