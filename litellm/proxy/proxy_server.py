@@ -25,6 +25,7 @@ from typing import (
     get_args,
     get_origin,
     get_type_hints,
+    Awaitable
 )
 
 from litellm.constants import (
@@ -767,7 +768,7 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
 
 
 router = APIRouter()
-origins = ["*"]
+origins = [origin.strip() for origin in os.getenv("ALLOWED_ORIGINS", "*").split(",")]
 
 
 # get current directory
@@ -862,6 +863,35 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+@app.middleware("http")
+async def add_headers(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+    origin = request.headers.get("origin")
+    if origin and origin not in origins:
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN, content={"detail": f"Origin '{origin}' is not allowed."}
+        )
+    response = await call_next(request)
+    if origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+    if not (
+        request.url.path.endswith("/docs")
+        or request.url.path.endswith("/redoc")
+        or request.url.path.endswith("/openapi.json")
+    ):
+        response.headers["Content-Security-Policy"] = "default-src 'none'"
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
+    headers_to_remove = ["access-control-allow-headers", "access-control-allow-methods"]
+    if request.method.lower() != "options":
+        for header in headers_to_remove:
+            try:
+                del response.headers[header]
+            except KeyError:
+                pass
+    return response
 
 app.add_middleware(PrometheusAuthMiddleware)
 
