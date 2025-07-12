@@ -15,6 +15,7 @@ export const AUTH_TYPE = {
 export const TRANSPORT = {
   SSE: "sse",
   HTTP: "http",
+  STDIO: "stdio",
 };
 
 export const handleTransport = (transport?: string | null): string => {

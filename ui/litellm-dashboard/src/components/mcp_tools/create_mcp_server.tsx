@@ -47,15 +47,36 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       const accessGroups = formValues.mcp_access_groups
 
       // Prepare the payload with cost configuration
-      const payload = {
+      let payload: Record<string, any> = {
         ...formValues,
         mcp_info: {
-          server_name: formValues.alias || formValues.url,
+          server_name: formValues.alias || formValues.url || formValues.command,
           description: formValues.description,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null,
         },
         mcp_access_groups: accessGroups
       };
+
+      // Handle stdio-specific fields
+      if (formValues.transport === "stdio") {
+        // Transform environment variables from form format to object format
+        if (formValues.env) {
+          const envObj: Record<string, string> = {};
+          formValues.env.forEach((envVar: any) => {
+            if (envVar.key && envVar.value) {
+              envObj[envVar.key] = envVar.value;
+            }
+          });
+          payload.env = envObj;
+        }
+        // Remove URL for stdio transport
+        delete payload.url;
+      } else {
+        // Remove stdio fields for non-stdio transport
+        delete payload.command;
+        delete payload.args;
+        delete payload.env;
+      }
 
       console.log(`Payload: ${JSON.stringify(payload)}`);
 
@@ -183,23 +204,25 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 />
               </Form.Item>
 
-              <Form.Item
-                label={
-                  <span className="text-sm font-medium text-gray-700">
-                    MCP Server URL
-                  </span>
-                }
-                name="url"
-                rules={[
-                  { required: true, message: "Please enter a server URL" },
-                  { type: 'url', message: "Please enter a valid URL" }
-                ]}
-              >
-                <TextInput 
-                  placeholder="https://your-mcp-server.com" 
-                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                />
-              </Form.Item>
+              {formValues.transport !== "stdio" && (
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700">
+                      MCP Server URL
+                    </span>
+                  }
+                  name="url"
+                  rules={[
+                    { required: formValues.transport !== "stdio", message: "Please enter a server URL" },
+                    { type: 'url', message: "Please enter a valid URL" }
+                  ]}
+                >
+                  <TextInput 
+                    placeholder="https://your-mcp-server.com" 
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
+              )}
 
               <div className="grid grid-cols-2 gap-4">
                 <Form.Item
@@ -215,9 +238,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                     placeholder="Select transport"
                     className="rounded-lg"
                     size="large"
+                    onChange={(value) => setFormValues({...formValues, transport: value})}
                   >
                     <Select.Option value="http">HTTP</Select.Option>
                     <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
+                    <Select.Option value="stdio">Standard I/O (stdio)</Select.Option>
                   </Select>
                 </Form.Item>
 
@@ -242,6 +267,113 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   </Select>
                 </Form.Item>
               </div>
+
+              {/* Stdio-specific fields */}
+              {formValues.transport === "stdio" && (
+                <>
+                  <Form.Item
+                    label={
+                      <span className="text-sm font-medium text-gray-700 flex items-center">
+                        Command
+                        <Tooltip title="The command to run the MCP server (e.g., 'npx', 'python', 'node')">
+                          <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="command"
+                    rules={[
+                      { required: formValues.transport === "stdio", message: "Please enter a command" },
+                    ]}
+                  >
+                    <TextInput 
+                      placeholder="e.g., npx, python, node" 
+                      className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                    />
+                  </Form.Item>
+
+                  <Form.Item
+                    label={
+                      <span className="text-sm font-medium text-gray-700 flex items-center">
+                        Arguments
+                        <Tooltip title="Arguments to pass to the command. Each argument should be on a separate line.">
+                          <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="args"
+                    rules={[
+                      { required: formValues.transport === "stdio", message: "Please enter arguments" },
+                    ]}
+                  >
+                    <Form.List name="args">
+                      {(fields, { add, remove }) => (
+                        <>
+                          {fields.map(({ key, name, ...restField }) => (
+                            <Space key={key} style={{ display: 'flex', marginBottom: 8 }} align="baseline">
+                              <Form.Item
+                                {...restField}
+                                name={[name]}
+                                rules={[{ required: true, message: 'Missing argument' }]}
+                              >
+                                <Input placeholder="e.g., -y, @circleci/mcp-server-circleci" />
+                              </Form.Item>
+                              <MinusCircleOutlined onClick={() => remove(name)} />
+                            </Space>
+                          ))}
+                          <Form.Item>
+                            <AntdButton type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>
+                              Add argument
+                            </AntdButton>
+                          </Form.Item>
+                        </>
+                      )}
+                    </Form.List>
+                  </Form.Item>
+
+                  <Form.Item
+                    label={
+                      <span className="text-sm font-medium text-gray-700 flex items-center">
+                        Environment Variables
+                        <Tooltip title="Environment variables to set when running the command. Format: KEY=VALUE">
+                          <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="env"
+                  >
+                    <Form.List name="env">
+                      {(fields, { add, remove }) => (
+                        <>
+                          {fields.map(({ key, name, ...restField }) => (
+                            <Space key={key} style={{ display: 'flex', marginBottom: 8 }} align="baseline">
+                              <Form.Item
+                                {...restField}
+                                name={[name, 'key']}
+                                rules={[{ required: true, message: 'Missing environment variable key' }]}
+                              >
+                                <Input placeholder="e.g., CIRCLECI_TOKEN" />
+                              </Form.Item>
+                              <Form.Item
+                                {...restField}
+                                name={[name, 'value']}
+                                rules={[{ required: true, message: 'Missing environment variable value' }]}
+                              >
+                                <Input placeholder="e.g., your-token-value" />
+                              </Form.Item>
+                              <MinusCircleOutlined onClick={() => remove(name)} />
+                            </Space>
+                          ))}
+                          <Form.Item>
+                            <AntdButton type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>
+                              Add environment variable
+                            </AntdButton>
+                          </Form.Item>
+                        </>
+                      )}
+                    </Form.List>
+                  </Form.Item>
+                </>
+              )}
 
               <Form.Item
                 label={

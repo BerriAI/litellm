@@ -128,6 +128,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
               <Select>
                 <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
                 <Select.Option value="http">HTTP</Select.Option>
+                <Select.Option value="stdio">Standard I/O (stdio)</Select.Option>
               </Select>
             </Form.Item>
             <Form.Item label="Authentication" name="auth_type" rules={[{ required: true }]}> 

@@ -227,12 +227,23 @@ class MCPServerManager:
             MCPClient: Configured MCP client instance
         """
         transport = server.transport or MCPTransport.sse
+        
+        # For stdio transport, create stdio configuration
+        stdio_config = None
+        if transport == MCPTransport.stdio:
+            stdio_config = {
+                "command": getattr(server, "command", None),
+                "args": getattr(server, "args", []),
+                "env": getattr(server, "env", None)
+            }
+        
         return MCPClient(
-            server_url=server.url,
+            server_url=server.url or "",
             transport_type=transport,
             auth_type=server.auth_type,
             auth_value=mcp_auth_header or server.authentication_token,
             timeout=60.0,
+            stdio_config=stdio_config,
         )
 
     async def _get_tools_from_server(self, server: MCPServer, mcp_auth_header: Optional[str] = None) -> List[MCPTool]:
