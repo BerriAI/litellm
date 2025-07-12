@@ -27,8 +27,10 @@ class MCPRequestHandler:
 
     LITELLM_MCP_SERVERS_HEADER_NAME = SpecialHeaders.mcp_servers.value
 
+    LITELLM_MCP_ACCESS_GROUPS_HEADER_NAME = SpecialHeaders.mcp_access_groups.value
+
     @staticmethod
-    async def process_mcp_request(scope: Scope) -> Tuple[UserAPIKeyAuth, Optional[str], Optional[List[str]]]:
+    async def process_mcp_request(scope: Scope) -> Tuple[UserAPIKeyAuth, Optional[str], Optional[List[str]], Optional[List[str]]]:
         """
         Process and validate MCP request headers from the ASGI scope.
         This includes:
@@ -43,6 +45,7 @@ class MCPRequestHandler:
             UserAPIKeyAuth containing validated authentication information
             mcp_auth_header: Optional[str] MCP auth header to be passed to the MCP server
             mcp_servers: Optional[List[str]] List of MCP servers to use
+            mcp_access_groups: Optional[List[str]] List of MCP access groups to use
 
         Raises:
             HTTPException: If headers are invalid or missing required headers
@@ -52,37 +55,31 @@ class MCPRequestHandler:
             MCPRequestHandler.get_litellm_api_key_from_headers(headers) or ""
         )
         mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers)
+        # Use helper for access groups
+        mcp_access_groups = MCPRequestHandler.get_mcp_access_groups_from_headers(headers)
+        verbose_logger.debug(f"Parsed MCP access groups (helper): {mcp_access_groups}")
+        # Use existing logic for servers (or add a helper if desired)
         mcp_servers_header = headers.get(MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME)
         verbose_logger.debug(f"Raw MCP servers header: {mcp_servers_header}")
         mcp_servers = None
-        if mcp_servers_header is not None:  # Changed from 'if mcp_servers_header:' to handle empty strings
+        if mcp_servers_header is not None:
             try:
-                # Parse as comma-separated list
                 mcp_servers = [s.strip() for s in mcp_servers_header.split(",") if s.strip()]
                 verbose_logger.debug(f"Parsed MCP servers: {mcp_servers}")
             except Exception as e:
                 verbose_logger.debug(f"Error parsing mcp_servers header: {e}")
                 mcp_servers = None
-
-            # If we got an empty string or parsing resulted in no servers, return empty list
             if mcp_servers_header == "" or (mcp_servers is not None and len(mcp_servers) == 0):
                 mcp_servers = []
-
         # Create a proper Request object with mock body method to avoid ASGI receive channel issues
         request = Request(scope=scope)
-
-        # Mock the body method to return empty dict as JSON bytes
-        # This prevents "Receive channel has not been made available" error
         async def mock_body():
-            return b"{}"  # Empty JSON object as bytes
-
+            return b"{}"
         request.body = mock_body  # type: ignore
-
         validated_user_api_key_auth = await user_api_key_auth(
             api_key=litellm_api_key, request=request
         )
-
-        return validated_user_api_key_auth, mcp_auth_header, mcp_servers
+        return validated_user_api_key_auth, mcp_auth_header, mcp_servers, mcp_access_groups
     
 
     @staticmethod
@@ -396,3 +393,24 @@ class MCPRequestHandler:
             return []
 
         return object_permissions.mcp_access_groups or []
+
+    @staticmethod
+    def get_mcp_access_groups_from_headers(headers: Headers) -> Optional[List[str]]:
+        """
+        Extract and parse the x-mcp-access-groups header as a list of strings.
+        """
+        mcp_access_groups_header = headers.get(MCPRequestHandler.LITELLM_MCP_ACCESS_GROUPS_HEADER_NAME)
+        if mcp_access_groups_header is not None:
+            try:
+                return [s.strip() for s in mcp_access_groups_header.split(",") if s.strip()]
+            except Exception:
+                return None
+        return None
+
+    @staticmethod
+    def get_mcp_access_groups_from_scope(scope: Scope) -> Optional[List[str]]:
+        """
+        Extract and parse the x-mcp-access-groups header from an ASGI scope.
+        """
+        headers = MCPRequestHandler._safe_get_headers_from_scope(scope)
+        return MCPRequestHandler.get_mcp_access_groups_from_headers(headers)

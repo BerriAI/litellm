@@ -165,20 +165,27 @@ if MCP_AVAILABLE:
     ########################################################
 
     @server.list_tools()
-    async def list_tools() -> list[MCPTool]:
+    async def list_tools() -> List[MCPTool]:
         """
         List all available tools
         """
         # Get user authentication from context variable
-        user_api_key_auth, mcp_auth_header, mcp_servers = get_auth_context()
+        user_api_key_auth, mcp_auth_header, mcp_servers, mcp_access_groups = get_auth_context()
         verbose_logger.debug(
             f"MCP list_tools - User API Key Auth from context: {user_api_key_auth}"
         )
-        # Get mcp_servers from context variable
+        verbose_logger.debug(
+            f"MCP list_tools - MCP servers from context: {mcp_servers}"
+        )
+        verbose_logger.debug(
+            f"MCP list_tools - MCP access groups from context: {mcp_access_groups}"
+        )
+        # Get mcp_servers and mcp_access_groups from context variable
         return await _list_mcp_tools(
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
             mcp_servers=mcp_servers,
+            mcp_access_groups=mcp_access_groups,
         )
 
     @server.call_tool()
@@ -204,7 +211,7 @@ if MCP_AVAILABLE:
         from litellm.proxy.proxy_server import proxy_config
 
         # Validate arguments
-        user_api_key_auth, mcp_auth_header, _ = get_auth_context()
+        user_api_key_auth, mcp_auth_header, _, _ = get_auth_context()
 
         verbose_logger.debug(
             f"MCP mcp_server_tool_call - User API Key Auth from context: {user_api_key_auth}"
@@ -254,6 +261,7 @@ if MCP_AVAILABLE:
         user_api_key_auth: Optional[UserAPIKeyAuth],
         mcp_auth_header: Optional[str],
         mcp_servers: Optional[List[str]],
+        mcp_access_groups: Optional[List[str]],
     ) -> List[MCPTool]:
         """
         Helper method to fetch tools from MCP servers based on server filtering criteria.
@@ -262,21 +270,46 @@ if MCP_AVAILABLE:
             user_api_key_auth: User authentication info for access control
             mcp_auth_header: Optional auth header for MCP server
             mcp_servers: Optional list of server names to filter by
+            mcp_access_groups: Optional list of access group names to filter by
 
         Returns:
             List[MCPTool]: List of tools from the specified or all allowed MCP servers
         """
-        if mcp_servers:
-            # If mcp_servers header is present, only get tools from specified servers
+        # Get all allowed servers for the user
+        allowed_server_ids = await global_mcp_server_manager.get_allowed_mcp_servers(
+            user_api_key_auth
+        )
+        
+        # If either mcp_servers or mcp_access_groups headers are present, filter servers
+        if mcp_servers or mcp_access_groups:
             tools = []
-            for server_id in await global_mcp_server_manager.get_allowed_mcp_servers(
-                user_api_key_auth
-            ):
+            filtered_server_ids = set()
+            
+            # Filter by server names if mcp_servers header is present
+            if mcp_servers:
+                for server_id in allowed_server_ids:
+                    server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+                    if server and any(
+                        normalize_server_name(server.name) == normalize_server_name(s)
+                        for s in mcp_servers
+                    ):
+                        filtered_server_ids.add(server_id)
+            
+            # Filter by access groups if mcp_access_groups header is present
+            if mcp_access_groups:
+                # Get servers that match the access groups
+                access_group_server_ids = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+                    mcp_access_groups
+                )
+                # Only include servers that the user has access to
+                for server_id in access_group_server_ids:
+                    if server_id in allowed_server_ids:
+                        filtered_server_ids.add(server_id)
+            
+            # Get tools from filtered servers
+            for server_id in filtered_server_ids:
                 server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-                if server and any(
-                    normalize_server_name(server.name) == normalize_server_name(s)
-                    for s in mcp_servers
-                ):
+                if server:
                     server_tools = (
                         await global_mcp_server_manager._get_tools_from_server(
                             server=server,
@@ -286,7 +319,7 @@ if MCP_AVAILABLE:
                     tools.extend(server_tools)
             return tools
         else:
-            # If no mcp_servers header, get tools from all allowed servers
+            # If no filtering headers, get tools from all allowed servers
             return await global_mcp_server_manager.list_tools(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
@@ -296,6 +329,7 @@ if MCP_AVAILABLE:
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
         mcp_servers: Optional[List[str]] = None,
+        mcp_access_groups: Optional[List[str]] = None,
     ) -> List[MCPTool]:
         """
         List all available tools
@@ -304,6 +338,7 @@ if MCP_AVAILABLE:
             user_api_key_auth: User authentication info for access control
             mcp_auth_header: Optional auth header for MCP server
             mcp_servers: Optional list of server names to filter by
+            mcp_access_groups: Optional list of access group names to filter by
         """
         tools = []
         for tool in global_mcp_tool_registry.list_tools():
@@ -323,6 +358,7 @@ if MCP_AVAILABLE:
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
             mcp_servers=mcp_servers,
+            mcp_access_groups=mcp_access_groups,
         )
 
         verbose_logger.debug("TOOLS FROM MCP SERVERS: %s", tools_from_mcp_servers)
@@ -466,15 +502,17 @@ if MCP_AVAILABLE:
         """Handle MCP requests through StreamableHTTP."""
         try:
             # Validate headers and log request info
-            user_api_key_auth, mcp_auth_header, mcp_servers = (
+            user_api_key_auth, mcp_auth_header, mcp_servers, mcp_access_groups = (
                 await MCPRequestHandler.process_mcp_request(scope)
             )
             verbose_logger.debug(f"MCP request headers - mcp_servers: {mcp_servers}")
+            verbose_logger.debug(f"MCP request headers - mcp_access_groups: {mcp_access_groups}")
             # Set the auth context variable for easy access in MCP functions
             set_auth_context(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
                 mcp_servers=mcp_servers,
+                mcp_access_groups=mcp_access_groups,
             )
 
             # Ensure session managers are initialized
@@ -492,14 +530,17 @@ if MCP_AVAILABLE:
         """Handle MCP requests through SSE."""
         try:
             # Validate headers and log request info
-            user_api_key_auth, mcp_auth_header, mcp_servers = (
+            user_api_key_auth, mcp_auth_header, mcp_servers, mcp_access_groups = (
                 await MCPRequestHandler.process_mcp_request(scope)
             )
+            verbose_logger.debug(f"MCP request headers - mcp_servers: {mcp_servers}")
+            verbose_logger.debug(f"MCP request headers - mcp_access_groups: {mcp_access_groups}")
             # Set the auth context variable for easy access in MCP functions
             set_auth_context(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
                 mcp_servers=mcp_servers,
+                mcp_access_groups=mcp_access_groups,
             )
 
             # Ensure session managers are initialized
@@ -544,6 +585,7 @@ if MCP_AVAILABLE:
         user_api_key_auth: UserAPIKeyAuth,
         mcp_auth_header: Optional[str] = None,
         mcp_servers: Optional[List[str]] = None,
+        mcp_access_groups: Optional[List[str]] = None,
     ) -> None:
         """
         Set the UserAPIKeyAuth in the auth context variable.
@@ -552,22 +594,24 @@ if MCP_AVAILABLE:
             user_api_key_auth: UserAPIKeyAuth object
             mcp_auth_header: MCP auth header to be passed to the MCP server
             mcp_servers: Optional list of server names to filter by
+            mcp_access_groups: Optional list of access group names to filter by
         """
         auth_user = MCPAuthenticatedUser(
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
             mcp_servers=mcp_servers,
+            mcp_access_groups=mcp_access_groups,
         )
         auth_context_var.set(auth_user)
 
     def get_auth_context() -> (
-        Tuple[Optional[UserAPIKeyAuth], Optional[str], Optional[List[str]]]
+        Tuple[Optional[UserAPIKeyAuth], Optional[str], Optional[List[str]], Optional[List[str]]]
     ):
         """
         Get the UserAPIKeyAuth from the auth context variable.
 
         Returns:
-            Tuple[Optional[UserAPIKeyAuth], Optional[str]]: UserAPIKeyAuth object and MCP auth header
+            Tuple[Optional[UserAPIKeyAuth], Optional[str], Optional[List[str]], Optional[List[str]]]: UserAPIKeyAuth object, MCP auth header, MCP servers, and MCP access groups
         """
         auth_user = auth_context_var.get()
         if auth_user and isinstance(auth_user, MCPAuthenticatedUser):
@@ -575,8 +619,9 @@ if MCP_AVAILABLE:
                 auth_user.user_api_key_auth,
                 auth_user.mcp_auth_header,
                 auth_user.mcp_servers,
+                auth_user.mcp_access_groups,
             )
-        return None, None, None
+        return None, None, None, None
 
     ########################################################
     ############ End of Auth Context Functions #############
