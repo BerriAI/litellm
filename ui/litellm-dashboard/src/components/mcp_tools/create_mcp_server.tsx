@@ -16,9 +16,17 @@ interface CreateMCPServerProps {
   userRole: string
   accessToken: string | null
   onCreateSuccess: (newMcpServer: MCPServer) => void
+  isModalVisible: boolean
+  setModalVisible: (visible: boolean) => void
 }
 
-const CreateMCPServer: React.FC<CreateMCPServerProps> = ({ userRole, accessToken, onCreateSuccess }) => {
+const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
+  userRole,
+  accessToken,
+  onCreateSuccess,
+  isModalVisible,
+  setModalVisible,
+}) => {
   const [form] = Form.useForm()
   const [isLoading, setIsLoading] = useState(false)
   const [costConfig, setCostConfig] = useState<MCPServerCostInfo>({})
@@ -107,8 +115,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({ userRole, accessToken
   }
 
   // state
-  const [isModalVisible, setModalVisible] = useState(false)
-
   const handleCancel = () => {
     form.resetFields()
     setCostConfig({})
@@ -132,213 +138,205 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({ userRole, accessToken
   }
 
   return (
-    <div>
-      <Button className="mx-auto mb-4" onClick={() => setModalVisible(true)}>
-        + Add New MCP Server
-      </Button>
-
-      <Modal
-        title={
-          <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
-            <img
-              src={mcpLogoImg}
-              alt="MCP Logo"
-              className="w-8 h-8 object-contain"
-              style={{
-                height: "20px",
-                width: "20px",
-                marginRight: "8px",
-                objectFit: "contain",
-              }}
-            />
-            <h2 className="text-xl font-semibold text-gray-900">Add New MCP Server</h2>
-          </div>
-        }
-        open={isModalVisible}
-        width={1000}
-        onCancel={handleCancel}
-        footer={null}
-        className="top-8"
-        styles={{
-          body: { padding: "24px" },
-          header: { padding: "24px 24px 0 24px", border: "none" },
-        }}
-      >
-        <div className="mt-6">
-          <Form
-            form={form}
-            onFinish={handleCreate}
-            onValuesChange={(_, allValues) => setFormValues(allValues)}
-            layout="vertical"
-            className="space-y-6"
-          >
-            <div className="grid grid-cols-1 gap-6">
-              <Form.Item
-                label={
-                  <span className="text-sm font-medium text-gray-700 flex items-center">
-                    MCP Server Name
-                    <Tooltip title="Best practice: Use a descriptive name that indicates the server's purpose (e.g., 'GitHub_MCP', 'Email_Service'). Hyphens '-' are not allowed; use underscores '_' instead.">
-                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                    </Tooltip>
-                  </span>
-                }
-                name="alias"
-                rules={[
-                  { required: false, message: "Please enter a server name" },
-                  {
-                    validator: (_, value) =>
-                      value && value.includes("-")
-                        ? Promise.reject(
-                            "Server name cannot contain '-' (hyphen). Please use '_' (underscore) instead.",
-                          )
-                        : Promise.resolve(),
-                  },
-                ]}
-              >
-                <TextInput
-                  placeholder="e.g., GitHub_MCP, Zapier_MCP, etc."
-                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                />
-              </Form.Item>
-
-              <Form.Item
-                label={<span className="text-sm font-medium text-gray-700">Description</span>}
-                name="description"
-                rules={[
-                  {
-                    required: false,
-                    message: "Please enter a server description",
-                  },
-                ]}
-              >
-                <TextInput
-                  placeholder="Brief description of what this server does"
-                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                />
-              </Form.Item>
-
-              <Form.Item
-                label={<span className="text-sm font-medium text-gray-700">Transport Type</span>}
-                name="transport"
-                rules={[{ required: true, message: "Please select a transport type" }]}
-              >
-                <Select
-                  placeholder="Select transport"
-                  className="rounded-lg"
-                  size="large"
-                  onChange={handleTransportChange}
-                  value={transportType}
-                >
-                  <Select.Option value="http">HTTP</Select.Option>
-                  <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
-                  <Select.Option value="stdio">Standard Input/Output (stdio)</Select.Option>
-                </Select>
-              </Form.Item>
-
-              {/* URL field - only show for HTTP and SSE */}
-              {transportType !== "stdio" && (
-                <Form.Item
-                  label={<span className="text-sm font-medium text-gray-700">MCP Server URL</span>}
-                  name="url"
-                  rules={[
-                    { required: true, message: "Please enter a server URL" },
-                    { type: "url", message: "Please enter a valid URL" },
-                  ]}
-                >
-                  <TextInput
-                    placeholder="https://your-mcp-server.com"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-              )}
-
-              {/* Authentication - only show for HTTP and SSE */}
-              {transportType !== "stdio" && (
-                <Form.Item
-                  label={<span className="text-sm font-medium text-gray-700">Authentication</span>}
-                  name="auth_type"
-                  rules={[{ required: true, message: "Please select an auth type" }]}
-                >
-                  <Select placeholder="Select auth type" className="rounded-lg" size="large">
-                    <Select.Option value="none">None</Select.Option>
-                    <Select.Option value="api_key">API Key</Select.Option>
-                    <Select.Option value="bearer_token">Bearer Token</Select.Option>
-                    <Select.Option value="basic">Basic Auth</Select.Option>
-                  </Select>
-                </Form.Item>
-              )}
-
-              {/* Stdio Configuration - only show for stdio transport */}
-              <StdioConfiguration isVisible={transportType === "stdio"} />
-
-              <Form.Item
-                label={
-                  <span className="text-sm font-medium text-gray-700 flex items-center">
-                    MCP Version
-                    <Tooltip title="Select the MCP specification version your server supports">
-                      <InfoCircleOutlined className="ml-2 text-gray-400 hover:text-gray-600" />
-                    </Tooltip>
-                  </span>
-                }
-                name="spec_version"
-                rules={[{ required: true, message: "Please select a spec version" }]}
-              >
-                <Select placeholder="Select MCP version" className="rounded-lg" size="large">
-                  <Select.Option value="2025-03-26">2025-03-26 (Latest)</Select.Option>
-                  <Select.Option value="2024-11-05">2024-11-05</Select.Option>
-                </Select>
-              </Form.Item>
-
-              <Form.Item
-                label={
-                  <span className="text-sm font-medium text-gray-700 flex items-center">
-                    MCP Access Groups
-                    <Tooltip title="Specify access groups for this MCP server. Users must be in at least one of these groups to access the server.">
-                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                    </Tooltip>
-                  </span>
-                }
-                name="mcp_access_groups"
-                className="mb-4"
-              >
-                <Select
-                  mode="tags"
-                  showSearch
-                  placeholder="Select existing groups or type to create new ones"
-                  optionFilterProp="children"
-                  tokenSeparators={[","]}
-                  options={mcpAccessGroups.map((group) => ({
-                    value: group,
-                    label: group,
-                  }))}
-                  maxTagCount="responsive"
-                  allowClear
-                />
-              </Form.Item>
-            </div>
-
-            {/* Connection Status Section */}
-            <div className="mt-8 pt-6 border-t border-gray-200">
-              <MCPConnectionStatus accessToken={accessToken} formValues={formValues} onToolsLoaded={setTools} />
-            </div>
-
-            {/* Cost Configuration Section */}
-            <div className="mt-6">
-              <MCPServerCostConfig value={costConfig} onChange={setCostConfig} tools={tools} disabled={false} />
-            </div>
-
-            <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100">
-              <Button variant="secondary" onClick={handleCancel}>
-                Cancel
-              </Button>
-              <Button variant="primary" loading={isLoading}>
-                {isLoading ? "Creating..." : "Add MCP Server"}
-              </Button>
-            </div>
-          </Form>
+    <Modal
+      title={
+        <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
+          <img
+            src={mcpLogoImg}
+            alt="MCP Logo"
+            className="w-8 h-8 object-contain"
+            style={{
+              height: "20px",
+              width: "20px",
+              marginRight: "8px",
+              objectFit: "contain",
+            }}
+          />
+          <h2 className="text-xl font-semibold text-gray-900">Add New MCP Server</h2>
         </div>
-      </Modal>
-    </div>
+      }
+      open={isModalVisible}
+      width={1000}
+      onCancel={handleCancel}
+      footer={null}
+      className="top-8"
+      styles={{
+        body: { padding: "24px" },
+        header: { padding: "24px 24px 0 24px", border: "none" },
+      }}
+    >
+      <div className="mt-6">
+        <Form
+          form={form}
+          onFinish={handleCreate}
+          onValuesChange={(_, allValues) => setFormValues(allValues)}
+          layout="vertical"
+          className="space-y-6"
+        >
+          <div className="grid grid-cols-1 gap-6">
+            <Form.Item
+              label={
+                <span className="text-sm font-medium text-gray-700 flex items-center">
+                  MCP Server Name
+                  <Tooltip title="Best practice: Use a descriptive name that indicates the server's purpose (e.g., 'GitHub_MCP', 'Email_Service'). Hyphens '-' are not allowed; use underscores '_' instead.">
+                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                  </Tooltip>
+                </span>
+              }
+              name="alias"
+              rules={[
+                { required: false, message: "Please enter a server name" },
+                {
+                  validator: (_, value) =>
+                    value && value.includes("-")
+                      ? Promise.reject("Server name cannot contain '-' (hyphen). Please use '_' (underscore) instead.")
+                      : Promise.resolve(),
+                },
+              ]}
+            >
+              <TextInput
+                placeholder="e.g., GitHub_MCP, Zapier_MCP, etc."
+                className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+              />
+            </Form.Item>
+
+            <Form.Item
+              label={<span className="text-sm font-medium text-gray-700">Description</span>}
+              name="description"
+              rules={[
+                {
+                  required: false,
+                  message: "Please enter a server description",
+                },
+              ]}
+            >
+              <TextInput
+                placeholder="Brief description of what this server does"
+                className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+              />
+            </Form.Item>
+
+            <Form.Item
+              label={<span className="text-sm font-medium text-gray-700">Transport Type</span>}
+              name="transport"
+              rules={[{ required: true, message: "Please select a transport type" }]}
+            >
+              <Select
+                placeholder="Select transport"
+                className="rounded-lg"
+                size="large"
+                onChange={handleTransportChange}
+                value={transportType}
+              >
+                <Select.Option value="http">HTTP</Select.Option>
+                <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
+                <Select.Option value="stdio">Standard Input/Output (stdio)</Select.Option>
+              </Select>
+            </Form.Item>
+
+            {/* URL field - only show for HTTP and SSE */}
+            {transportType !== "stdio" && (
+              <Form.Item
+                label={<span className="text-sm font-medium text-gray-700">MCP Server URL</span>}
+                name="url"
+                rules={[
+                  { required: true, message: "Please enter a server URL" },
+                  { type: "url", message: "Please enter a valid URL" },
+                ]}
+              >
+                <TextInput
+                  placeholder="https://your-mcp-server.com"
+                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                />
+              </Form.Item>
+            )}
+
+            {/* Authentication - only show for HTTP and SSE */}
+            {transportType !== "stdio" && (
+              <Form.Item
+                label={<span className="text-sm font-medium text-gray-700">Authentication</span>}
+                name="auth_type"
+                rules={[{ required: true, message: "Please select an auth type" }]}
+              >
+                <Select placeholder="Select auth type" className="rounded-lg" size="large">
+                  <Select.Option value="none">None</Select.Option>
+                  <Select.Option value="api_key">API Key</Select.Option>
+                  <Select.Option value="bearer_token">Bearer Token</Select.Option>
+                  <Select.Option value="basic">Basic Auth</Select.Option>
+                </Select>
+              </Form.Item>
+            )}
+
+            {/* Stdio Configuration - only show for stdio transport */}
+            <StdioConfiguration isVisible={transportType === "stdio"} />
+
+            <Form.Item
+              label={
+                <span className="text-sm font-medium text-gray-700 flex items-center">
+                  MCP Version
+                  <Tooltip title="Select the MCP specification version your server supports">
+                    <InfoCircleOutlined className="ml-2 text-gray-400 hover:text-gray-600" />
+                  </Tooltip>
+                </span>
+              }
+              name="spec_version"
+              rules={[{ required: true, message: "Please select a spec version" }]}
+            >
+              <Select placeholder="Select MCP version" className="rounded-lg" size="large">
+                <Select.Option value="2025-03-26">2025-03-26 (Latest)</Select.Option>
+                <Select.Option value="2024-11-05">2024-11-05</Select.Option>
+              </Select>
+            </Form.Item>
+
+            <Form.Item
+              label={
+                <span className="text-sm font-medium text-gray-700 flex items-center">
+                  MCP Access Groups
+                  <Tooltip title="Specify access groups for this MCP server. Users must be in at least one of these groups to access the server.">
+                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                  </Tooltip>
+                </span>
+              }
+              name="mcp_access_groups"
+              className="mb-4"
+            >
+              <Select
+                mode="tags"
+                showSearch
+                placeholder="Select existing groups or type to create new ones"
+                optionFilterProp="children"
+                tokenSeparators={[","]}
+                options={mcpAccessGroups.map((group) => ({
+                  value: group,
+                  label: group,
+                }))}
+                maxTagCount="responsive"
+                allowClear
+              />
+            </Form.Item>
+          </div>
+
+          {/* Connection Status Section */}
+          <div className="mt-8 pt-6 border-t border-gray-200">
+            <MCPConnectionStatus accessToken={accessToken} formValues={formValues} onToolsLoaded={setTools} />
+          </div>
+
+          {/* Cost Configuration Section */}
+          <div className="mt-6">
+            <MCPServerCostConfig value={costConfig} onChange={setCostConfig} tools={tools} disabled={false} />
+          </div>
+
+          <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100">
+            <Button variant="secondary" onClick={handleCancel}>
+              Cancel
+            </Button>
+            <Button variant="primary" loading={isLoading}>
+              {isLoading ? "Creating..." : "Add MCP Server"}
+            </Button>
+          </div>
+        </Form>
+      </div>
+    </Modal>
   )
 }
 
