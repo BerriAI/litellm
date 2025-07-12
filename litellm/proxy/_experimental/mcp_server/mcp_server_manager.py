@@ -175,8 +175,8 @@ class MCPServerManager:
                     mcp_server_cost_info=_mcp_info.get("mcp_server_cost_info", None),
                 ),
                 # Stdio-specific fields
-                command=mcp_server.command,
-                args=mcp_server.args,
+                command=getattr(mcp_server, 'command', None),
+                args=getattr(mcp_server, 'args', None) or [],
                 env=env_dict,
             )
             self.registry[mcp_server.server_id] = new_server

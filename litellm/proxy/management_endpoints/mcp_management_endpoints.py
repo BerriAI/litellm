@@ -247,9 +247,9 @@ if MCP_AVAILABLE:
                         updated_at=datetime.now(),
                         mcp_info=_server_config.mcp_info,
                         # Stdio-specific fields
-                        command=_server_config.command,
-                        args=_server_config.args or [],
-                        env=_server_config.env or {},
+                        command=getattr(_server_config, 'command', None),
+                        args=getattr(_server_config, 'args', None) or [],
+                        env=getattr(_server_config, 'env', None) or {},
                     )
                 )
 
@@ -271,9 +271,9 @@ if MCP_AVAILABLE:
                 mcp_info=server.mcp_info,
                 teams=cast(List[Dict[str, str | None]], server_to_teams_map.get(server.server_id, [])),
                 # Stdio-specific fields
-                command=server.command,
-                args=server.args or [],
-                env=server.env or {},
+                command=getattr(server, 'command', None),
+                args=getattr(server, 'args', None) or [],
+                env=getattr(server, 'env', None) or {},
             )
             for server in LIST_MCP_SERVERS
         ]
