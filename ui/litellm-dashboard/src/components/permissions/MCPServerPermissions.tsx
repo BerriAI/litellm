@@ -103,7 +103,7 @@ export function MCPServerPermissions({
                 className="inline-flex items-center px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-200 text-blue-800 text-sm font-medium"
               >
                 <span className="inline-block w-2 h-2 bg-blue-500 rounded-full mr-2"></span>
-                {getAccessGroupDisplayName(item.value)} <span className="ml-1 text-xs text-blue-500">(access group)</span>
+                {getAccessGroupDisplayName(item.value)} <span className="ml-1 text-xs text-blue-500">(Access Group)</span>
               </div>
             )
           ))}
