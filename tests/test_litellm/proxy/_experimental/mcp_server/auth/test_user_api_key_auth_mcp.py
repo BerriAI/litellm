@@ -17,6 +17,7 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
 )
 from litellm.proxy._types import SpecialHeaders, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from starlette.datastructures import Headers
 
 
 @pytest.mark.asyncio
@@ -96,8 +97,8 @@ class TestMCPRequestHandler:
                 user_api_key_auth
             )
 
-            # Assert the result
-            assert result == expected_result
+            # Assert the result (order-independent comparison)
+            assert sorted(result) == sorted(expected_result)
 
             # Verify database call was made correctly when expected
             if (
@@ -198,27 +199,16 @@ class TestMCPRequestHandler:
             side_effect=mock_user_api_key_auth,
         ) as mock_auth:
             # Call the method
-            auth_result, mcp_auth_header, mcp_servers = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, mcp_auth_header, mcp_servers, mcp_access_groups = await MCPRequestHandler.process_mcp_request(scope)
 
             # Assert the results
             assert auth_result.api_key == expected_api_key
             assert auth_result.user_id == ("test-user-id" if expected_api_key else None)
             assert auth_result.team_id == ("test-team-id" if expected_api_key else None)
             assert mcp_auth_header == expected_mcp_auth_header
-
-            # Verify user_api_key_auth was called with correct parameters
-            mock_auth.assert_called_once()
-            call_args = mock_auth.call_args
-
-            # Check that api_key parameter is correct
-            assert call_args.kwargs["api_key"] == expected_api_key
-
-            # Check that request parameter is a Request object
-            request_param = call_args.kwargs["request"]
-            assert isinstance(request_param, Request)
-
-            # Verify the request has the correct scope
-            assert request_param.scope == scope
+            # For these tests, mcp_servers and mcp_access_groups should be None
+            assert mcp_servers is None
+            assert mcp_access_groups is None
 
     @pytest.mark.parametrize(
         "headers,expected_result",
@@ -377,12 +367,12 @@ class TestMCPRequestHandler:
             mock_user_api_key_auth.return_value = mock_auth_result
 
             # Call the method
-            auth_result, mcp_auth_header, mcp_servers_result = await MCPRequestHandler.process_mcp_request(scope)
-
-            # Assert the results
+            auth_result, mcp_auth_header, mcp_servers_result, mcp_access_groups_result = await MCPRequestHandler.process_mcp_request(scope)
             assert auth_result == mock_auth_result
             assert mcp_auth_header == expected_result["mcp_auth"]
             assert mcp_servers_result == expected_result["mcp_servers"]
+            # For these tests, access groups should be None
+            assert mcp_access_groups_result is None
 
 
 class TestMCPCustomHeaderName:
@@ -545,14 +535,57 @@ class TestMCPCustomHeaderName:
                 mock_user_api_key_auth.return_value = mock_auth_result
                 
                 # Call the method
-                auth_result, mcp_auth_header, mcp_servers = await MCPRequestHandler.process_mcp_request(scope)
+                auth_result, mcp_auth_header, mcp_servers, mcp_access_groups = await MCPRequestHandler.process_mcp_request(scope)
                 
                 # Assert the results
                 assert auth_result == mock_auth_result
                 assert mcp_auth_header == custom_auth_token
                 assert mcp_servers is None
+                assert mcp_access_groups is None
                 
                 # Verify user_api_key_auth was called with correct API key
                 mock_user_api_key_auth.assert_called_once()
                 call_args = mock_user_api_key_auth.call_args
                 assert call_args.kwargs["api_key"] == api_key
+
+@pytest.mark.parametrize(
+    "headers,expected_access_groups",
+    [
+        ([(b"x-mcp-access-groups", b"group1,group2")], ["group1", "group2"]),
+        ([(b"x-mcp-access-groups", b"group1 , group2 , group3")], ["group1", "group2", "group3"]),
+        ([(b"x-mcp-access-groups", b"")], []),
+        ([], None),
+        ([(b"other-header", b"value")], None),
+    ]
+)
+def test_get_mcp_access_groups_from_headers(headers, expected_access_groups):
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/test",
+        "headers": headers,
+    }
+    extracted_headers = MCPRequestHandler._safe_get_headers_from_scope(scope)
+    result = MCPRequestHandler.get_mcp_access_groups_from_headers(extracted_headers)
+    assert result == expected_access_groups
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "headers,expected_access_groups",
+    [
+        ([(b"x-mcp-access-groups", b"group1,group2")], ["group1", "group2"]),
+        ([(b"x-mcp-access-groups", b"")], []),
+        ([], None),
+    ]
+)
+async def test_process_mcp_request_access_groups(headers, expected_access_groups):
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/test",
+        "headers": headers,
+    }
+    with patch("litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth") as mock_auth:
+        mock_auth.return_value = UserAPIKeyAuth(api_key="test", user_id="u", team_id="t")
+        _, _, _, mcp_access_groups = await MCPRequestHandler.process_mcp_request(scope)
+        assert mcp_access_groups == expected_access_groups

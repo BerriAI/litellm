@@ -18,7 +18,7 @@ LiteLLM Proxy provides an MCP Gateway that allows you to use a fixed endpoint fo
 | Feature | Description |
 |---------|-------------|
 | MCP Operations | • List Tools<br/>• Call Tools |
-| Supported MCP Transports | • Streamable HTTP<br/>• SSE |
+| Supported MCP Transports | • Streamable HTTP<br/>• SSE<br/>• Standard Input/Output (stdio) |
 | LiteLLM Permission Management | ✨ Enterprise Only<br/>• By Key<br/>• By Team<br/>• By Organization |
 
 ## Adding your MCP
@@ -33,9 +33,19 @@ On this form, you should enter your MCP Server URL and the transport you want to
 LiteLLM supports the following MCP transports:
 - Streamable HTTP
 - SSE (Server-Sent Events)
+- Standard Input/Output (stdio)
 
 <Image 
   img={require('../img/add_mcp.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+### Adding a stdio MCP Server
+
+For stdio MCP servers, select "Standard Input/Output (stdio)" as the transport type and provide the stdio configuration in JSON format:
+
+<Image 
+  img={require('../img/add_stdio_mcp.png')}
   style={{width: '80%', display: 'block', margin: '0'}}
 />
 
@@ -60,6 +70,15 @@ mcp_servers:
   zapier_mcp:
     url: "https://actions.zapier.com/mcp/sk-akxxxxx/sse"
   
+  # Standard Input/Output (stdio) Server - CircleCI Example
+  circleci_mcp:
+    transport: "stdio"
+    command: "npx"
+    args: ["-y", "@circleci/mcp-server-circleci"]
+    env:
+      CIRCLECI_TOKEN: "your-circleci-token"
+      CIRCLECI_BASE_URL: "https://circleci.com"
+  
   # Full configuration with all optional fields
   my_http_server:
     url: "https://my-mcp-server.com/mcp"
@@ -70,11 +89,15 @@ mcp_servers:
 ```
 
 **Configuration Options:**
-- **Server Name**: Use any descriptive name for your MCP server (e.g., `zapier_mcp`, `deepwiki_mcp`)
-- **URL**: The endpoint URL for your MCP server (required)
+- **Server Name**: Use any descriptive name for your MCP server (e.g., `zapier_mcp`, `deepwiki_mcp`, `circleci_mcp`)
+- **URL**: The endpoint URL for your MCP server (required for HTTP/SSE transports)
 - **Transport**: Optional transport type (defaults to `sse`)
   - `sse` - SSE (Server-Sent Events) transport
   - `http` - Streamable HTTP transport
+  - `stdio` - Standard Input/Output transport
+- **Command**: The command to execute for stdio transport (required for stdio)
+- **Args**: Array of arguments to pass to the command (optional for stdio)
+- **Env**: Environment variables to set for the stdio process (optional for stdio)
 - **Description**: Optional description for the server
 - **Auth Type**: Optional authentication type
 - **Spec Version**: Optional MCP specification version (defaults to `2025-03-26`)
@@ -621,6 +644,76 @@ When Creating a Key, Team, or Organization, you can select the allowed MCP Serve
   style={{width: '80%', display: 'block', margin: '0'}}
 />
 
+
+### MCP Access Groups
+
+MCP Access Groups are managed via the LiteLLM UI. They allow you to group multiple MCP servers together and grant access to these groups when creating API keys. This makes it easy to give a key access to several MCP servers at once, without having to select each server individually.
+
+#### 1. Managing Access Groups in the UI
+
+To create and manage MCP access groups:
+- Go to MCP Servers
+- Click "Add a New MCP Server"
+- Under the "MCP Access Groups" either select an existing group or create a new one by simply typing it
+- To add more servers to this Access Group, go to their settings and add the same name Access Group under their dropdown
+
+<Image 
+  img={require('../img/mcp_create_access_group.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+#### 2. Assigning Keys to Access Groups via the UI
+
+When creating a key/team in the UI:
+- You can select one or more MCP access groups to assign to the key.
+- The key will then have access to all MCP servers included in those groups.
+- This is reflected in the Test Key page, where only the MCP servers and tools from the assigned access groups will be available for testing.
+
+<Image 
+  img={require('../img/mcp_key_access_group.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+*Example UI flow:*
+- Go to "Keys" in the LiteLLM UI and click "Create Key".
+- In the creation form, select the desired MCP access groups from the dropdown or list.
+- Complete the key creation process. The new key will now have access to all MCP servers in the selected groups.
+
+#### 3. Using the Access Group Header for Segregating Access
+
+You can further restrict access at request time using the `x-mcp-access-groups` header. This allows you to dynamically limit which access groups are available for a given request. Note: The access groups referenced in the header must be created and managed in the UI.
+
+**Example:**
+```bash
+curl --location 'https://api.openai.com/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $OPENAI_API_KEY" \
+--data '{
+    "model": "gpt-4.1",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "http://localhost:4000/mcp",
+            "require_approval": "never",
+            "headers": {
+        "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+        "x-mcp-servers": [
+                "Zapier_Gmail"
+        ],
+        "x-mcp-access-groups": [
+                "dev"
+        ]
+}
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
+```
+This request will only have access to MCP servers in the specified access groups.
+
+For all access group management, please use the LiteLLM UI.
 
 ## LiteLLM Proxy - Walk through MCP Gateway
 LiteLLM exposes an MCP Gateway for admins to add all their MCP servers to LiteLLM. The key benefits of using LiteLLM Proxy with MCP are:

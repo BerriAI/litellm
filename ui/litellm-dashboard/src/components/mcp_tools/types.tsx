@@ -42,6 +42,10 @@ export const mcpServerHasAuth = (authType?: string | null): boolean => {
 export interface InputSchemaProperty {
     type: string;
     description?: string;
+    properties?: Record<string, InputSchemaProperty>; // For nested object properties
+    required?: string[]; // For required fields in nested objects
+    enum?: string[]; // For enum values
+    default?: any; // For default values
   }
   
   // Define the structure for the input schema of a tool
@@ -134,6 +138,7 @@ export interface MCPServer {
   updated_at: string;
   updated_by: string;
   teams?: Team[];
+  mcp_access_groups?: string[];
 }
 
 export interface MCPServerProps {
