@@ -9,6 +9,7 @@ interface VectorStoreContent {
 interface VectorStoreResult {
   score: number;
   content: VectorStoreContent[];
+  metadata?: Record<string, any>;
 }
 
 interface VectorStoreSearchResponse {
@@ -31,7 +32,9 @@ interface VectorStoreViewerProps {
 
 export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
   const [sectionExpanded, setSectionExpanded] = useState(true);
-  const [expandedResults, setExpandedResults] = useState<Record<string, boolean>>({});
+  const [expandedResults, setExpandedResults] = useState<
+    Record<string, boolean>
+  >({});
 
   if (!data || data.length === 0) {
     return null;
@@ -49,32 +52,39 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
 
   const toggleResult = (index: number, resultIndex: number) => {
     const key = `${index}-${resultIndex}`;
-    setExpandedResults(prev => ({
+    setExpandedResults((prev) => ({
       ...prev,
-      [key]: !prev[key]
+      [key]: !prev[key],
     }));
   };
 
   return (
     <div className="bg-white rounded-lg shadow mb-6">
-      <div 
+      <div
         className="flex justify-between items-center p-4 border-b cursor-pointer hover:bg-gray-50"
         onClick={() => setSectionExpanded(!sectionExpanded)}
       >
         <div className="flex items-center">
-          <svg 
-            className={`w-5 h-5 mr-2 text-gray-600 transition-transform ${sectionExpanded ? 'transform rotate-90' : ''}`}
-            fill="none" 
-            stroke="currentColor" 
+          <svg
+            className={`w-5 h-5 mr-2 text-gray-600 transition-transform ${sectionExpanded ? "transform rotate-90" : ""}`}
+            fill="none"
+            stroke="currentColor"
             viewBox="0 0 24 24"
           >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M9 5l7 7-7 7"
+            />
           </svg>
           <h3 className="text-lg font-medium">Vector Store Requests</h3>
         </div>
-        <span className="text-sm text-gray-500">{sectionExpanded ? 'Click to collapse' : 'Click to expand'}</span>
+        <span className="text-sm text-gray-500">
+          {sectionExpanded ? "Click to collapse" : "Click to expand"}
+        </span>
       </div>
-      
+
       {sectionExpanded && (
         <div className="p-4">
           {data.map((request, index) => (
@@ -87,21 +97,27 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
                       <span className="font-mono">{request.query}</span>
                     </div>
                     <div className="flex">
-                      <span className="font-medium w-1/3">Vector Store ID:</span>
-                      <span className="font-mono">{request.vector_store_id}</span>
+                      <span className="font-medium w-1/3">
+                        Vector Store ID:
+                      </span>
+                      <span className="font-mono">
+                        {request.vector_store_id}
+                      </span>
                     </div>
                     <div className="flex">
                       <span className="font-medium w-1/3">Provider:</span>
                       <span className="flex items-center">
                         {(() => {
-                          const { logo, displayName } = getProviderLogoAndName(request.custom_llm_provider);
+                          const { logo, displayName } = getProviderLogoAndName(
+                            request.custom_llm_provider
+                          );
                           return (
                             <>
                               {logo && (
-                                <img 
-                                  src={logo} 
-                                  alt={`${displayName} logo`} 
-                                  className="h-5 w-5 mr-2" 
+                                <img
+                                  src={logo}
+                                  alt={`${displayName} logo`}
+                                  className="h-5 w-5 mr-2"
                                 />
                               )}
                               {displayName}
@@ -122,7 +138,12 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
                     </div>
                     <div className="flex">
                       <span className="font-medium w-1/3">Duration:</span>
-                      <span>{calculateDuration(request.start_time, request.end_time)}</span>
+                      <span>
+                        {calculateDuration(
+                          request.start_time,
+                          request.end_time
+                        )}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -130,46 +151,88 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
 
               <h4 className="font-medium mb-2">Search Results</h4>
               <div className="space-y-2">
-                {request.vector_store_search_response.data.map((result, resultIndex) => {
-                  const isExpanded = expandedResults[`${index}-${resultIndex}`] || false;
-                  
-                  return (
-                    <div key={resultIndex} className="border rounded-lg overflow-hidden">
-                      <div 
-                        className="flex items-center p-3 bg-gray-50 cursor-pointer"
-                        onClick={() => toggleResult(index, resultIndex)}
+                {request.vector_store_search_response.data.map(
+                  (result, resultIndex) => {
+                    const isExpanded =
+                      expandedResults[`${index}-${resultIndex}`] || false;
+
+                    return (
+                      <div
+                        key={resultIndex}
+                        className="border rounded-lg overflow-hidden"
                       >
-                        <svg 
-                          className={`w-5 h-5 mr-2 transition-transform ${isExpanded ? 'transform rotate-90' : ''}`}
-                          fill="none" 
-                          stroke="currentColor" 
-                          viewBox="0 0 24 24"
+                        <div
+                          className="flex items-center p-3 bg-gray-50 cursor-pointer"
+                          onClick={() => toggleResult(index, resultIndex)}
                         >
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                        </svg>
-                        <div className="flex items-center">
-                          <span className="font-medium mr-2">Result {resultIndex + 1}</span>
-                          <span className="text-gray-500 text-sm">
-                            Score: <span className="font-mono">{result.score.toFixed(4)}</span>
-                          </span>
+                          <svg
+                            className={`w-5 h-5 mr-2 transition-transform ${isExpanded ? "transform rotate-90" : ""}`}
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M9 5l7 7-7 7"
+                            />
+                          </svg>
+                          <div className="flex items-center">
+                            <span className="font-medium mr-2">
+                              Result {resultIndex + 1}
+                            </span>
+                            <span className="text-gray-500 text-sm">
+                              Score:{" "}
+                              <span className="font-mono">
+                                {result.score.toFixed(4)}
+                              </span>
+                            </span>
+                          </div>
                         </div>
+
+                        {isExpanded && (
+                          <div className="p-3 border-t bg-white">
+                            {result.content.map((content, contentIndex) => (
+                              <div
+                                key={contentIndex}
+                                className="mb-2 last:mb-0"
+                              >
+                                <div className="text-xs text-gray-500 mb-1">
+                                  {content.type}
+                                </div>
+                                <pre className="text-xs font-mono whitespace-pre-wrap break-all bg-gray-50 p-2 rounded">
+                                  {content.text}
+                                </pre>
+
+                                <div className="text-xs text-gray-500 mb-1 pt-4">
+                                  Metadata
+                                </div>
+                                <div className="text-xs text-gray-400 mt-1">
+                                  {result.metadata &&
+                                  Object.entries(result.metadata).length > 0 ? (
+                                    <div>
+                                      {Object.entries(result.metadata).map(
+                                        ([key, value]) => (
+                                          <div key={key}>
+                                            <strong>{key}:</strong>
+                                            &nbsp;{value}
+                                          </div>
+                                        )
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span>No metadata available</span>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                      
-                      {isExpanded && (
-                        <div className="p-3 border-t bg-white">
-                          {result.content.map((content, contentIndex) => (
-                            <div key={contentIndex} className="mb-2 last:mb-0">
-                              <div className="text-xs text-gray-500 mb-1">{content.type}</div>
-                              <pre className="text-xs font-mono whitespace-pre-wrap break-all bg-gray-50 p-2 rounded">
-                                {content.text}
-                              </pre>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                    );
+                  }
+                )}
               </div>
             </div>
           ))}
@@ -177,4 +240,4 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
       )}
     </div>
   );
-} 
+}

@@ -108,6 +108,13 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_completion(setup_vector_
         # 2. the message with the context should have the bedrock knowledge base prefix string
         # this helps confirm that the context from the knowledge base was applied to the request
         assert BedrockVectorStore.CONTENT_PREFIX_STRING in content[1]["text"]
+        assert BedrockVectorStore.CONTENT_SUFFIX_STRING in content[1]["text"]
+        assert BedrockVectorStore.CONTENT_SECTION_METADATA_PREFIX_STRING in content[1]["text"]
+        assert BedrockVectorStore.CONTENT_SECTION_METADATA_SUFFIX_STRING in content[1]["text"]
+        assert BedrockVectorStore.CONTENT_SECTION_TEXT_PREFIX_STRING in content[1]["text"]
+        assert BedrockVectorStore.CONTENT_SECTION_TEXT_SUFFIX_STRING in content[1]["text"]
+        assert BedrockVectorStore.CONTENT_SECTION_PREFIX_STRING in content[1]["text"]
+        assert BedrockVectorStore.CONTENT_SECTION_SUFFIX_STRING in content[1]["text"]
         
 
 
@@ -175,7 +182,14 @@ async def test_openai_with_knowledge_base_mock_openai(setup_vector_store_registr
 
         # assert message[1] is the user message with the knowledge base context
         assert messages[1]["role"] == "user"
-        assert BedrockVectorStore.CONTENT_PREFIX_STRING in messages[1]["content"]
+        assert "<contest>" in messages[1]["content"]
+        assert BedrockVectorStore.CONTENT_SUFFIX_STRING in messages[1]["content"]
+        assert BedrockVectorStore.CONTENT_SECTION_METADATA_PREFIX_STRING in messages[1]["content"]
+        assert BedrockVectorStore.CONTENT_SECTION_METADATA_SUFFIX_STRING in messages[1]["content"]
+        assert BedrockVectorStore.CONTENT_SECTION_TEXT_PREFIX_STRING in messages[1]["content"]
+        assert BedrockVectorStore.CONTENT_SECTION_TEXT_SUFFIX_STRING in messages[1]["content"]
+        assert BedrockVectorStore.CONTENT_SECTION_PREFIX_STRING in messages[1]["content"]
+        assert BedrockVectorStore.CONTENT_SECTION_SUFFIX_STRING in messages[1]["content"]
 
 
 @pytest.mark.asyncio
