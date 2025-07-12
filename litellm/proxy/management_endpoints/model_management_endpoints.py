@@ -48,7 +48,6 @@ from litellm.types.router import (
     Deployment,
     DeploymentTypedDict,
     LiteLLMParamsTypedDict,
-    ModelGroupInfo,
     updateDeployment,
 )
 from litellm.utils import get_utc_datetime

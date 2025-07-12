@@ -13,7 +13,6 @@ router = APIRouter()
     "/litellm/.well-known/litellm-ui-config", response_model=UiDiscoveryEndpoints
 )  # if mounted at root path
 async def get_ui_config():
-    from litellm.proxy.proxy_server import _title, version
     from litellm.proxy.utils import get_proxy_base_url, get_server_root_path
 
     return UiDiscoveryEndpoints(
