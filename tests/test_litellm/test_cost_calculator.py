@@ -248,13 +248,13 @@ def test_default_image_cost_calculator(monkeypatch):
         "input_cost_per_pixel": 10,
     }
 
-    monkeypatch.setattr(
-        litellm,
-        "model_cost",
-        {
-            "azure/bf9001cd7209f5734ecb4ab937a5a0e2ba5f119708bd68f184db362930f9dc7b": temp_object
-        },
-    )
+    # Mock get_model_info to return the temp_object for our test model
+    def mock_get_model_info(model, custom_llm_provider=None):
+        if "bf9001cd7209f5734ecb4ab937a5a0e2ba5f119708bd68f184db362930f9dc7b" in model:
+            return temp_object
+        raise Exception("Model not found")
+    
+    monkeypatch.setattr(litellm, "get_model_info", mock_get_model_info)
 
     args = {
         "model": "azure/bf9001cd7209f5734ecb4ab937a5a0e2ba5f119708bd68f184db362930f9dc7b",
@@ -266,6 +266,148 @@ def test_default_image_cost_calculator(monkeypatch):
     }
     cost = default_image_cost_calculator(**args)
     assert cost == 10485760
+
+
+def test_gpt_image_1_token_based_cost_calculation():
+    """Test that gpt-image-1 uses token-based pricing correctly"""
+    import json
+    # Load the local model cost map directly
+    with open('model_prices_and_context_window.json', 'r') as f:
+        litellm.model_cost = json.load(f)
+    
+    from litellm.cost_calculator import default_image_cost_calculator, _estimate_gpt_image_1_output_tokens
+    
+    # Test token estimation function
+    assert _estimate_gpt_image_1_output_tokens("low", 1024, 1024) == 272
+    assert _estimate_gpt_image_1_output_tokens("medium", 1024, 1024) == 1056
+    assert _estimate_gpt_image_1_output_tokens("high", 1024, 1024) == 4160
+    
+    # Test cost calculation for medium quality 1024x1024 with actual token counts
+    cost = default_image_cost_calculator(
+        model="gpt-image-1",
+        quality="medium",
+        size="1024x1024",
+        n=1,
+        prompt_tokens=50,
+        completion_tokens=1056
+    )
+    
+    # Expected: 50 text tokens * 5e-06 + 1056 output tokens * 4e-05
+    expected_cost = 50 * 5e-06 + 1056 * 4e-05
+    assert abs(cost - expected_cost) < 1e-6
+    
+    # Test that different token counts produce different costs
+    cost_low_tokens = default_image_cost_calculator(
+        model="gpt-image-1", 
+        quality="low", 
+        size="1024x1024",
+        prompt_tokens=50,
+        completion_tokens=272
+    )
+    cost_medium_tokens = default_image_cost_calculator(
+        model="gpt-image-1", 
+        quality="medium", 
+        size="1024x1024",
+        prompt_tokens=50,
+        completion_tokens=1056
+    )
+    cost_high_tokens = default_image_cost_calculator(
+        model="gpt-image-1", 
+        quality="high", 
+        size="1024x1024",
+        prompt_tokens=50,
+        completion_tokens=4160
+    )
+    
+    assert cost_low_tokens < cost_medium_tokens < cost_high_tokens
+    
+    # Test Azure variant
+    azure_cost = default_image_cost_calculator(
+        model="azure/gpt-image-1",
+        custom_llm_provider="azure", 
+        quality="medium",
+        size="1024x1024",
+        prompt_tokens=50,
+        completion_tokens=1056
+    )
+    assert abs(azure_cost - expected_cost) < 1e-6
+
+
+def test_gpt_image_1_azure_deployment_names():
+    """Test that Azure gpt-image-1 deployment names work correctly"""
+    import json
+    # Load the local model cost map directly
+    with open('model_prices_and_context_window.json', 'r') as f:
+        litellm.model_cost = json.load(f)
+    
+    from litellm.cost_calculator import _calculate_token_based_image_cost
+    
+    # Test that the helper function correctly identifies gpt-image-1 models in various Azure deployment scenarios
+    cost_info = {
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 4e-05,
+        "input_cost_per_image_token": 1e-05,
+    }
+    
+    # Test various Azure deployment name scenarios that should be detected as gpt-image-1
+    test_scenarios = [
+        "azure/gpt-image-1",
+        "azure/my-gpt-image-1-deployment", 
+        "azure/image-gen-gpt-image-1",
+        "azure/custom-gpt-image-1-model"
+    ]
+    
+    # Expected cost: 50 text tokens * 5e-06 + 1056 output tokens * 4e-05
+    expected_cost = 50 * 5e-06 + 1056 * 4e-05
+    
+    for model_name in test_scenarios:
+        cost = _calculate_token_based_image_cost(
+            model=model_name,
+            cost_info=cost_info,
+            quality="medium",
+            height=1024,
+            width=1024,
+            n=1,
+            prompt_tokens=50,
+            completion_tokens=1056
+        )
+        assert abs(cost - expected_cost) < 1e-6, f"Failed for model: {model_name}"
+    
+    # Test a scenario with missing token-based pricing configuration
+    # Should raise an error since cost_info doesn't have token pricing fields
+    invalid_cost_info = {
+        "input_cost_per_pixel": 0.001,  # pixel-based pricing instead
+    }
+    try:
+        _calculate_token_based_image_cost(
+            model="azure/some-other-model",
+            cost_info=invalid_cost_info,
+            quality="medium", 
+            height=1024,
+            width=1024,
+            n=1,
+            prompt_tokens=50,
+            completion_tokens=1056
+        )
+        assert False, "Should have raised ValueError for model without token-based pricing"
+    except ValueError as e:
+        assert "does not have token-based pricing configuration" in str(e)
+    
+    # Test that missing token counts raise an error for token-based models
+    try:
+        _calculate_token_based_image_cost(
+            model="azure/gpt-image-1",
+            cost_info=cost_info,
+            quality="medium", 
+            height=1024,
+            width=1024,
+            n=1,
+            prompt_tokens=None,
+            completion_tokens=1056
+        )
+        assert False, "Should have raised ValueError for missing token counts"
+    except ValueError as e:
+        assert "Token counts are required" in str(e)
 
 
 def test_cost_calculator_with_cache_creation():
