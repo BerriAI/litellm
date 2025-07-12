@@ -46,7 +46,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
   const [selectedMode, setSelectedMode] = useState<string>("");
   const [selectedFeature, setSelectedFeature] = useState<string>("");
   const [serviceStatus, setServiceStatus] = useState<string>("I'm alive! ✓");
-  const [unhealthyEndpoints, setUnhealthyEndpoints] = useState<string>("0/0");
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [selectedModel, setSelectedModel] = useState<null | ModelGroupInfo>(null);
   const tableRef = useRef<TableInstance<any>>(null);
@@ -58,13 +57,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
         const _modelHubData = await modelHubPublicModelsCall();
         console.log("ModelHubData:", _modelHubData);
         setModelHubData(_modelHubData);
-        
-        // Calculate health status
-        if (_modelHubData && _modelHubData.length > 0) {
-          const totalModels = _modelHubData.length;
-          // For now, assume all models are healthy - you can add actual health check logic
-          setUnhealthyEndpoints(`0/${totalModels}`);
-        }
       } catch (error) {
         console.error("There was an error fetching the public model data", error);
         setServiceStatus("Service unavailable");
@@ -81,6 +73,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
       setLitellmVersion(publicModelHubInfo.litellm_version);
       setUsefulLinks(publicModelHubInfo.useful_links || {});
     };
+
 
     fetchPublicModelHubInfo();
 
@@ -218,16 +211,22 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
       size: 50,
     },
     {
-      header: "Model Group",
+      header: "Model Name",
       accessorKey: "model_group",
       enableSorting: true,
       cell: ({ row }) => (
-        <button
-          onClick={() => showModal(row.original)}
-          className="text-left font-medium text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
-        >
-          {row.original.model_group}
-        </button>
+        <div className="overflow-hidden">
+          <Tooltip title={row.original.model_group}>
+            <Button 
+              size="xs"
+              variant="light"
+              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+              onClick={() => showModal(row.original)}
+            >
+              {row.original.model_group}
+            </Button>
+          </Tooltip>
+        </div>
       ),
       size: 150,
     },
@@ -456,14 +455,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
         <Card className="mb-10 p-8">
           <Title className="text-3xl font-semibold mb-6">Health and Endpoint Status</Title>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            <div className="flex items-center space-x-3 p-4 rounded-lg bg-green-50">
-              <div className="w-3 h-3 bg-green-500 rounded-full"></div>
-              <Text className="text-green-600 font-medium text-base">Service status: {serviceStatus}</Text>
-            </div>
-            <div className="flex items-center space-x-3 p-4 rounded-lg bg-orange-50">
-              <div className="w-3 h-3 bg-orange-500 rounded-full"></div>
-              <Text className="text-orange-600 font-medium text-base">Unhealthy endpoints: {unhealthyEndpoints}</Text>
-            </div>
+            <Text className="text-green-600 font-medium text-base">Service status: {serviceStatus}</Text>
           </div>
         </Card>
 
