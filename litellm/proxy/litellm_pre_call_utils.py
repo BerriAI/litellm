@@ -105,13 +105,13 @@ def convert_key_logging_metadata_to_callback(
         if team_callback_settings_obj.success_callback is None:
             team_callback_settings_obj.success_callback = []
 
-        if data.callback_name not in team_callback_settings_obj.success_callback:
+        if data.callback_name and data.callback_name not in team_callback_settings_obj.success_callback:
             team_callback_settings_obj.success_callback.append(data.callback_name)
     elif data.callback_type == "failure":
         if team_callback_settings_obj.failure_callback is None:
             team_callback_settings_obj.failure_callback = []
 
-        if data.callback_name not in team_callback_settings_obj.failure_callback:
+        if data.callback_name and data.callback_name not in team_callback_settings_obj.failure_callback:
             team_callback_settings_obj.failure_callback.append(data.callback_name)
     elif (
         not data.callback_type or data.callback_type == "success_and_failure"
@@ -122,15 +122,15 @@ def convert_key_logging_metadata_to_callback(
             team_callback_settings_obj.failure_callback = []
         if team_callback_settings_obj.callbacks is None:
             team_callback_settings_obj.callbacks = []
+        if data.callback_name:
+            if data.callback_name not in team_callback_settings_obj.success_callback:
+                team_callback_settings_obj.success_callback.append(data.callback_name)
 
-        if data.callback_name not in team_callback_settings_obj.success_callback:
-            team_callback_settings_obj.success_callback.append(data.callback_name)
+            if data.callback_name not in team_callback_settings_obj.failure_callback:
+                team_callback_settings_obj.failure_callback.append(data.callback_name)
 
-        if data.callback_name not in team_callback_settings_obj.failure_callback:
-            team_callback_settings_obj.failure_callback.append(data.callback_name)
-
-        if data.callback_name not in team_callback_settings_obj.callbacks:
-            team_callback_settings_obj.callbacks.append(data.callback_name)
+            if data.callback_name not in team_callback_settings_obj.callbacks:
+                team_callback_settings_obj.callbacks.append(data.callback_name)
 
     for var, value in data.callback_vars.items():
         if team_callback_settings_obj.callback_vars is None:
@@ -774,9 +774,17 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )
     if callback_settings_obj is not None:
-        data["success_callback"] = callback_settings_obj.success_callback
-        data["failure_callback"] = callback_settings_obj.failure_callback
+        #########################################################################################
+        # Add success_callback, failure_callback, callback_vars
+        #########################################################################################
+        if callback_settings_obj.success_callback is not None:
+            data["success_callback"] = callback_settings_obj.success_callback
+        if callback_settings_obj.failure_callback is not None:
+            data["failure_callback"] = callback_settings_obj.failure_callback
 
+        #########################################################################################
+        # Add StandardDynamicCallbackParams
+        #########################################################################################
         if callback_settings_obj.callback_vars is not None:
             # unpack callback_vars in data
             for k, v in callback_settings_obj.callback_vars.items():

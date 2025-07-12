@@ -1208,7 +1208,7 @@ class BlockKeyRequest(LiteLLMPydanticObjectBase):
 
 
 class AddTeamCallback(LiteLLMPydanticObjectBase):
-    callback_name: str
+    callback_name: Optional[str] = None
     callback_type: Optional[Literal["success", "failure", "success_and_failure"]] = (
         "success_and_failure"
     )
@@ -1235,6 +1235,11 @@ class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
     callbacks: Optional[List[str]] = []
     # for now - only supported for langfuse
     callback_vars: Optional[Dict[str, str]] = {}
+
+    #########################################################################################
+    # Add disabled callbacks
+    #########################################################################################
+    litellm_disabled_callbacks: Optional[List[str]] = None
 
     @model_validator(mode="before")
     @classmethod
