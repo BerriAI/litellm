@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { modelHubCall, makeModelGroupPublic, modelHubPublicModelsCall } from "./networking";
+import { modelHubCall, makeModelGroupPublic, modelHubPublicModelsCall, proxyBaseUrl } from "./networking";
 import { getConfigFieldSetting, updateConfigFieldSetting } from "./networking";
 import { ModelDataTable } from "./model_dashboard/table";
 import { modelHubColumns } from "./model_hub_table_columns";
@@ -85,10 +85,20 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
     };
 
     const fetchPublicData = async () => {
-      const _modelHubData = await modelHubPublicModelsCall();
-      console.log("ModelHubData:", _modelHubData);
-      setModelHubData(_modelHubData.data);
-      setPublicPageAllowed(true);
+      try {
+        setLoading(true);
+        const _modelHubData = await modelHubPublicModelsCall();
+        console.log("ModelHubData:", _modelHubData);
+        console.log("First model structure:", _modelHubData[0]);
+        console.log("Model has model_group?", _modelHubData[0]?.model_group);
+        console.log("Model has providers?", _modelHubData[0]?.providers);
+        setModelHubData(_modelHubData);
+        setPublicPageAllowed(true);
+      } catch (error) {
+        console.error("There was an error fetching the public model data", error);
+      } finally {
+        setLoading(false);
+      }
     }
 
     if (accessToken) {
@@ -113,9 +123,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
     }
     
     try {
-      // First, enable the public model hub setting
-      await updateConfigFieldSetting(accessToken, "enable_public_model_hub", true);
-      
       // Get the selected model groups or use all if none are selected
       const modelGroupsToMakePublic = selectedModels.size > 0 
         ? Array.from(selectedModels)
@@ -129,7 +136,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
         message.success(`Successfully made ${modelGroupsToMakePublic.length} model group(s) public!`);
         
         // Route to the model hub table
-        router.push(`/model_hub_table?key=${accessToken}`);
+        router.push(`/model_hub_table`);
       } else {
         // Show the modal if no model groups available
         setIsPublicPageModalVisible(true);
@@ -361,7 +368,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
           <div className="flex justify-between mb-4">
             <Text className="text-base mr-2">Shareable Link:</Text>
             <Text className="max-w-sm ml-2 bg-gray-200 pr-2 pl-2 pt-1 pb-1 text-center rounded">
-              {`<proxy_base_url>/ui/model_hub_table?key=<YOUR_API_KEY>`}
+              {`${proxyBaseUrl}/model_hub_table`}
             </Text>
           </div>
           <div className="flex justify-end">
