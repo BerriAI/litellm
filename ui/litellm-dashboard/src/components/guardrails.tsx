@@ -102,8 +102,8 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
       {!isViewingGuardrailInfo && (
         <div className="flex justify-between items-center mb-4">
-          <Button icon={PlusIcon} onClick={handleAddGuardrail} disabled={!accessToken}>
-            Create New Guardrail
+          <Button onClick={handleAddGuardrail} disabled={!accessToken}>
+            + Create New Guardrail
           </Button>
         </div>
       )}

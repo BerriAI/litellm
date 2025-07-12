@@ -38,6 +38,7 @@ interface GuardrailTableProps {
   onGuardrailUpdated: () => void
   isAdmin?: boolean
   onShowGuardrailInfo?: (isVisible: boolean) => void
+  onCreateNewGuardrail: () => void
 }
 
 const GuardrailTable: React.FC<GuardrailTableProps> = ({
@@ -48,6 +49,7 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
   onGuardrailUpdated,
   isAdmin = false,
   onShowGuardrailInfo,
+  onCreateNewGuardrail,
 }) => {
   const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }])
   const [editModalVisible, setEditModalVisible] = useState(false)
@@ -236,6 +238,7 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
         onClose={handleGuardrailInfoClose}
         accessToken={accessToken}
         isAdmin={isAdmin}
+        onCreateNewGuardrail={onCreateNewGuardrail}
       />
     )
   }
