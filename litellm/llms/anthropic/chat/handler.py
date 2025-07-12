@@ -27,6 +27,7 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     get_async_httpx_client,
+    _get_httpx_client
 )
 from litellm.types.llms.anthropic import (
     ContentBlockDelta,
@@ -432,9 +433,7 @@ class AnthropicChatCompletion(BaseLLM):
 
             else:
                 if client is None or not isinstance(client, HTTPHandler):
-                    client = HTTPHandler(timeout=timeout)  # type: ignore
-                else:
-                    client = client
+                    client = _get_httpx_client()
 
                 try:
                     response = client.post(
