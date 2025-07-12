@@ -47,7 +47,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
     <div className="p-4 max-w-full">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <Button icon={ArrowLeftIcon} variant="light" className="mb-4">
+          <Button icon={ArrowLeftIcon} variant="light" className="mb-4" onClick={onBack}>
             Back to All Servers
           </Button>
           <Title>{mcpServer.alias}</Title>
