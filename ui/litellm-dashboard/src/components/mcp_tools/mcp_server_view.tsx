@@ -20,6 +20,10 @@ import { MCPToolsViewer } from ".";
 import MCPServerEdit from "./mcp_server_edit";
 import MCPServerCostDisplay from "./mcp_server_cost_display";
 import { getMaskedAndFullUrl } from "./utils";
+import { Form, Input, Select, message, Tooltip, Divider } from "antd";
+import { InfoCircleOutlined } from '@ant-design/icons';
+import { handleCopy } from "@/utils/dataUtils";
+import { ClipboardCopyIcon } from "@heroicons/react/outline";
 
 interface MCPServerViewProps {
   mcpServer: MCPServer;
@@ -63,7 +67,10 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
             ← Back
           </Button>
           <Title>{mcpServer.alias}</Title>
-          <Text className="text-gray-500 font-mono">{mcpServer.server_id}</Text>
+          <div className="flex items-center cursor-pointer" onClick={() => handleCopy(mcpServer.server_id, 'Server ID copied to clipboard')}>
+            <Text className="text-gray-500 font-mono">{mcpServer.server_id}</Text>
+            <ClipboardCopyIcon className="h-5 w-5 ml-2 text-gray-500" />
+          </div>
         </div>
       </div>
 

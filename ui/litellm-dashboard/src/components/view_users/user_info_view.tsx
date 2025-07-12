@@ -13,13 +13,13 @@ import {
   Title,
   Badge,
 } from "@tremor/react";
-import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
+import { ArrowLeftIcon, TrashIcon, RefreshIcon, ClipboardCopyIcon } from "@heroicons/react/outline";
 import { userInfoCall, userDeleteCall, userUpdateUserCall, modelAvailableCall, invitationCreateCall, getProxyBaseUrl } from "../networking";
 import { message } from "antd";
 import { rolesWithWriteAccess } from '../../utils/roles';
 import { UserEditView } from "../user_edit_view";
 import OnboardingModal, { InvitationLink } from "../onboarding_link";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { formatNumberWithCommas, handleCopy } from "@/utils/dataUtils";
 
 interface UserInfoViewProps {
   userId: string;
@@ -197,7 +197,10 @@ export default function UserInfoView({
             Back to Users
           </Button>
           <Title>{userData.user_info?.user_email || "User"}</Title>
-          <Text className="text-gray-500 font-mono">{userData.user_id}</Text>
+          <div className="flex items-center cursor-pointer" onClick={() => handleCopy(userData.user_id, 'User ID copied to clipboard')}>
+            <Text className="text-gray-500 font-mono">{userData.user_id}</Text>
+            <ClipboardCopyIcon className="h-5 w-5 ml-2 text-gray-500" />
+          </div>
         </div>
         {userRole && rolesWithWriteAccess.includes(userRole) && (
           <div className="flex items-center space-x-2">
@@ -338,7 +341,10 @@ export default function UserInfoView({
                 <div className="space-y-4">
                   <div>
                     <Text className="font-medium">User ID</Text>
-                    <Text className="font-mono">{userData.user_id}</Text>
+                    <div className="flex items-center cursor-pointer" onClick={() => handleCopy(userData.user_id, 'User ID copied to clipboard')}>
+                      <Text className="font-mono">{userData.user_id}</Text>
+                      <ClipboardCopyIcon className="h-5 w-5 ml-2 text-gray-500" />
+                    </div>
                   </div>
                   
                   <div>

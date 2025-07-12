@@ -4,7 +4,8 @@ import { DataTable } from './table';
 import { columns } from './columns';
 import { Card, Title, Text, Metric, AreaChart } from '@tremor/react';
 import { RequestViewer } from './index';
-import { formatNumberWithCommas } from '@/utils/dataUtils';
+import { formatNumberWithCommas, handleCopy } from '@/utils/dataUtils';
+import { ClipboardCopyIcon } from '@heroicons/react/outline';
 
 interface SessionViewProps {
   sessionId: string;
@@ -48,7 +49,10 @@ export const SessionView: React.FC<SessionViewProps> = ({ sessionId, logs, onBac
         <div className="mt-4">
           <h1 className="text-2xl font-semibold text-gray-900">Session Details</h1>
           <div className="space-y-2">
-            <p className="text-sm text-gray-500 font-mono">{sessionId}</p>
+            <div className="flex items-center cursor-pointer" onClick={() => handleCopy(sessionId, 'Session ID copied to clipboard')}>
+              <p className="text-sm text-gray-500 font-mono">{sessionId}</p>
+              <ClipboardCopyIcon className="h-4 w-4 ml-2 text-gray-500" />
+            </div>
             <a 
               href="https://docs.litellm.ai/docs/proxy/ui_logs_sessions" 
               target="_blank" 
