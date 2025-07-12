@@ -55,6 +55,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [selectedProvider, setSelectedProvider] = useState<string>("");
   const [selectedMode, setSelectedMode] = useState<string>("");
+  const [selectedFeature, setSelectedFeature] = useState<string>("");
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
   const router = useRouter();
   const tableRef = useRef<TableInstance<any>>(null);
@@ -200,11 +201,44 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
     return Array.from(modes);
   };
 
+  const getUniqueFeatures = (data: ModelGroupInfo[]) => {
+    const features = new Set<string>();
+    data.forEach(model => {
+      // Find all properties that start with 'supports_' and are true
+      Object.entries(model)
+        .filter(([key, value]) => key.startsWith('supports_') && value === true)
+        .forEach(([key]) => {
+          // Format the feature name (remove 'supports_' prefix and convert to title case)
+          const featureName = key
+            .replace(/^supports_/, '')
+            .split('_')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(' ');
+          features.add(featureName);
+        });
+    });
+    return Array.from(features).sort();
+  };
+
   const filteredData = modelHubData?.filter(model => {
     const matchesSearch = model.model_group.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesProvider = selectedProvider === "" || model.providers.includes(selectedProvider);
     const matchesMode = selectedMode === "" || model.mode === selectedMode;
-    return matchesSearch && matchesProvider && matchesMode;
+    
+    // Check if model has the selected feature
+    const matchesFeature = selectedFeature === "" || 
+      Object.entries(model)
+        .filter(([key, value]) => key.startsWith('supports_') && value === true)
+        .some(([key]) => {
+          const featureName = key
+            .replace(/^supports_/, '')
+            .split('_')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(' ');
+          return featureName === selectedFeature;
+        });
+    
+    return matchesSearch && matchesProvider && matchesMode && matchesFeature;
   }) || [];
 
   const handleRowSelection = (modelGroup: string, isSelected: boolean) => {
@@ -234,7 +268,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   // Clear selections when filters change to avoid confusion
   useEffect(() => {
     setSelectedModels(new Set());
-  }, [searchTerm, selectedProvider, selectedMode]);
+  }, [searchTerm, selectedProvider, selectedMode, selectedFeature]);
 
   console.log("publicPage: ", publicPage);
   console.log("publicPageAllowed: ", publicPageAllowed);
@@ -300,6 +334,19 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                   <option value="" className="text-sm text-gray-600">All Modes</option>
                   {modelHubData && getUniqueModes(modelHubData).map(mode => (
                     <option key={mode} value={mode} className="text-sm text-gray-800">{mode}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <Text className="text-sm font-medium mb-2">Features:</Text>
+                <select
+                  value={selectedFeature}
+                  onChange={(e) => setSelectedFeature(e.target.value)}
+                  className="border rounded px-3 py-2 text-sm text-gray-600 w-48 h-10"
+                >
+                  <option value="" className="text-sm text-gray-600">All Features</option>
+                  {modelHubData && getUniqueFeatures(modelHubData).map(feature => (
+                    <option key={feature} value={feature} className="text-sm text-gray-800">{feature}</option>
                   ))}
                 </select>
               </div>
