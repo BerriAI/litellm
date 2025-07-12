@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Modal, message, Select, Tooltip } from "antd"
-import { TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react"
+import { TabPanel, TabPanels, TabGroup, TabList, Tab, Button } from "@tremor/react"
 import { Grid, Col, Title, Text } from "@tremor/react"
 import { DataTable } from "../view_logs/table"
 import { mcpServerColumns } from "./mcp_server_columns"
@@ -56,6 +56,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [selectedTeam, setSelectedTeam] = useState<string>("all")
   const [selectedMcpAccessGroup, setSelectedMcpAccessGroup] = useState<string>("all")
   const [filteredServers, setFilteredServers] = useState<MCPServer[]>([])
+  const [isModalVisible, setModalVisible] = useState(false)
 
   // Get unique teams from all servers
   const uniqueTeams = React.useMemo(() => {
@@ -161,6 +162,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     setServerToDelete(null)
   }
 
+  const handleCreateSuccess = (newMcpServer: MCPServer) => {
+    setFilteredServers((prev) => [...prev, newMcpServer])
+    setModalVisible(false)
+  }
+
   if (!accessToken || !userRole || !userID) {
     return <div className="p-6 text-center text-gray-500">Missing required authentication parameters.</div>
   }
@@ -195,15 +201,6 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       />
     ) : (
       <div className="w-full h-full">
-        <div className="flex justify-between items-center mb-6 px-6">
-          <div>
-            <Title>MCP Servers</Title>
-            <Text className="text-tremor-content">Configure and manage your MCP servers</Text>
-          </div>
-          {isAdminRole(userRole) && (
-            <CreateMCPServer userRole={userRole} accessToken={accessToken} onCreateSuccess={refetch} />
-          )}
-        </div>
         <div className="w-full px-6">
           <div className="flex flex-col space-y-4">
             <div className="flex items-center justify-between bg-gray-50 rounded-lg p-4 border-2 border-gray-200">
@@ -271,15 +268,29 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     )
 
   return (
-    <div className="w-full h-full">
+    <div className="w-full h-full p-6">
       <DeleteModal
         isModalOpen={isDeleteModalOpen}
         title="Delete MCP Server"
         confirmDelete={confirmDelete}
         cancelDelete={cancelDelete}
       />
+      <CreateMCPServer
+        userRole={userRole}
+        accessToken={accessToken}
+        onCreateSuccess={handleCreateSuccess}
+        isModalVisible={isModalVisible}
+        setModalVisible={setModalVisible}
+      />
+      <Title>MCP Servers</Title>
+      <Text className="text-tremor-content mt-2">Configure and manage your MCP servers</Text>
+      {isAdminRole(userRole) && (
+        <Button className="mt-4 mb-4" onClick={() => setModalVisible(true)}>
+          + Add New MCP Server
+        </Button>
+      )}
       <TabGroup className="w-full h-full">
-        <TabList className="flex justify-between mt-2 w-full items-center px-6">
+        <TabList className="flex justify-between mt-2 w-full items-center">
           <div className="flex">
             <Tab>All Servers</Tab>
             <Tab>Connect</Tab>

@@ -1,5 +1,5 @@
 import React, { useState } from "react"
-import { EyeIcon, EyeOffIcon } from "@heroicons/react/outline"
+import { ArrowLeftIcon, EyeIcon, EyeOffIcon } from "@heroicons/react/outline"
 import { Title, Card, Button, Text, Grid, TabGroup, TabList, TabPanel, TabPanels, Tab, Icon } from "@tremor/react"
 
 import { MCPServer, handleTransport, handleAuth } from "./types"
@@ -47,8 +47,8 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
     <div className="p-4 max-w-full">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <Button onClick={onBack} className="mb-4">
-            ← Back
+          <Button icon={ArrowLeftIcon} variant="light" className="mb-4">
+            Back to All Servers
           </Button>
           <Title>{mcpServer.alias}</Title>
           <Text className="text-gray-500 font-mono">{mcpServer.server_id}</Text>
