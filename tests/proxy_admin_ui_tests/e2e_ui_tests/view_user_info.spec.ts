@@ -39,7 +39,10 @@ test.describe("User Info View", () => {
     await page.locator('button:has-text("Back to Users")').click();
 
     // Verify we're back on the users page
-    await expect(page.locator('h1:has-text("Users")')).toBeVisible();
+    await expect(page.locator("table")).toBeVisible();
+    await expect(
+      page.locator('input[placeholder="Search by email..."]')
+    ).toBeVisible();
   });
 
   // test("should handle user deletion", async ({ page }) => {
