@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from "react";
-import { modelHubPublicModelsCall, proxyBaseUrl } from "./networking";
+import { modelHubPublicModelsCall, proxyBaseUrl, getUiConfig } from "./networking";
 import { ModelDataTable } from "./model_dashboard/table";
 import { ColumnDef } from "@tanstack/react-table";
 import {
@@ -35,6 +35,9 @@ interface PublicModelHubProps {
 
 const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
   const [modelHubData, setModelHubData] = useState<ModelGroupInfo[] | null>(null);
+  const [pageTitle, setPageTitle] = useState<string>("LiteLLM Gateway");
+  const [pageDescription, setPageDescription] = useState<string>("");
+  const [litellmVersion, setLitellmVersion] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(true);
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [selectedProvider, setSelectedProvider] = useState<string>("");
@@ -67,6 +70,16 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
         setLoading(false);
       }
     };
+
+    const fetchDiscoveryData = async () => {
+      const discoveryData = await getUiConfig();
+      console.log("Discovery Data:", discoveryData);
+      setPageTitle(discoveryData.docs_title);
+      setPageDescription(discoveryData.docs_description);
+      setLitellmVersion(discoveryData.litellm_version);
+    };
+
+    fetchDiscoveryData();
 
     fetchPublicData();
   }, []);
@@ -409,21 +422,21 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
       {/* Header */}
       <div className="bg-green-600 text-white px-8 py-6">
         <div className="flex justify-between items-center w-full">
-          <Title className="text-white text-2xl font-semibold">LiteLLM Gateway</Title>
+          <Title className="text-white text-2xl font-semibold">{pageTitle}</Title>
         </div>
       </div>
 
       <div className="w-full px-8 py-12">
         {/* About Section */}
         <Card className="mb-10 p-8">
-          <Title className="text-2xl font-semibold mb-6">About Model Gateway</Title>
+          <Title className="text-2xl font-semibold mb-6">About</Title>
           <Text className="text-gray-700 mb-6 text-lg leading-relaxed">
-            Model Gateway is a service that lets you use a variety of models for inference via consistent OpenAI APIs.
+            {pageDescription}
           </Text>
           <div className="flex items-center space-x-3 text-base text-gray-600">
             <span className="flex items-center">
               <span className="w-5 h-5 mr-2">🔧</span>
-              Built with litellm: v1.63.2
+              Built with litellm: v{litellmVersion}
             </span>
           </div>
         </Card>

@@ -110,6 +110,9 @@ export interface CredentialItem {
 export interface LiteLLMWellKnownUiConfig {
   server_root_path: string;
   proxy_base_url: string | null;
+  docs_title: string;
+  docs_description: string;
+  litellm_version: string;
 }
 
 export interface CredentialsResponse {
