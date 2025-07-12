@@ -36,6 +36,7 @@ from litellm.proxy._types import (
     MCPTransportType,
     UserAPIKeyAuth,
 )
+from litellm.types.mcp import MCPStdioConfig
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 
 
@@ -141,6 +142,10 @@ class MCPServerManager:
                     description=mcp_server.description,
                     mcp_server_cost_info=_mcp_info.get("mcp_server_cost_info", None),
                 ),
+                # Stdio-specific fields
+                command=mcp_server.command,
+                args=mcp_server.args,
+                env=mcp_server.env,
             )
             self.registry[mcp_server.server_id] = new_server
             verbose_logger.debug(
@@ -227,13 +232,36 @@ class MCPServerManager:
             MCPClient: Configured MCP client instance
         """
         transport = server.transport or MCPTransport.sse
-        return MCPClient(
-            server_url=server.url,
-            transport_type=transport,
-            auth_type=server.auth_type,
-            auth_value=mcp_auth_header or server.authentication_token,
-            timeout=60.0,
-        )
+        
+        # Handle stdio transport
+        if transport == MCPTransport.stdio:
+            # For stdio, we need to get the stdio config from the server
+            stdio_config: Optional[MCPStdioConfig] = None
+            if server.command and server.args is not None:
+                stdio_config = MCPStdioConfig(
+                    command=server.command,
+                    args=server.args,
+                    env=server.env or {}
+                )
+            
+            return MCPClient(
+                server_url="",  # Not used for stdio
+                transport_type=transport,
+                auth_type=server.auth_type,
+                auth_value=mcp_auth_header or server.authentication_token,
+                timeout=60.0,
+                stdio_config=stdio_config,
+            )
+        else:
+            # For HTTP/SSE transports
+            server_url = server.url or ""
+            return MCPClient(
+                server_url=server_url,
+                transport_type=transport,
+                auth_type=server.auth_type,
+                auth_value=mcp_auth_header or server.authentication_token,
+                timeout=60.0,
+            )
 
     async def _get_tools_from_server(self, server: MCPServer, mcp_auth_header: Optional[str] = None) -> List[MCPTool]:
         """

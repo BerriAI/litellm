@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import TypedDict
@@ -17,10 +17,14 @@ class MCPInfo(TypedDict, total=False):
 class MCPServer(BaseModel):
     server_id: str
     name: str
-    url: str
+    url: Optional[str] = None
     transport: MCPTransportType
     spec_version: MCPSpecVersionType
     auth_type: Optional[MCPAuthType] = None
     authentication_token: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
+    # Stdio-specific fields
+    command: Optional[str] = None
+    args: Optional[List[str]] = None
+    env: Optional[Dict[str, str]] = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
