@@ -86,6 +86,7 @@ export interface TeamData {
     object_permission?: {
       object_permission_id: string;
       mcp_servers: string[];
+      mcp_access_groups?: string[];
       vector_stores: string[];
     };
     team_member_budget_table: {
@@ -304,9 +305,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       // Handle object_permission updates
       const { servers, accessGroups } = values.mcp_servers_and_groups || { servers: [], accessGroups: [] };
-      if (!updateData.object_permission) updateData.object_permission = {};
-      updateData.object_permission.mcp_servers = servers;
-      updateData.object_permission.mcp_access_groups = accessGroups;
+      if ((servers && servers.length > 0) || (accessGroups && accessGroups.length > 0)) {
+        updateData.object_permission = {};
+        if (servers && servers.length > 0) {
+          updateData.object_permission.mcp_servers = servers;
+        }
+        if (accessGroups && accessGroups.length > 0) {
+          updateData.object_permission.mcp_access_groups = accessGroups;
+        }
+      }
       delete values.mcp_servers_and_groups;
       
       const response = await teamUpdateCall(accessToken, updateData);

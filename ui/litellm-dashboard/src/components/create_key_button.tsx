@@ -310,7 +310,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       formValues.metadata = JSON.stringify(metadata);
 
 
-      // Transform allowed_vector_store_ids and allowed_mcp_server_ids into object_permission format
+      // Transform allowed_vector_store_ids and allowed_mcp_servers_and_groups into object_permission format
       if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
         formValues.object_permission = {
           vector_stores: formValues.allowed_vector_store_ids
@@ -319,14 +319,20 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         delete formValues.allowed_vector_store_ids;
       }
 
-      // Transform allowed_mcp_server_ids into object_permission format
-      if (formValues.allowed_mcp_server_ids && formValues.allowed_mcp_server_ids.length > 0) {
+      // Transform allowed_mcp_servers_and_groups into object_permission format
+      if (formValues.allowed_mcp_servers_and_groups && (formValues.allowed_mcp_servers_and_groups.servers?.length > 0 || formValues.allowed_mcp_servers_and_groups.accessGroups?.length > 0)) {
         if (!formValues.object_permission) {
           formValues.object_permission = {};
         }
-        formValues.object_permission.mcp_servers = formValues.allowed_mcp_server_ids;
+        const { servers, accessGroups } = formValues.allowed_mcp_servers_and_groups;
+        if (servers && servers.length > 0) {
+          formValues.object_permission.mcp_servers = servers;
+        }
+        if (accessGroups && accessGroups.length > 0) {
+          formValues.object_permission.mcp_access_groups = accessGroups;
+        }
         // Remove the original field as it's now part of object_permission
-        delete formValues.allowed_mcp_server_ids;
+        delete formValues.allowed_mcp_servers_and_groups;
       }
 
       // Transform allowed_mcp_access_groups into object_permission format
@@ -793,14 +799,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         label={
                           <span>
                             Allowed MCP Servers{' '}
-                            <Tooltip title="Select which MCP servers or access groups this key can access. Leave empty for access to all.">
+                            <Tooltip title="Select which MCP servers or access groups this key can access. ">
                               <InfoCircleOutlined style={{ marginLeft: '4px' }} />
                             </Tooltip>
                           </span>
                         } 
                         name="allowed_mcp_servers_and_groups" 
                         className="mt-4"
-                        help="Select MCP servers or access groups this key can access. Leave empty for access to all."
+                        help="Select MCP servers or access groups this key can access. "
                       >
                         <PremiumMCPSelector
                           onChange={val => form.setFieldValue('allowed_mcp_servers_and_groups', val)}

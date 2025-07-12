@@ -47,6 +47,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
+    attach_object_permission_to_dict,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
@@ -820,7 +821,6 @@ async def _set_object_permission(
         data_json["object_permission_id"] = (
             created_object_permission.object_permission_id
         )
-
         # delete the object_permission from the data_json
         data_json.pop("object_permission")
     return data_json
@@ -2593,10 +2593,13 @@ async def _list_key_helper(
     # Prepare response
     key_list: List[Union[str, UserAPIKeyAuth]] = []
     for key in keys:
+        key_dict = key.dict()
+        # Attach object_permission if object_permission_id is set
+        key_dict = await attach_object_permission_to_dict(key_dict, prisma_client)
         if return_full_object is True:
-            key_list.append(UserAPIKeyAuth(**key.dict()))  # Return full key object
+            key_list.append(UserAPIKeyAuth(**key_dict))  # Return full key object
         else:
-            _token = key.dict().get("token")
+            _token = key_dict.get("token")
             key_list.append(_token)  # Return only the token
 
     return KeyListResponseObject(
@@ -3096,3 +3099,6 @@ def validate_model_max_budget(model_max_budget: Optional[Dict]) -> None:
         raise ValueError(
             f"Invalid model_max_budget: {str(e)}. Example of valid model_max_budget: https://docs.litellm.ai/docs/proxy/users"
         )
+
+
+
