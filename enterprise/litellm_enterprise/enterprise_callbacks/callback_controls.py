@@ -34,7 +34,7 @@ class EnterpriseCallbackControls:
 
             try:
                 disabled_callbacks = EnterpriseCallbackControls.get_disabled_callbacks(litellm_params, standard_callback_dynamic_params)
-                verbose_logger.debug(f"Dynamically disabled callbacks from {X_LITELLM_DISABLE_CALLBACKS}: {disabled_callbacks}")
+                verbose_logger.debug(f"Dynamically disabled callbacks: {disabled_callbacks}")
                 verbose_logger.debug(f"Checking if {callback} is disabled via headers. Disable callbacks from headers: {disabled_callbacks}")
                 if disabled_callbacks is not None:
                     #########################################################
