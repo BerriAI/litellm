@@ -40,6 +40,31 @@ from litellm.types.mcp import MCPStdioConfig
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 
 
+def _deserialize_env_dict(env_data: Any) -> Optional[Dict[str, str]]:
+    """
+    Helper function to deserialize environment dictionary from database storage.
+    Handles both JSON string and dictionary formats.
+    
+    Args:
+        env_data: The environment data from database (could be JSON string or dict)
+        
+    Returns:
+        Dict[str, str] or None: Deserialized environment dictionary
+    """
+    if not env_data:
+        return None
+        
+    if isinstance(env_data, str):
+        try:
+            return json.loads(env_data)
+        except (json.JSONDecodeError, TypeError):
+            # If it's not valid JSON, return as-is (shouldn't happen but safety)
+            return None
+    else:
+        # Already a dictionary
+        return env_data
+
+
 class MCPServerManager:
     def __init__(self):
         self.registry: Dict[str, MCPServer] = {}
@@ -130,6 +155,10 @@ class MCPServerManager:
     def add_update_server(self, mcp_server: LiteLLM_MCPServerTable):
         if mcp_server.server_id not in self.get_registry():
             _mcp_info: MCPInfo = mcp_server.mcp_info or {}
+            
+            # Use helper to deserialize environment dictionary
+            env_dict = _deserialize_env_dict(mcp_server.env)
+            
             new_server = MCPServer(
                 server_id=mcp_server.server_id,
                 name=mcp_server.alias or mcp_server.server_id,
@@ -145,7 +174,7 @@ class MCPServerManager:
                 # Stdio-specific fields
                 command=mcp_server.command,
                 args=mcp_server.args,
-                env=mcp_server.env,
+                env=env_dict,
             )
             self.registry[mcp_server.server_id] = new_server
             verbose_logger.debug(
