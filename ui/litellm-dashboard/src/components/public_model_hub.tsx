@@ -262,16 +262,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
 
   const publicModelHubColumns = (): ColumnDef<ModelGroupInfo>[] => [
     {
-      header: "#",
-      id: "index",
-      enableSorting: false,
-      cell: ({ row }) => {
-        const index = row.index + 1;
-        return <Text className="text-center">{index}</Text>;
-      },
-      size: 50,
-    },
-    {
       header: "Model Name",
       accessorKey: "model_group",
       enableSorting: true,
