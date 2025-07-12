@@ -219,6 +219,13 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const tableRef = useRef<TableInstance<any>>(null);
   const [selectedTabIndex, setSelectedTabIndex] = useState(0);
 
+  const handleCreateNewModelClick = () => {
+    if (selectedModelId) {
+      setSelectedModelId(null);
+    }
+    setSelectedTabIndex(1);
+  };
+
   const setProviderModelsFn = (provider: Providers) => {
     const _providerModels = getProviderModels(provider, modelMap);
     setProviderModels(_providerModels);
@@ -996,7 +1003,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
           {all_admin_roles.includes(userRole || "") && (
-            <Button className="w-fit" onClick={() => setSelectedTabIndex(1)}>
+            <Button className="w-fit" onClick={handleCreateNewModelClick}>
               + Create New Model
             </Button>
           )}

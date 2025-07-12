@@ -225,9 +225,14 @@ export default function ModelInfoView({
   if (!modelData) {
     return (
       <div className="p-4">
-        <Button icon={<ArrowLeftIcon />} onClick={onClose} className="mb-4">
+        <TremorButton
+          icon={ArrowLeftIcon}
+          variant="light"
+          onClick={onClose}
+          className="mb-4"
+        >
           Back to Models
-        </Button>
+        </TremorButton>
         <Text>Model not found</Text>
       </div>
     );
@@ -257,9 +262,14 @@ export default function ModelInfoView({
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <Button icon={<ArrowLeftIcon />} onClick={onClose} className="mb-4">
+          <TremorButton
+            icon={ArrowLeftIcon}
+            variant="light"
+            onClick={onClose}
+            className="mb-4"
+          >
             Back to Models
-          </Button>
+          </TremorButton>
           <Title>Public Model Name: {getDisplayModelName(modelData)}</Title>
           <Text className="text-gray-500 font-mono">
             {modelData.model_info.id}
