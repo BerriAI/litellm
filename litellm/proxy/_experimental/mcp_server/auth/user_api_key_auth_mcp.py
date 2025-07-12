@@ -27,8 +27,10 @@ class MCPRequestHandler:
 
     LITELLM_MCP_SERVERS_HEADER_NAME = SpecialHeaders.mcp_servers.value
 
+    LITELLM_MCP_ACCESS_GROUPS_HEADER_NAME = SpecialHeaders.mcp_access_groups.value
+
     @staticmethod
-    async def process_mcp_request(scope: Scope) -> Tuple[UserAPIKeyAuth, Optional[str], Optional[List[str]]]:
+    async def process_mcp_request(scope: Scope) -> Tuple[UserAPIKeyAuth, Optional[str], Optional[List[str]], Optional[List[str]]]:
         """
         Process and validate MCP request headers from the ASGI scope.
         This includes:
@@ -43,6 +45,7 @@ class MCPRequestHandler:
             UserAPIKeyAuth containing validated authentication information
             mcp_auth_header: Optional[str] MCP auth header to be passed to the MCP server
             mcp_servers: Optional[List[str]] List of MCP servers to use
+            mcp_access_groups: Optional[List[str]] List of MCP access groups to use
 
         Raises:
             HTTPException: If headers are invalid or missing required headers
@@ -53,7 +56,10 @@ class MCPRequestHandler:
         )
         mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers)
         mcp_servers_header = headers.get(MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME)
+        mcp_access_groups_header = headers.get(MCPRequestHandler.LITELLM_MCP_ACCESS_GROUPS_HEADER_NAME)
         verbose_logger.debug(f"Raw MCP servers header: {mcp_servers_header}")
+        verbose_logger.debug(f"Raw MCP access groups header: {mcp_access_groups_header}")
+        
         mcp_servers = None
         if mcp_servers_header is not None:  # Changed from 'if mcp_servers_header:' to handle empty strings
             try:
@@ -67,6 +73,20 @@ class MCPRequestHandler:
             # If we got an empty string or parsing resulted in no servers, return empty list
             if mcp_servers_header == "" or (mcp_servers is not None and len(mcp_servers) == 0):
                 mcp_servers = []
+
+        mcp_access_groups = None
+        if mcp_access_groups_header is not None:  # Handle empty strings
+            try:
+                # Parse as comma-separated list
+                mcp_access_groups = [s.strip() for s in mcp_access_groups_header.split(",") if s.strip()]
+                verbose_logger.debug(f"Parsed MCP access groups: {mcp_access_groups}")
+            except Exception as e:
+                verbose_logger.debug(f"Error parsing mcp_access_groups header: {e}")
+                mcp_access_groups = None
+
+            # If we got an empty string or parsing resulted in no access groups, return empty list
+            if mcp_access_groups_header == "" or (mcp_access_groups is not None and len(mcp_access_groups) == 0):
+                mcp_access_groups = []
 
         # Create a proper Request object with mock body method to avoid ASGI receive channel issues
         request = Request(scope=scope)
@@ -82,7 +102,7 @@ class MCPRequestHandler:
             api_key=litellm_api_key, request=request
         )
 
-        return validated_user_api_key_auth, mcp_auth_header, mcp_servers
+        return validated_user_api_key_auth, mcp_auth_header, mcp_servers, mcp_access_groups
     
 
     @staticmethod

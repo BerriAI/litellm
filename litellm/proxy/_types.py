@@ -2713,6 +2713,7 @@ class SpecialHeaders(enum.Enum):
     custom_litellm_api_key = "x-litellm-api-key"
     mcp_auth = "x-mcp-auth"
     mcp_servers = "x-mcp-servers"
+    mcp_access_groups = "x-mcp-access-groups"
 
 
 class LitellmDataForBackendLLMCall(TypedDict, total=False):
