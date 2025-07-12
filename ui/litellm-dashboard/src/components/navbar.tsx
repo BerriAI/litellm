@@ -24,6 +24,7 @@ interface NavbarProps {
   setProxySettings: React.Dispatch<React.SetStateAction<any>>;
   proxySettings: any;
   accessToken: string | null;
+  isPublicPage: boolean;
 }
 
 const Navbar: React.FC<NavbarProps> = ({
@@ -34,6 +35,7 @@ const Navbar: React.FC<NavbarProps> = ({
   proxySettings,
   setProxySettings,
   accessToken,
+  isPublicPage = false,
 }) => {
   const baseUrl = getProxyBaseUrl();
   const imageUrl = baseUrl + "/get_image";
@@ -143,6 +145,7 @@ const Navbar: React.FC<NavbarProps> = ({
               Docs
             </a>
 
+            {!isPublicPage && (
             <Dropdown 
               menu={{ 
                 items: userItems,
@@ -170,6 +173,7 @@ const Navbar: React.FC<NavbarProps> = ({
                 </svg>
               </button>
             </Dropdown>
+            )}
           </div>
         </div>
       </div>
