@@ -579,7 +579,7 @@ All OpenAI compatible models from Vertex Model Garden are supported.
 | Property | Details |
 |----------|---------|
 | Provider Route | `vertex_ai/openai/{MODEL_ID}` |
-| Vertex Documentation | [SDK for Deploy & OpenAI Chat Completions](https://github.com/GoogleCloudPlatform/generative-ai/blob/main/open-models/get_started_with_model_garden_sdk.ipynb), [Vertex Model Garden](https://cloud.google.com/model-garden?hl=en) |
+| Vertex Documentation | [Model Garden LiteLLM Inference](https://github.com/GoogleCloudPlatform/generative-ai/blob/main/open-models/use-cases/model_garden_litellm_inference.ipynb), [Vertex Model Garden](https://cloud.google.com/model-garden?hl=en) |
 | Supported Operations | `/chat/completions`, `/embeddings` |
 
 <Tabs>
