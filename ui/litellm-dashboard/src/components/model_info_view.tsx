@@ -14,7 +14,7 @@ import {
   TextInput,
 } from "@tremor/react";
 import NumericalInput from "./shared/numerical_input";
-import { ArrowLeftIcon, TrashIcon, KeyIcon } from "@heroicons/react/outline";
+import { ArrowLeftIcon, TrashIcon, KeyIcon, ClipboardCopyIcon } from "@heroicons/react/outline";
 import { modelDeleteCall, modelUpdateCall, CredentialItem, credentialGetCall, credentialCreateCall, modelInfoCall, modelInfoV1Call, modelPatchUpdateCall } from "./networking";
 import { Button, Form, Input, InputNumber, message, Select, Modal } from "antd";
 import EditModelModal from "./edit_model/edit_model_modal";
@@ -24,6 +24,7 @@ import { getDisplayModelName } from "./view_model/model_name_display";
 import AddCredentialsModal from "./model_add/add_credentials_tab";
 import ReuseCredentialsModal from "./model_add/reuse_credentials";
 import CacheControlSettings from "./add_model/cache_control_settings";
+import { handleCopy } from "@/utils/dataUtils";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -242,7 +243,10 @@ export default function ModelInfoView({
             Back to Models
           </Button>
           <Title>Public Model Name: {getDisplayModelName(modelData)}</Title>
-          <Text className="text-gray-500 font-mono">{modelData.model_info.id}</Text>
+          <div className="flex items-center cursor-pointer" onClick={() => handleCopy(modelData.model_info.id, 'Model ID copied to clipboard')}>
+            <Text className="text-gray-500 font-mono">{modelData.model_info.id}</Text>
+            <ClipboardCopyIcon className="h-5 w-5 ml-2 text-gray-500" />
+          </div>
         </div>
         <div className="flex gap-2">
           {isAdmin && (

@@ -15,7 +15,7 @@ import {
   TextInput,
   Select as TremorSelect
 } from "@tremor/react";
-import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
+import { ArrowLeftIcon, TrashIcon, RefreshIcon, ClipboardCopyIcon } from "@heroicons/react/outline";
 import { keyDeleteCall, keyUpdateCall } from "./networking";
 import { KeyResponse } from "./key_team_helpers/key_list";
 import { Form, Input, InputNumber, message, Select, Tooltip } from "antd";
@@ -24,7 +24,7 @@ import { RegenerateKeyModal } from "./regenerate_key_modal";
 import { rolesWithWriteAccess } from '../utils/roles';
 import ObjectPermissionsView from "./object_permissions_view";
 import LoggingSettingsView from "./logging_settings_view";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { formatNumberWithCommas, handleCopy } from "@/utils/dataUtils";
 import { extractLoggingSettings, formatMetadataForDisplay } from "./key_info_utils";
 
 interface KeyInfoViewProps {
@@ -165,7 +165,10 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
             Back to Keys
           </Button>
           <Title>{keyData.key_alias || "API Key"}</Title>
-          <Text className="text-gray-500 font-mono">{keyData.token}</Text>
+          <div className="flex items-center cursor-pointer" onClick={() => handleCopy(keyData.token, 'Key copied to clipboard')}>
+            <Text className="text-gray-500 font-mono">{keyData.token}</Text>
+            <ClipboardCopyIcon className="h-5 w-5 ml-2 text-gray-500" />
+          </div>
         </div>
         {userRole && rolesWithWriteAccess.includes(userRole) && (
           <div className="flex gap-2">

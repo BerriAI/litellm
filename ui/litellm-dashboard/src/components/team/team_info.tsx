@@ -28,7 +28,7 @@ import { InfoCircleOutlined } from '@ant-design/icons';
 import {
   Select as Select2,
 } from "antd";
-import { PencilAltIcon, PlusIcon, TrashIcon } from "@heroicons/react/outline";
+import { PencilAltIcon, PlusIcon, TrashIcon, ClipboardCopyIcon } from "@heroicons/react/outline";
 import MemberModal from "./edit_membership";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
@@ -37,7 +37,7 @@ import ObjectPermissionsView from "../object_permissions_view";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import PremiumVectorStoreSelector from "../common_components/PremiumVectorStoreSelector";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { formatNumberWithCommas, handleCopy } from "@/utils/dataUtils";
 import EditLoggingSettings from "./EditLoggingSettings";
 import LoggingSettingsView from "../logging_settings_view";
 import { fetchMCPAccessGroups } from "../networking";
@@ -342,7 +342,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         <div>
           <Button onClick={onClose} className="mb-4">← Back</Button>
           <Title>{info.team_alias}</Title>
-          <Text className="text-gray-500 font-mono">{info.team_id}</Text>
+          <div className="flex items-center cursor-pointer" onClick={() => handleCopy(info.team_id, 'Team ID copied to clipboard')}>
+            <Text className="text-gray-500 font-mono">{info.team_id}</Text>
+            <ClipboardCopyIcon className="h-5 w-5 ml-2 text-gray-500" />
+          </div>
         </div>
       </div>
 
@@ -612,7 +615,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </div>
                   <div>
                     <Text className="font-medium">Team ID</Text>
-                    <div className="font-mono">{info.team_id}</div>
+                    <div className="flex items-center cursor-pointer" onClick={() => handleCopy(info.team_id, 'Team ID copied to clipboard')}>
+                      <div className="font-mono">{info.team_id}</div>
+                      <ClipboardCopyIcon className="h-5 w-5 ml-2 text-gray-500" />
+                    </div>
                   </div>
                   <div>
                     <Text className="font-medium">Created At</Text>

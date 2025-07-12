@@ -20,6 +20,8 @@ import { getGuardrailLogoAndName, guardrail_provider_map } from "./guardrail_inf
 import PiiConfiguration from "./pii_configuration";
 import GuardrailProviderFields from "./guardrail_provider_fields";
 import GuardrailOptionalParams from "./guardrail_optional_params";
+import { handleCopy } from "@/utils/dataUtils";
+import { ClipboardCopyIcon } from "@heroicons/react/outline";
 
 export interface GuardrailInfoProps {
   guardrailId: string;
@@ -325,7 +327,10 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
         <div>
           <Button onClick={onClose} className="mb-4">← Back</Button>
           <Title>{guardrailData.guardrail_name || "Unnamed Guardrail"}</Title>
-          <Text className="text-gray-500 font-mono">{guardrailData.guardrail_id}</Text>
+          <div className="flex items-center cursor-pointer" onClick={() => handleCopy(guardrailData.guardrail_id, 'Guardrail ID copied to clipboard')}>
+            <Text className="text-gray-500 font-mono">{guardrailData.guardrail_id}</Text>
+            <ClipboardCopyIcon className="h-5 w-5 ml-2 text-gray-500" />
+          </div>
         </div>
       </div>
 
@@ -531,7 +536,10 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
                   <div className="space-y-4">
                     <div>
                       <Text className="font-medium">Guardrail ID</Text>
-                      <div className="font-mono">{guardrailData.guardrail_id}</div>
+                      <div className="flex items-center cursor-pointer" onClick={() => handleCopy(guardrailData.guardrail_id, 'Guardrail ID copied to clipboard')}>
+                        <div className="font-mono">{guardrailData.guardrail_id}</div>
+                        <ClipboardCopyIcon className="h-5 w-5 ml-2 text-gray-500" />
+                      </div>
                     </div>
                     <div>
                       <Text className="font-medium">Guardrail Name</Text>
