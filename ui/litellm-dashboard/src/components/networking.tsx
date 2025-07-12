@@ -4618,10 +4618,6 @@ export const healthCheckHistoryCall = async (
   }
 };
 
-export const getHealthStatus = async () => {
-  const healthStatus = await healthCheckCall(accessToken);
-  return healthStatus;
-};
 
 export const latestHealthChecksCall = async (accessToken: String) => {
   /**

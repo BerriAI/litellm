@@ -138,7 +138,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
         message.success(`Successfully made ${modelGroupsToMakePublic.length} model group(s) public!`);
         
         // Route to the model hub table
-        router.push(`/model_hub_table`);
+        router.push(`/ui/model_hub_table`);
       } else {
         // Show the modal if no model groups available
         setIsPublicPageModalVisible(true);
