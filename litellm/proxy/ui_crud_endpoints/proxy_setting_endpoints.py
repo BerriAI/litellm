@@ -282,7 +282,15 @@ async def _update_litellm_setting(
         in_memory_var: The in-memory variable to update
         success_message: Message to return on success
     """
-    from litellm.proxy.proxy_server import proxy_config
+    from litellm.proxy.proxy_server import proxy_config, store_model_in_db
+
+    if store_model_in_db is not True:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
+            },
+        )
 
     # Update the in-memory settings
     in_memory_var = settings.model_dump(exclude_none=True)
