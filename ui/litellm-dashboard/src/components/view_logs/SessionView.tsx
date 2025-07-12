@@ -2,9 +2,10 @@ import React, { useState } from "react"
 import { LogEntry } from "./columns"
 import { DataTable } from "./table"
 import { columns } from "./columns"
-import { Card, Title, Text, Metric, AreaChart } from "@tremor/react"
+import { Card, Title, Text, Metric, AreaChart, Button as TremorButton } from "@tremor/react"
 import { RequestViewer } from "./index"
 import { formatNumberWithCommas } from "@/utils/dataUtils"
+import { ArrowLeftIcon } from "@heroicons/react/outline"
 
 interface SessionViewProps {
   sessionId: string
@@ -34,14 +35,9 @@ export const SessionView: React.FC<SessionViewProps> = ({ sessionId, logs, onBac
     <div className="space-y-6">
       {/* Header with back button */}
       <div className="mb-8">
-        <div className="flex items-center space-x-4">
-          <button onClick={onBack} className="flex items-center text-gray-600 hover:text-gray-900 transition-colors">
-            <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-            </svg>
-            Back to All Logs
-          </button>
-        </div>
+        <TremorButton icon={ArrowLeftIcon} variant="light" onClick={onBack} className="mb-4">
+          Back to All Logs
+        </TremorButton>
         <div className="mt-4">
           <h1 className="text-2xl font-semibold text-gray-900">Session Details</h1>
           <div className="space-y-2">
