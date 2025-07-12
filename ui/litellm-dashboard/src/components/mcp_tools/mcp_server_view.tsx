@@ -17,6 +17,7 @@ interface MCPServerViewProps {
   accessToken: string | null
   userRole: string | null
   userID: string | null
+  availableAccessGroups: string[]
 }
 
 export const MCPServerView: React.FC<MCPServerViewProps> = ({
@@ -27,6 +28,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   accessToken,
   userRole,
   userID,
+  availableAccessGroups,
 }) => {
   const [editing, setEditing] = useState(isEditing)
   const [showFullUrl, setShowFullUrl] = useState(false)
@@ -131,6 +133,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                   accessToken={accessToken}
                   onCancel={() => setEditing(false)}
                   onSuccess={handleSuccess}
+                  availableAccessGroups={availableAccessGroups}
                 />
               ) : (
                 <div className="space-y-4">
