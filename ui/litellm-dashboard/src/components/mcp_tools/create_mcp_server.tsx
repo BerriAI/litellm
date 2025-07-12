@@ -356,8 +356,17 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               </Form.Item>
             </div>
 
-            {/* Cost Configuration Section */}
+            {/* Connection Status Section */}
             <div className="mt-8 pt-6 border-t border-gray-200">
+              <MCPConnectionStatus
+                accessToken={accessToken}
+                formValues={formValues}
+                onToolsLoaded={setTools}
+              />
+            </div>
+
+            {/* Cost Configuration Section */}
+            <div className="mt-6">
               <MCPServerCostConfig
                 value={costConfig}
                 onChange={setCostConfig}
