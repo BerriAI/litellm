@@ -8,7 +8,7 @@ import {
   Title,
   Button,
 } from "@tremor/react";
-import { message, Tag, Tooltip, Modal } from "antd";
+import { message, Tag, Tooltip, Modal, Select } from "antd";
 import { CopyOutlined } from "@ant-design/icons";
 import { ExternalLinkIcon, SearchIcon, EyeIcon, CogIcon } from "@heroicons/react/outline";
 import { Copy, Info } from "lucide-react";
@@ -47,9 +47,9 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
   const [usefulLinks, setUsefulLinks] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState<boolean>(true);
   const [searchTerm, setSearchTerm] = useState<string>("");
-  const [selectedProvider, setSelectedProvider] = useState<string>("");
-  const [selectedMode, setSelectedMode] = useState<string>("");
-  const [selectedFeature, setSelectedFeature] = useState<string>("");
+  const [selectedProviders, setSelectedProviders] = useState<string[]>([]);
+  const [selectedModes, setSelectedModes] = useState<string[]>([]);
+  const [selectedFeatures, setSelectedFeatures] = useState<string[]>([]);
   const [serviceStatus, setServiceStatus] = useState<string>("I'm alive! ✓");
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [selectedModel, setSelectedModel] = useState<null | ModelGroupInfo>(null);
@@ -89,7 +89,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
   useEffect(() => {
     // This would clear selections if we had any selection functionality
     // For now, it's just for consistency with the original component
-  }, [searchTerm, selectedProvider, selectedMode, selectedFeature]);
+  }, [searchTerm, selectedProviders, selectedModes, selectedFeatures]);
 
   const getUniqueProviders = (data: ModelGroupInfo[]) => {
     const providers = new Set<string>();
@@ -128,11 +128,11 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
 
   const filteredData = modelHubData?.filter(model => {
     const matchesSearch = model.model_group.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesProvider = selectedProvider === "" || model.providers.includes(selectedProvider);
-    const matchesMode = selectedMode === "" || model.mode === selectedMode;
+    const matchesProvider = selectedProviders.length === 0 || selectedProviders.some(provider => model.providers.includes(provider));
+    const matchesMode = selectedModes.length === 0 || selectedModes.includes(model.mode || "");
     
-    // Check if model has the selected feature
-    const matchesFeature = selectedFeature === "" || 
+    // Check if model has any of the selected features
+    const matchesFeature = selectedFeatures.length === 0 || 
       Object.entries(model)
         .filter(([key, value]) => key.startsWith('supports_') && value === true)
         .some(([key]) => {
@@ -141,7 +141,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
             .split('_')
             .map(word => word.charAt(0).toUpperCase() + word.slice(1))
             .join(' ');
-          return featureName === selectedFeature;
+          return selectedFeatures.includes(featureName);
         });
     
     return matchesSearch && matchesProvider && matchesMode && matchesFeature;
@@ -482,42 +482,51 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
             </div>
             <div>
               <Text className="text-base font-medium mb-3">Provider:</Text>
-              <select
-                value={selectedProvider}
-                onChange={(e) => setSelectedProvider(e.target.value)}
-                className="border rounded-lg px-4 py-3 text-base text-gray-600 w-full focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              <Select
+                mode="multiple"
+                value={selectedProviders}
+                onChange={(values) => setSelectedProviders(values)}
+                placeholder="Select providers"
+                className="w-full"
+                size="large"
+                allowClear
               >
-                <option value="" className="text-base text-gray-600">All Providers</option>
                 {modelHubData && getUniqueProviders(modelHubData).map(provider => (
-                  <option key={provider} value={provider} className="text-base text-gray-800">{provider}</option>
+                  <Select.Option key={provider} value={provider}>{provider}</Select.Option>
                 ))}
-              </select>
+              </Select>
             </div>
             <div>
               <Text className="text-base font-medium mb-3">Mode:</Text>
-              <select
-                value={selectedMode}
-                onChange={(e) => setSelectedMode(e.target.value)}
-                className="border rounded-lg px-4 py-3 text-base text-gray-600 w-full focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              <Select
+                mode="multiple"
+                value={selectedModes}
+                onChange={(values) => setSelectedModes(values)}
+                placeholder="Select modes"
+                className="w-full"
+                size="large"
+                allowClear
               >
-                <option value="" className="text-base text-gray-600">All Modes</option>
                 {modelHubData && getUniqueModes(modelHubData).map(mode => (
-                  <option key={mode} value={mode} className="text-base text-gray-800">{mode}</option>
+                  <Select.Option key={mode} value={mode}>{mode}</Select.Option>
                 ))}
-              </select>
+              </Select>
             </div>
             <div>
               <Text className="text-base font-medium mb-3">Features:</Text>
-              <select
-                value={selectedFeature}
-                onChange={(e) => setSelectedFeature(e.target.value)}
-                className="border rounded-lg px-4 py-3 text-base text-gray-600 w-full focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              <Select
+                mode="multiple"
+                value={selectedFeatures}
+                onChange={(values) => setSelectedFeatures(values)}
+                placeholder="Select features"
+                className="w-full"
+                size="large"
+                allowClear
               >
-                <option value="" className="text-base text-gray-600">All Features</option>
                 {modelHubData && getUniqueFeatures(modelHubData).map(feature => (
-                  <option key={feature} value={feature} className="text-base text-gray-800">{feature}</option>
+                  <Select.Option key={feature} value={feature}>{feature}</Select.Option>
                 ))}
-              </select>
+              </Select>
             </div>
           </div>
         </Card>
