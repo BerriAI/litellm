@@ -114,6 +114,26 @@ print(response)
 
 Call any model supported by a provider, with `model=<provider_name>/<model_name>`. There might be provider-specific details here, so refer to [provider docs for more information](https://docs.litellm.ai/docs/providers)
 
+## Environment Variable Configuration
+
+You can now configure LiteLLM using environment variables:
+
+| Variable           | Description                                      |
+| ------------------ | ------------------------------------------------ |
+| `LITELLM_API_KEY`  | Used as the default value for `litellm.api_key`  |
+| `LITELLM_API_BASE` | Used as the default value for `litellm.api_base` |
+
+If not explicitly set in code, these values will be automatically picked up:
+
+```python
+import litellm
+
+print(litellm.api_key)  # Will output the value from LITELLM_API_KEY if not manually set
+print(litellm.api_base) # Will output the value from LITELLM_API_BASE if not manually set
+```
+
+This is helpful when running LiteLLM in CI/CD pipelines, containerized environments, or local `.env` setups.
+
 ## Async ([Docs](https://docs.litellm.ai/docs/completion/stream#async-completion))
 
 ```python
