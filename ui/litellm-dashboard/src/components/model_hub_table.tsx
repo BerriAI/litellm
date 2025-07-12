@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { modelHubCall, makeModelGroupPublic, modelHubPublicModelsCall, proxyBaseUrl } from "./networking";
+import { modelHubCall, makeModelGroupPublic, modelHubPublicModelsCall, getProxyBaseUrl } from "./networking";
 import { getConfigFieldSetting, updateConfigFieldSetting } from "./networking";
 import { ModelDataTable } from "./model_dashboard/table";
 import { modelHubColumns } from "./model_hub_table_columns";
@@ -287,7 +287,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
             <Title className="text-center">Model Hub - Table View</Title>
             <div className="flex items-center space-x-4">
               <Text>Model Hub URL:</Text>
-              <Text className="bg-gray-200 px-2 py-1 rounded">{`${proxyBaseUrl}/ui/model_hub_table`}</Text>
+              <Text className="bg-gray-200 px-2 py-1 rounded">{`${getProxyBaseUrl()}/ui/model_hub_table`}</Text>
             
             {publicPage == false ? (
               premiumUser ? (
@@ -432,7 +432,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
           <div className="flex justify-between mb-4">
             <Text className="text-base mr-2">Shareable Link:</Text>
             <Text className="max-w-sm ml-2 bg-gray-200 pr-2 pl-2 pt-1 pb-1 text-center rounded">
-              {`${proxyBaseUrl}/model_hub_table`}
+              {`${getProxyBaseUrl()}/ui/model_hub_table`}
             </Text>
           </div>
           <div className="flex justify-end">
