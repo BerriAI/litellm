@@ -13,6 +13,9 @@ import { CopyOutlined } from "@ant-design/icons";
 import { ExternalLinkIcon, SearchIcon, EyeIcon, CogIcon } from "@heroicons/react/outline";
 import { Copy, Info } from "lucide-react";
 import { Table as TableInstance } from '@tanstack/react-table';
+import { generateCodeSnippet } from "./chat_ui/CodeSnippets";
+import { EndpointType, getEndpointType } from "./chat_ui/mode_endpoint_mapping";
+import { MessageType } from "./chat_ui/types";
 // Simple approach without react-markdown dependency
 
 interface ModelGroupInfo {
@@ -672,48 +675,48 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
               <Text className="text-lg font-semibold mb-4">Usage Example</Text>
               <div className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto">
                 <pre className="text-sm">
-{`import openai
-
-client = openai.OpenAI(
-    api_key="your_api_key",
-    base_url="http://0.0.0.0:4000"  # Your LiteLLM Proxy URL
-)
-
-response = client.chat.completions.create(
-    model="${selectedModel.model_group}",
-    messages=[
-        {
-            "role": "user",
-            "content": "Hello, how are you?"
-        }
-    ]
-)
-
-print(response.choices[0].message.content)`}
+{(() => {
+  const codeSnippet = generateCodeSnippet({
+    apiKeySource: 'custom',
+    accessToken: null,
+    apiKey: 'your_api_key',
+    inputMessage: 'Hello, how are you?',
+    chatHistory: [
+      { role: 'user', content: 'Hello, how are you?', isImage: false } as MessageType
+    ],
+    selectedTags: [],
+    selectedVectorStores: [],
+    selectedGuardrails: [],
+    endpointType: getEndpointType(selectedModel.mode || 'chat'),
+    selectedModel: selectedModel.model_group,
+    selectedSdk: 'openai'
+  });
+  return codeSnippet;
+})()}
                 </pre>
               </div>
               <div className="mt-2 text-right">
-                <button
-                  onClick={() => copyToClipboard(`import openai
-
-client = openai.OpenAI(
-    api_key="your_api_key",
-    base_url="http://0.0.0.0:4000"  # Your LiteLLM Proxy URL
-)
-
-response = client.chat.completions.create(
-    model="${selectedModel.model_group}",
-    messages=[
-        {
-            "role": "user",
-            "content": "Hello, how are you?"
-        }
-    ]
-)
-
-print(response.choices[0].message.content)`)}
-                  className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer"
-                >
+                                  <button
+                    onClick={() => {
+                      const codeSnippet = generateCodeSnippet({
+                        apiKeySource: 'custom',
+                        accessToken: null,
+                        apiKey: 'your_api_key',
+                        inputMessage: 'Hello, how are you?',
+                        chatHistory: [
+                          { role: 'user', content: 'Hello, how are you?', isImage: false } as MessageType
+                        ],
+                        selectedTags: [],
+                        selectedVectorStores: [],
+                        selectedGuardrails: [],
+                        endpointType: getEndpointType(selectedModel.mode || 'chat'),
+                        selectedModel: selectedModel.model_group,
+                        selectedSdk: 'openai'
+                      });
+                      copyToClipboard(codeSnippet);
+                    }}
+                    className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer"
+                  >
                   Copy to clipboard
                 </button>
               </div>
