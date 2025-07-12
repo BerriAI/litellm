@@ -92,19 +92,25 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
             key={opt.value}
             value={opt.value}
           >
-            {opt.isAccessGroup && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span style={{
                 display: 'inline-block',
-                width: 10,
-                height: 10,
+                width: 8,
+                height: 8,
                 borderRadius: '50%',
-                background: '#1890ff',
-                marginRight: 8,
-                verticalAlign: 'middle',
+                background: opt.isAccessGroup ? '#1890ff' : '#52c41a',
+                flexShrink: 0,
               }} />
-            )}
-            {opt.label}
-            {opt.isAccessGroup && <span style={{ color: '#1890ff', marginLeft: 8 }}>(Access Group)</span>}
+              <span style={{ flex: 1 }}>{opt.label}</span>
+              <span style={{ 
+                color: opt.isAccessGroup ? '#1890ff' : '#52c41a', 
+                fontSize: '12px',
+                fontWeight: 500,
+                opacity: 0.8
+              }}>
+                {opt.isAccessGroup ? 'Access Group' : 'MCP Server'}
+              </span>
+            </div>
           </Select.Option>
         ))}
       </Select>
