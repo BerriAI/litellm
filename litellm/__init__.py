@@ -936,7 +936,7 @@ from .llms.openrouter.chat.transformation import OpenrouterConfig
 from .llms.datarobot.chat.transformation import DataRobotConfig
 from .llms.anthropic.chat.transformation import AnthropicConfig
 from .llms.anthropic.common_utils import AnthropicModelInfo
-from .llms.groq.stt.transformation import GroqSTTConfig
+from .llms.groq.stt.transformation import GroqAudioTranscriptionConfig
 from .llms.anthropic.completion.transformation import AnthropicTextConfig
 from .llms.triton.completion.transformation import TritonConfig
 from .llms.triton.completion.transformation import TritonGenerateConfig
