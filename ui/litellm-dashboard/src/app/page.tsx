@@ -18,7 +18,6 @@ import GeneralSettings from "@/components/general_settings";
 import PassThroughSettings from "@/components/pass_through_settings";
 import BudgetPanel from "@/components/budgets/budget_panel";
 import SpendLogsTable from "@/components/view_logs";
-import ModelHub from "@/components/model_hub";
 import ModelHubTable from "@/components/model_hub_table";
 import NewUsagePage from "@/components/new_usage";
 import APIRef from "@/components/api_ref";
@@ -258,6 +257,7 @@ export default function CreateKeyPage() {
               setProxySettings={setProxySettings}
               proxySettings={proxySettings}
               accessToken={accessToken}
+              isPublicPage={false}
             />
             <div className="flex flex-1 overflow-auto">
               <div className="mt-8">
@@ -369,12 +369,6 @@ export default function CreateKeyPage() {
                   userRole={userRole}
                   accessToken={accessToken}
                   modelData={modelData}
-                />
-              ) : page == "model-hub" ? (
-                <ModelHub
-                  accessToken={accessToken}
-                  publicPage={false}
-                  premiumUser={premiumUser}
                 />
               ) : page == "model-hub-table" ? (
                 <ModelHubTable

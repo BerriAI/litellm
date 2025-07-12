@@ -87,7 +87,7 @@ export const modelHubColumns = (
     },
   },
   {
-    header: "Model",
+    header: "Public Model Name",
     accessorKey: "model_group",
     enableSorting: true,
     sortingFn: "alphanumeric",
