@@ -130,11 +130,17 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                 onChange={(value) => {
                   setSelectedProvider(value);
                   setProviderModelsFn(value);
-                  form.setFieldsValue({
-                    model: getProviderModels(value, null),
-                    model_name: getProviderModels(value, null),
-                    custom_model_name: getProviderModels(value, null),
-                  });
+                  if (value === Providers.Azure || value === Providers.Ollama) {
+                    form.setFieldsValue({
+                      model: getProviderModels(value, null),
+                    });
+                  } else {
+                    form.setFieldsValue({
+                      model: [],
+                      model_name: getProviderModels(value, null),
+                      custom_model_name: getProviderModels(value, null),
+                    });
+                  }
                 }}
               >
                 {Object.entries(Providers).map(
