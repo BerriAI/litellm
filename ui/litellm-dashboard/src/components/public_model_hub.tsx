@@ -11,6 +11,7 @@ import {
 import { message, Tag, Tooltip, Modal } from "antd";
 import { ExternalLinkIcon, SearchIcon, EyeIcon, CogIcon } from "@heroicons/react/outline";
 import { Table as TableInstance } from '@tanstack/react-table';
+// Simple approach without react-markdown dependency
 
 interface ModelGroupInfo {
   model_group: string;
@@ -193,6 +194,8 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
       .map(([key]) => key);
   };
 
+
+
   const formatCost = (cost: number) => {
     return `$${(cost * 1_000_000).toFixed(4)}`;
   };
@@ -319,7 +322,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
       size: 100,
     },
     {
-      header: "Input $/1K",
+      header: "Input $/1M",
       accessorKey: "input_cost_per_token",
       enableSorting: true,
       cell: ({ row }) => {
@@ -333,7 +336,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
       size: 100,
     },
     {
-      header: "Output $/1K",
+      header: "Output $/1M",
       accessorKey: "output_cost_per_token",
       enableSorting: true,
       cell: ({ row }) => {
@@ -428,22 +431,20 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
 
       <div className="w-full px-8 py-12">
         {/* About Section */}
-        <Card className="mb-10 p-8">
-          <Title className="text-2xl font-semibold mb-6">About</Title>
-          <Text className="text-gray-700 mb-6 text-lg leading-relaxed">
-            {pageDescription}
-          </Text>
-          <div className="flex items-center space-x-3 text-base text-gray-600">
-            <span className="flex items-center">
-              <span className="w-5 h-5 mr-2">🔧</span>
-              Built with litellm: v{litellmVersion}
-            </span>
-          </div>
-        </Card>
+          <Card className="mb-10 p-8">
+            <Title className="text-3xl font-semibold mb-6">About</Title>
+            <p className="text-gray-700 mb-6 text-lg leading-relaxed">Proxy Server to call 100+ LLMs in the OpenAI format.</p>
+            <div className="flex items-center space-x-3 text-base text-gray-600">
+              <span className="flex items-center">
+                <span className="w-5 h-5 mr-2">🔧</span>
+                Built with litellm: v{litellmVersion}
+              </span>
+            </div>
+          </Card>
 
         {/* Useful Links */}
         <Card className="mb-10 p-8">
-          <Title className="text-2xl font-semibold mb-6">Useful Links</Title>
+          <Title className="text-3xl font-semibold mb-6">Useful Links</Title>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
             <button
               onClick={handleServiceUrlClick}
@@ -471,7 +472,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
 
         {/* Health and Endpoint Status */}
         <Card className="mb-10 p-8">
-          <Title className="text-2xl font-semibold mb-6">Health and Endpoint Status</Title>
+          <Title className="text-3xl font-semibold mb-6">Health and Endpoint Status</Title>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
             <div className="flex items-center space-x-3 p-4 rounded-lg bg-green-50">
               <div className="w-3 h-3 bg-green-500 rounded-full"></div>
@@ -545,7 +546,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
         {/* Models Table */}
         <Card className="p-8">
           <div className="flex justify-between items-center mb-8">
-            <Title className="text-2xl font-semibold">Models available in Gateway</Title>
+            <Title className="text-3xl font-semibold">Models available in Gateway</Title>
           </div>
 
           <ModelDataTable
