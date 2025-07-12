@@ -131,7 +131,6 @@ html_form = f"""
         
         .toggle-password input[type="checkbox"] {{
             margin-right: 8px;
-            margin-bottom: 0;
             vertical-align: middle;
             width: 16px;
             height: 16px;
