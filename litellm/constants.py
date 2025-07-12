@@ -269,6 +269,7 @@ LITELLM_CHAT_PROVIDERS = [
     "llamafile",
     "lm_studio",
     "galadriel",
+    "gradient_ai",
     "github_copilot",  # GitHub Copilot Chat API
     "novita",
     "meta_llama",
