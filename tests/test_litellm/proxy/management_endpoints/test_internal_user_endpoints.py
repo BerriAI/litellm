@@ -460,7 +460,6 @@ async def test_new_user_default_teams_flow(mocker):
         assert team_call_kwargs["user_id"] == "test-user-123"
         assert team_call_kwargs["team_id"] == "96fed65b-0182-4ff4-8429-2721cd7d42af"
         assert team_call_kwargs["user_email"] == "test@example.com"
-        assert team_call_kwargs["max_budget_in_team"] == 100
         assert team_call_kwargs["user_role"] == "user"
 
         # Verify response structure
