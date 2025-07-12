@@ -11,13 +11,15 @@ interface MCPServerEditProps {
   accessToken: string | null;
   onCancel: () => void;
   onSuccess: (server: MCPServer) => void;
+  availableAccessGroups: string[];
 }
 
-const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, onCancel, onSuccess }) => {
+const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, onCancel, onSuccess, availableAccessGroups }) => {
   const [form] = Form.useForm();
   const [costConfig, setCostConfig] = useState<MCPServerCostInfo>({});
   const [tools, setTools] = useState<any[]>([]);
   const [isLoadingTools, setIsLoadingTools] = useState(false);
+  const [searchValue, setSearchValue] = useState<string>("");
 
   // Initialize cost config from existing server data
   useEffect(() => {
@@ -74,6 +76,35 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
       setIsLoadingTools(false);
     }
   };
+
+  // Generate options with existing groups and potential new group
+  const getAccessGroupOptions = () => {
+    const existingOptions = availableAccessGroups.map((group: string) => ({
+      value: group,
+      label: (
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+          <span className="font-medium">{group}</span>
+        </div>
+      ),
+    }))
+
+    // If search value doesn't match any existing group and is not empty, add "create new group" option
+    if (searchValue && !availableAccessGroups.some(group => group.toLowerCase().includes(searchValue.toLowerCase()))) {
+      existingOptions.push({
+        value: searchValue,
+        label: (
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+            <span className="font-medium">{searchValue}</span>
+            <span className="text-gray-400 text-xs ml-1">create new group</span>
+          </div>
+        ),
+      })
+    }
+
+    return existingOptions
+  }
 
   const handleSave = async (values: Record<string, any>) => {
     if (!accessToken) return;
@@ -160,8 +191,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
               <Select
                 mode="tags"
                 style={{ width: '100%' }}
+                showSearch
                 placeholder="Add or select access groups"
                 tokenSeparators={[',']}
+                optionFilterProp="value"
+                filterOption={(input, option) =>
+                  (option?.value ?? '').toLowerCase().includes(input.toLowerCase())
+                }
+                onSearch={(value) => setSearchValue(value)}
+                options={getAccessGroupOptions()}
                 // Ensure value is always an array of strings
                 getPopupContainer={trigger => trigger.parentNode}
               />
