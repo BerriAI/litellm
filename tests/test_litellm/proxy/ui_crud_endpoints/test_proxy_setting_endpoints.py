@@ -11,7 +11,10 @@ sys.path.insert(
 
 from litellm.proxy._types import DefaultInternalUserParams, LitellmUserRoles
 from litellm.proxy.proxy_server import app
-from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams, SSOConfig
+from litellm.types.proxy.management_endpoints.ui_sso import (
+    DefaultTeamSSOParams,
+    SSOConfig,
+)
 
 client = TestClient(app)
 
@@ -35,16 +38,14 @@ def mock_proxy_config(monkeypatch):
                 "rpm_limit": 10,
             },
         },
-        "general_settings": {
-            "proxy_admin_email": "admin@example.com"
-        },
+        "general_settings": {"proxy_admin_email": "admin@example.com"},
         "environment_variables": {
             "GOOGLE_CLIENT_ID": "test_google_client_id",
             "GOOGLE_CLIENT_SECRET": "test_google_client_secret",
             "MICROSOFT_CLIENT_ID": "test_microsoft_client_id",
             "MICROSOFT_CLIENT_SECRET": "test_microsoft_client_secret",
-            "PROXY_BASE_URL": "https://example.com"
-        }
+            "PROXY_BASE_URL": "https://example.com",
+        },
     }
 
     async def mock_get_config():
@@ -118,8 +119,10 @@ class TestProxySettingEndpoints:
     ):
         """Test updating the internal user settings"""
         # Mock litellm.default_internal_user_params
+
         import litellm
 
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
         monkeypatch.setattr(litellm, "default_internal_user_params", {})
 
         # New settings to update
@@ -132,6 +135,7 @@ class TestProxySettingEndpoints:
 
         response = client.patch("/update/internal_user_settings", json=new_settings)
 
+        print(response.text)
         assert response.status_code == 200
         data = response.json()
 
@@ -190,6 +194,7 @@ class TestProxySettingEndpoints:
         # Mock litellm.default_team_params
         import litellm
 
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
         monkeypatch.setattr(litellm, "default_team_params", {})
 
         # New settings to update
@@ -271,7 +276,7 @@ class TestProxySettingEndpoints:
             "microsoft_client_id": "new_microsoft_client_id",
             "microsoft_client_secret": "new_microsoft_client_secret",
             "proxy_base_url": "https://newexample.com",
-            "user_email": "newadmin@example.com"
+            "user_email": "newadmin@example.com",
         }
 
         response = client.patch("/update/sso_settings", json=new_sso_settings)
@@ -286,17 +291,33 @@ class TestProxySettingEndpoints:
         # Verify settings were updated
         settings = data["settings"]
         assert settings["google_client_id"] == new_sso_settings["google_client_id"]
-        assert settings["google_client_secret"] == new_sso_settings["google_client_secret"]
-        assert settings["microsoft_client_id"] == new_sso_settings["microsoft_client_id"]
-        assert settings["microsoft_client_secret"] == new_sso_settings["microsoft_client_secret"]
+        assert (
+            settings["google_client_secret"] == new_sso_settings["google_client_secret"]
+        )
+        assert (
+            settings["microsoft_client_id"] == new_sso_settings["microsoft_client_id"]
+        )
+        assert (
+            settings["microsoft_client_secret"]
+            == new_sso_settings["microsoft_client_secret"]
+        )
         assert settings["proxy_base_url"] == new_sso_settings["proxy_base_url"]
         assert settings["user_email"] == new_sso_settings["user_email"]
 
         # Verify the config was updated
         updated_config = mock_proxy_config["config"]
-        assert updated_config["environment_variables"]["GOOGLE_CLIENT_ID"] == new_sso_settings["google_client_id"]
-        assert updated_config["environment_variables"]["GOOGLE_CLIENT_SECRET"] == new_sso_settings["google_client_secret"]
-        assert updated_config["general_settings"]["proxy_admin_email"] == new_sso_settings["user_email"]
+        assert (
+            updated_config["environment_variables"]["GOOGLE_CLIENT_ID"]
+            == new_sso_settings["google_client_id"]
+        )
+        assert (
+            updated_config["environment_variables"]["GOOGLE_CLIENT_SECRET"]
+            == new_sso_settings["google_client_secret"]
+        )
+        assert (
+            updated_config["general_settings"]["proxy_admin_email"]
+            == new_sso_settings["user_email"]
+        )
 
         # Verify save_config was called exactly once
         assert mock_proxy_config["save_call_count"]() == 1

@@ -81,7 +81,7 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles,
       setIsEditing(false);
     } catch (error) {
       console.error("Error updating SSO settings:", error);
-      message.error("Failed to update settings");
+      message.error("Failed to update settings: " + error);
     } finally {
       setSaving(false);
     }

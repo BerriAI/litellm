@@ -46,13 +46,35 @@ class ResetBudgetJob:
             await self.reset_budget_for_litellm_teams()
 
             ### RESET ENDUSER (Customer) BUDGET and corresponding Budget duration ###
-            await self.reset_budget_for_litellm_endusers()
+            await self.reset_budget_for_litellm_budget_table()
 
-    async def reset_budget_for_litellm_endusers(self):
+    async def reset_budget_for_litellm_team_members(
+        self, budgets_to_reset: List[LiteLLM_BudgetTableFull]
+    ):
         """
-        Resets the budget for all LiteLLM End-Users (Customers) if their budget has expired
+        Resets the budget for all LiteLLM Team Members if their budget has expired
+        """
+        return await self.prisma_client.db.litellm_teammembership.update_many(
+            where={
+                "budget_id": {
+                    "in": [
+                        budget.budget_id
+                        for budget in budgets_to_reset
+                        if budget.budget_id is not None
+                    ]
+                }
+            },
+            data={
+                "spend": 0,
+            },
+        )
+
+    async def reset_budget_for_litellm_budget_table(self):
+        """
+        Resets the budget for all LiteLLM End-Users (Customers), and Team Members if their budget has expired
         The corresponding Budget duration is also updated.
         """
+
         now = datetime.now(timezone.utc)
         start_time = time.time()
         endusers_to_reset: Optional[List[LiteLLM_EndUserTable]] = None
@@ -69,6 +91,7 @@ class ResetBudgetJob:
                     budget = await ResetBudgetJob._reset_budget_reset_at_date(
                         budget, now
                     )
+
                 await self.prisma_client.update_data(
                     query_type="update_many",
                     data_list=budgets_to_reset,
@@ -78,7 +101,15 @@ class ResetBudgetJob:
                 endusers_to_reset = await self.prisma_client.get_data(
                     table_name="enduser",
                     query_type="find_all",
-                    budget_id_list=[budget.budget_id for budget in budgets_to_reset],
+                    budget_id_list=[
+                        budget.budget_id
+                        for budget in budgets_to_reset
+                        if budget.budget_id is not None
+                    ],
+                )
+
+                await self.reset_budget_for_litellm_team_members(
+                    budgets_to_reset=budgets_to_reset
                 )
 
             if endusers_to_reset is not None and len(endusers_to_reset) > 0:
@@ -125,19 +156,19 @@ class ResetBudgetJob:
                 self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
                     service=ServiceTypes.RESET_BUDGET_JOB,
                     duration=end_time - start_time,
-                    call_type="reset_budget_endusers",
+                    call_type="reset_budget_budget_table",
                     start_time=start_time,
                     end_time=end_time,
                     event_metadata={
-                        "num_budgets_found": len(budgets_to_reset)
-                        if budgets_to_reset
-                        else 0,
+                        "num_budgets_found": (
+                            len(budgets_to_reset) if budgets_to_reset else 0
+                        ),
                         "budgets_found": json.dumps(
                             budgets_to_reset, indent=4, default=str
                         ),
-                        "num_endusers_found": len(endusers_to_reset)
-                        if endusers_to_reset
-                        else 0,
+                        "num_endusers_found": (
+                            len(endusers_to_reset) if endusers_to_reset else 0
+                        ),
                         "endusers_found": json.dumps(
                             endusers_to_reset, indent=4, default=str
                         ),
@@ -163,15 +194,15 @@ class ResetBudgetJob:
                     start_time=start_time,
                     end_time=end_time,
                     event_metadata={
-                        "num_budgets_found": len(budgets_to_reset)
-                        if budgets_to_reset
-                        else 0,
+                        "num_budgets_found": (
+                            len(budgets_to_reset) if budgets_to_reset else 0
+                        ),
                         "budgets_found": json.dumps(
                             budgets_to_reset, indent=4, default=str
                         ),
-                        "num_endusers_found": len(endusers_to_reset)
-                        if endusers_to_reset
-                        else 0,
+                        "num_endusers_found": (
+                            len(endusers_to_reset) if endusers_to_reset else 0
+                        ),
                         "endusers_found": json.dumps(
                             endusers_to_reset, indent=4, default=str
                         ),
@@ -465,7 +496,10 @@ class ResetBudgetJob:
             item.spend = 0.0
             if hasattr(item, "budget_duration") and item.budget_duration is not None:
                 # Get standardized reset time based on budget duration
-                from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+                from litellm.proxy.common_utils.timezone_utils import (
+                    get_budget_reset_time,
+                )
+
                 item.budget_reset_at = get_budget_reset_time(
                     budget_duration=item.budget_duration
                 )
@@ -510,10 +544,13 @@ class ResetBudgetJob:
     @staticmethod
     async def _reset_budget_reset_at_date(
         budget: LiteLLM_BudgetTableFull, current_time: datetime
-    ) -> Optional[LiteLLM_BudgetTableFull]:
+    ) -> LiteLLM_BudgetTableFull:
         try:
             if budget.budget_duration is not None:
-                from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+                from litellm.litellm_core_utils.duration_parser import (
+                    duration_in_seconds,
+                )
+
                 duration_s = duration_in_seconds(duration=budget.budget_duration)
 
                 # Fallback for existing budgets that do not have a budget_reset_at date set, ensuring the duration is taken into account

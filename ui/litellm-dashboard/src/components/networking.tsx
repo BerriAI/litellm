@@ -4836,7 +4836,7 @@ export const updateInternalUserSettings = async (
     if (!response.ok) {
       const errorData = await response.text();
       handleError(errorData);
-      throw new Error("Network response was not ok");
+      throw new Error(errorData);
     }
 
     const data = await response.json();
