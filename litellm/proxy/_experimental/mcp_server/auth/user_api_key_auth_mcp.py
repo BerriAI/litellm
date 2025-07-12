@@ -30,7 +30,7 @@ class MCPRequestHandler:
     LITELLM_MCP_ACCESS_GROUPS_HEADER_NAME = SpecialHeaders.mcp_access_groups.value
 
     @staticmethod
-    async def process_mcp_request(scope: Scope) -> Tuple[UserAPIKeyAuth, Optional[str], Optional[List[str]], Optional[List[str]]]:
+    async def process_mcp_request(scope: Scope) -> Tuple[UserAPIKeyAuth, Optional[str], Optional[List[str]]]:
         """
         Process and validate MCP request headers from the ASGI scope.
         This includes:
@@ -44,8 +44,7 @@ class MCPRequestHandler:
         Returns:
             UserAPIKeyAuth containing validated authentication information
             mcp_auth_header: Optional[str] MCP auth header to be passed to the MCP server
-            mcp_servers: Optional[List[str]] List of MCP servers to use
-            mcp_access_groups: Optional[List[str]] List of MCP access groups to use
+            mcp_servers: Optional[List[str]] List of MCP servers and access groups to use
 
         Raises:
             HTTPException: If headers are invalid or missing required headers
@@ -55,10 +54,8 @@ class MCPRequestHandler:
             MCPRequestHandler.get_litellm_api_key_from_headers(headers) or ""
         )
         mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers)
-        # Use helper for access groups
-        mcp_access_groups = MCPRequestHandler.get_mcp_access_groups_from_headers(headers)
-        verbose_logger.debug(f"Parsed MCP access groups (helper): {mcp_access_groups}")
-        # Use existing logic for servers (or add a helper if desired)
+        
+        # Parse MCP servers from header
         mcp_servers_header = headers.get(MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME)
         verbose_logger.debug(f"Raw MCP servers header: {mcp_servers_header}")
         mcp_servers = None
@@ -79,7 +76,7 @@ class MCPRequestHandler:
         validated_user_api_key_auth = await user_api_key_auth(
             api_key=litellm_api_key, request=request
         )
-        return validated_user_api_key_auth, mcp_auth_header, mcp_servers, mcp_access_groups
+        return validated_user_api_key_auth, mcp_auth_header, mcp_servers
     
 
     @staticmethod
