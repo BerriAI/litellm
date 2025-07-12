@@ -15,7 +15,7 @@ import {
   TextInput,
   Select as TremorSelect
 } from "@tremor/react";
-import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
+import { ArrowLeftIcon, TrashIcon, RefreshIcon, ClipboardCopyIcon } from "@heroicons/react/outline";
 import { keyDeleteCall, keyUpdateCall } from "./networking";
 import { KeyResponse } from "./key_team_helpers/key_list";
 import { Form, Input, InputNumber, message, Select, Tooltip } from "antd";
@@ -61,6 +61,11 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
       </div>
     );
   }
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(keyData.token);
+    message.success('Key copied to clipboard');
+  };
 
   const handleKeyUpdate = async (formValues: Record<string, any>) => {
     try {
@@ -165,7 +170,10 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
             Back to Keys
           </Button>
           <Title>{keyData.key_alias || "API Key"}</Title>
-          <Text className="text-gray-500 font-mono">{keyData.token}</Text>
+          <div className="flex items-center cursor-pointer" onClick={handleCopy}>
+            <Text className="text-gray-500 font-mono">{keyData.token}</Text>
+            <ClipboardCopyIcon className="h-5 w-5 ml-2 text-gray-500" />
+          </div>
         </div>
         {userRole && rolesWithWriteAccess.includes(userRole) && (
           <div className="flex gap-2">
