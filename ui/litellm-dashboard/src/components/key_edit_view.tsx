@@ -117,7 +117,10 @@ export function KeyEditView({
     metadata: formatMetadataForDisplay(keyData.metadata),
     guardrails: keyData.metadata?.guardrails || [],
     vector_stores: keyData.object_permission?.vector_stores || [],
-    mcp_servers: keyData.object_permission?.mcp_servers || [],
+    mcp_servers_and_groups: {
+      servers: keyData.object_permission?.mcp_servers || [],
+      accessGroups: keyData.object_permission?.mcp_access_groups || []
+    },
     logging_settings: extractLoggingSettings(keyData.metadata)
   };
 

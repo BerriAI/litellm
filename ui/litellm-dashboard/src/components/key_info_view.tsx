@@ -79,13 +79,15 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
         delete formValues.vector_stores;
       }
 
-      if (formValues.mcp_servers !== undefined) {
+      if (formValues.mcp_servers_and_groups !== undefined) {
+        const { servers, accessGroups } = formValues.mcp_servers_and_groups || { servers: [], accessGroups: [] };
         formValues.object_permission = {
           ...keyData.object_permission,
-          mcp_servers: formValues.mcp_servers || []
+          mcp_servers: servers || [],
+          mcp_access_groups: accessGroups || []
         };
-        // Remove mcp_servers from the top level as it should be in object_permission
-        delete formValues.mcp_servers;
+        // Remove mcp_servers_and_groups from the top level as it should be in object_permission
+        delete formValues.mcp_servers_and_groups;
       }
 
       // Convert metadata back to an object if it exists and is a string

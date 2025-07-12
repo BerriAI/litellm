@@ -406,6 +406,7 @@ async def new_team(  # noqa: PLR0915
 
             _model_id = model_dict.id
 
+
         ## Handle Object Permission - MCP, Vector Stores etc.
         object_permission_id = await _set_object_permission(
             data=data,
