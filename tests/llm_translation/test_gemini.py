@@ -12,6 +12,7 @@ sys.path.insert(
 from base_llm_unit_tests import BaseLLMChatTest
 from litellm.llms.vertex_ai.context_caching.transformation import (
     separate_cached_messages,
+    transform_openai_messages_to_gemini_context_caching,
 )
 import litellm
 from litellm import completion
@@ -65,6 +66,153 @@ class TestGoogleAIStudioGemini(BaseLLMChatTest):
             response.model_extra["vertex_ai_url_context_metadata"] is not None
         ), "URL context metadata should be present"
         print(f"response={response}")
+
+
+def test_gemini_context_caching_with_ttl():
+    """Test Gemini context caching with TTL support"""
+    
+    # Test case 1: Basic TTL functionality
+    messages_with_ttl = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 400,
+                    "cache_control": {"type": "ephemeral", "ttl": "3600s"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral", "ttl": "7200s"},
+                }
+            ],
+        }
+    ]
+    
+    # Test the transformation function directly
+    result = transform_openai_messages_to_gemini_context_caching(
+        model="gemini-1.5-pro",
+        messages=messages_with_ttl,
+        cache_key="test-ttl-cache-key"
+    )
+    
+    # Verify TTL is properly included in the result
+    assert "ttl" in result
+    assert result["ttl"] == "3600s"  # Should use the first valid TTL found
+    assert result["model"] == "models/gemini-1.5-pro"
+    assert result["displayName"] == "test-ttl-cache-key"
+    
+    # Test case 2: Invalid TTL should be ignored
+    messages_invalid_ttl = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Cached content with invalid TTL",
+                    "cache_control": {"type": "ephemeral", "ttl": "invalid_ttl"},
+                }
+            ],
+        }
+    ]
+    
+    result_invalid = transform_openai_messages_to_gemini_context_caching(
+        model="gemini-1.5-pro",
+        messages=messages_invalid_ttl,
+        cache_key="test-invalid-ttl"
+    )
+    
+    # Verify invalid TTL is not included
+    assert "ttl" not in result_invalid
+    assert result_invalid["model"] == "models/gemini-1.5-pro"
+    assert result_invalid["displayName"] == "test-invalid-ttl"
+    
+    # Test case 3: Messages without TTL should work normally
+    messages_no_ttl = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Cached content without TTL",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+    ]
+    
+    result_no_ttl = transform_openai_messages_to_gemini_context_caching(
+        model="gemini-1.5-pro",
+        messages=messages_no_ttl,
+        cache_key="test-no-ttl"
+    )
+    
+    # Verify no TTL field is present when not specified
+    assert "ttl" not in result_no_ttl
+    assert result_no_ttl["model"] == "models/gemini-1.5-pro"
+    assert result_no_ttl["displayName"] == "test-no-ttl"
+    
+    # Test case 4: Mixed messages with some having TTL
+    messages_mixed = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "System message with TTL",
+                    "cache_control": {"type": "ephemeral", "ttl": "1800s"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "User message without TTL",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": "Assistant response without cache control"
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Another user message",
+                    "cache_control": {"type": "ephemeral", "ttl": "900s"},
+                }
+            ],
+        }
+    ]
+    
+    # Test separation of cached messages
+    cached_messages, non_cached_messages = separate_cached_messages(messages_mixed)
+    assert len(cached_messages) > 0
+    assert len(non_cached_messages) > 0
+    
+    # Test transformation with mixed messages
+    result_mixed = transform_openai_messages_to_gemini_context_caching(
+        model="gemini-1.5-pro",
+        messages=messages_mixed,
+        cache_key="test-mixed-ttl"
+    )
+    
+    # Should pick up the first valid TTL
+    assert "ttl" in result_mixed
+    assert result_mixed["ttl"] == "1800s"
+    assert result_mixed["model"] == "models/gemini-1.5-pro"
+    assert result_mixed["displayName"] == "test-mixed-ttl"
 
 
 def test_gemini_context_caching_separate_messages():

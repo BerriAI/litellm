@@ -1219,11 +1219,37 @@ Use Google AI Studio context caching is supported by
 
 in your message content block.
 
+### Custom TTL Support
+
+You can now specify a custom Time-To-Live (TTL) for your cached content using the `ttl` parameter:
+
+```bash
+{
+    {
+        "role": "system",
+        "content": ...,
+        "cache_control": {
+            "type": "ephemeral",
+            "ttl": "3600s"  # 👈 Cache for 1 hour
+        }
+    },
+    ...
+}
+```
+
+**TTL Format Requirements:**
+- Must be a string ending with 's' for seconds
+- Must contain a positive number (can be decimal)
+- Examples: `"3600s"` (1 hour), `"7200s"` (2 hours), `"1800s"` (30 minutes), `"1.5s"` (1.5 seconds)
+
+**TTL Behavior:**
+- If multiple cached messages have different TTLs, the first valid TTL encountered will be used
+- Invalid TTL formats are ignored and the cache will use Google's default expiration time
+- If no TTL is specified, Google's default cache expiration (approximately 1 hour) applies
+
 ### Architecture Diagram
 
 <Image img={require('../../img/gemini_context_caching.png')} />
-
-
 
 **Notes:**
 
@@ -1232,7 +1258,6 @@ in your message content block.
 - Gemini Context Caching only allows 1 block of continuous messages to be cached. 
 
 - If multiple non-continuous blocks contain `cache_control` - the first continuous block will be used. (sent to `/cachedContent` in the [Gemini format](https://ai.google.dev/api/caching#cache_create-SHELL))
-
 
 - The raw request to Gemini's `/generateContent` endpoint looks like this: 
 
@@ -1252,7 +1277,6 @@ curl -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5
     }'
 
 ```
-
 
 ### Example Usage
 
@@ -1291,6 +1315,48 @@ for _ in range(2):
     )
 
     print(resp.usage) # 👈 2nd usage block will be less, since cached tokens used
+```
+
+</TabItem>
+<TabItem value="sdk-ttl" label="SDK with Custom TTL">
+
+```python
+from litellm import completion 
+
+# Cache for 2 hours (7200 seconds)
+resp = completion(
+    model="gemini/gemini-1.5-pro",
+    messages=[
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 4000,
+                    "cache_control": {
+                        "type": "ephemeral", 
+                        "ttl": "7200s"  # 👈 Cache for 2 hours
+                    },
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {
+                        "type": "ephemeral",
+                        "ttl": "3600s"  # 👈 This TTL will be ignored (first one is used)
+                    },
+                }
+            ],
+        }
+    ]
+)
+
+print(resp.usage)
 ```
 
 </TabItem>
@@ -1350,6 +1416,44 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 </TabItem>
+<TabItem value="curl-ttl" label="Curl with Custom TTL">
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gemini-1.5-pro",
+    "messages": [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 4000,
+                    "cache_control": {
+                        "type": "ephemeral",
+                        "ttl": "7200s"
+                    }
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {
+                        "type": "ephemeral",
+                        "ttl": "3600s"
+                    }
+                }
+            ]
+        }
+    ]
+}'
+```
+</TabItem>
 <TabItem value="openai-python" label="OpenAI Python SDK">
 
 ```python 
@@ -1380,6 +1484,40 @@ response = await client.chat.completions.create(
     ]
 )
 
+```
+
+</TabItem>
+<TabItem value="openai-python-ttl" label="OpenAI Python SDK with TTL">
+
+```python 
+import openai
+client = openai.AsyncOpenAI(
+    api_key="anything",            # litellm proxy api key
+    base_url="http://0.0.0.0:4000" # litellm proxy base url
+)
+
+response = await client.chat.completions.create(
+    model="gemini-1.5-pro",
+    messages=[
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 4000,
+                    "cache_control": {
+                        "type": "ephemeral",
+                        "ttl": "7200s"  # Cache for 2 hours
+                    }
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": "what are the key terms and conditions in this agreement?",
+        },
+    ]
+)
 ```
 
 </TabItem>
