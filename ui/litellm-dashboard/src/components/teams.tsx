@@ -368,21 +368,26 @@ const Teams: React.FC<TeamProps> = ({
           formValues.metadata = JSON.stringify(metadata);
         }
         
-        // Transform allowed_vector_store_ids and allowed_mcp_server_ids into object_permission
-        if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
-          formValues.object_permission = {
-            vector_stores: formValues.allowed_vector_store_ids
-          };
-          delete formValues.allowed_vector_store_ids;
-        }
-
-        // Transform allowed_mcp_server_ids into object_permission
-        if (formValues.allowed_mcp_server_ids && formValues.allowed_mcp_server_ids.length > 0) {
-          if (!formValues.object_permission) {
-            formValues.object_permission = {};
+        // Transform allowed_vector_store_ids and allowed_mcp_servers_and_groups into object_permission
+        if (
+          (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) ||
+          (formValues.allowed_mcp_servers_and_groups && (formValues.allowed_mcp_servers_and_groups.servers?.length > 0 || formValues.allowed_mcp_servers_and_groups.accessGroups?.length > 0))
+        ) {
+          formValues.object_permission = {};
+          if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
+            formValues.object_permission.vector_stores = formValues.allowed_vector_store_ids;
+            delete formValues.allowed_vector_store_ids;
           }
-          formValues.object_permission.mcp_servers = formValues.allowed_mcp_server_ids;
-          delete formValues.allowed_mcp_server_ids;
+          if (formValues.allowed_mcp_servers_and_groups) {
+            const { servers, accessGroups } = formValues.allowed_mcp_servers_and_groups;
+            if (servers && servers.length > 0) {
+              formValues.object_permission.mcp_servers = servers;
+            }
+            if (accessGroups && accessGroups.length > 0) {
+              formValues.object_permission.mcp_access_groups = accessGroups;
+            }
+            delete formValues.allowed_mcp_servers_and_groups;
+          }
         }
 
         // Transform allowed_mcp_access_groups into object_permission
@@ -1179,14 +1184,14 @@ const Teams: React.FC<TeamProps> = ({
                             label={
                               <span>
                                 Allowed MCP Servers{' '}
-                                <Tooltip title="Select which MCP servers or access groups this team can access by default. Leave empty for access to all.">
+                                <Tooltip title="Select which MCP servers or access groups this team can access by default. ">
                                   <InfoCircleOutlined style={{ marginLeft: '4px' }} />
                                 </Tooltip>
                               </span>
                             }
                             name="allowed_mcp_servers_and_groups"
                             className="mt-8"
-                            help="Select MCP servers or access groups this team can access. Leave empty for access to all."
+                            help="Select MCP servers or access groups this team can access. "
                           >
                             <PremiumMCPSelector
                               onChange={val => form.setFieldValue('allowed_mcp_servers_and_groups', val)}

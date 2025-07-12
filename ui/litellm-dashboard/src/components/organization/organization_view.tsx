@@ -157,12 +157,21 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       };
 
       // Handle object_permission updates
-      if (values.vector_stores !== undefined || values.mcp_servers !== undefined) {
+      if (values.vector_stores !== undefined || values.mcp_servers_and_groups !== undefined) {
         updateData.object_permission = {
           ...orgData?.object_permission,
-          vector_stores: values.vector_stores || [],
-          mcp_servers: values.mcp_servers || []
+          vector_stores: values.vector_stores || []
         };
+        
+        if (values.mcp_servers_and_groups !== undefined) {
+          const { servers, accessGroups } = values.mcp_servers_and_groups || { servers: [], accessGroups: [] };
+          if (servers && servers.length > 0) {
+            updateData.object_permission.mcp_servers = servers;
+          }
+          if (accessGroups && accessGroups.length > 0) {
+            updateData.object_permission.mcp_access_groups = accessGroups;
+          }
+        }
       }
       
       const response = await organizationUpdateCall(accessToken, updateData);
@@ -366,7 +375,10 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                     budget_duration: orgData.litellm_budget_table.budget_duration,
                     metadata: orgData.metadata ? JSON.stringify(orgData.metadata, null, 2) : "",
                     vector_stores: orgData.object_permission?.vector_stores || [],
-                    mcp_servers: orgData.object_permission?.mcp_servers || []
+                    mcp_servers_and_groups: {
+                      servers: orgData.object_permission?.mcp_servers || [],
+                      accessGroups: orgData.object_permission?.mcp_access_groups || []
+                    }
                   }}
                   layout="vertical"
                 >
@@ -423,12 +435,12 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                     />
                   </Form.Item>
 
-                  <Form.Item label="MCP Servers" name="mcp_servers">
+                  <Form.Item label="MCP Servers & Access Groups" name="mcp_servers_and_groups">
                     <MCPServerSelector
-                      onChange={(values) => form.setFieldValue('mcp_servers', values)}
-                      value={form.getFieldValue('mcp_servers')}
+                      onChange={(values) => form.setFieldValue('mcp_servers_and_groups', values)}
+                      value={form.getFieldValue('mcp_servers_and_groups')}
                       accessToken={accessToken || ""}
-                      placeholder="Select MCP servers"
+                      placeholder="Select MCP servers and access groups"
                     />
                   </Form.Item>
 

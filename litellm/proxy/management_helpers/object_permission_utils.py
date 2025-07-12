@@ -11,6 +11,47 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy.utils import PrismaClient
 
 
+async def attach_object_permission_to_dict(
+    data_dict: Dict,
+    prisma_client: PrismaClient,
+) -> Dict:
+    """
+    Helper method to attach object_permission to a dictionary if object_permission_id is set.
+    
+    This function:
+    1. Checks if the dictionary has an object_permission_id
+    2. If found, queries the database for the corresponding object permission
+    3. Converts the object permission to a dictionary format
+    4. Attaches it to the input dictionary under the 'object_permission' key
+    
+    Args:
+        data_dict: The dictionary to attach object_permission to
+        prisma_client: The database client
+        
+    Returns:
+        Dict: The input dictionary with object_permission attached if found
+        
+    Raises:
+        ValueError: If prisma_client is None
+    """
+    if prisma_client is None:
+        raise ValueError("Prisma client not found")
+        
+    object_permission_id = data_dict.get("object_permission_id")
+    if object_permission_id:
+        object_permission = await prisma_client.db.litellm_objectpermissiontable.find_unique(
+            where={"object_permission_id": object_permission_id},
+        )
+        if object_permission:
+            # Convert to dict if needed
+            try:
+                object_permission = object_permission.model_dump()
+            except Exception:
+                object_permission = object_permission.dict()
+            data_dict["object_permission"] = object_permission
+    return data_dict
+
+
 async def handle_update_object_permission_common(
     data_json: Dict,
     existing_object_permission_id: Optional[str],
