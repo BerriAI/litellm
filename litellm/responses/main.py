@@ -28,6 +28,7 @@ from litellm.types.llms.openai import (
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
+from litellm._logging import verbose_logger
 
 from .streaming_iterator import BaseResponsesAPIStreamingIterator
 
@@ -42,52 +43,392 @@ def mock_responses_api_response(
     mock_response: str = "In a peaceful grove beneath a silver moon, a unicorn named Lumina discovered a hidden pool that reflected the stars. As she dipped her horn into the water, the pool began to shimmer, revealing a pathway to a magical realm of endless night skies. Filled with wonder, Lumina whispered a wish for all who dream to find their own hidden magic, and as she glanced back, her hoofprints sparkled like stardust.",
 ):
     return ResponsesAPIResponse(
-        **{  # type: ignore
-            "id": "resp_67ccd2bed1ec8190b14f964abc0542670bb6a6b452d3795b",
-            "object": "response",
-            "created_at": 1741476542,
-            "status": "completed",
-            "error": None,
-            "incomplete_details": None,
-            "instructions": None,
-            "max_output_tokens": None,
-            "model": "gpt-4.1-2025-04-14",
-            "output": [
-                {
-                    "type": "message",
-                    "id": "msg_67ccd2bf17f0819081ff3bb2cf6508e60bb6a6b452d3795b",
-                    "status": "completed",
-                    "role": "assistant",
-                    "content": [
-                        {
-                            "type": "output_text",
-                            "text": mock_response,
-                            "annotations": [],
-                        }
-                    ],
-                }
-            ],
-            "parallel_tool_calls": True,
-            "previous_response_id": None,
-            "reasoning": {"effort": None, "summary": None},
-            "store": True,
-            "temperature": 1.0,
-            "text": {"format": {"type": "text"}},
-            "tool_choice": "auto",
-            "tools": [],
-            "top_p": 1.0,
-            "truncation": "disabled",
-            "usage": {
-                "input_tokens": 36,
-                "input_tokens_details": {"cached_tokens": 0},
-                "output_tokens": 87,
-                "output_tokens_details": {"reasoning_tokens": 0},
-                "total_tokens": 123,
-            },
-            "user": None,
-            "metadata": {},
-        }
+        id="resp_mock_123",
+        object="response",
+        status="completed",
+        status_details=None,
+        output=[
+            ResponseContent(
+                type="text",
+                text=mock_response,
+                content=mock_response,
+            )
+        ],
+        usage=ResponseAPIUsage(
+            completion_tokens=50,
+            prompt_tokens=25,
+            total_tokens=75,
+        ),
+        created=1234567890,
+        model="mock-model",
     )
+
+
+async def aresponses_api_with_mcp(
+    input: Union[str, ResponseInputParam],
+    model: str,
+    include: Optional[List[ResponseIncludable]] = None,
+    instructions: Optional[str] = None,
+    max_output_tokens: Optional[int] = None,
+    prompt: Optional[PromptObject] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    parallel_tool_calls: Optional[bool] = None,
+    previous_response_id: Optional[str] = None,
+    reasoning: Optional[Reasoning] = None,
+    store: Optional[bool] = None,
+    background: Optional[bool] = None,
+    stream: Optional[bool] = None,
+    temperature: Optional[float] = None,
+    text: Optional[ResponseTextConfigParam] = None,
+    tool_choice: Optional[ToolChoice] = None,
+    tools: Optional[Iterable[ToolParam]] = None,
+    top_p: Optional[float] = None,
+    truncation: Optional[Literal["auto", "disabled"]] = None,
+    user: Optional[str] = None,
+    # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+    # The extra values given here take precedence over values defined on the client or passed to this method.
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    # LiteLLM specific params,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
+    """
+    Async version of responses API with MCP integration.
+    
+    When MCP tools with server_url="litellm_proxy" are provided, this function will:
+    1. Get available tools from the MCP server manager
+    2. Insert the tools into the messages/input
+    3. Call the standard responses API
+    4. If require_approval="never" and tool calls are returned, automatically execute them
+    """
+    from litellm.experimental_mcp_client.tools import transform_mcp_tool_to_openai_tool
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.types.utils import ChatCompletionMessageToolCall
+    from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
+    import json
+    
+    # Check if we have MCP tools with server_url="litellm_proxy"
+    mcp_tools_with_litellm_proxy = []
+    other_tools = []
+    
+    if tools:
+        for tool in tools:
+            if (isinstance(tool, dict) and 
+                tool.get("type") == "mcp" and 
+                tool.get("server_url") == "litellm_proxy"):
+                mcp_tools_with_litellm_proxy.append(tool)
+            else:
+                other_tools.append(tool)
+    
+    # If we have MCP tools with litellm_proxy, get available tools from MCP manager
+    openai_tools = []
+    if mcp_tools_with_litellm_proxy:
+        from litellm.proxy._types import UserAPIKeyAuth
+        user_api_key_auth = kwargs.get("user_api_key_auth")
+        
+        # Get tools from MCP server manager
+        mcp_tools = await global_mcp_server_manager.list_tools(user_api_key_auth=user_api_key_auth)
+        
+        # Transform MCP tools to OpenAI format
+        for mcp_tool in mcp_tools:
+            openai_tool = transform_mcp_tool_to_openai_tool(mcp_tool)
+            openai_tools.append(openai_tool)
+    
+    # Combine with other tools
+    all_tools = openai_tools + other_tools if (openai_tools or other_tools) else None
+    
+    # Make initial response API call
+    response = await aresponses(
+        input=input,
+        model=model,
+        include=include,
+        instructions=instructions,
+        max_output_tokens=max_output_tokens,
+        prompt=prompt,
+        metadata=metadata,
+        parallel_tool_calls=parallel_tool_calls,
+        previous_response_id=previous_response_id,
+        reasoning=reasoning,
+        store=store,
+        background=background,
+        stream=stream,
+        temperature=temperature,
+        text=text,
+        tool_choice=tool_choice,
+        tools=all_tools,
+        top_p=top_p,
+        truncation=truncation,
+        user=user,
+        extra_headers=extra_headers,
+        extra_query=extra_query,
+        extra_body=extra_body,
+        timeout=timeout,
+        custom_llm_provider=custom_llm_provider,
+        **kwargs,
+    )
+    
+    # Check if we need to auto-execute tool calls
+    if (mcp_tools_with_litellm_proxy and 
+        isinstance(response, ResponsesAPIResponse) and
+        any(tool.get("require_approval") == "never" for tool in mcp_tools_with_litellm_proxy)):
+        
+        # Check if response contains tool calls
+        tool_calls = []
+        for output_item in response.output:
+            # Check if this is a function call output item
+            if (isinstance(output_item, dict) and 
+                output_item.get("type") == "function_call"):
+                tool_calls.append(output_item)
+            elif hasattr(output_item, 'type') and output_item.type == "function_call":
+                # Handle pydantic model case
+                tool_calls.append(output_item)
+        
+        if tool_calls:
+            # Execute tool calls automatically
+            tool_results = []
+            for tool_call in tool_calls:
+                try:
+                    # Extract tool call details from responses API format
+                    if isinstance(tool_call, dict):
+                        tool_name = tool_call.get("name")
+                        tool_arguments = tool_call.get("arguments")
+                        tool_call_id = tool_call.get("call_id") or tool_call.get("id")
+                    else:
+                        tool_name = getattr(tool_call, "name", None)
+                        tool_arguments = getattr(tool_call, "arguments", None)
+                        tool_call_id = getattr(tool_call, "call_id", None) or getattr(tool_call, "id", None)
+                    
+                    if not tool_name:
+                        verbose_logger.warning(f"Tool call missing name: {tool_call}")
+                        continue
+                    
+                    # Parse arguments if they're a string
+                    if isinstance(tool_arguments, str):
+                        try:
+                            parsed_arguments = json.loads(tool_arguments)
+                        except json.JSONDecodeError:
+                            parsed_arguments = {}
+                    else:
+                        parsed_arguments = tool_arguments or {}
+                    
+                    result = await global_mcp_server_manager.call_tool(
+                        name=tool_name,
+                        arguments=parsed_arguments,
+                        user_api_key_auth=user_api_key_auth,
+                    )
+                    
+                    # Format result for inclusion in response
+                    result_text = str(result.content[0].text) if result.content else "Tool executed successfully"
+                    tool_results.append({
+                        "tool_call_id": tool_call_id,
+                        "result": result_text
+                    })
+                    
+                except Exception as e:
+                    verbose_logger.exception(f"Error executing MCP tool call: {e}")
+                    tool_results.append({
+                        "tool_call_id": tool_call_id if 'tool_call_id' in locals() else "unknown",
+                        "result": f"Error executing tool: {str(e)}"
+                    })
+            
+            if tool_results:
+                # Create follow-up input with tool results in proper format
+                follow_up_input = []
+                
+                # Add the original response (assistant message with tool calls)
+                # Transform response output back to input format for follow-up
+                for output_item in response.output:
+                    if isinstance(output_item, dict):
+                        if output_item.get("type") == "function_call":
+                            # Add function call to input
+                            follow_up_input.append({
+                                "type": "function_call",
+                                "call_id": output_item.get("call_id") or output_item.get("id"),
+                                "name": output_item.get("name"),
+                                "arguments": output_item.get("arguments")
+                            })
+                        elif output_item.get("type") == "message":
+                            # Add message content
+                            follow_up_input.append({
+                                "type": "message",
+                                "role": output_item.get("role", "assistant"),
+                                "content": output_item.get("content", "")
+                            })
+                
+                # Add tool results
+                for tool_result in tool_results:
+                    follow_up_input.append({
+                        "type": "function_call_output",
+                        "call_id": tool_result["tool_call_id"],
+                        "output": tool_result["result"]
+                    })
+                
+                # Make a follow-up call with the tool results
+                final_response = await aresponses(
+                    input=follow_up_input,
+                    model=model,
+                    include=include,
+                    instructions=instructions,
+                    max_output_tokens=max_output_tokens,
+                    prompt=prompt,
+                    metadata=metadata,
+                    parallel_tool_calls=parallel_tool_calls,
+                    previous_response_id=response.id,  # Link to previous response
+                    reasoning=reasoning,
+                    store=store,
+                    background=background,
+                    stream=stream,
+                    temperature=temperature,
+                    text=text,
+                    tools=all_tools,  # Keep tools for potential future calls
+                    top_p=top_p,
+                    truncation=truncation,
+                    user=user,
+                    extra_headers=extra_headers,
+                    extra_query=extra_query,
+                    extra_body=extra_body,
+                    timeout=timeout,
+                    custom_llm_provider=custom_llm_provider,
+                    **kwargs,
+                )
+                
+                return final_response
+    
+    return response
+
+
+def responses_api_with_mcp(
+    input: Union[str, ResponseInputParam],
+    model: str,
+    include: Optional[List[ResponseIncludable]] = None,
+    instructions: Optional[str] = None,
+    max_output_tokens: Optional[int] = None,
+    prompt: Optional[PromptObject] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    parallel_tool_calls: Optional[bool] = None,
+    previous_response_id: Optional[str] = None,
+    reasoning: Optional[Reasoning] = None,
+    store: Optional[bool] = None,
+    background: Optional[bool] = None,
+    stream: Optional[bool] = None,
+    temperature: Optional[float] = None,
+    text: Optional[ResponseTextConfigParam] = None,
+    tool_choice: Optional[ToolChoice] = None,
+    tools: Optional[Iterable[ToolParam]] = None,
+    top_p: Optional[float] = None,
+    truncation: Optional[Literal["auto", "disabled"]] = None,
+    user: Optional[str] = None,
+    # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+    # The extra values given here take precedence over values defined on the client or passed to this method.
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    # LiteLLM specific params,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
+    """
+    Synchronous version of responses API with MCP integration.
+    
+    When MCP tools with server_url="litellm_proxy" are provided, this function will:
+    1. Get available tools from the MCP server manager
+    2. Insert the tools into the messages/input
+    3. Call the standard responses API
+    4. If require_approval="never" and tool calls are returned, automatically execute them
+    """
+    import asyncio
+    import threading
+    
+    # Check if we're in an async context
+    try:
+        loop = asyncio.get_running_loop()
+        # We're in an async context, can't run sync here
+        # Use the run_in_executor approach
+        import concurrent.futures
+        
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(_run_async_responses_api_with_mcp, 
+                input, model, include, instructions, max_output_tokens,
+                prompt, metadata, parallel_tool_calls, previous_response_id,
+                reasoning, store, background, stream, temperature, text,
+                tool_choice, tools, top_p, truncation, user, extra_headers,
+                extra_query, extra_body, timeout, custom_llm_provider, kwargs)
+            return future.result()
+        
+    except RuntimeError:
+        # No event loop running, create a new one
+        return asyncio.run(aresponses_api_with_mcp(
+            input=input,
+            model=model,
+            include=include,
+            instructions=instructions,
+            max_output_tokens=max_output_tokens,
+            prompt=prompt,
+            metadata=metadata,
+            parallel_tool_calls=parallel_tool_calls,
+            previous_response_id=previous_response_id,
+            reasoning=reasoning,
+            store=store,
+            background=background,
+            stream=stream,
+            temperature=temperature,
+            text=text,
+            tool_choice=tool_choice,
+            tools=tools,
+            top_p=top_p,
+            truncation=truncation,
+            user=user,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
+        ))
+
+
+def _run_async_responses_api_with_mcp(
+    input, model, include, instructions, max_output_tokens,
+    prompt, metadata, parallel_tool_calls, previous_response_id,
+    reasoning, store, background, stream, temperature, text,
+    tool_choice, tools, top_p, truncation, user, extra_headers,
+    extra_query, extra_body, timeout, custom_llm_provider, kwargs
+):
+    """Helper function to run async function in a separate thread with its own event loop"""
+    import asyncio
+    
+    return asyncio.run(aresponses_api_with_mcp(
+        input=input,
+        model=model,
+        include=include,
+        instructions=instructions,
+        max_output_tokens=max_output_tokens,
+        prompt=prompt,
+        metadata=metadata,
+        parallel_tool_calls=parallel_tool_calls,
+        previous_response_id=previous_response_id,
+        reasoning=reasoning,
+        store=store,
+        background=background,
+        stream=stream,
+        temperature=temperature,
+        text=text,
+        tool_choice=tool_choice,
+        tools=tools,
+        top_p=top_p,
+        truncation=truncation,
+        user=user,
+        extra_headers=extra_headers,
+        extra_query=extra_query,
+        extra_body=extra_body,
+        timeout=timeout,
+        custom_llm_provider=custom_llm_provider,
+        **kwargs,
+    ))
 
 
 @client
