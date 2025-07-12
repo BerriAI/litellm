@@ -16,6 +16,7 @@ import {
 import { Modal, message, Tooltip } from "antd";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { Table as TableInstance } from '@tanstack/react-table';
+import { Copy } from "lucide-react";
 
 interface ModelHubTableProps {
   accessToken: string | null;
@@ -284,10 +285,24 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
       {publicPage == false ? (
         <div className="w-full m-2 mt-2 p-8">
           <div className="flex justify-between items-center mb-6">
-            <Title className="text-center">Model Hub - Table View</Title>
-            <div className="flex items-center space-x-4">
-              <Text>Model Hub URL:</Text>
-              <Text className="bg-gray-200 px-2 py-1 rounded">{`${getProxyBaseUrl()}/ui/model_hub_table`}</Text>
+            <div className="flex flex-col items-start">
+            <Title className="text-center">Model Hub</Title>
+            <p className="text-sm text-gray-600">
+              A list of all public model names personally available to you.
+            </p>
+            </div>
+                          <div className="flex items-center space-x-4">
+                <Text>Model Hub URL:</Text>
+                <div className="flex items-center bg-gray-200 px-2 py-1 rounded">
+                  <Text className="mr-2">{`${getProxyBaseUrl()}/ui/model_hub_table`}</Text>
+                  <button
+                    onClick={() => copyToClipboard(`${getProxyBaseUrl()}/ui/model_hub_table`)}
+                    className="p-1 hover:bg-gray-300 rounded transition-colors"
+                    title="Copy URL"
+                  >
+                    <Copy size={16} className="text-gray-600" />
+                  </button>
+                </div>
             
             {publicPage == false && (
               <Tooltip 

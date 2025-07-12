@@ -370,12 +370,6 @@ export default function CreateKeyPage() {
                   accessToken={accessToken}
                   modelData={modelData}
                 />
-              ) : page == "model-hub" ? (
-                <ModelHub
-                  accessToken={accessToken}
-                  publicPage={false}
-                  premiumUser={premiumUser}
-                />
               ) : page == "model-hub-table" ? (
                 <ModelHubTable
                   accessToken={accessToken}
