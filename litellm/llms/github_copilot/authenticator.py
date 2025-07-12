@@ -339,7 +339,11 @@ class Authenticator:
         verification_uri = device_code_info["verification_uri"]
 
         print(  # noqa: T201
-            f"Please visit {verification_uri} and enter code {user_code} to authenticate."
+            f"Please visit {verification_uri} and enter code {user_code} to authenticate.",
+
+            # When this is running in docker, it may not be flushed immediately
+            # so we force flush to ensure the user sees the message
+            flush=True,
         )
 
         return self._poll_for_access_token(device_code)
