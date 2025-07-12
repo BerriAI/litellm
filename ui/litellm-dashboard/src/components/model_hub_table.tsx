@@ -285,9 +285,17 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
         <div className="w-full m-2 mt-2 p-8">
           <div className="flex justify-between items-center mb-6">
             <Title className="text-center">Model Hub - Table View</Title>
+            <div className="flex items-center space-x-4">
+              <Text>Model Hub URL:</Text>
+              <Text className="bg-gray-200 px-2 py-1 rounded">{`${proxyBaseUrl}/ui/model_hub_table`}</Text>
+            
             {publicPage == false ? (
               premiumUser ? (
-                <Button className="ml-4" onClick={() => handleMakePublicPage()}>
+                <Button 
+                  className="ml-4" 
+                  onClick={() => handleMakePublicPage()}
+                  disabled={selectedModels.size === 0}
+                >
                   ✨ Make Public
                 </Button>
               ) : (
@@ -303,6 +311,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                 <Text className="bg-gray-200 px-2 py-1 rounded">{`/ui/model_hub_table?key=<YOUR_KEY>`}</Text>
               </div>
             )}
+          </div>
           </div>
 
           {/* Filters */}
