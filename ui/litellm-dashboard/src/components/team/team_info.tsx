@@ -40,6 +40,7 @@ import PremiumVectorStoreSelector from "../common_components/PremiumVectorStoreS
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import EditLoggingSettings from "./EditLoggingSettings";
 import LoggingSettingsView from "../logging_settings_view";
+import { fetchMCPAccessGroups } from "../networking";
 
 export interface TeamMembership {
   user_id: string;
@@ -85,6 +86,7 @@ export interface TeamData {
     object_permission?: {
       object_permission_id: string;
       mcp_servers: string[];
+      mcp_access_groups?: string[];
       vector_stores: string[];
     };
     team_member_budget_table: {
@@ -116,7 +118,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   is_proxy_admin,
   userModels,
   editTeam,
-  premiumUser = false
+  premiumUser = false,
+  onUpdate
 }) => {
   const [teamData, setTeamData] = useState<TeamData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -125,6 +128,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
   const [isEditing, setIsEditing] = useState(false);
+  const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
+  const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
 
   console.log("userModels in team info", userModels);
 
@@ -148,6 +153,18 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     fetchTeamInfo();
   }, [teamId, accessToken]);
 
+  const fetchMcpAccessGroups = async () => {
+    if (!accessToken) return;
+    if (mcpAccessGroupsLoaded) return;
+    try {
+      const groups = await fetchMCPAccessGroups(accessToken);
+      setMcpAccessGroups(groups);
+      setMcpAccessGroupsLoaded(true);
+    } catch (error) {
+      console.error("Failed to fetch MCP access groups:", error);
+    }
+  };
+
   const handleMemberCreate = async (values: any) => {
     try {
       if (accessToken == null) return;
@@ -163,7 +180,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       message.success("Team member added successfully");
       setIsAddMemberModalVisible(false);
       form.resetFields();
-      fetchTeamInfo();
+      
+      // Fetch updated team info
+      const updatedTeamData = await teamInfoCall(accessToken, teamId);
+      setTeamData(updatedTeamData);
+      
+      // Notify parent component of the update
+      onUpdate(updatedTeamData);
     } catch (error: any) {
       let errMsg = "Failed to add team member";
   
@@ -198,7 +221,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       message.success("Team member updated successfully");
       setIsEditMemberModalVisible(false);
-      fetchTeamInfo();
+      
+      // Fetch updated team info
+      const updatedTeamData = await teamInfoCall(accessToken, teamId);
+      setTeamData(updatedTeamData);
+      
+      // Notify parent component of the update
+      onUpdate(updatedTeamData);
     } catch (error: any) {
       let errMsg = "Failed to update team member";
       if (error?.raw?.detail?.includes("Assigning team admins is a premium feature")) {
@@ -222,10 +251,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         return;
       }
 
-      const response = await teamMemberDeleteCall(accessToken, teamId, member);
+      await teamMemberDeleteCall(accessToken, teamId, member);
 
       message.success("Team member removed successfully");
-      fetchTeamInfo();
+      
+      // Fetch updated team info
+      const updatedTeamData = await teamInfoCall(accessToken, teamId);
+      setTeamData(updatedTeamData);
+      
+      // Notify parent component of the update
+      onUpdate(updatedTeamData);
     } catch (error) {
       message.error("Failed to remove team member");
       console.error("Error removing team member:", error);
@@ -269,13 +304,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }
 
       // Handle object_permission updates
-      if (values.vector_stores !== undefined || values.mcp_servers !== undefined) {
-        updateData.object_permission = {
-          ...teamData?.team_info.object_permission,
-          vector_stores: values.vector_stores || [],
-          mcp_servers: values.mcp_servers || []
-        };
+      const { servers, accessGroups } = values.mcp_servers_and_groups || { servers: [], accessGroups: [] };
+      if ((servers && servers.length > 0) || (accessGroups && accessGroups.length > 0)) {
+        updateData.object_permission = {};
+        if (servers && servers.length > 0) {
+          updateData.object_permission.mcp_servers = servers;
+        }
+        if (accessGroups && accessGroups.length > 0) {
+          updateData.object_permission.mcp_access_groups = accessGroups;
+        }
       }
+      delete values.mcp_servers_and_groups;
       
       const response = await teamUpdateCall(accessToken, updateData);
       
@@ -433,7 +472,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     logging_settings: info.metadata?.logging || [],
                     organization_id: info.organization_id,
                     vector_stores: info.object_permission?.vector_stores || [],
-                    mcp_servers: info.object_permission?.mcp_servers || []
+                    mcp_servers: info.object_permission?.mcp_servers || [],
+                    mcp_access_groups: info.object_permission?.mcp_servers || [],
+                    mcp_servers_and_groups: info.object_permission?.mcp_servers || []
                   }}
                   layout="vertical"
                 >
@@ -528,12 +569,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     />
                   </Form.Item>
 
-                  <Form.Item label="MCP Servers" name="mcp_servers">
+                  <Form.Item label="MCP Servers / Access Groups" name="mcp_servers_and_groups">
                     <MCPServerSelector
-                      onChange={(values) => form.setFieldValue('mcp_servers', values)}
-                      value={form.getFieldValue('mcp_servers')}
-                      accessToken={accessToken || ""}
-                      placeholder="Select MCP servers"
+                      onChange={val => form.setFieldValue('mcp_servers_and_groups', val)}
+                      value={form.getFieldValue('mcp_servers_and_groups')}
+                      accessToken={accessToken || ''}
+                      placeholder="Select MCP servers or access groups (optional)"
                     />
                   </Form.Item>
                   <Form.Item label="Organization ID" name="organization_id">

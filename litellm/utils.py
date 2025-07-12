@@ -5347,6 +5347,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("NEBIUS_API_KEY")
+        elif custom_llm_provider == "dashscope":
+            if "DASHSCOPE_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("DASHSCOPE_API_KEY")
     else:
         ## openai - chatcompletion + text completion
         if (
@@ -6804,6 +6809,8 @@ class ProviderConfigManager:
             return litellm.NovitaConfig()
         elif litellm.LlmProviders.NEBIUS == provider:
             return litellm.NebiusConfig()
+        elif litellm.LlmProviders.DASHSCOPE == provider:
+            return litellm.DashScopeChatConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
@@ -7091,6 +7098,12 @@ class ProviderConfigManager:
             )
 
             return get_azure_image_generation_config(model)
+        elif LlmProviders.XINFERENCE == provider:
+            from litellm.llms.xinference.image_generation import (
+                get_xinference_image_generation_config,
+            )
+
+            return get_xinference_image_generation_config(model)
         return None
 
     @staticmethod

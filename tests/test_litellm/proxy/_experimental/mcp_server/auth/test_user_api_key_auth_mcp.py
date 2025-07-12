@@ -96,8 +96,8 @@ class TestMCPRequestHandler:
                 user_api_key_auth
             )
 
-            # Assert the result
-            assert result == expected_result
+            # Assert the result (order-independent comparison)
+            assert sorted(result) == sorted(expected_result)
 
             # Verify database call was made correctly when expected
             if (
@@ -383,3 +383,176 @@ class TestMCPRequestHandler:
             assert auth_result == mock_auth_result
             assert mcp_auth_header == expected_result["mcp_auth"]
             assert mcp_servers_result == expected_result["mcp_servers"]
+
+
+class TestMCPCustomHeaderName:
+    """Test suite for custom MCP authentication header name functionality"""
+
+    @pytest.mark.parametrize(
+        "env_var,general_setting,expected_header_name",
+        [
+            # Test case 1: Default behavior (no custom settings)
+            (None, None, "x-mcp-auth"),
+            # Test case 2: Environment variable set
+            ("custom-mcp-header", None, "custom-mcp-header"),
+            # Test case 3: General setting set (env var takes precedence)
+            (None, "settings-mcp-header", "settings-mcp-header"),
+            # Test case 4: Both set (env var takes precedence)
+            ("env-mcp-header", "settings-mcp-header", "env-mcp-header"),
+            # Test case 5: Empty env var (should fallback to default due to 'or' logic)
+            ("", "settings-mcp-header", "x-mcp-auth"),
+            # Test case 6: Empty general setting (should fallback to default)
+            (None, "", "x-mcp-auth"),
+        ],
+    )
+    def test_get_mcp_client_side_auth_header_name(
+        self, env_var, general_setting, expected_header_name
+    ):
+        """Test that custom header name configuration works correctly"""
+        
+        # Mock the secret manager and general settings
+        with patch("litellm.secret_managers.main.get_secret_str") as mock_get_secret:
+            with patch("litellm.proxy.proxy_server.general_settings") as mock_general_settings:
+                
+                # Configure mocks
+                mock_get_secret.return_value = env_var
+                mock_general_settings.get.return_value = general_setting
+                
+                # Call the method
+                result = MCPRequestHandler._get_mcp_client_side_auth_header_name()
+                
+                # Assert the result
+                assert result == expected_header_name
+                
+                # Verify secret manager was called (the function calls it twice)
+                expected_secret_calls = 2 if env_var is not None else 1
+                assert mock_get_secret.call_count == expected_secret_calls
+                
+                # Verify all calls were with the correct parameter
+                for call in mock_get_secret.call_args_list:
+                    assert call.args == ("LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME",)
+                
+                # Verify general settings was called based on env var value
+                if env_var is None:
+                    # When env var is None, general settings should be checked (twice if not None)
+                    expected_general_calls = 2 if general_setting is not None else 1
+                    assert mock_general_settings.get.call_count == expected_general_calls
+                    for call in mock_general_settings.get.call_args_list:
+                        assert call.args == ("mcp_client_side_auth_header_name",)
+                else:
+                    # If env var is set (even empty string), general settings shouldn't be checked
+                    mock_general_settings.get.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "custom_header_name,headers,expected_auth_header",
+        [
+            # Test case 1: Default header name
+            (
+                "x-mcp-auth", 
+                [(b"x-mcp-auth", b"default-auth-token")],
+                "default-auth-token"
+            ),
+            # Test case 2: Custom header name
+            (
+                "custom-auth-header",
+                [(b"custom-auth-header", b"custom-auth-token")],
+                "custom-auth-token"
+            ),
+            # Test case 3: Custom header name with case insensitive
+            (
+                "Custom-Auth-Header",
+                [(b"custom-auth-header", b"case-insensitive-token")],
+                "case-insensitive-token"
+            ),
+            # Test case 4: Header not present
+            (
+                "missing-header",
+                [(b"x-mcp-auth", b"wrong-header-token")],
+                None
+            ),
+            # Test case 5: Multiple headers, only custom one should be used
+            (
+                "my-custom-auth",
+                [
+                    (b"x-mcp-auth", b"default-token"),
+                    (b"my-custom-auth", b"custom-token")
+                ],
+                "custom-token"
+            ),
+        ],
+    )
+    def test_get_mcp_auth_header_from_headers_with_custom_name(
+        self, custom_header_name, headers, expected_auth_header
+    ):
+        """Test that MCP auth header extraction uses custom header name"""
+        
+        # Mock the header name method
+        with patch.object(
+            MCPRequestHandler, 
+            '_get_mcp_client_side_auth_header_name',
+            return_value=custom_header_name
+        ):
+            # Create headers from the test data
+            scope = {
+                "type": "http",
+                "method": "POST", 
+                "path": "/test",
+                "headers": headers,
+            }
+            extracted_headers = MCPRequestHandler._safe_get_headers_from_scope(scope)
+            
+            # Call the method
+            result = MCPRequestHandler._get_mcp_auth_header_from_headers(extracted_headers)
+            
+            # Assert the result
+            assert result == expected_auth_header
+
+    @pytest.mark.asyncio
+    async def test_process_mcp_request_with_custom_auth_header(self):
+        """Test that process_mcp_request works with custom authentication header"""
+        
+        custom_header_name = "x-custom-mcp-auth"
+        custom_auth_token = "custom-auth-token-123"
+        api_key = "test-api-key"
+        
+        # Create ASGI scope with custom header
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/test",
+            "headers": [
+                (b"x-litellm-api-key", api_key.encode()),
+                (custom_header_name.encode(), custom_auth_token.encode()),
+            ],
+        }
+        
+        # Mock the custom header name method
+        with patch.object(
+            MCPRequestHandler,
+            '_get_mcp_client_side_auth_header_name',
+            return_value=custom_header_name
+        ):
+            # Mock user_api_key_auth
+            mock_auth_result = UserAPIKeyAuth(
+                api_key=api_key,
+                user_id="test-user-id",
+                team_id="test-team-id",
+            )
+            
+            with patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth"
+            ) as mock_user_api_key_auth:
+                mock_user_api_key_auth.return_value = mock_auth_result
+                
+                # Call the method
+                auth_result, mcp_auth_header, mcp_servers = await MCPRequestHandler.process_mcp_request(scope)
+                
+                # Assert the results
+                assert auth_result == mock_auth_result
+                assert mcp_auth_header == custom_auth_token
+                assert mcp_servers is None
+                
+                # Verify user_api_key_auth was called with correct API key
+                mock_user_api_key_auth.assert_called_once()
+                call_args = mock_user_api_key_auth.call_args
+                assert call_args.kwargs["api_key"] == api_key

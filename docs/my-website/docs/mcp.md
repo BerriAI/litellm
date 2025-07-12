@@ -18,7 +18,7 @@ LiteLLM Proxy provides an MCP Gateway that allows you to use a fixed endpoint fo
 | Feature | Description |
 |---------|-------------|
 | MCP Operations | • List Tools<br/>• Call Tools |
-| Supported MCP Transports | • Streamable HTTP<br/>• SSE |
+| Supported MCP Transports | • Streamable HTTP<br/>• SSE<br/>• Standard Input/Output (stdio) |
 | LiteLLM Permission Management | ✨ Enterprise Only<br/>• By Key<br/>• By Team<br/>• By Organization |
 
 ## Adding your MCP
@@ -33,9 +33,19 @@ On this form, you should enter your MCP Server URL and the transport you want to
 LiteLLM supports the following MCP transports:
 - Streamable HTTP
 - SSE (Server-Sent Events)
+- Standard Input/Output (stdio)
 
 <Image 
   img={require('../img/add_mcp.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+### Adding a stdio MCP Server
+
+For stdio MCP servers, select "Standard Input/Output (stdio)" as the transport type and provide the stdio configuration in JSON format:
+
+<Image 
+  img={require('../img/add_stdio_mcp.png')}
   style={{width: '80%', display: 'block', margin: '0'}}
 />
 
@@ -60,6 +70,15 @@ mcp_servers:
   zapier_mcp:
     url: "https://actions.zapier.com/mcp/sk-akxxxxx/sse"
   
+  # Standard Input/Output (stdio) Server - CircleCI Example
+  circleci_mcp:
+    transport: "stdio"
+    command: "npx"
+    args: ["-y", "@circleci/mcp-server-circleci"]
+    env:
+      CIRCLECI_TOKEN: "your-circleci-token"
+      CIRCLECI_BASE_URL: "https://circleci.com"
+  
   # Full configuration with all optional fields
   my_http_server:
     url: "https://my-mcp-server.com/mcp"
@@ -70,11 +89,15 @@ mcp_servers:
 ```
 
 **Configuration Options:**
-- **Server Name**: Use any descriptive name for your MCP server (e.g., `zapier_mcp`, `deepwiki_mcp`)
-- **URL**: The endpoint URL for your MCP server (required)
+- **Server Name**: Use any descriptive name for your MCP server (e.g., `zapier_mcp`, `deepwiki_mcp`, `circleci_mcp`)
+- **URL**: The endpoint URL for your MCP server (required for HTTP/SSE transports)
 - **Transport**: Optional transport type (defaults to `sse`)
   - `sse` - SSE (Server-Sent Events) transport
   - `http` - Streamable HTTP transport
+  - `stdio` - Standard Input/Output transport
+- **Command**: The command to execute for stdio transport (required for stdio)
+- **Args**: Array of arguments to pass to the command (optional for stdio)
+- **Env**: Environment variables to set for the stdio process (optional for stdio)
 - **Description**: Optional description for the server
 - **Auth Type**: Optional authentication type
 - **Spec Version**: Optional MCP specification version (defaults to `2025-03-26`)
@@ -441,6 +464,174 @@ if __name__ == "__main__":
 </TabItem>
 </Tabs>
 
+
+### Customize the MCP Auth Header Name
+
+By default, LiteLLM uses `x-mcp-auth` to pass your credentials to MCP servers. You can change this header name in one of the following ways:
+1. Set the `LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME` environment variable
+
+```bash title="Environment Variable" showLineNumbers
+export LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME="authorization"
+```
+
+
+2. Set the `mcp_client_side_auth_header_name` in the general settings on the config.yaml file
+
+```yaml title="config.yaml" showLineNumbers
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: sk-xxxxxxx
+
+general_settings:
+  mcp_client_side_auth_header_name: "authorization"
+```
+
+#### Using the authorization header
+
+In this example the `authorization` header will be passed to the MCP server for authentication.
+
+```bash title="cURL with authorization header" showLineNumbers
+curl --location '<your-litellm-proxy-base-url>/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $LITELLM_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "<your-litellm-proxy-base-url>/mcp",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+                "authorization": "Bearer sk-zapier-token-123"
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
+```
+
+
+
+## ✨ MCP Cost Tracking
+
+LiteLLM provides two ways to track costs for MCP tool calls:
+
+| Method | When to Use | What It Does |
+|--------|-------------|--------------|
+| **Config-based Cost Tracking** | Simple cost tracking with fixed costs per tool/server | Automatically tracks costs based on configuration |
+| **Custom Post-MCP Hook** | Dynamic cost tracking with custom logic | Allows custom cost calculations and response modifications |
+
+### Config-based Cost Tracking
+
+Configure fixed costs for MCP servers directly in your config.yaml:
+
+```yaml title="config.yaml" showLineNumbers
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: sk-xxxxxxx
+
+mcp_servers:
+  zapier_server:
+    url: "https://actions.zapier.com/mcp/sk-xxxxx/sse"
+    mcp_info:
+      mcp_server_cost_info:
+        # Default cost for all tools in this server
+        default_cost_per_query: 0.01
+        # Custom cost for specific tools
+        tool_name_to_cost_per_query:
+          send_email: 0.05
+          create_document: 0.03
+          
+  expensive_api_server:
+    url: "https://api.expensive-service.com/mcp"
+    mcp_info:
+      mcp_server_cost_info:
+        default_cost_per_query: 1.50
+```
+
+### Custom Post-MCP Hook
+
+Use this when you need dynamic cost calculation or want to modify the MCP response before it's returned to the user.
+
+#### 1. Create a custom MCP hook file
+
+```python title="custom_mcp_hook.py" showLineNumbers
+from typing import Optional
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.mcp import MCPPostCallResponseObject
+
+
+class CustomMCPCostTracker(CustomLogger):
+    """
+    Custom handler for MCP cost tracking and response modification
+    """
+    
+    async def async_post_mcp_tool_call_hook(
+        self, 
+        kwargs, 
+        response_obj: MCPPostCallResponseObject, 
+        start_time, 
+        end_time
+    ) -> Optional[MCPPostCallResponseObject]:
+        """
+        Called after each MCP tool call. 
+        Modify costs and response before returning to user.
+        """
+        
+        # Extract tool information from kwargs
+        tool_name = kwargs.get("name", "")
+        server_name = kwargs.get("server_name", "")
+        
+        # Calculate custom cost based on your logic
+        custom_cost = 42.00
+        
+        # Set the response cost
+        response_obj.hidden_params.response_cost = custom_cost
+        
+  
+      
+        return response_obj
+    
+
+# Create instance for LiteLLM to use
+custom_mcp_cost_tracker = CustomMCPCostTracker()
+```
+
+#### 2. Configure in config.yaml
+
+```yaml title="config.yaml" showLineNumbers
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: sk-xxxxxxx
+
+# Add your custom MCP hook
+callbacks:
+  - custom_mcp_hook.custom_mcp_cost_tracker
+
+mcp_servers:
+  zapier_server:
+    url: "https://actions.zapier.com/mcp/sk-xxxxx/sse"
+```
+
+#### 3. Start the proxy
+
+```shell
+$ litellm --config /path/to/config.yaml 
+```
+
+When MCP tools are called, your custom hook will:
+1. Calculate costs based on your custom logic
+2. Modify the response if needed
+3. Track costs in LiteLLM's logging system
 
 ## ✨ MCP Permission Management
 

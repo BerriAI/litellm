@@ -16,6 +16,7 @@ import {
   ChevronDownIcon,
 } from "@heroicons/react/outline";
 import { Tooltip } from "antd";
+import { Badge } from "@tremor/react";
 import {
   ColumnDef,
   flexRender,
@@ -171,6 +172,22 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
           <span className="text-xs">
             {guardrail.litellm_params.mode}
           </span>
+        );
+      },
+    },
+    {
+      header: "Default On",
+      accessorKey: "litellm_params.default_on",
+      cell: ({ row }) => {
+        const guardrail = row.original;
+        return (
+          <Badge 
+            color={guardrail.litellm_params?.default_on ? "green" : "gray"}
+            className="text-xs font-normal"
+            size="xs"
+          >
+            {guardrail.litellm_params?.default_on ? "Default On" : "Default Off"}
+          </Badge>
         );
       },
     },

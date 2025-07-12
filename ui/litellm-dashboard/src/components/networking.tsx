@@ -93,6 +93,7 @@ export interface Organization {
   object_permission?: {
     object_permission_id: string;
     mcp_servers: string[];
+    mcp_access_groups?: string[];
     vector_stores: string[];
   };
 }
@@ -105,6 +106,13 @@ export interface CredentialItem {
     description?: string;
     required?: boolean;
   };
+}
+
+export interface PublicModelHubInfo {
+  docs_title: string;
+  custom_docs_description: string | null;
+  litellm_version: string;
+  useful_links: Record<string, string>;
 }
 
 export interface LiteLLMWellKnownUiConfig {
@@ -147,6 +155,21 @@ export function setGlobalLitellmHeaderName(
   globalLitellmHeaderName = headerName;
 }
 
+export const makeModelGroupPublic = async (accessToken: string, modelGroups: string[]) => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/model_group/make_public` : `/model_group/make_public`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model_groups: modelGroups,
+    }),
+  });
+  return response.json();
+};
+
 export const getUiConfig = async () => {
   console.log("Getting UI config");
   /**Special route to get the proxy base url and server root path */
@@ -160,6 +183,15 @@ export const getUiConfig = async () => {
    */
   console.log("jsonData in getUiConfig:", jsonData);
   updateProxyBaseUrl(jsonData.server_root_path, jsonData.proxy_base_url);
+  return jsonData;
+};
+
+export const getPublicModelHubInfo = async () => {
+  const url = defaultProxyBaseUrl
+    ? `${defaultProxyBaseUrl}/public/model_hub/info`
+    : `/public/model_hub/info`;
+  const response = await fetch(url);
+  const jsonData: PublicModelHubInfo = await response.json();
   return jsonData;
 };
 
@@ -1766,6 +1798,17 @@ export const modelInfoV1Call = async (accessToken: String, modelId: String) => {
     console.error("Failed to create key:", error);
     throw error;
   }
+};
+
+export const modelHubPublicModelsCall = async () => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/public/model_hub` : `/public/model_hub`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+  return response.json();
 };
 
 export const modelHubCall = async (accessToken: String) => {
@@ -4576,6 +4619,7 @@ export const healthCheckHistoryCall = async (
   }
 };
 
+
 export const latestHealthChecksCall = async (accessToken: String) => {
   /**
    * Get the latest health check status for all models
@@ -4833,6 +4877,38 @@ export const fetchMCPServers = async (accessToken: string) => {
     return data;
   } catch (error) {
     console.error("Failed to fetch MCP servers:", error);
+    throw error;
+  }
+};
+
+export const fetchMCPAccessGroups = async (accessToken: string) => {
+  try {
+    // Construct base URL
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/v1/mcp/access_groups`
+      : `/v1/mcp/access_groups`;
+
+    console.log("Fetching MCP access groups from:", url);
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Fetched MCP access groups:", data);
+    return data.access_groups || [];
+  } catch (error) {
+    console.error("Failed to fetch MCP access groups:", error);
     throw error;
   }
 };
@@ -5977,6 +6053,144 @@ export const deleteCallback = async (
     return data;
   } catch (error) {
     console.error("Failed to delete specific callback:", error);
+    throw error;
+  }
+};
+
+export const mcpToolsCall = async (accessToken: string) => {
+  const proxyBaseUrl = getProxyBaseUrl();
+  const response = await fetch(`${proxyBaseUrl}/v1/mcp/tools`, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+
+
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+
+  return await response.json();
+};
+
+export const testMCPConnectionRequest = async (
+  accessToken: string,
+  mcpServerConfig: Record<string, any>
+) => {
+  try {
+    console.log(
+      "Testing MCP connection with config:",
+      JSON.stringify(mcpServerConfig)
+    );
+
+    // Construct the URL for POST request
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/mcp-rest/test/connection`
+      : `/mcp-rest/test/connection`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(mcpServerConfig),
+    });
+
+    // Check for non-JSON responses first
+    const contentType = response.headers.get("content-type");
+    if (!contentType || !contentType.includes("application/json")) {
+      const text = await response.text();
+      console.error("Received non-JSON response:", text);
+      throw new Error(
+        `Received non-JSON response (${response.status}: ${response.statusText}). Check network tab for details.`
+      );
+    }
+
+    const data = await response.json();
+
+    if (!response.ok || data.status === "error") {
+      // Return the error response instead of throwing an error
+      // This allows the caller to handle the error format properly
+      if (data.status === "error") {
+        return data; // Return the full error response
+      } else {
+        return {
+          status: "error",
+          message:
+            data.error?.message ||
+            `MCP connection test failed: ${response.status} ${response.statusText}`,
+        };
+      }
+    }
+
+    return data;
+  } catch (error) {
+    console.error("MCP connection test error:", error);
+    // For network errors or other exceptions, still throw
+    throw error;
+  }
+};
+
+export const testMCPToolsListRequest = async (
+  accessToken: string,
+  mcpServerConfig: Record<string, any>
+) => {
+  try {
+    console.log(
+      "Testing MCP tools list with config:",
+      JSON.stringify(mcpServerConfig)
+    );
+
+    // Construct the URL for POST request
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/mcp-rest/test/tools/list`
+      : `/mcp-rest/test/tools/list`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(mcpServerConfig),
+    });
+
+    // Check for non-JSON responses first
+    const contentType = response.headers.get("content-type");
+    if (!contentType || !contentType.includes("application/json")) {
+      const text = await response.text();
+      console.error("Received non-JSON response:", text);
+      throw new Error(
+        `Received non-JSON response (${response.status}: ${response.statusText}). Check network tab for details.`
+      );
+    }
+
+    const data = await response.json();
+
+    if (!response.ok || data.error) {
+      // Return the error response instead of throwing an error
+      // This allows the caller to handle the error format properly
+      if (data.error) {
+        return data; // Return the full error response
+      } else {
+        return {
+          tools: [],
+          error: "request_failed",
+          message:
+            data.message ||
+            `MCP tools list failed: ${response.status} ${response.statusText}`,
+        };
+      }
+    }
+
+    return data;
+  } catch (error) {
+    console.error("MCP tools list test error:", error);
+    // For network errors or other exceptions, still throw
     throw error;
   }
 };
