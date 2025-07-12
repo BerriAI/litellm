@@ -124,7 +124,7 @@ const DisabledCallbacks: React.FC<DisabledCallbacksProps> = ({
                           className="w-4 h-4 object-contain" 
                         />
                       )}
-                      <span>{callbackInfo?.displayName || callbackName}</span>
+                      <span>{callbackInfo?.displayName || callbackName} </span>
                     </div>
                     <span className="text-xs text-gray-500">
                       {callbackType}
