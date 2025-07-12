@@ -409,19 +409,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
       {/* Header */}
       <div className="bg-green-600 text-white px-8 py-6">
         <div className="flex justify-between items-center w-full">
-          <div className="flex items-center space-x-4">
-            <div className="w-10 h-10 bg-white rounded flex items-center justify-center">
-              <Text className="text-green-600 font-bold text-xl">≡</Text>
-            </div>
-            <Title className="text-white text-2xl font-semibold">Model Hub Gateway</Title>
-          </div>
-          <Button
-            variant="secondary"
-            size="md"
-            className="bg-white text-green-600 hover:bg-gray-100 px-6 py-2"
-          >
-            Prod
-          </Button>
+          <Title className="text-white text-2xl font-semibold">LiteLLM Gateway</Title>
         </div>
       </div>
 
