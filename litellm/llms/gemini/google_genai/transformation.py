@@ -124,6 +124,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         return (
             litellm_params.pop("api_key", None)
             or litellm_params.pop("gemini_api_key", None)
+            or get_secret_str("GOOGLE_API_KEY")
             or get_secret_str("GEMINI_API_KEY")
             or litellm.api_key
         )
