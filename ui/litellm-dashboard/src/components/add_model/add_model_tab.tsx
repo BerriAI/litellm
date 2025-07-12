@@ -1,18 +1,31 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Modal } from "antd";
+import React, { useEffect, useState } from "react";
+import {
+  Card,
+  Form,
+  Button,
+  Tooltip,
+  Typography,
+  Select as AntdSelect,
+  Modal,
+} from "antd";
 import type { FormInstance } from "antd";
 import type { UploadProps } from "antd/es/upload";
 import LiteLLMModelNameField from "./litellm_model_name";
 import ConditionalPublicModelName from "./conditional_public_model_name";
 import ProviderSpecificFields from "./provider_specific_fields";
 import AdvancedSettings from "./advanced_settings";
-import { Providers, providerLogoMap, getPlaceholder, getProviderModels } from "../provider_info_helpers";
+import {
+  Providers,
+  providerLogoMap,
+  getPlaceholder,
+  getProviderModels,
+} from "../provider_info_helpers";
 import type { Team } from "../key_team_helpers/key_list";
 import { CredentialItem, modelAvailableCall } from "../networking";
 import ConnectionErrorDisplay from "./model_connection_test";
 import { TEST_MODES } from "./add_model_modes";
 import { Row, Col } from "antd";
-import { Text, TextInput } from "@tremor/react";
+import { Text } from "@tremor/react";
 import TeamDropdown from "../common_components/team_dropdown";
 import { all_admin_roles } from "@/utils/roles";
 
@@ -53,8 +66,10 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
 }) => {
   // State for test mode and connection testing
   const [testMode, setTestMode] = useState<string>("chat");
-  const [isResultModalVisible, setIsResultModalVisible] = useState<boolean>(false);
-  const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false);
+  const [isResultModalVisible, setIsResultModalVisible] =
+    useState<boolean>(false);
+  const [isTestingConnection, setIsTestingConnection] =
+    useState<boolean>(false);
   // Using a unique ID to force the ConnectionErrorDisplay to remount and run a fresh test
   const [connectionTestId, setConnectionTestId] = useState<string>("");
 
@@ -72,7 +87,15 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
 
   useEffect(() => {
     const fetchModelAccessGroups = async () => {
-      const response = await modelAvailableCall(accessToken, "", "", false, null, true, true);
+      const response = await modelAvailableCall(
+        accessToken,
+        "",
+        "",
+        false,
+        null,
+        true,
+        true
+      );
       setModelAccessGroups(response["data"].map((model: any) => model["id"]));
     };
     fetchModelAccessGroups();
@@ -107,58 +130,55 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                 onChange={(value) => {
                   setSelectedProvider(value);
                   setProviderModelsFn(value);
-                  form.setFieldsValue({ 
+                  form.setFieldsValue({
                     model: getProviderModels(value, null),
-                    model_name: getProviderModels(value, null) ,
-                    custom_model_name: getProviderModels(value, null)
+                    model_name: getProviderModels(value, null),
+                    custom_model_name: getProviderModels(value, null),
                   });
                 }}
               >
-                {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => (
-                  <AntdSelect.Option
-                    key={providerEnum}
-                    value={providerEnum}
-                  >
-                    <div className="flex items-center space-x-2">
-                      <img
-                        src={providerLogoMap[providerDisplayName]}
-                        alt={`${providerEnum} logo`}
-                        className="w-5 h-5"
-                        onError={(e) => {
-                          // Create a div with provider initial as fallback
-                          const target = e.target as HTMLImageElement;
-                          const parent = target.parentElement;
-                          if (parent) {
-                            const fallbackDiv = document.createElement('div');
-                            fallbackDiv.className = 'w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs';
-                            fallbackDiv.textContent = providerDisplayName.charAt(0);
-                            parent.replaceChild(fallbackDiv, target);
-                          }
-                        }}
-                      />
-                      <span>{providerDisplayName}</span>
-                    </div>
-                  </AntdSelect.Option>
-                ))}
+                {Object.entries(Providers).map(
+                  ([providerEnum, providerDisplayName]) => (
+                    <AntdSelect.Option key={providerEnum} value={providerEnum}>
+                      <div className="flex items-center space-x-2">
+                        <img
+                          src={providerLogoMap[providerDisplayName]}
+                          alt={`${providerEnum} logo`}
+                          className="w-5 h-5"
+                          onError={(e) => {
+                            // Create a div with provider initial as fallback
+                            const target = e.target as HTMLImageElement;
+                            const parent = target.parentElement;
+                            if (parent) {
+                              const fallbackDiv = document.createElement("div");
+                              fallbackDiv.className =
+                                "w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs";
+                              fallbackDiv.textContent =
+                                providerDisplayName.charAt(0);
+                              parent.replaceChild(fallbackDiv, target);
+                            }
+                          }}
+                        />
+                        <span>{providerDisplayName}</span>
+                      </div>
+                    </AntdSelect.Option>
+                  )
+                )}
               </AntdSelect>
             </Form.Item>
             <LiteLLMModelNameField
-                selectedProvider={selectedProvider}
-                providerModels={providerModels}
-                getPlaceholder={getPlaceholder}
-              />
-            
+              selectedProvider={selectedProvider}
+              providerModels={providerModels}
+              getPlaceholder={getPlaceholder}
+            />
+
             {/* Conditionally Render "Public Model Name" */}
-            <ConditionalPublicModelName  />
-                        
+            <ConditionalPublicModelName />
+
             {/* Select Mode */}
-            <Form.Item
-              label="Mode"
-              name="mode"
-              className="mb-1"
-            >
+            <Form.Item label="Mode" name="mode" className="mb-1">
               <AntdSelect
-                style={{ width: '100%' }}
+                style={{ width: "100%" }}
                 value={testMode}
                 onChange={(value) => setTestMode(value)}
                 options={TEST_MODES}
@@ -168,7 +188,14 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
               <Col span={10}></Col>
               <Col span={10}>
                 <Text className="mb-5 mt-1">
-                  <strong>Optional</strong> - LiteLLM endpoint to use when health checking this model <Link href="https://docs.litellm.ai/docs/proxy/health#health" target="_blank">Learn more</Link>
+                  <strong>Optional</strong> - LiteLLM endpoint to use when
+                  health checking this model{" "}
+                  <Link
+                    href="https://docs.litellm.ai/docs/proxy/health#health"
+                    target="_blank"
+                  >
+                    Learn more
+                  </Link>
                 </Text>
               </Col>
             </Row>
@@ -176,7 +203,8 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
             {/* Credentials */}
             <div className="mb-4">
               <Typography.Text className="text-sm text-gray-500 mb-2">
-                Either select existing credentials OR enter new provider credentials below
+                Either select existing credentials OR enter new provider
+                credentials below
               </Typography.Text>
             </div>
 
@@ -189,14 +217,16 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                 placeholder="Select or search for existing credentials"
                 optionFilterProp="children"
                 filterOption={(input, option) =>
-                  (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                  (option?.label ?? "")
+                    .toLowerCase()
+                    .includes(input.toLowerCase())
                 }
                 options={[
-                  { value: null, label: 'None' },
+                  { value: null, label: "None" },
                   ...credentials.map((credential) => ({
                     value: credential.credential_name,
-                    label: credential.credential_name
-                  }))
+                    label: credential.credential_name,
+                  })),
                 ]}
                 allowClear
               />
@@ -210,13 +240,14 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
 
             <Form.Item
               noStyle
-              shouldUpdate={(prevValues, currentValues) => 
-                prevValues.litellm_credential_name !== currentValues.litellm_credential_name ||
+              shouldUpdate={(prevValues, currentValues) =>
+                prevValues.litellm_credential_name !==
+                  currentValues.litellm_credential_name ||
                 prevValues.provider !== currentValues.provider
               }
             >
               {({ getFieldValue }) => {
-                const credentialName = getFieldValue('litellm_credential_name');
+                const credentialName = getFieldValue("litellm_credential_name");
                 console.log("🔑 Credential Name Changed:", credentialName);
                 // Only show provider specific fields if no credentials selected
                 if (!credentialName) {
@@ -229,14 +260,17 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                 }
                 return (
                   <div className="text-gray-500 text-sm text-center">
-                    Using existing credentials - no additional provider fields needed
+                    Using existing credentials - no additional provider fields
+                    needed
                   </div>
                 );
               }}
             </Form.Item>
             <div className="flex items-center my-4">
               <div className="flex-grow border-t border-gray-200"></div>
-              <span className="px-4 text-gray-500 text-sm">Additional Model Info Settings</span>
+              <span className="px-4 text-gray-500 text-sm">
+                Additional Model Info Settings
+              </span>
               <div className="flex-grow border-t border-gray-200"></div>
             </div>
             <Form.Item
@@ -247,39 +281,37 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
               rules={[
                 {
                   required: !isAdmin, // Required if not admin
-                  message: 'Please select a team.'
-                }
+                  message: "Please select a team.",
+                },
               ]}
             >
               <TeamDropdown teams={teams} />
             </Form.Item>
-            {
-              isAdmin && (
-                <>
-                  <Form.Item
-                    label="Model Access Group"
-                    name="model_access_group"
-                    className="mb-4"
-                    tooltip="Use model access groups to give users access to select models, and add new ones to the group over time."
-                  >
-                    <AntdSelect
-                      mode="tags"
-                      showSearch
-                      placeholder="Select existing groups or type to create new ones"
-                      optionFilterProp="children"
-                      tokenSeparators={[',']}
-                      options={modelAccessGroups.map((group) => ({
-                        value: group,
-                        label: group
-                      }))}
-                      maxTagCount="responsive"
-                      allowClear
-                    />
-                  </Form.Item>
-                </>
-              )
-            }
-            <AdvancedSettings 
+            {isAdmin && (
+              <>
+                <Form.Item
+                  label="Model Access Group"
+                  name="model_access_group"
+                  className="mb-4"
+                  tooltip="Use model access groups to give users access to select models, and add new ones to the group over time."
+                >
+                  <AntdSelect
+                    mode="tags"
+                    showSearch
+                    placeholder="Select existing groups or type to create new ones"
+                    optionFilterProp="children"
+                    tokenSeparators={[","]}
+                    options={modelAccessGroups.map((group) => ({
+                      value: group,
+                      label: group,
+                    }))}
+                    maxTagCount="responsive"
+                    allowClear
+                  />
+                </Form.Item>
+              </>
+            )}
+            <AdvancedSettings
               showAdvancedSettings={showAdvancedSettings}
               setShowAdvancedSettings={setShowAdvancedSettings}
               teams={teams}
@@ -292,14 +324,19 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                 </Typography.Link>
               </Tooltip>
               <div className="space-x-2">
-                <Button onClick={handleTestConnection} loading={isTestingConnection}>Test Connect</Button>
+                <Button
+                  onClick={handleTestConnection}
+                  loading={isTestingConnection}
+                >
+                  Test Connect
+                </Button>
                 <Button htmlType="submit">Add Model</Button>
               </div>
             </div>
           </>
         </Form>
       </Card>
-      
+
       {/* Test Connection Results Modal */}
       <Modal
         title="Connection Test Results"
@@ -309,24 +346,29 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
           setIsTestingConnection(false);
         }}
         footer={[
-          <Button key="close" onClick={() => {
-            setIsResultModalVisible(false);
-            setIsTestingConnection(false);
-          }}>
+          <Button
+            key="close"
+            onClick={() => {
+              setIsResultModalVisible(false);
+              setIsTestingConnection(false);
+            }}
+          >
             Close
-          </Button>
+          </Button>,
         ]}
         width={700}
       >
         {/* Only render the ConnectionErrorDisplay when modal is visible and we have a test ID */}
         {isResultModalVisible && (
-          <ConnectionErrorDisplay 
+          <ConnectionErrorDisplay
             // The key prop tells React to create a new component instance when it changes
             key={connectionTestId}
             formValues={form.getFieldsValue()}
             accessToken={accessToken}
             testMode={testMode}
-            modelName={form.getFieldValue('model_name') || form.getFieldValue('model')}
+            modelName={
+              form.getFieldValue("model_name") || form.getFieldValue("model")
+            }
             onClose={() => {
               setIsResultModalVisible(false);
               setIsTestingConnection(false);
@@ -339,4 +381,4 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
   );
 };
 
-export default AddModelTab; 
+export default AddModelTab;
