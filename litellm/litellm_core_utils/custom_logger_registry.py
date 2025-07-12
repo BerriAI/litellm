@@ -7,7 +7,7 @@ Example:
     "datadog" -> DataDogLogger
     "prometheus" -> PrometheusLogger
 """
-
+from typing import Union
 from litellm.integrations.agentops import AgentOps
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.argilla import ArgillaLogger
@@ -103,7 +103,7 @@ class CustomLoggerRegistry:
         pass  # enterprise not installed
 
     @classmethod
-    def get_callback_str_from_class_type(cls, class_type: type) -> str | None:
+    def get_callback_str_from_class_type(cls, class_type: type) -> Union[str, None]:
         """
         Get the callback string from the class type.
         

@@ -210,6 +210,7 @@ DEFAULT_IMAGE_ENDPOINT_MODEL = "dall-e-2"
 LITELLM_CHAT_PROVIDERS = [
     "openai",
     "openai_like",
+    "bytez",
     "xai",
     "custom_openai",
     "text-completion-openai",
