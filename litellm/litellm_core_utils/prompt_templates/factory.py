@@ -93,7 +93,7 @@ def map_system_message_pt(messages: list) -> list:
                     next_role == "user" or next_role == "assistant"
                 ):  # Next message is a user or assistant message
                     # Merge system prompt into the next message
-                    next_m["content"] = m["content"] + " " + next_m["content"]
+                    next_m["content"] = f"{m['content']} {next_m['content']}"
                 elif next_role == "system":  # Next message is a system message
                     # Append a user message instead of the system message
                     new_message = {"role": "user", "content": m["content"]}
