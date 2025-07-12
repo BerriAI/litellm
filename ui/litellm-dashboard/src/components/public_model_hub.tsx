@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useMemo } from "react";
 import { modelHubPublicModelsCall, proxyBaseUrl, getUiConfig, getPublicModelHubInfo } from "./networking";
 import { ModelDataTable } from "./model_dashboard/table";
 import { ColumnDef } from "@tanstack/react-table";
@@ -126,26 +126,79 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
     return Array.from(features).sort();
   };
 
-  const filteredData = modelHubData?.filter(model => {
-    const matchesSearch = model.model_group.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesProvider = selectedProviders.length === 0 || selectedProviders.some(provider => model.providers.includes(provider));
-    const matchesMode = selectedModes.length === 0 || selectedModes.includes(model.mode || "");
+
+
+  const filteredData = useMemo(() => {
+    if (!modelHubData) return [];
     
-    // Check if model has any of the selected features
-    const matchesFeature = selectedFeatures.length === 0 || 
-      Object.entries(model)
-        .filter(([key, value]) => key.startsWith('supports_') && value === true)
-        .some(([key]) => {
-          const featureName = key
-            .replace(/^supports_/, '')
-            .split('_')
-            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-            .join(' ');
-          return selectedFeatures.includes(featureName);
-        });
+    let searchResults = modelHubData;
     
-    return matchesSearch && matchesProvider && matchesMode && matchesFeature;
-  }) || [];
+    // Apply search if there's a search term
+    if (searchTerm.trim()) {
+      const lowercaseSearch = searchTerm.toLowerCase();
+      const searchWords = lowercaseSearch.split(/\s+/);
+      
+      // First, try flexible matching that handles different separators
+      const exactMatches = modelHubData.filter(model => {
+        const modelName = model.model_group.toLowerCase();
+        
+        // Check if it contains the exact search term
+        if (modelName.includes(lowercaseSearch)) {
+          return true;
+        }
+        
+        // Check if it contains all search words (handles spaces vs slashes/dashes)
+        return searchWords.every(word => modelName.includes(word));
+      });
+      
+      // If we have exact matches, rank them by relevance
+      if (exactMatches.length > 0) {
+        searchResults = exactMatches.sort((a, b) => {
+          const aName = a.model_group.toLowerCase();
+          const bName = b.model_group.toLowerCase();
+          
+          // Calculate relevance scores
+          const aExactMatch = aName === lowercaseSearch ? 1000 : 0;
+          const bExactMatch = bName === lowercaseSearch ? 1000 : 0;
+          
+          const aStartsWith = aName.startsWith(lowercaseSearch) ? 100 : 0;
+          const bStartsWith = bName.startsWith(lowercaseSearch) ? 100 : 0;
+          
+          const aContainsWords = lowercaseSearch.split(/\s+/).every(word => aName.includes(word)) ? 50 : 0;
+          const bContainsWords = lowercaseSearch.split(/\s+/).every(word => bName.includes(word)) ? 50 : 0;
+          
+          const aLength = aName.length;
+          const bLength = bName.length;
+          
+          const aScore = aExactMatch + aStartsWith + aContainsWords + (1000 - aLength);
+          const bScore = bExactMatch + bStartsWith + bContainsWords + (1000 - bLength);
+          
+                      return bScore - aScore; // Higher score first
+          });
+        }
+    }
+    
+    // Apply other filters
+    return searchResults.filter(model => {
+      const matchesProvider = selectedProviders.length === 0 || selectedProviders.some(provider => model.providers.includes(provider));
+      const matchesMode = selectedModes.length === 0 || selectedModes.includes(model.mode || "");
+      
+      // Check if model has any of the selected features
+      const matchesFeature = selectedFeatures.length === 0 || 
+        Object.entries(model)
+          .filter(([key, value]) => key.startsWith('supports_') && value === true)
+          .some(([key]) => {
+            const featureName = key
+              .replace(/^supports_/, '')
+              .split('_')
+              .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+              .join(' ');
+            return selectedFeatures.includes(featureName);
+          });
+      
+      return matchesProvider && matchesMode && matchesFeature;
+    });
+  }, [modelHubData, searchTerm, selectedProviders, selectedModes, selectedFeatures]);
 
 
 
@@ -306,6 +359,9 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
         <Text className="text-center">{formatTokens(row.original.max_input_tokens)}</Text>
       ),
       size: 100,
+      meta: {
+        className: "text-center",
+      },
     },
     {
       header: "Max Output",
@@ -315,6 +371,9 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
         <Text className="text-center">{formatTokens(row.original.max_output_tokens)}</Text>
       ),
       size: 100,
+      meta: {
+        className: "text-center",
+      },
     },
     {
       header: "Input $/1M",
@@ -329,6 +388,9 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
         );
       },
       size: 100,
+      meta: {
+        className: "text-center",
+      },
     },
     {
       header: "Output $/1M",
@@ -343,6 +405,9 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
         );
       },
       size: 100,
+      meta: {
+        className: "text-center",
+      },
     },
     {
       header: "Features",
@@ -468,12 +533,17 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
         <Card className="mb-10 p-8">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
             <div>
-              <Text className="text-base font-medium mb-3">Search Models:</Text>
+              <div className="flex items-center space-x-2 mb-3">
+                <Text className="text-base font-medium">Search Models:</Text>
+                <Tooltip title="Smart search with relevance ranking - finds models containing your search terms, ranked by relevance. Try searching 'xai grok-4', 'claude-4', 'gpt-4', or 'sonnet'" placement="top">
+                  <Info className="w-4 h-4 text-gray-400 cursor-help" />
+                </Tooltip>
+              </div>
               <div className="relative">
                 <SearchIcon className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" />
                 <input
                   type="text"
-                  placeholder="Search model names..."
+                  placeholder="Search model names... (smart search enabled)"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="border rounded-lg pl-10 pr-4 py-3 w-full text-base focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -534,7 +604,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
         {/* Models Table */}
         <Card className="p-8">
           <div className="flex justify-between items-center mb-8">
-            <Title className="text-3xl font-semibold">Models available in Gateway</Title>
+            <Title className="text-3xl font-semibold">Available Models</Title>
           </div>
 
           <ModelDataTable
