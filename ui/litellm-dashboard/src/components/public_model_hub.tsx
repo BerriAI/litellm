@@ -588,6 +588,24 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
                   </div>
                 </div>
               </div>
+              
+              {/* Wildcard Routing Note */}
+              {selectedModel.model_group.includes('*') && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                  <div className="flex items-start space-x-2">
+                    <Info className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <Text className="font-medium text-blue-900 mb-2">Wildcard Routing</Text>
+                      <Text className="text-sm text-blue-800 mb-2">
+                        This model uses wildcard routing. You can pass any value where you see the <code className="bg-blue-100 px-1 py-0.5 rounded text-xs">*</code> symbol.
+                      </Text>
+                      <Text className="text-sm text-blue-800">
+                        For example, with <code className="bg-blue-100 px-1 py-0.5 rounded text-xs">{selectedModel.model_group}</code>, you can use any string (<code className="bg-blue-100 px-1 py-0.5 rounded text-xs">{selectedModel.model_group.replace('*', 'my-custom-value')}</code>) that matches this pattern.
+                      </Text>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Token and Cost Information */}
