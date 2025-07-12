@@ -18,6 +18,7 @@ interface CreateMCPServerProps {
   onCreateSuccess: (newMcpServer: MCPServer) => void
   isModalVisible: boolean
   setModalVisible: (visible: boolean) => void
+  availableAccessGroups: string[]
 }
 
 const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
@@ -26,14 +27,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   onCreateSuccess,
   isModalVisible,
   setModalVisible,
+  availableAccessGroups,
 }) => {
   const [form] = Form.useForm()
   const [isLoading, setIsLoading] = useState(false)
   const [costConfig, setCostConfig] = useState<MCPServerCostInfo>({})
-  const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([])
   const [formValues, setFormValues] = useState<Record<string, any>>({})
   const [tools, setTools] = useState<any[]>([])
   const [transportType, setTransportType] = useState<string>("sse")
+  const [searchValue, setSearchValue] = useState<string>("")
 
   const handleCreate = async (formValues: Record<string, any>) => {
     setIsLoading(true)
@@ -130,6 +132,35 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     } else {
       form.setFieldsValue({ command: undefined, args: undefined, env: undefined })
     }
+  }
+
+  // Generate options with existing groups and potential new group
+  const getAccessGroupOptions = () => {
+    const existingOptions = availableAccessGroups.map((group: string) => ({
+      value: group,
+      label: (
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+          <span className="font-medium">{group}</span>
+        </div>
+      ),
+    }))
+
+    // If search value doesn't match any existing group and is not empty, add "create new group" option
+    if (searchValue && !availableAccessGroups.some(group => group.toLowerCase().includes(searchValue.toLowerCase()))) {
+      existingOptions.push({
+        value: searchValue,
+        label: (
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+            <span className="font-medium">{searchValue}</span>
+            <span className="text-gray-400 text-xs ml-1">create new group</span>
+          </div>
+        ),
+      })
+    }
+
+    return existingOptions
   }
 
   // rendering
@@ -304,12 +335,13 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 mode="tags"
                 showSearch
                 placeholder="Select existing groups or type to create new ones"
-                optionFilterProp="children"
+                optionFilterProp="value"
+                filterOption={(input, option) =>
+                  (option?.value ?? '').toLowerCase().includes(input.toLowerCase())
+                }
+                onSearch={(value) => setSearchValue(value)}
                 tokenSeparators={[","]}
-                options={mcpAccessGroups.map((group) => ({
-                  value: group,
-                  label: group,
-                }))}
+                options={getAccessGroupOptions()}
                 maxTagCount="responsive"
                 allowClear
               />

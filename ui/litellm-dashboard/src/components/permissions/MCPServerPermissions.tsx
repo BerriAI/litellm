@@ -80,9 +80,9 @@ export function MCPServerPermissions({
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
-        <ServerIcon className="h-4 w-4 text-green-600" />
+        <ServerIcon className="h-4 w-4 text-gray-600" />
         <Text className="font-semibold text-gray-900">MCP Servers</Text>
-        <Badge color="green" size="xs">
+        <Badge color="gray" size="xs">
           {totalCount}
         </Badge>
       </div>
@@ -92,7 +92,7 @@ export function MCPServerPermissions({
             item.type === 'server' ? (
               <Tooltip key={index} title={`Full ID: ${item.value}`} placement="top">
                 <div
-                  className="inline-flex items-center px-3 py-1.5 rounded-lg bg-green-50 border border-green-200 text-green-800 text-sm font-medium cursor-help"
+                  className="inline-flex items-center px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-200 text-blue-800 text-sm font-medium cursor-help"
                 >
                   {getMCPServerDisplayName(item.value)}
                 </div>
@@ -100,10 +100,10 @@ export function MCPServerPermissions({
             ) : (
               <div
                 key={index}
-                className="inline-flex items-center px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-200 text-blue-800 text-sm font-medium"
+                className="inline-flex items-center px-3 py-1.5 rounded-lg bg-green-50 border border-green-200 text-green-800 text-sm font-medium"
               >
-                <span className="inline-block w-2 h-2 bg-blue-500 rounded-full mr-2"></span>
-                {getAccessGroupDisplayName(item.value)} <span className="ml-1 text-xs text-blue-500">(Access Group)</span>
+                <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-2"></span>
+                {getAccessGroupDisplayName(item.value)} <span className="ml-1 text-xs text-green-500">(Access Group)</span>
               </div>
             )
           ))}
