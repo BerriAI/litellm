@@ -25,7 +25,7 @@ export const formatNumberWithCommas = (value: number | null | undefined, decimal
   });
 };
 
-export const handleCopy = (text: string, messageText: string = 'Copied to clipboard') => {
+export const handleCopy = (text: string | null | undefined, messageText: string = 'Copied to clipboard') => {
   if (!text) return;
   navigator.clipboard.writeText(text);
   message.success(messageText);
