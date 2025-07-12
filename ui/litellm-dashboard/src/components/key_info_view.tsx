@@ -24,7 +24,7 @@ import { RegenerateKeyModal } from "./regenerate_key_modal";
 import { rolesWithWriteAccess } from '../utils/roles';
 import ObjectPermissionsView from "./object_permissions_view";
 import LoggingSettingsView from "./logging_settings_view";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { formatNumberWithCommas, handleCopy } from "@/utils/dataUtils";
 import { extractLoggingSettings, formatMetadataForDisplay } from "./key_info_utils";
 
 interface KeyInfoViewProps {
@@ -61,11 +61,6 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
       </div>
     );
   }
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(keyData.token);
-    message.success('Key copied to clipboard');
-  };
 
   const handleKeyUpdate = async (formValues: Record<string, any>) => {
     try {
@@ -170,7 +165,7 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
             Back to Keys
           </Button>
           <Title>{keyData.key_alias || "API Key"}</Title>
-          <div className="flex items-center cursor-pointer" onClick={handleCopy}>
+          <div className="flex items-center cursor-pointer" onClick={() => handleCopy(keyData.token, 'Key copied to clipboard')}>
             <Text className="text-gray-500 font-mono">{keyData.token}</Text>
             <ClipboardCopyIcon className="h-5 w-5 ml-2 text-gray-500" />
           </div>

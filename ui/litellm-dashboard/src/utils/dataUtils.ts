@@ -1,3 +1,5 @@
+import { message } from "antd";
+
 export function updateExistingKeys<Source extends Object>(
   target: Source,
   source: Object
@@ -21,4 +23,10 @@ export const formatNumberWithCommas = (value: number | null | undefined, decimal
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
   });
+};
+
+export const handleCopy = (text: string, messageText: string = 'Copied to clipboard') => {
+  if (!text) return;
+  navigator.clipboard.writeText(text);
+  message.success(messageText);
 };
