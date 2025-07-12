@@ -6,7 +6,7 @@ import LiteLLMModelNameField from "./litellm_model_name";
 import ConditionalPublicModelName from "./conditional_public_model_name";
 import ProviderSpecificFields from "./provider_specific_fields";
 import AdvancedSettings from "./advanced_settings";
-import { Providers, providerLogoMap, getPlaceholder } from "../provider_info_helpers";
+import { Providers, providerLogoMap, getPlaceholder, getProviderModels } from "../provider_info_helpers";
 import type { Team } from "../key_team_helpers/key_list";
 import { CredentialItem, modelAvailableCall } from "../networking";
 import ConnectionErrorDisplay from "./model_connection_test";
@@ -108,8 +108,9 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                   setSelectedProvider(value);
                   setProviderModelsFn(value);
                   form.setFieldsValue({ 
-                    model: [],
-                    model_name: undefined 
+                    model: getProviderModels(value, null),
+                    model_name: getProviderModels(value, null) ,
+                    custom_model_name: getProviderModels(value, null)
                   });
                 }}
               >
@@ -320,7 +321,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
         {/* Only render the ConnectionErrorDisplay when modal is visible and we have a test ID */}
         {isResultModalVisible && (
           <ConnectionErrorDisplay 
-            // The key prop tells React to create a fresh component instance when it changes
+            // The key prop tells React to create a new component instance when it changes
             key={connectionTestId}
             formValues={form.getFieldsValue()}
             accessToken={accessToken}

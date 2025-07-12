@@ -140,6 +140,11 @@ export const getPlaceholder = (selectedProvider: string): string => {
   };
 
   export const getProviderModels = (provider: Providers, modelMap: any): Array<string> => {
+    if (modelMap === null) {
+      const providerName = provider_map[provider];
+      return [providerName];
+    }
+    console.log(`Model map: ${modelMap}`);
     let providerKey = provider;
     console.log(`Provider key: ${providerKey}`);
     let custom_llm_provider = provider_map[providerKey];
@@ -150,6 +155,7 @@ export const getPlaceholder = (selectedProvider: string): string => {
     if (providerKey && typeof modelMap === "object") {
       Object.entries(modelMap).forEach(([key, value]) => {
         if (
+          console.log(`Key: ${key}, Value: ${value}`),
           value !== null &&
           typeof value === "object" &&
           "litellm_provider" in (value as object) &&
