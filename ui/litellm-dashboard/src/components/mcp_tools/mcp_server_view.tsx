@@ -1,34 +1,22 @@
-import React, { useState } from "react";
-import { EyeIcon, EyeOffIcon } from "@heroicons/react/outline";
-import {
-  Title,
-  Card,
-  Button,
-  Text,
-  Grid,
-  TabGroup,
-  TabList,
-  TabPanel,
-  TabPanels,
-  Tab,
-  Icon,
-} from "@tremor/react";
+import React, { useState } from "react"
+import { EyeIcon, EyeOffIcon } from "@heroicons/react/outline"
+import { Title, Card, Button, Text, Grid, TabGroup, TabList, TabPanel, TabPanels, Tab, Icon } from "@tremor/react"
 
-import { MCPServer, handleTransport, handleAuth } from "./types";
+import { MCPServer, handleTransport, handleAuth } from "./types"
 // TODO: Move Tools viewer from index file
-import { MCPToolsViewer } from ".";
-import MCPServerEdit from "./mcp_server_edit";
-import MCPServerCostDisplay from "./mcp_server_cost_display";
-import { getMaskedAndFullUrl } from "./utils";
+import { MCPToolsViewer } from "."
+import MCPServerEdit from "./mcp_server_edit"
+import MCPServerCostDisplay from "./mcp_server_cost_display"
+import { getMaskedAndFullUrl } from "./utils"
 
 interface MCPServerViewProps {
-  mcpServer: MCPServer;
-  onBack: () => void;
-  isProxyAdmin: boolean;
-  isEditing: boolean;
-  accessToken: string | null;
-  userRole: string | null;
-  userID: string | null;
+  mcpServer: MCPServer
+  onBack: () => void
+  isProxyAdmin: boolean
+  isEditing: boolean
+  accessToken: string | null
+  userRole: string | null
+  userID: string | null
 }
 
 export const MCPServerView: React.FC<MCPServerViewProps> = ({
@@ -40,20 +28,20 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   userRole,
   userID,
 }) => {
-  const [editing, setEditing] = useState(isEditing);
-  const [showFullUrl, setShowFullUrl] = useState(false);
+  const [editing, setEditing] = useState(isEditing)
+  const [showFullUrl, setShowFullUrl] = useState(false)
 
   const handleSuccess = (updated: MCPServer) => {
-    setEditing(false);
-    onBack();
-  };
+    setEditing(false)
+    onBack()
+  }
 
-  const { maskedUrl, hasToken } = getMaskedAndFullUrl(mcpServer.url);
+  const { maskedUrl, hasToken } = getMaskedAndFullUrl(mcpServer.url)
 
   const renderUrlWithToggle = (url: string, showFull: boolean) => {
-    if (!hasToken) return url;
-    return showFull ? url : maskedUrl;
-  };
+    if (!hasToken) return url
+    return showFull ? url : maskedUrl
+  }
 
   return (
     <div className="p-4 max-w-full">
@@ -102,15 +90,8 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                     {renderUrlWithToggle(mcpServer.url, showFullUrl)}
                   </Text>
                   {hasToken && (
-                    <button
-                      onClick={() => setShowFullUrl(!showFullUrl)}
-                      className="p-1 hover:bg-gray-100 rounded"
-                    >
-                      <Icon
-                        icon={showFullUrl ? EyeOffIcon : EyeIcon}
-                        size="sm"
-                        className="text-gray-500"
-                      />
+                    <button onClick={() => setShowFullUrl(!showFullUrl)} className="p-1 hover:bg-gray-100 rounded">
+                      <Icon icon={showFullUrl ? EyeOffIcon : EyeIcon} size="sm" className="text-gray-500" />
                     </button>
                   )}
                 </div>
@@ -120,7 +101,6 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
               <Title>Cost Configuration</Title>
               <MCPServerCostDisplay costConfig={mcpServer.mcp_info?.mcp_server_cost_info} />
             </Card>
-
           </TabPanel>
 
           {/* Tool Panel */}
@@ -167,15 +147,8 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                     <div className="font-mono break-all overflow-wrap-anywhere max-w-full flex items-center gap-2">
                       {renderUrlWithToggle(mcpServer.url, showFullUrl)}
                       {hasToken && (
-                        <button
-                          onClick={() => setShowFullUrl(!showFullUrl)}
-                          className="p-1 hover:bg-gray-100 rounded"
-                        >
-                          <Icon
-                            icon={showFullUrl ? EyeOffIcon : EyeIcon}
-                            size="sm"
-                            className="text-gray-500"
-                          />
+                        <button onClick={() => setShowFullUrl(!showFullUrl)} className="p-1 hover:bg-gray-100 rounded">
+                          <Icon icon={showFullUrl ? EyeOffIcon : EyeIcon} size="sm" className="text-gray-500" />
                         </button>
                       )}
                     </div>
@@ -198,11 +171,8 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                       {mcpServer.mcp_access_groups && mcpServer.mcp_access_groups.length > 0 ? (
                         <div className="flex flex-wrap gap-2">
                           {mcpServer.mcp_access_groups.map((group: any, index: number) => (
-                            <span 
-                              key={index}
-                              className="px-2 py-1 bg-gray-100 rounded-md text-sm"
-                            >
-                              {typeof group === 'string' ? group : group?.name ?? ''}
+                            <span key={index} className="px-2 py-1 bg-gray-100 rounded-md text-sm">
+                              {typeof group === "string" ? group : group?.name ?? ""}
                             </span>
                           ))}
                         </div>
@@ -222,5 +192,5 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
         </TabPanels>
       </TabGroup>
     </div>
-  );
-};
+  )
+}
