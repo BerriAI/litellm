@@ -78,15 +78,15 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
         custom_llm_provider: Optional[str] = None,
     ) -> bool:
         """
-        Currently no Azure O Series models support native streaming.
+        Azure O3 and O4 models support native streaming.
         """
 
         if stream is not True:
             return False
 
-        if (
-            model and "o3" in model
-        ):  # o3 models support streaming - https://github.com/BerriAI/litellm/issues/8274
+        if model and ("o3" in model or "o4" in model):
+            # o3 and o4 models support streaming - https://github.com/BerriAI/litellm/issues/8274
+            # and https://github.com/BerriAI/litellm/issues/12150
             return False
 
         if model is not None:
