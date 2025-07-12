@@ -6,7 +6,7 @@ from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterat
 from litellm.types.llms.openai import ResponsesAPIResponse, ToolParam
 
 
-class MCPResponsesAPIHelper:
+class LiteLLM_Proxy_MCP_Handler:
     """
     Helper class with static methods for MCP integration with Responses API.
 
@@ -170,13 +170,13 @@ class MCPResponsesAPIHelper:
         tool_call_id: Optional[str] = None
         for tool_call in tool_calls:
             try:
-                tool_name, tool_arguments, tool_call_id = MCPResponsesAPIHelper._extract_tool_call_details(tool_call)
+                tool_name, tool_arguments, tool_call_id = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_call)
                 
                 if not tool_name:
                     verbose_logger.warning(f"Tool call missing name: {tool_call}")
                     continue
                 
-                parsed_arguments = MCPResponsesAPIHelper._parse_tool_arguments(tool_arguments)
+                parsed_arguments = LiteLLM_Proxy_MCP_Handler._parse_tool_arguments(tool_arguments)
                 
                 result = await global_mcp_server_manager.call_tool(
                     name=tool_name,
@@ -185,7 +185,7 @@ class MCPResponsesAPIHelper:
                 )
                 
                 # Format result for inclusion in response
-                result_text = MCPResponsesAPIHelper._parse_mcp_result(result)
+                result_text = LiteLLM_Proxy_MCP_Handler._parse_mcp_result(result)
                 tool_results.append({
                     "tool_call_id": tool_call_id,
                     "result": result_text
