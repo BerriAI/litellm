@@ -355,6 +355,9 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseUsageBlock,
 )
 from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+    ModelGroupInfoProxy,
+)
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     LiteLLM_UpperboundKeyGenerateParams,
@@ -639,6 +642,8 @@ async def proxy_startup_event(app: FastAPI):
             proxy_batch_write_at=proxy_batch_write_at,
             proxy_logging_obj=proxy_logging_obj,
         )
+
+        await ProxyStartupEvent._update_default_team_member_budget()
 
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
@@ -1640,7 +1645,7 @@ class ProxyConfig:
         if credential_list_dict:
             credential_list = [CredentialItem(**cred) for cred in credential_list_dict]
         return credential_list
-    
+
     def _load_environment_variables(self, config: dict):
         ## ENVIRONMENT VARIABLES
         global premium_user
@@ -1655,7 +1660,9 @@ class ProxyConfig:
                 # ```
                 #########################################################
                 if isinstance(value, str) and value.startswith("os.environ/"):
-                    resolved_secret_string: Optional[str] = get_secret_str(secret_name=value)
+                    resolved_secret_string: Optional[str] = get_secret_str(
+                        secret_name=value
+                    )
                     if resolved_secret_string is not None:
                         os.environ[key] = resolved_secret_string
                 else:
@@ -1896,6 +1903,7 @@ class ProxyConfig:
                         raise Exception(
                             f"Invalid value set for upperbound_key_generate_params - value={value}"
                         )
+
                 else:
                     verbose_proxy_logger.debug(
                         f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}"
@@ -1974,10 +1982,13 @@ class ProxyConfig:
                     value=custom_sso, config_file_path=config_file_path
                 )
 
-            custom_ui_sso_sign_in_handler = general_settings.get("custom_ui_sso_sign_in_handler", None)
+            custom_ui_sso_sign_in_handler = general_settings.get(
+                "custom_ui_sso_sign_in_handler", None
+            )
             if custom_ui_sso_sign_in_handler is not None:
                 user_custom_ui_sso_sign_in_handler = get_instance_fn(
-                    value=custom_ui_sso_sign_in_handler, config_file_path=config_file_path
+                    value=custom_ui_sso_sign_in_handler,
+                    config_file_path=config_file_path,
                 )
 
             if enterprise_proxy_config is not None:
@@ -3357,6 +3368,23 @@ class ProxyStartupEvent:
         )
 
     @classmethod
+    async def _update_default_team_member_budget(cls):
+        """Update the default team member budget"""
+        if litellm.default_internal_user_params is None:
+            return
+
+        _teams = litellm.default_internal_user_params.get("teams") or []
+        if _teams and all(isinstance(team, dict) for team in _teams):
+            from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+                update_default_team_member_budget,
+            )
+
+            teams_pydantic_obj = [NewUserRequestTeam(**team) for team in _teams]
+            await update_default_team_member_budget(
+                teams=teams_pydantic_obj, user_api_key_dict=UserAPIKeyAuth(token=hash_token(master_key))  # type: ignore
+            )
+
+    @classmethod
     async def initialize_scheduled_background_jobs(
         cls,
         general_settings: dict,
@@ -3382,6 +3410,7 @@ class ProxyStartupEvent:
                 proxy_logging_obj=proxy_logging_obj,
                 prisma_client=prisma_client,
             )
+
             scheduler.add_job(
                 budget_reset_job.reset_budget,
                 "interval",
@@ -6530,8 +6559,8 @@ async def model_info_v1(  # noqa: PLR0915
 
 def _get_model_group_info(
     llm_router: Router, all_models_str: List[str], model_group: Optional[str]
-) -> List[ModelGroupInfo]:
-    model_groups: List[ModelGroupInfo] = []
+) -> List[ModelGroupInfoProxy]:
+    model_groups: List[ModelGroupInfoProxy] = []
     # ensure all_models_str is a set
     all_models_str_set = set(all_models_str)
 
@@ -6542,14 +6571,22 @@ def _get_model_group_info(
         _model_group_info = llm_router.get_model_group_info(model_group=model)
 
         if _model_group_info is not None:
-            model_groups.append(_model_group_info)
+            model_groups.append(ModelGroupInfoProxy(**_model_group_info.model_dump()))
         else:
-            model_group_info = ModelGroupInfo(
+            model_group_info = ModelGroupInfoProxy(
                 model_group=model,
                 providers=[],
             )
             model_groups.append(model_group_info)
+
+    ## check for public model groups
+    if litellm.public_model_groups is not None:
+        for mg in model_groups:
+            if mg.model_group in litellm.public_model_groups:
+                mg.is_public_model_group = True
+
     return model_groups
+
 
 @router.get(
     "/model_group/info",
@@ -6772,7 +6809,7 @@ async def model_group_info(
         infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
         llm_router=llm_router,
     )
-    model_groups: List[ModelGroupInfo] = _get_model_group_info(
+    model_groups: List[ModelGroupInfoProxy] = _get_model_group_info(
         llm_router=llm_router, all_models_str=all_models_str, model_group=model_group
     )
 

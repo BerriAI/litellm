@@ -847,9 +847,28 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     transport: MCPTransportType = MCPTransport.sse
     spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
     auth_type: Optional[MCPAuthType] = None
-    url: str
+    url: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
     mcp_access_groups: List[str] = Field(default_factory=list)
+    # Stdio-specific fields
+    command: Optional[str] = None
+    args: Optional[List[str]] = None
+    env: Optional[Dict[str, str]] = None
+    
+    @model_validator(mode="before")
+    @classmethod
+    def validate_transport_fields(cls, values):
+        if isinstance(values, dict):
+            transport = values.get("transport")
+            if transport == MCPTransport.stdio:
+                if not values.get("command"):
+                    raise ValueError("command is required for stdio transport")
+                if not values.get("args"):
+                    raise ValueError("args is required for stdio transport")
+            elif transport in [MCPTransport.http, MCPTransport.sse]:
+                if not values.get("url"):
+                    raise ValueError("url is required for HTTP/SSE transport")
+        return values
 
 
 
@@ -860,9 +879,28 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     transport: MCPTransportType = MCPTransport.sse
     spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
     auth_type: Optional[MCPAuthType] = None
-    url: str
+    url: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
     mcp_access_groups: List[str] = Field(default_factory=list)
+    # Stdio-specific fields
+    command: Optional[str] = None
+    args: Optional[List[str]] = None
+    env: Optional[Dict[str, str]] = None
+    
+    @model_validator(mode="before")
+    @classmethod
+    def validate_transport_fields(cls, values):
+        if isinstance(values, dict):
+            transport = values.get("transport")
+            if transport == MCPTransport.stdio:
+                if not values.get("command"):
+                    raise ValueError("command is required for stdio transport")
+                if not values.get("args"):
+                    raise ValueError("args is required for stdio transport")
+            elif transport in [MCPTransport.http, MCPTransport.sse]:
+                if not values.get("url"):
+                    raise ValueError("url is required for HTTP/SSE transport")
+        return values
 
 
 
@@ -872,7 +910,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     server_id: str
     alias: Optional[str] = None
     description: Optional[str] = None
-    url: str
+    url: Optional[str] = None
     transport: MCPTransportType
     spec_version: MCPSpecVersionType
     auth_type: Optional[MCPAuthType] = None
@@ -883,6 +921,10 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     teams: List[Dict[str, Optional[str]]] = Field(default_factory=list)
     mcp_access_groups: List[str] = Field(default_factory=list)
     mcp_info: Optional[MCPInfo] = None
+    # Stdio-specific fields
+    command: Optional[str] = None
+    args: Optional[List[str]] = None
+    env: Optional[Dict[str, str]] = None
 
 
 class NewUserRequestTeam(LiteLLMPydanticObjectBase):

@@ -18,7 +18,7 @@ LiteLLM Proxy provides an MCP Gateway that allows you to use a fixed endpoint fo
 | Feature | Description |
 |---------|-------------|
 | MCP Operations | • List Tools<br/>• Call Tools |
-| Supported MCP Transports | • Streamable HTTP<br/>• SSE |
+| Supported MCP Transports | • Streamable HTTP<br/>• SSE<br/>• Standard Input/Output (stdio) |
 | LiteLLM Permission Management | ✨ Enterprise Only<br/>• By Key<br/>• By Team<br/>• By Organization |
 
 ## Adding your MCP
@@ -33,9 +33,19 @@ On this form, you should enter your MCP Server URL and the transport you want to
 LiteLLM supports the following MCP transports:
 - Streamable HTTP
 - SSE (Server-Sent Events)
+- Standard Input/Output (stdio)
 
 <Image 
   img={require('../img/add_mcp.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+### Adding a stdio MCP Server
+
+For stdio MCP servers, select "Standard Input/Output (stdio)" as the transport type and provide the stdio configuration in JSON format:
+
+<Image 
+  img={require('../img/add_stdio_mcp.png')}
   style={{width: '80%', display: 'block', margin: '0'}}
 />
 
@@ -60,6 +70,15 @@ mcp_servers:
   zapier_mcp:
     url: "https://actions.zapier.com/mcp/sk-akxxxxx/sse"
   
+  # Standard Input/Output (stdio) Server - CircleCI Example
+  circleci_mcp:
+    transport: "stdio"
+    command: "npx"
+    args: ["-y", "@circleci/mcp-server-circleci"]
+    env:
+      CIRCLECI_TOKEN: "your-circleci-token"
+      CIRCLECI_BASE_URL: "https://circleci.com"
+  
   # Full configuration with all optional fields
   my_http_server:
     url: "https://my-mcp-server.com/mcp"
@@ -70,11 +89,15 @@ mcp_servers:
 ```
 
 **Configuration Options:**
-- **Server Name**: Use any descriptive name for your MCP server (e.g., `zapier_mcp`, `deepwiki_mcp`)
-- **URL**: The endpoint URL for your MCP server (required)
+- **Server Name**: Use any descriptive name for your MCP server (e.g., `zapier_mcp`, `deepwiki_mcp`, `circleci_mcp`)
+- **URL**: The endpoint URL for your MCP server (required for HTTP/SSE transports)
 - **Transport**: Optional transport type (defaults to `sse`)
   - `sse` - SSE (Server-Sent Events) transport
   - `http` - Streamable HTTP transport
+  - `stdio` - Standard Input/Output transport
+- **Command**: The command to execute for stdio transport (required for stdio)
+- **Args**: Array of arguments to pass to the command (optional for stdio)
+- **Env**: Environment variables to set for the stdio process (optional for stdio)
 - **Description**: Optional description for the server
 - **Auth Type**: Optional authentication type
 - **Spec Version**: Optional MCP specification version (defaults to `2025-03-26`)

@@ -59,7 +59,9 @@ export const modelHubColumns = (
   handleSelectAll: (checked: boolean) => void,
   showModal: (model: ModelHubData) => void,
   copyToClipboard: (text: string) => void,
-): ColumnDef<ModelHubData>[] => [
+  publicPage: boolean = false,
+): ColumnDef<ModelHubData>[] => {
+  const allColumns: ColumnDef<ModelHubData>[] = [
   {
     header: () => (
       <Checkbox
@@ -241,14 +243,14 @@ export const modelHubColumns = (
     accessorKey: "public",
     enableSorting: true,
     sortingFn: (rowA, rowB) => {
-      const publicA = rowA.original.public === true ? 1 : 0;
-      const publicB = rowB.original.public === true ? 1 : 0;
+      const publicA = rowA.original.is_public_model_group === true ? 1 : 0;
+      const publicB = rowB.original.is_public_model_group === true ? 1 : 0;
       return publicA - publicB;
     },
     cell: ({ row }) => {
       const model = row.original;
       
-      return model.public === true ? (
+      return model.is_public_model_group === true ? (
         <Badge color="green" size="xs">Yes</Badge>
       ) : (
         <Badge color="gray" size="xs">No</Badge>
@@ -278,4 +280,20 @@ export const modelHubColumns = (
       );
     },
   },
-]; 
+];
+
+  // Filter out columns based on publicPage setting
+  if (publicPage) {
+    return allColumns.filter(column => {
+      // Remove the select/checkbox column
+      if (column.id === "select") return false;
+      
+      // Remove the public column
+      if ('accessorKey' in column && column.accessorKey === "public") return false;
+      
+      return true;
+    });
+  }
+  
+  return allColumns;
+};
