@@ -20,6 +20,6 @@ export default function PublicModelHubTable() {
    *
    */
   return (
-    <ModelHubTable accessToken={accessToken} publicPage={true} premiumUser={false} />
+    <ModelHubTable accessToken={accessToken} publicPage={true} premiumUser={false} userRole={null}/>
   );
 } 

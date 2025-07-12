@@ -375,6 +375,7 @@ export default function CreateKeyPage() {
                   accessToken={accessToken}
                   publicPage={false}
                   premiumUser={premiumUser}
+                  userRole={userRole}
                 />
               ) : page == "caching" ? (
                 <CacheDashboard
