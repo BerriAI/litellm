@@ -37,7 +37,7 @@ interface PublicModelHubProps {
 const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
   const [modelHubData, setModelHubData] = useState<ModelGroupInfo[] | null>(null);
   const [pageTitle, setPageTitle] = useState<string>("LiteLLM Gateway");
-  const [pageDescription, setPageDescription] = useState<string>("");
+  const [customDocsDescription, setCustomDocsDescription] = useState<string | null>(null);
   const [litellmVersion, setLitellmVersion] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(true);
   const [searchTerm, setSearchTerm] = useState<string>("");
@@ -76,7 +76,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
       const discoveryData = await getUiConfig();
       console.log("Discovery Data:", discoveryData);
       setPageTitle(discoveryData.docs_title);
-      setPageDescription(discoveryData.docs_description);
+      setCustomDocsDescription(discoveryData.custom_docs_description);
       setLitellmVersion(discoveryData.litellm_version);
     };
 
@@ -433,7 +433,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
         {/* About Section */}
           <Card className="mb-10 p-8">
             <Title className="text-3xl font-semibold mb-6">About</Title>
-            <p className="text-gray-700 mb-6 text-lg leading-relaxed">Proxy Server to call 100+ LLMs in the OpenAI format.</p>
+            <p className="text-gray-700 mb-6 text-lg leading-relaxed">{customDocsDescription ? customDocsDescription : "Proxy Server to call 100+ LLMs in the OpenAI format."}</p>
             <div className="flex items-center space-x-3 text-base text-gray-600">
               <span className="flex items-center">
                 <span className="w-5 h-5 mr-2">🔧</span>

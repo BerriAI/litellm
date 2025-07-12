@@ -111,7 +111,7 @@ export interface LiteLLMWellKnownUiConfig {
   server_root_path: string;
   proxy_base_url: string | null;
   docs_title: string;
-  docs_description: string;
+  custom_docs_description: string | null;
   litellm_version: string;
 }
 
