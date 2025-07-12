@@ -16,6 +16,7 @@ import { Table as TableInstance } from '@tanstack/react-table';
 import { generateCodeSnippet } from "./chat_ui/CodeSnippets";
 import { EndpointType, getEndpointType } from "./chat_ui/mode_endpoint_mapping";
 import { MessageType } from "./chat_ui/types";
+import { getProviderLogoAndName } from "./provider_info_helpers";
 // Simple approach without react-markdown dependency
 
 interface ModelGroupInfo {
@@ -257,6 +258,8 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
     return limits.length > 0 ? limits.join(", ") : "N/A";
   };
 
+
+
   const publicModelHubColumns = (): ColumnDef<ModelGroupInfo>[] => [
     {
       header: "#",
@@ -294,30 +297,30 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
       enableSorting: true,
       cell: ({ row }) => {
         const providers = row.original.providers;
-        const getProviderColor = (provider: string) => {
-          switch (provider.toLowerCase()) {
-            case "openai":
-              return "green";
-            case "anthropic":
-              return "orange";
-            case "cohere":
-              return "blue";
-            default:
-              return "gray";
-          }
-        };
         
         return (
           <div className="flex flex-wrap gap-1">
-            {providers.map((provider) => (
-              <Tag
-                key={provider}
-                color={getProviderColor(provider)}
-                className="text-xs"
-              >
-                {provider}
-              </Tag>
-            ))}
+            {providers.map((provider) => {
+              const { logo } = getProviderLogoAndName(provider);
+              return (
+                <div
+                  key={provider}
+                  className="flex items-center space-x-1 px-2 py-1 bg-gray-100 rounded text-xs"
+                >
+                  {logo && (
+                    <img 
+                      src={logo} 
+                      alt={provider} 
+                      className="w-3 h-3 flex-shrink-0 object-contain"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = 'none';
+                      }}
+                    />
+                  )}
+                  <span className="capitalize">{provider}</span>
+                </div>
+              );
+            })}
           </div>
         );
       },
@@ -560,9 +563,41 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
                 className="w-full"
                 size="large"
                 allowClear
+                optionRender={(option) => {
+                  const { logo } = getProviderLogoAndName(option.value as string);
+                  return (
+                    <div className="flex items-center space-x-2">
+                      {logo && (
+                        <img 
+                          src={logo} 
+                          alt={option.label as string} 
+                          className="w-5 h-5 flex-shrink-0 object-contain"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.display = 'none';
+                          }}
+                        />
+                      )}
+                      <span className="capitalize">{option.label}</span>
+                    </div>
+                  );
+                }}
               >
                 {modelHubData && getUniqueProviders(modelHubData).map(provider => (
-                  <Select.Option key={provider} value={provider}>{provider}</Select.Option>
+                  <Select.Option key={provider} value={provider}>
+                    <div className="flex items-center space-x-2">
+                      {getProviderLogoAndName(provider).logo && (
+                        <img 
+                          src={getProviderLogoAndName(provider).logo} 
+                          alt={provider} 
+                          className="w-5 h-5 flex-shrink-0 object-contain"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.display = 'none';
+                          }}
+                        />
+                      )}
+                      <span className="capitalize">{provider}</span>
+                    </div>
+                  </Select.Option>
                 ))}
               </Select>
             </div>
@@ -661,9 +696,26 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
                 <div>
                   <Text className="font-medium">Providers:</Text>
                   <div className="flex flex-wrap gap-1 mt-1">
-                    {selectedModel.providers.map(provider => (
-                      <Tag key={provider} color="blue">{provider}</Tag>
-                    ))}
+                    {selectedModel.providers.map(provider => {
+                      const { logo } = getProviderLogoAndName(provider);
+                      return (
+                        <Tag key={provider} color="blue">
+                          <div className="flex items-center space-x-1">
+                            {logo && (
+                              <img 
+                                src={logo} 
+                                alt={provider} 
+                                className="w-3 h-3 flex-shrink-0 object-contain"
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).style.display = 'none';
+                                }}
+                              />
+                            )}
+                            <span className="capitalize">{provider}</span>
+                          </div>
+                        </Tag>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
