@@ -544,3 +544,76 @@ class TestMCPCustomHeaderName:
                 mock_user_api_key_auth.assert_called_once()
                 call_args = mock_user_api_key_auth.call_args
                 assert call_args.kwargs["api_key"] == api_key
+
+class TestMCPAccessGroupsE2E:
+    """Simple e2e tests for MCP access groups functionality"""
+
+    @pytest.mark.asyncio 
+    async def test_mcp_access_group_resolution_e2e(self):
+        """E2E test: Pass access group in x-mcp-servers header, verify it resolves to server IDs"""
+        
+        # Mock servers that belong to the access group
+        mock_server_1 = MagicMock()
+        mock_server_1.server_id = "gmail-server"
+        mock_server_2 = MagicMock()  
+        mock_server_2.server_id = "slack-server"
+        
+        # Mock prisma client
+        mock_prisma_client = MagicMock()
+        mock_find_many = AsyncMock(return_value=[mock_server_1, mock_server_2])
+        mock_prisma_client.db.litellm_mcpservertable.find_many = mock_find_many
+        
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+            # Test that when we pass an access group, it calls _get_mcp_servers_from_access_groups
+            result = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+                access_groups=["dev-group"]
+            )
+            
+            # Verify it unfurls the MCPs from that group
+            assert sorted(result) == sorted(["gmail-server", "slack-server"])
+            
+            # Verify the correct database query was made
+            mock_find_many.assert_called_once_with(
+                where={
+                    "mcp_access_groups": {
+                        "hasSome": ["dev-group"]
+                    }
+                }
+            )
+
+    @pytest.mark.asyncio
+    async def test_mcp_header_with_mixed_servers_and_groups(self):
+        """E2E test: x-mcp-servers header with both server names and access groups"""
+        
+        # Create ASGI scope with mixed servers and access groups
+        scope = {
+            "type": "http", 
+            "method": "POST",
+            "path": "/test",
+            "headers": [
+                (b"x-litellm-api-key", b"test-api-key"),
+                (b"x-mcp-servers", b"zapier-server,dev-group"),  # Mix of server name and access group
+            ],
+        }
+        
+        # Mock user authentication
+        async def mock_user_api_key_auth(api_key, request):
+            return UserAPIKeyAuth(
+                token="test-token",
+                api_key=api_key,
+                user_id="test-user-id",
+                team_id="test-team-id",
+                user_role=None,
+                request_route=None
+            )
+        
+        with patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+            side_effect=mock_user_api_key_auth,
+        ):
+            # Call process_mcp_request 
+            auth_result, mcp_auth_header, mcp_servers = await MCPRequestHandler.process_mcp_request(scope)
+            
+            # Verify the header parsing worked correctly
+            assert auth_result.api_key == "test-api-key"
+            assert mcp_servers == ["zapier-server", "dev-group"]  # Should contain both server name and access group
