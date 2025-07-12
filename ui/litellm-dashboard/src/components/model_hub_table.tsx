@@ -363,6 +363,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
               handleSelectAll,
               showModal,
               copyToClipboard,
+              publicPage,
             )}
             data={filteredData}
             isLoading={loading}

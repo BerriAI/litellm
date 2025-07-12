@@ -59,7 +59,9 @@ export const modelHubColumns = (
   handleSelectAll: (checked: boolean) => void,
   showModal: (model: ModelHubData) => void,
   copyToClipboard: (text: string) => void,
-): ColumnDef<ModelHubData>[] => [
+  publicPage: boolean = false,
+): ColumnDef<ModelHubData>[] => {
+  const allColumns: ColumnDef<ModelHubData>[] = [
   {
     header: () => (
       <Checkbox
@@ -278,4 +280,20 @@ export const modelHubColumns = (
       );
     },
   },
-]; 
+];
+
+  // Filter out columns based on publicPage setting
+  if (publicPage) {
+    return allColumns.filter(column => {
+      // Remove the select/checkbox column
+      if (column.id === "select") return false;
+      
+      // Remove the public column
+      if ('accessorKey' in column && column.accessorKey === "public") return false;
+      
+      return true;
+    });
+  }
+  
+  return allColumns;
+};
