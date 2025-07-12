@@ -697,7 +697,6 @@ async def test_get_tools_from_mcp_servers():
                 user_api_key_auth=mock_user_auth,
                 mcp_auth_header=mock_auth_header,
                 mcp_servers=["server1"],
-                mcp_access_groups=None
             )
             assert len(result) == 1, "Should only return tools from server1"
             assert result[0].name == "tool1", "Should return tool from server1"
@@ -710,7 +709,6 @@ async def test_get_tools_from_mcp_servers():
                 user_api_key_auth=mock_user_auth,
                 mcp_auth_header=mock_auth_header,
                 mcp_servers=None,
-                mcp_access_groups=None
             )
             assert len(result) == 2, "Should return tools from all servers"
             assert result[0].name == "tool1" and result[1].name == "tool2", "Should return tools from all servers"

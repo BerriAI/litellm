@@ -111,6 +111,7 @@ mcp_servers:
 <Tabs>
 <TabItem value="openai" label="OpenAI API">
 
+### Quick Start
 #### Connect via OpenAI Responses API
 
 Use the OpenAI Responses API to connect to your LiteLLM MCP server:
@@ -197,7 +198,7 @@ Use tools directly from Cursor IDE with LiteLLM MCP:
 </TabItem>
 </Tabs>
 
-## Segregating MCP Server Access
+### Specific MCP Servers
 
 You can choose to access specific MCP servers and only list their tools using the `x-mcp-servers` header. This header allows you to:
 - Limit tool access to one or more specific MCP servers
@@ -288,6 +289,58 @@ This configuration in Cursor IDE settings will limit tool access to only the spe
 
 </TabItem>
 </Tabs>
+
+### Grouping MCPs (Access Groups)
+
+MCP Access Groups allow you to group multiple MCP servers together for easier management.
+
+#### 1. Create an Access Group
+
+To create an access group:
+- Go to MCP Servers in the LiteLLM UI
+- Click "Add a New MCP Server" 
+- Under "MCP Access Groups", create a new group (e.g., "dev_group") by typing it
+- Add the same group name to other servers to group them together
+
+<Image 
+  img={require('../img/mcp_create_access_group.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+#### 2. Use Access Group in Cursor
+
+Include the access group name in the `x-mcp-servers` header:
+
+```json title="Cursor Configuration with Access Groups" showLineNumbers
+{
+  "mcpServers": {
+    "LiteLLM": {
+      "url": "<your-litellm-proxy-base-url>/mcp",
+      "headers": {
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
+        "x-mcp-servers": "dev_group"
+      }
+    }
+  }
+}
+```
+
+This gives you access to all servers in the "dev_group" access group.
+
+#### Advanced: Connecting Access Groups to API Keys
+
+When creating API keys, you can assign them to specific access groups for permission management:
+
+- Go to "Keys" in the LiteLLM UI and click "Create Key"
+- Select the desired MCP access groups from the dropdown
+- The key will have access to all MCP servers in those groups
+- This is reflected in the Test Key page
+
+<Image 
+  img={require('../img/mcp_key_access_group.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
 
 ## Using your MCP with client side credentials
 
@@ -643,77 +696,6 @@ When Creating a Key, Team, or Organization, you can select the allowed MCP Serve
   img={require('../img/mcp_key.png')}
   style={{width: '80%', display: 'block', margin: '0'}}
 />
-
-
-### MCP Access Groups
-
-MCP Access Groups are managed via the LiteLLM UI. They allow you to group multiple MCP servers together and grant access to these groups when creating API keys. This makes it easy to give a key access to several MCP servers at once, without having to select each server individually.
-
-#### 1. Managing Access Groups in the UI
-
-To create and manage MCP access groups:
-- Go to MCP Servers
-- Click "Add a New MCP Server"
-- Under the "MCP Access Groups" either select an existing group or create a new one by simply typing it
-- To add more servers to this Access Group, go to their settings and add the same name Access Group under their dropdown
-
-<Image 
-  img={require('../img/mcp_create_access_group.png')}
-  style={{width: '80%', display: 'block', margin: '0'}}
-/>
-
-#### 2. Assigning Keys to Access Groups via the UI
-
-When creating a key/team in the UI:
-- You can select one or more MCP access groups to assign to the key.
-- The key will then have access to all MCP servers included in those groups.
-- This is reflected in the Test Key page, where only the MCP servers and tools from the assigned access groups will be available for testing.
-
-<Image 
-  img={require('../img/mcp_key_access_group.png')}
-  style={{width: '80%', display: 'block', margin: '0'}}
-/>
-
-*Example UI flow:*
-- Go to "Keys" in the LiteLLM UI and click "Create Key".
-- In the creation form, select the desired MCP access groups from the dropdown or list.
-- Complete the key creation process. The new key will now have access to all MCP servers in the selected groups.
-
-#### 3. Using the Access Group Header for Segregating Access
-
-You can further restrict access at request time using the `x-mcp-access-groups` header. This allows you to dynamically limit which access groups are available for a given request. Note: The access groups referenced in the header must be created and managed in the UI.
-
-**Example:**
-```bash
-curl --location 'https://api.openai.com/v1/responses' \
---header 'Content-Type: application/json' \
---header "Authorization: Bearer $OPENAI_API_KEY" \
---data '{
-    "model": "gpt-4.1",
-    "tools": [
-        {
-            "type": "mcp",
-            "server_label": "litellm",
-            "server_url": "http://localhost:4000/mcp",
-            "require_approval": "never",
-            "headers": {
-        "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
-        "x-mcp-servers": [
-                "Zapier_Gmail"
-        ],
-        "x-mcp-access-groups": [
-                "dev"
-        ]
-}
-        }
-    ],
-    "input": "Run available tools",
-    "tool_choice": "required"
-}'
-```
-This request will only have access to MCP servers in the specified access groups.
-
-For all access group management, please use the LiteLLM UI.
 
 ## LiteLLM Proxy - Walk through MCP Gateway
 LiteLLM exposes an MCP Gateway for admins to add all their MCP servers to LiteLLM. The key benefits of using LiteLLM Proxy with MCP are:
