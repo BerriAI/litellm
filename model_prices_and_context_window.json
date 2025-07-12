@@ -15963,5 +15963,85 @@
         "supports_reasoning": true,
         "mode": "chat",
         "source": "https://bailian.console.alibabacloud.com/?spm=a2c63.p38356.0.0.4a615d7bjSUCb4&tab=doc#/doc/?type=model&url=https%3A%2F%2Fwww.alibabacloud.com%2Fhelp%2Fen%2Fdoc-detail%2F2840914.html"
+    },
+    "moonshot/moonshot-v1-8k": {
+        "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "litellm_provider": "moonshot",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "mode": "chat",
+        "source": "https://platform.moonshot.ai/docs/pricing"
+    },
+    "moonshot/moonshot-v1-32k": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "litellm_provider": "moonshot",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "mode": "chat",
+        "source": "https://platform.moonshot.ai/docs/pricing"
+    },
+    "moonshot/moonshot-v1-128k": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "litellm_provider": "moonshot",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "mode": "chat",
+        "source": "https://platform.moonshot.ai/docs/pricing"
+    },
+    "moonshot/moonshot-v1-auto": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "litellm_provider": "moonshot",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "mode": "chat",
+        "source": "https://platform.moonshot.ai/docs/pricing"
+    },
+    "moonshot/kimi-k2": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "litellm_provider": "moonshot",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "mode": "chat",
+        "source": "https://platform.moonshot.ai/docs/pricing"
+    },
+    "moonshot/moonshot-v1-32k-0430": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "litellm_provider": "moonshot",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "mode": "chat",
+        "source": "https://platform.moonshot.ai/docs/pricing"
+    },
+    "moonshot/moonshot-v1-128k-0430": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "litellm_provider": "moonshot",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "mode": "chat",
+        "source": "https://platform.moonshot.ai/docs/pricing"
+    },
+    "moonshot/moonshot-v1-8k-0430": {
+        "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "litellm_provider": "moonshot",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "mode": "chat",
+        "source": "https://platform.moonshot.ai/docs/pricing"
     }
 }
