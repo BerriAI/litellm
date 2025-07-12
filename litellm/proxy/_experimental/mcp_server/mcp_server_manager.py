@@ -114,7 +114,7 @@ class MCPServerManager:
             # Generate stable server ID based on parameters
             server_id = self._generate_stable_server_id(
                 server_name=server_name,
-                url=server_config["url"],
+                url=server_config.get("url", None) or "",
                 transport=server_config.get("transport", MCPTransport.http),
                 spec_version=server_config.get("spec_version", MCPSpecVersion.mar_2025),
                 auth_type=server_config.get("auth_type", None),
@@ -123,7 +123,10 @@ class MCPServerManager:
             new_server = MCPServer(
                 server_id=server_id,
                 name=server_name,
-                url=server_config["url"],
+                url=server_config.get("url", None) or "",
+                command=server_config.get("command", None) or "",
+                args=server_config.get("args", None) or [],
+                env=server_config.get("env", None) or {},
                 # TODO: utility fn the default values
                 transport=server_config.get("transport", MCPTransport.http),
                 spec_version=server_config.get("spec_version", MCPSpecVersion.mar_2025),
