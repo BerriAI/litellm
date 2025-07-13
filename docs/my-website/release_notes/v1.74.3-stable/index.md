@@ -180,12 +180,12 @@ pip install litellm==1.74.3.rc
     - New guardrail integration - [PR](https://github.com/BerriAI/litellm/pull/12519)
 - **[Prometheus](../../docs/proxy/prometheus)**
     - support tag based metrics (enables prometheus metrics for measuring roo-code/cline/claude code engagement) - [PR](https://github.com/BerriAI/litellm/pull/12534), [Get Started](../../docs/proxy/prometheus#custom-tags)
+- **[Datadog LLM Observability](../../docs/observability/datadog)**
+    - Added `total_cost` field to track costs in DataDog LLM observability metrics - [PR](https://github.com/BerriAI/litellm/pull/12467)
 
 #### Bugs
 - **[Prometheus](../../docs/proxy/prometheus)**
     - Remove experimental `_by_tag` metrics (fixes cardinality issue) - [PR](https://github.com/BerriAI/litellm/pull/12395)
-- **[Datadog LLM Observability Logger]** [NEEDS DOCS]
-    - push total_cost - [PR](https://github.com/BerriAI/litellm/pull/12467)
 - **[Slack Alerting](../../docs/proxy/alerting)**
     - Fix slack alerting for outage and region outage alerts - [PR](https://github.com/BerriAI/litellm/pull/12464), [Get Started](../../docs/proxy/alerting#region-outage-alerting--enterprise-feature)
 
