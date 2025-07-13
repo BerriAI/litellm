@@ -229,26 +229,17 @@ pip install litellm==1.74.3.rc
 ---
 
 ## New Contributors
-* @wildcard made their first contribution in https://github.com/BerriAI/litellm/pull/12157
-* @colesmcintosh made their first contribution in https://github.com/BerriAI/litellm/pull/12168
-* @seyeong-han made their first contribution in https://github.com/BerriAI/litellm/pull/11946
-* @dinggh made their first contribution in https://github.com/BerriAI/litellm/pull/12162
-* @raz-alon made their first contribution in https://github.com/BerriAI/litellm/pull/11432
-* @tofarr made their first contribution in https://github.com/BerriAI/litellm/pull/12200
-* @szafranek made their first contribution in https://github.com/BerriAI/litellm/pull/12179
-* @SamBoyd made their first contribution in https://github.com/BerriAI/litellm/pull/12147
-* @lizzij made their first contribution in https://github.com/BerriAI/litellm/pull/12219
-* @cipri-tom made their first contribution in https://github.com/BerriAI/litellm/pull/12201
-* @zsimjee made their first contribution in https://github.com/BerriAI/litellm/pull/12185
-* @jroberts2600 made their first contribution in https://github.com/BerriAI/litellm/pull/12175
-* @njbrake made their first contribution in https://github.com/BerriAI/litellm/pull/12202
-* @NANDINI-star made their first contribution in https://github.com/BerriAI/litellm/pull/12244
-* @utsumi-fj made their first contribution in https://github.com/BerriAI/litellm/pull/12230
-* @dcieslak19973 made their first contribution in https://github.com/BerriAI/litellm/pull/12283
-* @hanouticelina made their first contribution in https://github.com/BerriAI/litellm/pull/12286
-* @lowjiansheng made their first contribution in https://github.com/BerriAI/litellm/pull/11999
-* @JoostvDoorn made their first contribution in https://github.com/BerriAI/litellm/pull/12281
-* @takashiishida made their first contribution in https://github.com/BerriAI/litellm/pull/12239
+* @kanaka made their first contribution in https://github.com/BerriAI/litellm/pull/12418
+* @juancarlosm made their first contribution in https://github.com/BerriAI/litellm/pull/12411
+* @DmitriyAlergant made their first contribution in https://github.com/BerriAI/litellm/pull/12356
+* @Rayshard made their first contribution in https://github.com/BerriAI/litellm/pull/12487
+* @minghao51 made their first contribution in https://github.com/BerriAI/litellm/pull/12361
+* @jdietzsch91 made their first contribution in https://github.com/BerriAI/litellm/pull/12488
+* @iwinux made their first contribution in https://github.com/BerriAI/litellm/pull/12473
+* @andresC98 made their first contribution in https://github.com/BerriAI/litellm/pull/12413
+* @EmaSuriano made their first contribution in https://github.com/BerriAI/litellm/pull/12509
+* @strawgate made their first contribution in https://github.com/BerriAI/litellm/pull/12528
+* @inf3rnus made their first contribution in https://github.com/BerriAI/litellm/pull/12121
 
-## **[Git Diff](https://github.com/BerriAI/litellm/compare/v1.73.6-stable...v1.74.0-stable)**
+## **[Git Diff](https://github.com/BerriAI/litellm/compare/v1.74.0-stable...v1.74.3-stable)**
 
