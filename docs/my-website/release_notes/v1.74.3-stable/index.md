@@ -94,7 +94,10 @@ pip install litellm==1.74.3rc2
 
 ## [MCP Gateway](../../docs/mcp)
 
-[NEEDS IMAGE]
+<Image 
+  img={require('../../img/release_notes/mcp_tool_cost_tracking.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
 
 #### Features
 - **[Cost Tracking](../../docs/mcp#-mcp-cost-tracking)**
@@ -122,7 +125,10 @@ pip install litellm==1.74.3rc2
 ## Management Endpoints / UI
 
 
-[NEEDS IMAGE]
+<Image 
+  img={require('../../img/release_notes/model_hub_v2.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
 
 #### Features
 - **Model Hub**
