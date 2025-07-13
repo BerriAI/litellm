@@ -94,6 +94,7 @@ pip install litellm==1.74.3.rc
 
 ## [MCP Gateway](../../docs/mcp)
 
+[NEEDS IMAGE]
 
 #### Features
 - **[Cost Tracking](../../docs/mcp#-mcp-cost-tracking)**
@@ -119,6 +120,9 @@ pip install litellm==1.74.3.rc
 ---
 
 ## Management Endpoints / UI
+
+
+[NEEDS IMAGE]
 
 #### Features
 - **Model Hub**
@@ -161,48 +165,41 @@ pip install litellm==1.74.3.rc
 ## Logging / Guardrail Integrations
 
 #### Features
-- Guardrails 
-  - All guardrails are now supported on the UI - [PR](https://github.com/BerriAI/litellm/pull/12349)
-- **[Azure Content Safety](../../docs/guardrails/azure_content_safety)**
-  - Add Azure Content Safety Guardrails to LiteLLM proxy - [PR](https://github.com/BerriAI/litellm/pull/12268)
-  - Add azure content safety guardrails to the UI - [PR](https://github.com/BerriAI/litellm/pull/12309)
-- **[DeepEval](../../docs/observability/deepeval_integration)**
-  - Fix DeepEval logging format for failure events - [PR](https://github.com/BerriAI/litellm/pull/12303)
-- **[Arize](../../docs/proxy/logging#arize)**
-  - Add Arize Team Based Logging - [PR](https://github.com/BerriAI/litellm/pull/12264)
-- **[Langfuse](../../docs/proxy/logging#langfuse)**
-  - Langfuse prompt_version support - [PR](https://github.com/BerriAI/litellm/pull/12301)
-- **[Sentry Integration](../../docs/observability/sentry)**
-  - Add sentry scrubbing - [PR](https://github.com/BerriAI/litellm/pull/12210)
-- **[AWS SQS Logging](../../docs/proxy/logging#aws-sqs)**
-  - New AWS SQS Logging Integration - [PR](https://github.com/BerriAI/litellm/pull/12176)
-- **[S3 Logger](../../docs/proxy/logging#s3-buckets)**
-  - Add failure logging support - [PR](https://github.com/BerriAI/litellm/pull/12299)
-- **[Prometheus Metrics](../../docs/proxy/prometheus)**
-  - Add better error validation for prometheus metrics and labels - [PR](https://github.com/BerriAI/litellm/pull/12182)
+- **[Langfuse](../../docs/observability/langfuse_integration)**
+    - Version bump - [PR](https://github.com/BerriAI/litellm/pull/12376)
+    - LANGFUSE_TRACING_ENVIRONMENT support - [PR](https://github.com/BerriAI/litellm/pull/12376), [NEEDS DOCS]
+- **[Bedrock Guardrails](../../docs/proxy/guardrails/bedrock)**
+    - Raise Bedrock output text on 'BLOCKED' actions from guardrail - [PR](https://github.com/BerriAI/litellm/pull/12435)
+- **[OTEL](../../docs/observability/opentelemetry_integration)**
+    - `OTEL_RESOURCE_ATTRIBUTES` support - [PR](https://github.com/BerriAI/litellm/pull/12468)
+- **[Guardrails AI](../../docs/proxy/guardrails/guardrails_ai)**
+    - pre-call + logging only guardrail (pii detection/competitor names) support - [PR](https://github.com/BerriAI/litellm/pull/12506)
+- **[Guardrails](../../docs/proxy/guardrails/quick_start)**
+    - [Enterprise] Support tag based mode for guardrails - [PR](https://github.com/BerriAI/litellm/pull/12508), [NEEDS DOCS]
+- **[OpenAI Moderations API](../../docs/proxy/guardrails/openai_moderation)**
+    - New guardrail integration - [PR](https://github.com/BerriAI/litellm/pull/12519)
+- **[Prometheus](../../docs/proxy/prometheus)**
+    - support tag based metrics (enables prometheus metrics for measuring roo-code/cline/claude code engagement) - [PR](https://github.com/BerriAI/litellm/pull/12534), [NEEDS DOCS]
 
 #### Bugs
-- **Security**
-  - Ensure only LLM API route fails get logged on Langfuse - [PR](https://github.com/BerriAI/litellm/pull/12308)
-- **OpenMeter**
-  - Integration error handling fix - [PR](https://github.com/BerriAI/litellm/pull/12147)
-- **Message Redaction**
-  - Ensure message redaction works for responses API logging - [PR](https://github.com/BerriAI/litellm/pull/12291)
-- **Bedrock Guardrails**
-  - Fix bedrock guardrails post_call for streaming responses - [PR](https://github.com/BerriAI/litellm/pull/12252)
+- **[Prometheus](../../docs/proxy/prometheus)**
+    - Remove experimental `_by_tag` metrics (fixes cardinality issue) - [PR](https://github.com/BerriAI/litellm/pull/12395)
+- **[Datadog LLM Observability Logger]** [NEEDS DOCS]
+    - push total_cost - [PR](https://github.com/BerriAI/litellm/pull/12467)
+- **[Slack Alerting](../../docs/proxy/alerting)**
+    - Fix slack alerting for outage and region outage alerts - [PR](https://github.com/BerriAI/litellm/pull/12464), [Get Started](../../docs/proxy/alerting#region-outage-alerting--enterprise-feature)
+
 ---
 
 ## Performance / Loadbalancing / Reliability improvements
 
-#### Features
-- **Python SDK**
-  - 2 second faster import times - [PR](https://github.com/BerriAI/litellm/pull/12135)
-  - Reduce python sdk import time by .3s - [PR](https://github.com/BerriAI/litellm/pull/12140)
-- **Error Handling**
-  - Add error handling for MCP tools not found or invalid server - [PR](https://github.com/BerriAI/litellm/pull/12223)
-- **SSL/TLS**
-  - Fix SSL certificate error - [PR](https://github.com/BerriAI/litellm/pull/12327)
-  - Fix custom ca bundle support in aiohttp transport - [PR](https://github.com/BerriAI/litellm/pull/12281)
+#### Bugs
+- **[Responses API Bridge](../../docs/response_api#calling-non-responses-api-endpoints-responses-to-chatcompletions-bridge)**
+    - add image support for Responses API when falling back on Chat Completions - [PR](https://github.com/BerriAI/litellm/pull/12204) s/o [@ryan-castner](https://github.com/ryan-castner)
+- **aiohttp**
+    - Properly close aiohttp client sessions to prevent resource leaks - [PR](https://github.com/BerriAI/litellm/pull/12251)
+- **Router**
+    - don't add invalid deployment to router pattern match - [PR](https://github.com/BerriAI/litellm/pull/12459)
 
 
 ---
