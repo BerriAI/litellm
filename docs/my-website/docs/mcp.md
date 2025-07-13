@@ -19,6 +19,8 @@ LiteLLM Proxy provides an MCP Gateway that allows you to use a fixed endpoint fo
 |---------|-------------|
 | MCP Operations | • List Tools<br/>• Call Tools |
 | Supported MCP Transports | • Streamable HTTP<br/>• SSE<br/>• Standard Input/Output (stdio) |
+| MCP Tool Cost Tracking | ✅ Supported |
+| Grouping MCPs (Access Groups) | ✅ Supported |
 | LiteLLM Permission Management | ✨ Enterprise Only<br/>• By Key<br/>• By Team<br/>• By Organization |
 
 ## Adding your MCP
@@ -570,16 +572,37 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
 
 
 
-## ✨ MCP Cost Tracking
+## MCP Cost Tracking
 
-LiteLLM provides two ways to track costs for MCP tool calls:
+LiteLLM provides cost tracking for MCP tool calls, allowing you to monitor and control expenses associated with MCP operations. You can configure costs at two levels:
 
-| Method | When to Use | What It Does |
-|--------|-------------|--------------|
-| **Config-based Cost Tracking** | Simple cost tracking with fixed costs per tool/server | Automatically tracks costs based on configuration |
-| **Custom Post-MCP Hook** | Dynamic cost tracking with custom logic | Allows custom cost calculations and response modifications |
+- **Default cost per tool**: Set a uniform cost for all tools from a specific MCP server
+- **Tool-specific costs**: Define individual costs for specific tools (e.g., `search_tool` costs $10, while `get_weather` costs $5)
 
-### Config-based Cost Tracking
+### Configure cost tracking
+
+LiteLLM offers two approaches to track MCP tool costs, each designed for different use cases:
+
+| Method | Best For | Capabilities |
+|--------|----------|-------------|
+| **UI/Config-based Cost Tracking** | Simple, static cost tracking scenarios | • Set default costs for all server tools<br/>• Configure individual tool costs<br/>• Automatic cost tracking based on configuration |
+| **Custom Post-MCP Hook** | Dynamic, complex cost tracking requirements | • Custom cost calculation logic<br/>• Real-time cost adjustments<br/>• Response modification capabilities |
+
+### Configuration on UI/config.yaml
+
+<Tabs>
+<TabItem value="ui" label="LiteLLM UI">
+
+On the UI when adding a new MCP server, you can navigate to the "Cost Configuration" tab to configure the cost for the MCP server.
+
+<Image 
+  img={require('../img/mcp_cost.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+</TabItem>
+
+<TabItem value="config" label="config.yaml">
 
 Configure fixed costs for MCP servers directly in your config.yaml:
 
@@ -608,6 +631,9 @@ mcp_servers:
       mcp_server_cost_info:
         default_cost_per_query: 1.50
 ```
+
+</TabItem>
+</Tabs>
 
 ### Custom Post-MCP Hook
 
