@@ -179,7 +179,7 @@ pip install litellm==1.74.3.rc
 - **[OpenAI Moderations API](../../docs/proxy/guardrails/openai_moderation)**
     - New guardrail integration - [PR](https://github.com/BerriAI/litellm/pull/12519)
 - **[Prometheus](../../docs/proxy/prometheus)**
-    - support tag based metrics (enables prometheus metrics for measuring roo-code/cline/claude code engagement) - [PR](https://github.com/BerriAI/litellm/pull/12534), [NEEDS DOCS]
+    - support tag based metrics (enables prometheus metrics for measuring roo-code/cline/claude code engagement) - [PR](https://github.com/BerriAI/litellm/pull/12534), [Get Started](../../docs/proxy/prometheus#custom-tags)
 
 #### Bugs
 - **[Prometheus](../../docs/proxy/prometheus)**
