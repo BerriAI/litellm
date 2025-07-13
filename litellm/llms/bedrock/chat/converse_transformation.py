@@ -286,7 +286,6 @@ class AmazonConverseConfig(BaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        is_thinking_enabled = self.is_thinking_enabled(non_default_params)
 
         for param, value in non_default_params.items():
             if param == "response_format" and isinstance(value, dict):
@@ -324,17 +323,7 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=[_tool]
                 )
-                if (
-                    litellm.utils.supports_tool_choice(
-                        model=model, custom_llm_provider=self.custom_llm_provider
-                    )
-                    and not is_thinking_enabled
-                ):
-                    optional_params["tool_choice"] = ToolChoiceValuesBlock(
-                        tool=SpecificToolChoiceBlock(
-                            name=schema_name if schema_name != "" else "json_tool_call"
-                        )
-                    )
+
                 optional_params["json_mode"] = True
                 if non_default_params.get("stream", False) is True:
                     optional_params["fake_stream"] = True
