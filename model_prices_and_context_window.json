@@ -16004,7 +16004,7 @@
         "mode": "chat",
         "source": "https://platform.moonshot.ai/docs/pricing"
     },
-    "moonshot/kimi-k2": {
+    "moonshot/kimi-k2-0711-preview": {
         "max_tokens": 131072,
         "max_input_tokens": 131072,
         "max_output_tokens": 131072,
