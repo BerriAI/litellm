@@ -206,11 +206,25 @@ pip install litellm==1.74.3.rc
 
 ## General Proxy Improvements
 
+#### Bugs
+- **S3**
+  - s3 config.yaml file - ensure yaml safe load is used - [PR](https://github.com/BerriAI/litellm/pull/12373)
+- **Audit Logs**
+  - Add audit logs for model updates - [PR](https://github.com/BerriAI/litellm/pull/12396)
 - **Startup**
-  - Add new banner on startup - [PR](https://github.com/BerriAI/litellm/pull/12328)
-- **Dependencies**
-  - Update pydantic version - [PR](https://github.com/BerriAI/litellm/pull/12213)
+  - Multiple API Keys Created on Startup when max_budget is enabled - [PR](https://github.com/BerriAI/litellm/pull/12436)
+- **Auth**
+  - Resolve model group alias on Auth (if user has access to underlying model, allow alias request to work) - [PR](https://github.com/BerriAI/litellm/pull/12440)
+- **config.yaml**
+  - fix parsing environment_variables from config.yaml - [PR](https://github.com/BerriAI/litellm/pull/12482)
+- **Security**
+  - Log hashed jwt w/ prefix instead of actual value - [PR](https://github.com/BerriAI/litellm/pull/12524)
 
+#### Features
+- **MCP**
+    - Bump mcp version on docker img - [PR](https://github.com/BerriAI/litellm/pull/12362)
+- **Request Headers**
+    - Forward ‘anthropic-beta’ header when forward_client_headers_to_llm_api is true - [PR](https://github.com/BerriAI/litellm/pull/12462)
 
 ---
 
