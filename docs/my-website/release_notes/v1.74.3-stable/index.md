@@ -59,22 +59,22 @@ pip install litellm==1.74.3rc2
 
 
 #### Features
-- **XInference**
+- **[Xinference](../../docs/providers/xinference)**
     - Image generation API support - [PR](https://github.com/BerriAI/litellm/pull/12439)
-- **Bedrock**
+- **[Bedrock](../../docs/providers/bedrock)**
     - API Key Auth support for AWS Bedrock API - [PR](https://github.com/BerriAI/litellm/pull/12495)
-- **🆕 Dashscope**
+- **[🆕 Dashscope](../../docs/providers/dashscope)**
     - New integration from Alibaba (enables qwen usage) - [PR](https://github.com/BerriAI/litellm/pull/12361)
-- **🆕 Bytez**
+- **[🆕 Bytez](../../docs/providers/bytez)**
     - New /chat/completion integration - [PR](https://github.com/BerriAI/litellm/pull/12121)
 
 #### Bugs
-- **Github Copilot**
+- **[Github Copilot](../../docs/providers/github_copilot)**
     - Fix API base url for Github Copilot - [PR](https://github.com/BerriAI/litellm/pull/12418)
-- **Bedrock**
+- **[Bedrock](../../docs/providers/bedrock)**
     - Ensure supported bedrock/converse/ params = bedrock/ params - [PR](https://github.com/BerriAI/litellm/pull/12466)
     - Fix cache token cost calculation - [PR](https://github.com/BerriAI/litellm/pull/12488)
-- **XAI**
+- **[XAI](../../docs/providers/xai)**
     - ensure finish_reason includes tool calls when xai responses with tool calls - [PR](https://github.com/BerriAI/litellm/pull/12545)
 
 ---
