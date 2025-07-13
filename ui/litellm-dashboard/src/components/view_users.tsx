@@ -1,15 +1,7 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
-import {
-  Tab,
-  TabGroup,
-  TabList,
-  TabPanels,
-  TabPanel,
-  Select,
-  SelectItem,
-} from "@tremor/react";
+import React, { useState, useEffect, useCallback, useRef } from "react"
+import { Tab, TabGroup, TabList, TabPanels, TabPanel, Select, SelectItem } from "@tremor/react"
 
-import { message } from "antd";
+import { message } from "antd"
 
 import {
   userInfoCall,
@@ -19,48 +11,47 @@ import {
   UserListResponse,
   invitationCreateCall,
   getProxyBaseUrl,
-} from "./networking";
-import { Button } from "@tremor/react";
-import CreateUser from "./create_user_button";
-import EditUserModal from "./edit_user";
-import OnboardingModal from "./onboarding_link";
-import { InvitationLink } from "./onboarding_link";
+} from "./networking"
+import { Button } from "@tremor/react"
+import CreateUser from "./create_user_button"
+import EditUserModal from "./edit_user"
+import OnboardingModal from "./onboarding_link"
+import { InvitationLink } from "./onboarding_link"
 
-import { userDeleteCall } from "./networking";
-import { columns } from "./view_users/columns";
-import { UserDataTable } from "./view_users/table";
-import { UserInfo } from "./view_users/types";
-import SSOSettings from "./SSOSettings";
-import debounce from "lodash/debounce";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { updateExistingKeys } from "@/utils/dataUtils";
-import { useDebouncedState } from '@tanstack/react-pacer/debouncer'
+import { userDeleteCall } from "./networking"
+import { columns } from "./view_users/columns"
+import { UserDataTable } from "./view_users/table"
+import { UserInfo } from "./view_users/types"
+import SSOSettings from "./SSOSettings"
+import debounce from "lodash/debounce"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { updateExistingKeys } from "@/utils/dataUtils"
+import { useDebouncedState } from "@tanstack/react-pacer/debouncer"
 
 interface ViewUserDashboardProps {
-  accessToken: string | null;
-  token: string | null;
-  keys: any[] | null;
-  userRole: string | null;
-  userID: string | null;
-  teams: any[] | null;
-  setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
+  accessToken: string | null
+  token: string | null
+  keys: any[] | null
+  userRole: string | null
+  userID: string | null
+  teams: any[] | null
+  setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>
 }
 
 interface FilterState {
-  email: string;
-  user_id: string;
-  user_role: string;
-  sso_user_id: string;
-  team: string;
-  model: string;
-  min_spend: number | null;
-  max_spend: number | null;
-  sort_by: string;
-  sort_order: 'asc' | 'desc';
+  email: string
+  user_id: string
+  user_role: string
+  sso_user_id: string
+  team: string
+  model: string
+  min_spend: number | null
+  max_spend: number | null
+  sort_by: string
+  sort_order: "asc" | "desc"
 }
 
-
-const DEFAULT_PAGE_SIZE = 25;
+const DEFAULT_PAGE_SIZE = 25
 
 const initialFilters: FilterState = {
   email: "",
@@ -72,36 +63,28 @@ const initialFilters: FilterState = {
   min_spend: null,
   max_spend: null,
   sort_by: "created_at",
-  sort_order: "desc"
+  sort_order: "desc",
 }
 
-const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
-  accessToken,
-  token,
-  userRole,
-  userID,
-  teams,
-}) => {
-  const queryClient = useQueryClient();
-  const [currentPage, setCurrentPage] = useState(1);
-  const [editModalVisible, setEditModalVisible] = useState(false);
-  const [selectedUser, setSelectedUser] = useState<UserInfo | null>(null);
-  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [userToDelete, setUserToDelete] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState("users");
-  const [filters, setFilters] = useState<FilterState>(initialFilters);
+const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, token, userRole, userID, teams }) => {
+  const queryClient = useQueryClient()
+  const [currentPage, setCurrentPage] = useState(1)
+  const [editModalVisible, setEditModalVisible] = useState(false)
+  const [selectedUser, setSelectedUser] = useState<UserInfo | null>(null)
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
+  const [userToDelete, setUserToDelete] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState("users")
+  const [filters, setFilters] = useState<FilterState>(initialFilters)
   const [debouncedFilters, setDebouncedFilters, debouncer] = useDebouncedState(filters, { wait: 300 })
-  const [showFilters, setShowFilters] = useState(false);
-  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] =
-    useState(false);
-  const [invitationLinkData, setInvitationLinkData] =
-    useState<InvitationLink | null>(null);
-  const [baseUrl, setBaseUrl] = useState<string | null>(null);
+  const [showFilters, setShowFilters] = useState(false)
+  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false)
+  const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null)
+  const [baseUrl, setBaseUrl] = useState<string | null>(null)
 
   const handleDelete = (userId: string) => {
-    setUserToDelete(userId);
-    setIsDeleteModalOpen(true);
-  };
+    setUserToDelete(userId)
+    setIsDeleteModalOpen(true)
+  }
 
   useEffect(() => {
     return () => {
@@ -110,106 +93,106 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   }, [debouncer])
 
   useEffect(() => {
-    setBaseUrl(getProxyBaseUrl());
-  }, []);
+    setBaseUrl(getProxyBaseUrl())
+  }, [])
 
   const updateFilters = (update: Partial<FilterState>) => {
     setFilters((previousFilters) => {
-      const newFilters = {...previousFilters, ...update };
-      setDebouncedFilters(newFilters);
-      return newFilters;
+      const newFilters = { ...previousFilters, ...update }
+      setDebouncedFilters(newFilters)
+      return newFilters
     })
-  };
+  }
 
-  const handleSortChange = (sortBy: string, sortOrder: 'asc' | 'desc') => {
-    updateFilters({ sort_by: sortBy, sort_order: sortOrder });
-  };
+  const handleSortChange = (sortBy: string, sortOrder: "asc" | "desc") => {
+    updateFilters({ sort_by: sortBy, sort_order: sortOrder })
+  }
 
   const handleResetPassword = async (userId: string) => {
     if (!accessToken) {
-      message.error("Access token not found");
-      return;
+      message.error("Access token not found")
+      return
     }
     try {
-      message.success("Generating password reset link...");
-      const data = await invitationCreateCall(accessToken, userId);
-      setInvitationLinkData(data);
-      setIsInvitationLinkModalVisible(true);
+      message.success("Generating password reset link...")
+      const data = await invitationCreateCall(accessToken, userId)
+      setInvitationLinkData(data)
+      setIsInvitationLinkModalVisible(true)
     } catch (error) {
-      message.error("Failed to generate password reset link");
+      message.error("Failed to generate password reset link")
     }
-  };
+  }
 
   const confirmDelete = async () => {
     if (userToDelete && accessToken) {
       try {
-        await userDeleteCall(accessToken, [userToDelete]);
+        await userDeleteCall(accessToken, [userToDelete])
 
         // Update the user list after deletion
-        queryClient.setQueriesData<UserListResponse>({ queryKey: ['userList'] }, (previousData) => {
-          if (previousData === undefined) return previousData;
-          const updatedUsers = previousData.users.filter(user => user.user_id !== userToDelete);
-          return { ...previousData, users: updatedUsers };
+        queryClient.setQueriesData<UserListResponse>({ queryKey: ["userList"] }, (previousData) => {
+          if (previousData === undefined) return previousData
+          const updatedUsers = previousData.users.filter((user) => user.user_id !== userToDelete)
+          return { ...previousData, users: updatedUsers }
         })
-        
-        message.success("User deleted successfully");
+
+        message.success("User deleted successfully")
       } catch (error) {
-        console.error("Error deleting user:", error);
-        message.error("Failed to delete user");
+        console.error("Error deleting user:", error)
+        message.error("Failed to delete user")
       }
     }
-    setIsDeleteModalOpen(false);
-    setUserToDelete(null);
-  };
+    setIsDeleteModalOpen(false)
+    setUserToDelete(null)
+  }
 
   const cancelDelete = () => {
-    setIsDeleteModalOpen(false);
-    setUserToDelete(null);
-  };
+    setIsDeleteModalOpen(false)
+    setUserToDelete(null)
+  }
 
   const handleEditCancel = async () => {
-    setSelectedUser(null);
-    setEditModalVisible(false);
-  };
+    setSelectedUser(null)
+    setEditModalVisible(false)
+  }
 
   const handleEditSubmit = async (editedUser: any) => {
-    console.log("inside handleEditSubmit:", editedUser);
+    console.log("inside handleEditSubmit:", editedUser)
 
     if (!accessToken || !token || !userRole || !userID) {
-      return;
+      return
     }
 
     try {
-      const response = await userUpdateUserCall(accessToken, editedUser, null);
-      queryClient.setQueriesData<UserListResponse>({ queryKey: ['userList'] }, (previousData) => {
-        if (previousData === undefined) return previousData;
-        const updatedUsers = previousData.users.map(user => {
+      const response = await userUpdateUserCall(accessToken, editedUser, null)
+      queryClient.setQueriesData<UserListResponse>({ queryKey: ["userList"] }, (previousData) => {
+        if (previousData === undefined) return previousData
+        const updatedUsers = previousData.users.map((user) => {
           if (user.user_id === response.data.user_id) {
-            return updateExistingKeys(user, response.data);
+            return updateExistingKeys(user, response.data)
           }
-          return user;
-        });
-        
-        return { ...previousData, users: updatedUsers };
+          return user
+        })
+
+        return { ...previousData, users: updatedUsers }
       })
 
-      message.success(`User ${editedUser.user_id} updated successfully`);
+      message.success(`User ${editedUser.user_id} updated successfully`)
     } catch (error) {
-      console.error("There was an error updating the user", error);
+      console.error("There was an error updating the user", error)
     }
-    setSelectedUser(null);
-    setEditModalVisible(false);
+    setSelectedUser(null)
+    setEditModalVisible(false)
     // Close the modal
-  };
+  }
 
   const handlePageChange = async (newPage: number) => {
-    setCurrentPage(newPage);
-  };
+    setCurrentPage(newPage)
+  }
 
   const userListQuery = useQuery({
-    queryKey: ['userList', { debouncedFilter: debouncedFilters, currentPage }],
+    queryKey: ["userList", { debouncedFilter: debouncedFilters, currentPage }],
     queryFn: async () => {
-      if (!accessToken) throw new Error('Access token required');
+      if (!accessToken) throw new Error("Access token required")
 
       return await userListCall(
         accessToken,
@@ -221,23 +204,23 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         debouncedFilters.team || null,
         debouncedFilters.sso_user_id || null,
         debouncedFilters.sort_by,
-        debouncedFilters.sort_order
-      );
+        debouncedFilters.sort_order,
+      )
     },
     enabled: Boolean(accessToken && token && userRole && userID),
-    placeholderData: (previousData) => previousData
-  });
+    placeholderData: (previousData) => previousData,
+  })
   const userListResponse = userListQuery.data
 
   const userRolesQuery = useQuery<Record<string, Record<string, string>>>({
-    queryKey: ['userRoles'],
+    queryKey: ["userRoles"],
     initialData: () => ({}),
     queryFn: async () => {
-      if (!accessToken) throw new Error('Access token required');
-      return await getPossibleUserRoles(accessToken);
+      if (!accessToken) throw new Error("Access token required")
+      return await getPossibleUserRoles(accessToken)
     },
     enabled: Boolean(accessToken && token && userRole && userID),
-  });
+  })
   const possibleUIRoles = userRolesQuery.data
 
   if (userListQuery.isLoading) {
@@ -245,40 +228,34 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   }
 
   if (!accessToken || !token || !userRole || !userID) {
-    return <div>Loading...</div>;
+    return <div>Loading...</div>
   }
 
   const tableColumns = columns(
     possibleUIRoles,
     (user) => {
-      setSelectedUser(user);
-      setEditModalVisible(true);
+      setSelectedUser(user)
+      setEditModalVisible(true)
     },
     handleDelete,
     handleResetPassword,
-    () => {} // placeholder function, will be overridden in UserDataTable
-  );
+    () => {}, // placeholder function, will be overridden in UserDataTable
+  )
 
   return (
     <div className="w-full p-6">
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-xl font-semibold">Users</h1>
         <div className="flex space-x-3">
-          <CreateUser
-            userID={userID}
-            accessToken={accessToken}
-            teams={teams}
-            possibleUIRoles={possibleUIRoles}
-          />
+          <CreateUser userID={userID} accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
         </div>
       </div>
-      
+
       <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "users" : "settings")}>
         <TabList className="mb-4">
           <Tab>Users</Tab>
           <Tab>Default User Settings</Tab>
         </TabList>
-        
+
         <TabPanels>
           <TabPanel>
             <div className="bg-white rounded-lg shadow">
@@ -312,15 +289,10 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
 
                     {/* Filter Button */}
                     <button
-                      className={`px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2 ${showFilters ? 'bg-gray-100' : ''}`}
+                      className={`px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2 ${showFilters ? "bg-gray-100" : ""}`}
                       onClick={() => setShowFilters(!showFilters)}
                     >
-                      <svg
-                        className="w-4 h-4"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path
                           strokeLinecap="round"
                           strokeLinejoin="round"
@@ -338,15 +310,10 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                     <button
                       className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
                       onClick={() => {
-                        updateFilters(initialFilters);
+                        updateFilters(initialFilters)
                       }}
                     >
-                      <svg
-                        className="w-4 h-4"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path
                           strokeLinecap="round"
                           strokeLinejoin="round"
@@ -368,7 +335,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                           placeholder="Filter by User ID"
                           className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                           value={filters.user_id}
-                          onChange={(e) => updateFilters({ user_id : e.target.value })}
+                          onChange={(e) => updateFilters({ user_id: e.target.value })}
                         />
                         <svg
                           className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500"
@@ -414,7 +381,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                           ))}
                         </Select>
                       </div>
-                      
+
                       {/* SSO ID Search */}
                       <div className="relative w-64">
                         <input
@@ -422,7 +389,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                           placeholder="Filter by SSO ID"
                           className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                           value={filters.sso_user_id}
-                          onChange={(e) => updateFilters({ sso_user_id : e.target.value })}
+                          onChange={(e) => updateFilters({ sso_user_id: e.target.value })}
                         />
                       </div>
                     </div>
@@ -437,23 +404,18 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                         : 0}{" "}
                       -{" "}
                       {userListResponse && userListResponse.users
-                        ? Math.min(
-                            userListResponse.page * userListResponse.page_size,
-                            userListResponse.total
-                          )
+                        ? Math.min(userListResponse.page * userListResponse.page_size, userListResponse.total)
                         : 0}{" "}
                       of {userListResponse ? userListResponse.total : 0} results
                     </span>
-                    
+
                     {/* Pagination Buttons */}
                     <div className="flex space-x-2">
                       <button
                         onClick={() => handlePageChange(currentPage - 1)}
                         disabled={currentPage === 1}
                         className={`px-3 py-1 text-sm border rounded-md ${
-                          currentPage === 1
-                            ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                            : 'hover:bg-gray-50'
+                          currentPage === 1 ? "bg-gray-100 text-gray-400 cursor-not-allowed" : "hover:bg-gray-50"
                         }`}
                       >
                         Previous
@@ -463,8 +425,8 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                         disabled={!userListResponse || currentPage >= userListResponse.total_pages}
                         className={`px-3 py-1 text-sm border rounded-md ${
                           !userListResponse || currentPage >= userListResponse.total_pages
-                            ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                            : 'hover:bg-gray-50'
+                            ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                            : "hover:bg-gray-50"
                         }`}
                       >
                         Next
@@ -483,21 +445,26 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                 onSortChange={handleSortChange}
                 currentSort={{
                   sortBy: filters.sort_by,
-                  sortOrder: filters.sort_order
+                  sortOrder: filters.sort_order,
                 }}
                 possibleUIRoles={possibleUIRoles}
                 handleEdit={(user) => {
-                  setSelectedUser(user);
-                  setEditModalVisible(true);
+                  setSelectedUser(user)
+                  setEditModalVisible(true)
                 }}
                 handleDelete={handleDelete}
                 handleResetPassword={handleResetPassword}
               />
             </div>
           </TabPanel>
-          
+
           <TabPanel>
-            <SSOSettings accessToken={accessToken} possibleUIRoles={possibleUIRoles} userID={userID} userRole={userRole}/>
+            <SSOSettings
+              accessToken={accessToken}
+              possibleUIRoles={possibleUIRoles}
+              userID={userID}
+              userRole={userRole}
+            />
           </TabPanel>
         </TabPanels>
       </TabGroup>
@@ -515,18 +482,12 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       {isDeleteModalOpen && (
         <div className="fixed z-10 inset-0 overflow-y-auto">
           <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-            <div
-              className="fixed inset-0 transition-opacity"
-              aria-hidden="true"
-            >
+            <div className="fixed inset-0 transition-opacity" aria-hidden="true">
               <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
             </div>
 
             {/* Modal Panel */}
-            <span
-              className="hidden sm:inline-block sm:align-middle sm:h-screen"
-              aria-hidden="true"
-            >
+            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">
               &#8203;
             </span>
 
@@ -535,16 +496,10 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
               <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
                 <div className="sm:flex sm:items-start">
                   <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                    <h3 className="text-lg leading-6 font-medium text-gray-900">
-                      Delete User
-                    </h3>
+                    <h3 className="text-lg leading-6 font-medium text-gray-900">Delete User</h3>
                     <div className="mt-2">
-                      <p className="text-sm text-gray-500">
-                        Are you sure you want to delete this user?
-                      </p>
-                      <p className="text-sm font-medium text-gray-900 mt-2">
-                        User ID: {userToDelete}
-                      </p>
+                      <p className="text-sm text-gray-500">Are you sure you want to delete this user?</p>
+                      <p className="text-sm font-medium text-gray-900 mt-2">User ID: {userToDelete}</p>
                     </div>
                   </div>
                 </div>
@@ -568,7 +523,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         modalType="resetPassword"
       />
     </div>
-  );
-};
+  )
+}
 
-export default ViewUserDashboard;
+export default ViewUserDashboard

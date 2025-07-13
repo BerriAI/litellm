@@ -18,7 +18,9 @@ LiteLLM Proxy provides an MCP Gateway that allows you to use a fixed endpoint fo
 | Feature | Description |
 |---------|-------------|
 | MCP Operations | • List Tools<br/>• Call Tools |
-| Supported MCP Transports | • Streamable HTTP<br/>• SSE |
+| Supported MCP Transports | • Streamable HTTP<br/>• SSE<br/>• Standard Input/Output (stdio) |
+| MCP Tool Cost Tracking | ✅ Supported |
+| Grouping MCPs (Access Groups) | ✅ Supported |
 | LiteLLM Permission Management | ✨ Enterprise Only<br/>• By Key<br/>• By Team<br/>• By Organization |
 
 ## Adding your MCP
@@ -33,9 +35,19 @@ On this form, you should enter your MCP Server URL and the transport you want to
 LiteLLM supports the following MCP transports:
 - Streamable HTTP
 - SSE (Server-Sent Events)
+- Standard Input/Output (stdio)
 
 <Image 
   img={require('../img/add_mcp.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+#### Adding a stdio MCP Server
+
+For stdio MCP servers, select "Standard Input/Output (stdio)" as the transport type and provide the stdio configuration in JSON format:
+
+<Image 
+  img={require('../img/add_stdio_mcp.png')}
   style={{width: '80%', display: 'block', margin: '0'}}
 />
 
@@ -60,6 +72,15 @@ mcp_servers:
   zapier_mcp:
     url: "https://actions.zapier.com/mcp/sk-akxxxxx/sse"
   
+  # Standard Input/Output (stdio) Server - CircleCI Example
+  circleci_mcp:
+    transport: "stdio"
+    command: "npx"
+    args: ["-y", "@circleci/mcp-server-circleci"]
+    env:
+      CIRCLECI_TOKEN: "your-circleci-token"
+      CIRCLECI_BASE_URL: "https://circleci.com"
+  
   # Full configuration with all optional fields
   my_http_server:
     url: "https://my-mcp-server.com/mcp"
@@ -70,11 +91,15 @@ mcp_servers:
 ```
 
 **Configuration Options:**
-- **Server Name**: Use any descriptive name for your MCP server (e.g., `zapier_mcp`, `deepwiki_mcp`)
-- **URL**: The endpoint URL for your MCP server (required)
+- **Server Name**: Use any descriptive name for your MCP server (e.g., `zapier_mcp`, `deepwiki_mcp`, `circleci_mcp`)
+- **URL**: The endpoint URL for your MCP server (required for HTTP/SSE transports)
 - **Transport**: Optional transport type (defaults to `sse`)
   - `sse` - SSE (Server-Sent Events) transport
   - `http` - Streamable HTTP transport
+  - `stdio` - Standard Input/Output transport
+- **Command**: The command to execute for stdio transport (required for stdio)
+- **Args**: Array of arguments to pass to the command (optional for stdio)
+- **Env**: Environment variables to set for the stdio process (optional for stdio)
 - **Description**: Optional description for the server
 - **Auth Type**: Optional authentication type
 - **Spec Version**: Optional MCP specification version (defaults to `2025-03-26`)
@@ -88,6 +113,7 @@ mcp_servers:
 <Tabs>
 <TabItem value="openai" label="OpenAI API">
 
+### Quick Start
 #### Connect via OpenAI Responses API
 
 Use the OpenAI Responses API to connect to your LiteLLM MCP server:
@@ -174,7 +200,7 @@ Use tools directly from Cursor IDE with LiteLLM MCP:
 </TabItem>
 </Tabs>
 
-## Segregating MCP Server Access
+### Specific MCP Servers
 
 You can choose to access specific MCP servers and only list their tools using the `x-mcp-servers` header. This header allows you to:
 - Limit tool access to one or more specific MCP servers
@@ -265,6 +291,58 @@ This configuration in Cursor IDE settings will limit tool access to only the spe
 
 </TabItem>
 </Tabs>
+
+### Grouping MCPs (Access Groups)
+
+MCP Access Groups allow you to group multiple MCP servers together for easier management.
+
+#### 1. Create an Access Group
+
+To create an access group:
+- Go to MCP Servers in the LiteLLM UI
+- Click "Add a New MCP Server" 
+- Under "MCP Access Groups", create a new group (e.g., "dev_group") by typing it
+- Add the same group name to other servers to group them together
+
+<Image 
+  img={require('../img/mcp_create_access_group.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+#### 2. Use Access Group in Cursor
+
+Include the access group name in the `x-mcp-servers` header:
+
+```json title="Cursor Configuration with Access Groups" showLineNumbers
+{
+  "mcpServers": {
+    "LiteLLM": {
+      "url": "<your-litellm-proxy-base-url>/mcp",
+      "headers": {
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
+        "x-mcp-servers": "dev_group"
+      }
+    }
+  }
+}
+```
+
+This gives you access to all servers in the "dev_group" access group.
+
+#### Advanced: Connecting Access Groups to API Keys
+
+When creating API keys, you can assign them to specific access groups for permission management:
+
+- Go to "Keys" in the LiteLLM UI and click "Create Key"
+- Select the desired MCP access groups from the dropdown
+- The key will have access to all MCP servers in those groups
+- This is reflected in the Test Key page
+
+<Image 
+  img={require('../img/mcp_key_access_group.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
 
 ## Using your MCP with client side credentials
 
@@ -494,16 +572,37 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
 
 
 
-## ✨ MCP Cost Tracking
+## MCP Cost Tracking
 
-LiteLLM provides two ways to track costs for MCP tool calls:
+LiteLLM provides cost tracking for MCP tool calls, allowing you to monitor and control expenses associated with MCP operations. You can configure costs at two levels:
 
-| Method | When to Use | What It Does |
-|--------|-------------|--------------|
-| **Config-based Cost Tracking** | Simple cost tracking with fixed costs per tool/server | Automatically tracks costs based on configuration |
-| **Custom Post-MCP Hook** | Dynamic cost tracking with custom logic | Allows custom cost calculations and response modifications |
+- **Default cost per tool**: Set a uniform cost for all tools from a specific MCP server
+- **Tool-specific costs**: Define individual costs for specific tools (e.g., `search_tool` costs $10, while `get_weather` costs $5)
 
-### Config-based Cost Tracking
+### Configure cost tracking
+
+LiteLLM offers two approaches to track MCP tool costs, each designed for different use cases:
+
+| Method | Best For | Capabilities |
+|--------|----------|-------------|
+| **UI/Config-based Cost Tracking** | Simple, static cost tracking scenarios | • Set default costs for all server tools<br/>• Configure individual tool costs<br/>• Automatic cost tracking based on configuration |
+| **Custom Post-MCP Hook** | Dynamic, complex cost tracking requirements | • Custom cost calculation logic<br/>• Real-time cost adjustments<br/>• Response modification capabilities |
+
+### Configuration on UI/config.yaml
+
+<Tabs>
+<TabItem value="ui" label="LiteLLM UI">
+
+On the UI when adding a new MCP server, you can navigate to the "Cost Configuration" tab to configure the cost for the MCP server.
+
+<Image 
+  img={require('../img/mcp_cost.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+</TabItem>
+
+<TabItem value="config" label="config.yaml">
 
 Configure fixed costs for MCP servers directly in your config.yaml:
 
@@ -532,6 +631,9 @@ mcp_servers:
       mcp_server_cost_info:
         default_cost_per_query: 1.50
 ```
+
+</TabItem>
+</Tabs>
 
 ### Custom Post-MCP Hook
 
@@ -620,7 +722,6 @@ When Creating a Key, Team, or Organization, you can select the allowed MCP Serve
   img={require('../img/mcp_key.png')}
   style={{width: '80%', display: 'block', margin: '0'}}
 />
-
 
 ## LiteLLM Proxy - Walk through MCP Gateway
 LiteLLM exposes an MCP Gateway for admins to add all their MCP servers to LiteLLM. The key benefits of using LiteLLM Proxy with MCP are:

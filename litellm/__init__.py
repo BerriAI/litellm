@@ -193,6 +193,7 @@ openai_like_key: Optional[str] = None
 azure_key: Optional[str] = None
 anthropic_key: Optional[str] = None
 replicate_key: Optional[str] = None
+bytez_key: Optional[str] = None
 cohere_key: Optional[str] = None
 infinity_key: Optional[str] = None
 clarifai_key: Optional[str] = None
@@ -322,6 +323,7 @@ disable_end_user_cost_tracking: Optional[bool] = None
 disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 custom_prometheus_metadata_labels: List[str] = []
+custom_prometheus_tags: List[str] = []
 prometheus_metrics_config: Optional[List] = None
 disable_add_prefix_to_prompt: bool = (
     False  # used by anthropic, to disable adding prefix to prompt
@@ -673,6 +675,7 @@ def add_known_models():
         elif value.get("litellm_provider") == "dashscope":
             dashscope_models.append(key)
 
+
 add_known_models()
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
 
@@ -917,6 +920,7 @@ ALL_LITELLM_RESPONSE_TYPES = [
     TextCompletionResponse,
 ]
 
+from .llms.bytez.chat.transformation import BytezChatConfig
 from .llms.custom_llm import CustomLLM
 from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from .llms.openai_like.chat.handler import OpenAILikeChatConfig
