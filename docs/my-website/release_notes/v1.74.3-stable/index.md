@@ -167,7 +167,7 @@ pip install litellm==1.74.3.rc
 #### Features
 - **[Langfuse](../../docs/observability/langfuse_integration)**
     - Version bump - [PR](https://github.com/BerriAI/litellm/pull/12376)
-    - LANGFUSE_TRACING_ENVIRONMENT support - [PR](https://github.com/BerriAI/litellm/pull/12376), [NEEDS DOCS]
+    - LANGFUSE_TRACING_ENVIRONMENT support - [PR](https://github.com/BerriAI/litellm/pull/12376)
 - **[Bedrock Guardrails](../../docs/proxy/guardrails/bedrock)**
     - Raise Bedrock output text on 'BLOCKED' actions from guardrail - [PR](https://github.com/BerriAI/litellm/pull/12435)
 - **[OTEL](../../docs/observability/opentelemetry_integration)**
@@ -175,7 +175,7 @@ pip install litellm==1.74.3.rc
 - **[Guardrails AI](../../docs/proxy/guardrails/guardrails_ai)**
     - pre-call + logging only guardrail (pii detection/competitor names) support - [PR](https://github.com/BerriAI/litellm/pull/12506)
 - **[Guardrails](../../docs/proxy/guardrails/quick_start)**
-    - [Enterprise] Support tag based mode for guardrails - [PR](https://github.com/BerriAI/litellm/pull/12508), [NEEDS DOCS]
+    - [Enterprise] Support tag based mode for guardrails - [PR](https://github.com/BerriAI/litellm/pull/12508), [Get Started](../../docs/proxy/guardrails/quick_start#-tag-based-guardrail-modes)
 - **[OpenAI Moderations API](../../docs/proxy/guardrails/openai_moderation)**
     - New guardrail integration - [PR](https://github.com/BerriAI/litellm/pull/12519)
 - **[Prometheus](../../docs/proxy/prometheus)**
