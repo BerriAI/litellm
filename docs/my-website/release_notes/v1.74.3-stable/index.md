@@ -77,6 +77,8 @@ pip install litellm==1.74.3.rc
 - **XAI**
     - ensure finish_reason includes tool calls when xai responses with tool calls - [PR](https://github.com/BerriAI/litellm/pull/12545)
 
+---
+
 ## LLM API Endpoints
 
 #### Features
@@ -84,61 +86,75 @@ pip install litellm==1.74.3.rc
     - Return ‘reasoning_content’ on streaming - [PR](https://github.com/BerriAI/litellm/pull/12377)
 - **[/chat/completions](../../docs/completion/input)** 
     - Add 'thinking blocks' to stream chunk builder - [PR](https://github.com/BerriAI/litellm/pull/12395)
-- **[/mcp (MCP Gateway)](../../docs/mcp)**
-    - Add Cost Tracking - [PR](https://github.com/BerriAI/litellm/pull/12385)
-    - Add usage tracking - [PR](https://github.com/BerriAI/litellm/pull/12397)
-    - Allow customizing what client side auth header to use - [PR](https://github.com/BerriAI/litellm/pull/12460)
-    - Allow using custom post call MCP hook for cost tracking - [PR](https://github.com/BerriAI/litellm/pull/12469)
-    - Raises error when MCP server header is malformed in the request - [PR](https://github.com/BerriAI/litellm/pull/12494)
-    - Add custom cost configuration for each MCP tool - [PR](https://github.com/BerriAI/litellm/pull/12499)
-    - Add support for editing MCP cost per tool - [PR](https://github.com/BerriAI/litellm/pull/12501)
-    - Add validation to mcp server name to not allow "-" (enables namespaces to work) - [PR](https://github.com/BerriAI/litellm/pull/12515)
-    - Allow using stdio MCPs with LiteLLM (enables using Circle CI MCP w/ LiteLLM) - [PR](https://github.com/BerriAI/litellm/pull/12530)
 - **[/v1/messages](../../docs/anthropic_unified)**
     - Fallbacks support - [PR](https://github.com/BerriAI/litellm/pull/12440)
     - tool call handling for non-anthropic models (/v1/messages to /chat/completion bridge) - [PR](https://github.com/BerriAI/litellm/pull/12473)
-#### Bugs
-- **[/mcp (MCP Gateway)](../../docs/mcp)**
-    - Fix task group is not initialized error - [PR](https://github.com/BerriAI/litellm/pull/12411) s/o [@juancarlosm](https://github.com/juancarlosm)
-    - Fix mcp tool separator to work with Claude code - [PR](https://github.com/BerriAI/litellm/pull/12430)
-
 
 ---
 
-## Spend Tracking / Budget Improvements
+## [MCP Gateway](../../docs/mcp)
+
+
+#### Features
+- **[Cost Tracking](../../docs/mcp#-mcp-cost-tracking)**
+    - Add Cost Tracking - [PR](https://github.com/BerriAI/litellm/pull/12385)
+    - Add usage tracking - [PR](https://github.com/BerriAI/litellm/pull/12397)
+    - Add custom cost configuration for each MCP tool - [PR](https://github.com/BerriAI/litellm/pull/12499)
+    - Add support for editing MCP cost per tool - [PR](https://github.com/BerriAI/litellm/pull/12501)
+    - Allow using custom post call MCP hook for cost tracking - [PR](https://github.com/BerriAI/litellm/pull/12469)
+- **[Auth](../../docs/mcp#using-your-mcp-with-client-side-credentials)**
+    - Allow customizing what client side auth header to use - [PR](https://github.com/BerriAI/litellm/pull/12460)
+    - Raises error when MCP server header is malformed in the request - [PR](https://github.com/BerriAI/litellm/pull/12494)
+- **[MCP Server](../../docs/mcp#adding-your-mcp)**
+    - Allow using stdio MCPs with LiteLLM (enables using Circle CI MCP w/ LiteLLM) - [PR](https://github.com/BerriAI/litellm/pull/12530), [Get Started](../../docs/mcp#adding-a-stdio-mcp-server)
 
 #### Bugs
-  - Fix allow strings in calculate cost - [PR](https://github.com/BerriAI/litellm/pull/12200)
-  - VertexAI Anthropic streaming cost tracking with prompt caching fixes - [PR](https://github.com/BerriAI/litellm/pull/12188)
+- **General**
+    - Fix task group is not initialized error - [PR](https://github.com/BerriAI/litellm/pull/12411) s/o [@juancarlosm](https://github.com/juancarlosm)
+- **[MCP Server](../../docs/mcp#adding-your-mcp)**
+    - Fix mcp tool separator to work with Claude code - [PR](https://github.com/BerriAI/litellm/pull/12430), [Get Started](../../docs/mcp#adding-your-mcp)
+    - Add validation to mcp server name to not allow "-" (enables namespaces to work) - [PR](https://github.com/BerriAI/litellm/pull/12515)
+
 
 ---
 
 ## Management Endpoints / UI
 
-#### Bugs
-- **Team Management**
-  - Prevent team model reset on model add - [PR](https://github.com/BerriAI/litellm/pull/12144)
-  - Return team-only models on /v2/model/info - [PR](https://github.com/BerriAI/litellm/pull/12144)
-  - Render team member budget correctly - [PR](https://github.com/BerriAI/litellm/pull/12144)
-- **UI Rendering**
-  - Fix rendering ui on non-root images - [PR](https://github.com/BerriAI/litellm/pull/12226)
-  - Correctly display 'Internal Viewer' user role - [PR](https://github.com/BerriAI/litellm/pull/12284)
-- **Configuration**
-  - Handle empty config.yaml - [PR](https://github.com/BerriAI/litellm/pull/12189)
-  - Fix gemini /models - replace models/ as expected - [PR](https://github.com/BerriAI/litellm/pull/12189)
-
 #### Features
-- **Team Management**
-  - Allow adding team specific logging callbacks - [PR](https://github.com/BerriAI/litellm/pull/12261)
-  - Add Arize Team Based Logging - [PR](https://github.com/BerriAI/litellm/pull/12264)
-  - Allow Viewing/Editing Team Based Callbacks - [PR](https://github.com/BerriAI/litellm/pull/12265)
-- **UI Improvements**
-  - Comma separated spend and budget display - [PR](https://github.com/BerriAI/litellm/pull/12317)
-  - Add logos to callback list - [PR](https://github.com/BerriAI/litellm/pull/12244)
-- **CLI**
-  - Add litellm-proxy cli login for starting to use litellm proxy - [PR](https://github.com/BerriAI/litellm/pull/12216)
-- **Email Templates**
-  - Customizable Email template - Subject and Signature - [PR](https://github.com/BerriAI/litellm/pull/12218)
+- **Model Hub**
+    - new model hub table view - [PR](https://github.com/BerriAI/litellm/pull/12468)
+    - new /public/model_hub endpoint - [PR](https://github.com/BerriAI/litellm/pull/12468)
+    - Make Model Hub OSS - [PR](https://github.com/BerriAI/litellm/pull/12553)
+    - New ‘make public’ modal flow for showing proxy models on public model hub - [PR](https://github.com/BerriAI/litellm/pull/12555)
+- **MCP**
+    - support for internal users to use and manage MCP servers - [PR](https://github.com/BerriAI/litellm/pull/12458)
+    - Adds UI support to add MCP access groups (similar to namespaces) - [PR](https://github.com/BerriAI/litellm/pull/12470)
+    - MCP Tool Testing Playground - [PR](https://github.com/BerriAI/litellm/pull/12520)
+    - Show cost config on root of MCP settings - [PR](https://github.com/BerriAI/litellm/pull/12526)
+- **Test Key**
+    - Stick sessions - [PR](https://github.com/BerriAI/litellm/pull/12365)
+    - MCP Access Groups - allow mcp access groups - [PR](https://github.com/BerriAI/litellm/pull/12529)
+- **Usage**
+    - Truncate long labels and improve tooltip in Top API Keys chart - [PR](https://github.com/BerriAI/litellm/pull/12371)
+    - Improve Chart Readability for Tag Usage - [PR](https://github.com/BerriAI/litellm/pull/12378)
+- **Teams**
+    - Prevent navigation reset after team member operations - [PR](https://github.com/BerriAI/litellm/pull/12424)
+    - Team Members - reset budget, if duration set - [PR](https://github.com/BerriAI/litellm/pull/12534)
+    - Use central team member budget when max_budget_in_team set on UI - [PR](https://github.com/BerriAI/litellm/pull/12533)
+- **SSO**
+    - Allow users to run a custom sso login handler - [PR](https://github.com/BerriAI/litellm/pull/12465)
+- **Navbar**
+    - improve user dropdown UI with premium badge and cleaner layout - [PR](https://github.com/BerriAI/litellm/pull/12502)
+- **General**
+    - Consistent layout for Create and Back buttons on all the pages - [PR](https://github.com/BerriAI/litellm/pull/12542)
+    - Align Show Password with Checkbox - [PR](https://github.com/BerriAI/litellm/pull/12538)
+    - Prevent writing default user setting updates to yaml (causes error in non-root env) - [PR](https://github.com/BerriAI/litellm/pull/12533)
+
+#### Bugs
+- **Model Hub**
+    - fix duplicates in /model_group/info - [PR](https://github.com/BerriAI/litellm/pull/12468)
+- **MCP**
+    - Fix UI not syncing MCP access groups properly with object permissions - [PR](https://github.com/BerriAI/litellm/pull/12523)
 
 ---
 

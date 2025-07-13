@@ -40,7 +40,7 @@ LiteLLM supports the following MCP transports:
   style={{width: '80%', display: 'block', margin: '0'}}
 />
 
-### Adding a stdio MCP Server
+#### Adding a stdio MCP Server
 
 For stdio MCP servers, select "Standard Input/Output (stdio)" as the transport type and provide the stdio configuration in JSON format:
 
