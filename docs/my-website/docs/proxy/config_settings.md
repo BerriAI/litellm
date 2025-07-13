@@ -512,6 +512,7 @@ router_settings:
 | LAGO_API_KEY | API key for accessing Lago services
 | LANGFUSE_DEBUG | Toggle debug mode for Langfuse
 | LANGFUSE_FLUSH_INTERVAL | Interval for flushing Langfuse logs
+| LANGFUSE_TRACING_ENVIRONMENT | Environment for Langfuse tracing
 | LANGFUSE_HOST | Host URL for Langfuse service
 | LANGFUSE_PUBLIC_KEY | Public key for Langfuse authentication
 | LANGFUSE_RELEASE | Release version of Langfuse integration

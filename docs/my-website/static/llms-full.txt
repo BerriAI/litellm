@@ -3424,7 +3424,7 @@ You can now set custom parameters (like success threshold) for your guardrails i
 
 info
 
-Get a free 7-day LiteLLM Enterprise trial here. [Start here](https://www.litellm.ai/#trial)
+Get a free 7-day LiteLLM Enterprise trial here. [Start here](https://www.litellm.ai/enterprise#trial)
 
 **No call needed**
 
@@ -4107,7 +4107,7 @@ Use this to see the changes in the codebase.
 
 info
 
-Get a free 7-day LiteLLM Enterprise trial here. [Start here](https://www.litellm.ai/#trial)
+Get a free 7-day LiteLLM Enterprise trial here. [Start here](https://www.litellm.ai/enterprise#trial)
 
 **No call needed**
 
@@ -4966,7 +4966,7 @@ Before adding a model you can test the connection to the LLM provider to verify 
 
 info
 
-Get a free 7-day LiteLLM Enterprise trial here. [Start here](https://www.litellm.ai/#trial)
+Get a free 7-day LiteLLM Enterprise trial here. [Start here](https://www.litellm.ai/enterprise#trial)
 
 **No call needed**
 
@@ -5815,7 +5815,7 @@ You can now set custom parameters (like success threshold) for your guardrails i
 
 info
 
-Get a free 7-day LiteLLM Enterprise trial here. [Start here](https://www.litellm.ai/#trial)
+Get a free 7-day LiteLLM Enterprise trial here. [Start here](https://www.litellm.ai/enterprise#trial)
 
 **No call needed**
 

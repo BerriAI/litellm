@@ -4,7 +4,7 @@ import Image from '@theme/IdealImage';
 For companies that need SSO, user management and professional support for LiteLLM Proxy
 
 :::info
-Get free 7-day trial key [here](https://www.litellm.ai/#trial)
+Get free 7-day trial key [here](https://www.litellm.ai/enterprise#trial)
 :::
 
 ## Enterprise Features
