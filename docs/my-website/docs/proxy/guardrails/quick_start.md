@@ -201,7 +201,7 @@ Follow this simple workflow to implement and tune guardrails:
 
 :::info
 
-✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/enterprise#trial)
 
 :::
 
@@ -295,7 +295,7 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 :::info
 
-✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/enterprise#trial)
 
 :::
 
@@ -380,7 +380,7 @@ Monitor which guardrails were executed and whether they passed or failed. e.g. g
 
 :::info
 
-✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/enterprise#trial)
 
 :::
 
@@ -405,7 +405,7 @@ Monitor which guardrails were executed and whether they passed or failed. e.g. g
 
 :::info
 
-✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/enterprise#trial)
 
 :::
 
@@ -465,7 +465,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 :::info
 
-✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/enterprise#trial)
 
 :::
 
@@ -495,7 +495,7 @@ guardrails:
 
 :::info
 
-✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/enterprise#trial)
 
 :::
 
