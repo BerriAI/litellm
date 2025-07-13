@@ -80,35 +80,28 @@ pip install litellm==1.74.3.rc
 ## LLM API Endpoints
 
 #### Features
-
-- **[/batches](../../docs/batches)**
-  - Support batch retrieve with target model Query Param - [PR](https://github.com/BerriAI/litellm/pull/12228)
-  - Anthropic completion bridge improvements - [PR](https://github.com/BerriAI/litellm/pull/12228)
-- **[/responses](../../docs/response_api)**
-  - Azure responses api bridge improvements - [PR](https://github.com/BerriAI/litellm/pull/12224)
-  - Fix responses api error handling - [PR](https://github.com/BerriAI/litellm/pull/12225)
+- **[/completions](../../docs/text_completion)**
+    - Return ‘reasoning_content’ on streaming - [PR](https://github.com/BerriAI/litellm/pull/12377)
+- **[/chat/completions](../../docs/completion/input)** 
+    - Add 'thinking blocks' to stream chunk builder - [PR](https://github.com/BerriAI/litellm/pull/12395)
 - **[/mcp (MCP Gateway)](../../docs/mcp)**
-  - Add MCP url masking on frontend - [PR](https://github.com/BerriAI/litellm/pull/12247)
-  - Add MCP servers header to scope - [PR](https://github.com/BerriAI/litellm/pull/12266)
-  - Litellm mcp tool prefix - [PR](https://github.com/BerriAI/litellm/pull/12289)
-  - Segregate MCP tools on connections using headers - [PR](https://github.com/BerriAI/litellm/pull/12296)
-  - Added changes to mcp url wrapping - [PR](https://github.com/BerriAI/litellm/pull/12207)
-
-
-#### Bugs
+    - Add Cost Tracking - [PR](https://github.com/BerriAI/litellm/pull/12385)
+    - Add usage tracking - [PR](https://github.com/BerriAI/litellm/pull/12397)
+    - Allow customizing what client side auth header to use - [PR](https://github.com/BerriAI/litellm/pull/12460)
+    - Allow using custom post call MCP hook for cost tracking - [PR](https://github.com/BerriAI/litellm/pull/12469)
+    - Raises error when MCP server header is malformed in the request - [PR](https://github.com/BerriAI/litellm/pull/12494)
+    - Add custom cost configuration for each MCP tool - [PR](https://github.com/BerriAI/litellm/pull/12499)
+    - Add support for editing MCP cost per tool - [PR](https://github.com/BerriAI/litellm/pull/12501)
+    - Add validation to mcp server name to not allow "-" (enables namespaces to work) - [PR](https://github.com/BerriAI/litellm/pull/12515)
+    - Allow using stdio MCPs with LiteLLM (enables using Circle CI MCP w/ LiteLLM) - [PR](https://github.com/BerriAI/litellm/pull/12530)
 - **[/v1/messages](../../docs/anthropic_unified)**
-  - Remove hardcoded model name on streaming - [PR](https://github.com/BerriAI/litellm/pull/12131)
-  - Support lowest latency routing - [PR](https://github.com/BerriAI/litellm/pull/12180)
-  - Non-anthropic models token usage returned - [PR](https://github.com/BerriAI/litellm/pull/12184)
-- **[/chat/completions](../../docs/providers/anthropic_unified)**
-  - Support Cursor IDE tool_choice format `{"type": "auto"}` - [PR](https://github.com/BerriAI/litellm/pull/12168)
-- **[/generateContent](../../docs/generate_content)**
-  - Allow passing litellm_params - [PR](https://github.com/BerriAI/litellm/pull/12177)
-  - Only pass supported params when using OpenAI models - [PR](https://github.com/BerriAI/litellm/pull/12297)
-  - Fix using gemini-cli with Vertex Anthropic Models - [PR](https://github.com/BerriAI/litellm/pull/12246)
-- **Streaming**
-  - Fix Error code: 307 for LlamaAPI Streaming Chat - [PR](https://github.com/BerriAI/litellm/pull/11946)
-  - Store finish reason even if is_finished - [PR](https://github.com/BerriAI/litellm/pull/12250)
+    - Fallbacks support - [PR](https://github.com/BerriAI/litellm/pull/12440)
+    - tool call handling for non-anthropic models (/v1/messages to /chat/completion bridge) - [PR](https://github.com/BerriAI/litellm/pull/12473)
+#### Bugs
+- **[/mcp (MCP Gateway)](../../docs/mcp)**
+    - Fix task group is not initialized error - [PR](https://github.com/BerriAI/litellm/pull/12411) s/o [@juancarlosm](https://github.com/juancarlosm)
+    - Fix mcp tool separator to work with Claude code - [PR](https://github.com/BerriAI/litellm/pull/12430)
+
 
 ---
 
