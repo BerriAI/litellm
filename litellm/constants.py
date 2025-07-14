@@ -641,17 +641,6 @@ dashscope_models: List = [
     "qwen3-30b-a3b",
 ]
 
-moonshot_models: List = [
-    "moonshot-v1-8k",
-    "moonshot-v1-32k",
-    "moonshot-v1-128k",
-    "moonshot-v1-auto",
-    "kimi-k2",
-    "moonshot-v1-32k-0430",
-    "moonshot-v1-128k-0430",
-    "moonshot-v1-8k-0430",
-]
-
 nebius_embedding_models: List = [
     "BAAI/bge-en-icl",
     "BAAI/bge-multilingual-gemma2",
