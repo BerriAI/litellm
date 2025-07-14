@@ -17,6 +17,7 @@ interface MCPServerViewProps {
   accessToken: string | null
   userRole: string | null
   userID: string | null
+  availableAccessGroups: string[]
 }
 
 export const MCPServerView: React.FC<MCPServerViewProps> = ({
@@ -27,6 +28,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   accessToken,
   userRole,
   userID,
+  availableAccessGroups,
 }) => {
   const [editing, setEditing] = useState(isEditing)
   const [showFullUrl, setShowFullUrl] = useState(false)
@@ -47,7 +49,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
     <div className="p-4 max-w-full">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <Button icon={ArrowLeftIcon} variant="light" className="mb-4">
+          <Button icon={ArrowLeftIcon} variant="light" className="mb-4" onClick={onBack}>
             Back to All Servers
           </Button>
           <Title>{mcpServer.alias}</Title>
@@ -131,6 +133,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                   accessToken={accessToken}
                   onCancel={() => setEditing(false)}
                   onSuccess={handleSuccess}
+                  availableAccessGroups={availableAccessGroups}
                 />
               ) : (
                 <div className="space-y-4">
