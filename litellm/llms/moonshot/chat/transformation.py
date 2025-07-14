@@ -4,7 +4,6 @@ Translates from OpenAI's `/v1/chat/completions` to Moonshot AI's `/v1/chat/compl
 
 from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
 
-import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
 )
