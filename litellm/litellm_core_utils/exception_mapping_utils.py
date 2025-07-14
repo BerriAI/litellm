@@ -1,4 +1,5 @@
 import json
+import sys
 import traceback
 from typing import Any, Optional
 
@@ -42,16 +43,16 @@ class ExceptionCheckers:
         """
         if not isinstance(error_str, str):
             return False
-        
+
         if "429" in error_str or "rate limit" in error_str.lower():
             return True
-        
+
         #######################################
         # Mistral API returns this error string
         #########################################
         if "service tier capacity exceeded" in error_str.lower():
             return True
-        
+
         return False
 
     @staticmethod
@@ -185,14 +186,16 @@ def exception_type(  # type: ignore  # noqa: PLR0915
     exception_mapping_worked = False
     exception_provider = custom_llm_provider
     if litellm.suppress_debug_info is False:
-        print()  # noqa
+        print(file=sys.stderr)  # noqa
         print(  # noqa
-            "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"  # noqa
+            "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m",  # noqa
+            file=sys.stderr,
         )  # noqa
         print(  # noqa
-            "LiteLLM.Info: If you need to debug this error, use `litellm._turn_on_debug()'."  # noqa
+            "LiteLLM.Info: If you need to debug this error, use `litellm._turn_on_debug()'.",  # noqa
+            file=sys.stderr,
         )  # noqa
-        print()  # noqa
+        print(file=sys.stderr)  # noqa
 
     litellm_response_headers = _get_response_headers(
         original_exception=original_exception
