@@ -16014,8 +16014,6 @@
         "litellm_provider": "moonshot",
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "supports_json_mode": true,
-        "supports_partial_mode": true,
         "supports_web_search": true,
         "mode": "chat",
         "source": "https://platform.moonshot.ai/docs/pricing/chat#generation-model-kimi-k2"
