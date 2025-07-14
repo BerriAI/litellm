@@ -56,33 +56,20 @@ for chunk in response:
     print(chunk)
 ```
 
-## Model Context Windows
+## Moonshot AI Limitations & LiteLLM Handling
 
-| Model Name | Context Window | Function Call |
-|------------|----------------|---------------|
-| moonshot-v1-8k | 8K tokens | `completion(model="moonshot/moonshot-v1-8k", messages)` |
-| moonshot-v1-32k | 32K tokens | `completion(model="moonshot/moonshot-v1-32k", messages)` |
-| moonshot-v1-128k | 128K tokens | `completion(model="moonshot/moonshot-v1-128k", messages)` |
-| moonshot-v1-auto | 128K tokens | `completion(model="moonshot/moonshot-v1-auto", messages)` |
-| kimi-k2 | 128K tokens | `completion(model="moonshot/kimi-k2", messages)` |
-| moonshot-v1-32k-0430 | 32K tokens | `completion(model="moonshot/moonshot-v1-32k-0430", messages)` |
-| moonshot-v1-128k-0430 | 128K tokens | `completion(model="moonshot/moonshot-v1-128k-0430", messages)` |
-| moonshot-v1-8k-0430 | 8K tokens | `completion(model="moonshot/moonshot-v1-8k-0430", messages)` |
+LiteLLM automatically handles the following [Moonshot AI limitations](https://platform.moonshot.ai/docs/guide/migrating-from-openai-to-kimi#about-api-compatibility) to provide seamless OpenAI compatibility:
 
-## Supported Features
-- ✅ Function calling
-- ✅ Tool choice (except "required" option)
-- ✅ Streaming
-- ✅ Temperature control (0-1)
-- ❌ Functions parameter (deprecated)
-- ❌ Tool choice "required" option
+### Temperature Range Limitation
+**Limitation**: Moonshot AI only supports temperature range [0, 1] (vs OpenAI's [0, 2])  
+**LiteLLM Handling**: Automatically clamps any temperature > 1 to 1
 
-## Important Notes
-- Temperature is between 0 and 1
-- Temperature close to 0 (<0.3) can only produce n=1 results (automatically handled)
-- `tool_choice` doesn't support `required` option (will be dropped or raise error based on `drop_params` setting)
-- `functions` parameter is not supported (automatically filtered out - use `tools` instead)
-- All models support up to their respective context window limits
+### Temperature + Multiple Outputs Limitation  
+**Limitation**: If temperature < 0.3 and n > 1, Moonshot AI raises an exception  
+**LiteLLM Handling**: Automatically sets temperature to 0.3 when this condition is detected
 
-## Pricing
-For up-to-date pricing information, please refer to the official Moonshot AI pricing page: https://platform.moonshot.ai/docs/pricing
+### Tool Choice "Required" Not Supported
+**Limitation**: Moonshot AI doesn't support `tool_choice="required"`  
+**LiteLLM Handling**: Converts this by:
+- Adding message: "Please select a tool to handle the current issue."
+- Removing the `tool_choice` parameter from the request
