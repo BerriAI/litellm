@@ -38,15 +38,16 @@ class BaseVectorStoreTest(ABC):
         litellm._turn_on_debug()
         litellm.set_verbose = True
         base_request_args = self.get_base_request_args()
+        default_query = base_request_args.get("query", "Basic ping")
         try: 
             if sync_mode:
                 response = litellm.vector_stores.search(
-                    query="Basic ping", 
+                    query=default_query, 
                     **base_request_args
                 )
             else:
                 response = await litellm.vector_stores.asearch(
-                    query="Basic ping", 
+                    query=default_query, 
                     **base_request_args
                 )
         except litellm.InternalServerError: 
