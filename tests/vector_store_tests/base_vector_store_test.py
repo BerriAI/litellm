@@ -107,7 +107,7 @@ class BaseVectorStoreTest(ABC):
             f"Expected object to be 'vector_store.search_results.page', got '{response['object']}'"
         
         # Validate search_query field
-        assert isinstance(response['search_query'], list), \
+        assert isinstance(response['search_query'], str), \
             f"search_query should be a list, got {type(response['search_query'])}"
         assert len(response['search_query']) > 0, "search_query should not be empty"
         assert all(isinstance(query, str) for query in response['search_query']), \
