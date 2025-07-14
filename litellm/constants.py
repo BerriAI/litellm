@@ -277,6 +277,7 @@ LITELLM_CHAT_PROVIDERS = [
     "nscale",
     "nebius",
     "dashscope",
+    "moonshot",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -404,6 +405,7 @@ openai_compatible_endpoints: List = [
     "inference.api.nscale.com/v1",
     "api.studio.nebius.ai/v1",
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    "https://api.moonshot.ai/v1",
 ]
 
 
@@ -440,6 +442,7 @@ openai_compatible_providers: List = [
     "nscale",
     "nebius",
     "dashscope",
+    "moonshot",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -451,6 +454,7 @@ openai_text_completion_compatible_providers: List = (
         "featherless_ai",
         "nebius",
         "dashscope",
+        "moonshot",
     ]
 )
 _openai_like_providers: List = [
@@ -635,6 +639,17 @@ dashscope_models: List = [
     "qwen3-235b-a22b",
     "qwen3-32b",
     "qwen3-30b-a3b",
+]
+
+moonshot_models: List = [
+    "moonshot-v1-8k",
+    "moonshot-v1-32k",
+    "moonshot-v1-128k",
+    "moonshot-v1-auto",
+    "kimi-k2-0711-preview",
+    "moonshot-v1-32k-0430",
+    "moonshot-v1-128k-0430",
+    "moonshot-v1-8k-0430",
 ]
 
 nebius_embedding_models: List = [

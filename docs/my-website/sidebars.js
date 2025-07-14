@@ -391,6 +391,7 @@ const sidebars = {
         "providers/meta_llama",
         "providers/mistral",
         "providers/codestral",
+        "providers/moonshot",
         "providers/cohere",
         "providers/anyscale",
         {
