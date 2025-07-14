@@ -27,7 +27,6 @@ import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._experimental.mcp_server.utils import validate_mcp_server_name
-from litellm.proxy.auth.model_checks import get_mcp_server_ids
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 MCP_AVAILABLE: bool = True
@@ -97,7 +96,9 @@ if MCP_AVAILABLE:
         """
         Get all MCP tools available for the current key, including those from access groups
         """
-        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
@@ -246,9 +247,9 @@ if MCP_AVAILABLE:
                         updated_at=datetime.now(),
                         mcp_info=_server_config.mcp_info,
                         # Stdio-specific fields
-                        command=_server_config.command,
-                        args=_server_config.args,
-                        env=_server_config.env,
+                        command=getattr(_server_config, 'command', None),
+                        args=getattr(_server_config, 'args', None) or [],
+                        env=getattr(_server_config, 'env', None) or {},
                     )
                 )
 
@@ -270,9 +271,9 @@ if MCP_AVAILABLE:
                 mcp_info=server.mcp_info,
                 teams=cast(List[Dict[str, str | None]], server_to_teams_map.get(server.server_id, [])),
                 # Stdio-specific fields
-                command=server.command,
-                args=server.args,
-                env=server.env,
+                command=getattr(server, 'command', None),
+                args=getattr(server, 'args', None) or [],
+                env=getattr(server, 'env', None) or {},
             )
             for server in LIST_MCP_SERVERS
         ]

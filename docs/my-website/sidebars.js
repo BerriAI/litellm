@@ -391,6 +391,7 @@ const sidebars = {
         "providers/meta_llama",
         "providers/mistral",
         "providers/codestral",
+        "providers/moonshot",
         "providers/cohere",
         "providers/anyscale",
         {
@@ -448,7 +449,7 @@ const sidebars = {
         "providers/featherless_ai",
         "providers/nebius",
         "providers/dashscope",
-        "providers/moonshot"
+        "providers/bytez"
       ],
     },
     {
