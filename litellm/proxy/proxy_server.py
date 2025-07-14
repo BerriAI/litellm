@@ -665,6 +665,12 @@ app = FastAPI(
     lifespan=proxy_startup_event,
 )
 
+class ExcludePathsFilter(logging.Filter):
+    def filter(self, record):
+        msg = record.getMessage()
+        return not any(path in msg for path in ["/health/liveliness", "/health/readiness"])
+
+logging.getLogger("uvicorn.access").addFilter(ExcludePathsFilter())
 
 ### CUSTOM API DOCS [ENTERPRISE FEATURE] ###
 # Custom OpenAPI schema generator to include only selected routes
