@@ -447,7 +447,8 @@ const sidebars = {
         "providers/snowflake",
         "providers/featherless_ai",
         "providers/nebius",
-        "providers/dashscope"
+        "providers/dashscope",
+        "providers/bytez"
       ],
     },
     {
