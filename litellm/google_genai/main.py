@@ -1,10 +1,10 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import TYPE_CHECKING, Any, Dict, Iterator, Optional, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, Iterator, Optional, Union
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.constants import request_timeout
@@ -39,6 +39,8 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 class GenerateContentSetupResult(BaseModel):
     """Internal Type - Result of setting up a generate content call"""
 
+    model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
+
     model: str
     request_body: Dict[str, Any]
     custom_llm_provider: str
@@ -47,9 +49,6 @@ class GenerateContentSetupResult(BaseModel):
     litellm_params: GenericLiteLLMParams
     litellm_logging_obj: LiteLLMLoggingObj
     litellm_call_id: Optional[str]
-
-    class Config:
-        arbitrary_types_allowed = True
 
 
 class GenerateContentHelper:

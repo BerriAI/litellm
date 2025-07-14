@@ -83,8 +83,9 @@ class JWTHandler:
         self.user_api_key_cache = user_api_key_cache
         self.litellm_jwtauth = litellm_jwtauth
         self.leeway = leeway
-
-    def is_jwt(self, token: str):
+    
+    @staticmethod
+    def is_jwt(token: str):
         parts = token.split(".")
         return len(parts) == 3
 

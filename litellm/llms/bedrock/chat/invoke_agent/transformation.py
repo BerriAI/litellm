@@ -102,6 +102,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         optional_params: dict,
         request_data: dict,
         api_base: str,
+        api_key: Optional[str] = None,
         model: Optional[str] = None,
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
@@ -115,6 +116,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             model=model,
             stream=stream,
             fake_stream=fake_stream,
+            api_key=api_key,
         )
 
     def _get_agent_id_and_alias_id(self, model: str) -> tuple[str, str]:
