@@ -107,25 +107,25 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         - tool_choice doesn't support "required" value
         - Temperature <0.3 limitation for n>1
         """
-        mapped_params = super().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=drop_params,
-        )
-        
+        supported_openai_params = self.get_supported_openai_params(model)
+        for param, value in non_default_params.items():
+            if param == "max_completion_tokens":
+                optional_params["max_tokens"] = value
+            elif param in supported_openai_params:
+                optional_params[param] = value
+
         ##########################################
         # temperature limitations
         # 1. `temperature` on KIMI API is [0, 1] but OpenAI is [0, 2]
         # 2. If temperature < 0.3 and n > 1, KIMI will raise an exception. 
         #       If we enter this condition, we set the temperature to 0.3 as suggested by Moonshot AI
         ##########################################
-        if "temperature" in mapped_params:
-            if mapped_params["temperature"] > 1:
-                mapped_params["temperature"] = 1
-            if mapped_params["temperature"] < 0.3 and mapped_params.get("n", 1) > 1:
-                mapped_params["temperature"] = 0.3
-        return mapped_params
+        if "temperature" in optional_params:
+            if optional_params["temperature"] > 1:
+                optional_params["temperature"] = 1
+            if optional_params["temperature"] < 0.3 and optional_params.get("n", 1) > 1:
+                optional_params["temperature"] = 0.3
+        return optional_params
     
 
     def transform_request(
