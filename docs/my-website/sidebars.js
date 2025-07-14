@@ -39,6 +39,7 @@ const sidebars = {
           "proxy/guardrails/lasso_security",
           "proxy/guardrails/guardrails_ai",
           "proxy/guardrails/lakera_ai",
+          "proxy/guardrails/openai_moderation",
           "proxy/guardrails/pangea",
           "proxy/guardrails/pii_masking_v2",
           "proxy/guardrails/panw_prisma_airs",
@@ -445,7 +446,8 @@ const sidebars = {
         "providers/petals",
         "providers/snowflake",
         "providers/featherless_ai",
-        "providers/nebius"
+        "providers/nebius",
+        "providers/dashscope"
       ],
     },
     {
@@ -616,6 +618,11 @@ const sidebars = {
         "proxy/customer_routing",
         "proxy_server",
       ],
+    },
+    {
+      type: "doc",
+      id: "provider_registration/index",
+      label: "Integrate as a Model Provider",
     },
     "troubleshoot",
   ],

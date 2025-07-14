@@ -4,6 +4,7 @@ LiteLLM MCP Server Routes
 
 import asyncio
 import contextlib
+from datetime import datetime
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 
 from fastapi import FastAPI, HTTPException
@@ -50,9 +51,7 @@ if MCP_AVAILABLE:
         auth_context_var,
     )
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-    from mcp.types import EmbeddedResource as MCPEmbeddedResource
-    from mcp.types import ImageContent as MCPImageContent
-    from mcp.types import TextContent as MCPTextContent
+    from mcp.types import EmbeddedResource, ImageContent, TextContent
     from mcp.types import Tool as MCPTool
 
     from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
@@ -166,7 +165,7 @@ if MCP_AVAILABLE:
     ########################################################
 
     @server.list_tools()
-    async def list_tools() -> list[MCPTool]:
+    async def list_tools() -> List[MCPTool]:
         """
         List all available tools
         """
@@ -174,6 +173,9 @@ if MCP_AVAILABLE:
         user_api_key_auth, mcp_auth_header, mcp_servers = get_auth_context()
         verbose_logger.debug(
             f"MCP list_tools - User API Key Auth from context: {user_api_key_auth}"
+        )
+        verbose_logger.debug(
+            f"MCP list_tools - MCP servers from context: {mcp_servers}"
         )
         # Get mcp_servers from context variable
         return await _list_mcp_tools(
@@ -185,7 +187,7 @@ if MCP_AVAILABLE:
     @server.call_tool()
     async def mcp_server_tool_call(
         name: str, arguments: Dict[str, Any] | None
-    ) -> List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]:
+    ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
         """
         Call a specific tool with the provided arguments
 
@@ -262,22 +264,48 @@ if MCP_AVAILABLE:
         Args:
             user_api_key_auth: User authentication info for access control
             mcp_auth_header: Optional auth header for MCP server
-            mcp_servers: Optional list of server names to filter by
+            mcp_servers: Optional list of server names and access groups to filter by
 
         Returns:
             List[MCPTool]: List of tools from the specified or all allowed MCP servers
         """
+        # Get all allowed servers for the user
+        allowed_server_ids = await global_mcp_server_manager.get_allowed_mcp_servers(
+            user_api_key_auth
+        )
+        
+        # If mcp_servers header is present, filter servers
         if mcp_servers:
-            # If mcp_servers header is present, only get tools from specified servers
             tools = []
-            for server_id in await global_mcp_server_manager.get_allowed_mcp_servers(
-                user_api_key_auth
-            ):
+            filtered_server_ids = set()
+            
+            # For each item in mcp_servers, try to match as server name first, then as access group
+            for server_or_group in mcp_servers:
+                # Try to match as server name first
+                server_name_matched = False
+                for server_id in allowed_server_ids:
+                    server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+                    if server and normalize_server_name(server.name) == normalize_server_name(server_or_group):
+                        filtered_server_ids.add(server_id)
+                        server_name_matched = True
+                
+                # If no server name matched, try to treat it as an access group
+                if not server_name_matched:
+                    try:
+                        access_group_server_ids = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+                            [server_or_group]
+                        )
+                        # Only include servers that the user has access to
+                        for server_id in access_group_server_ids:
+                            if server_id in allowed_server_ids:
+                                filtered_server_ids.add(server_id)
+                    except Exception as e:
+                        verbose_logger.debug(f"Could not resolve '{server_or_group}' as access group: {e}")
+            
+            # Get tools from filtered servers
+            for server_id in filtered_server_ids:
                 server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-                if server and any(
-                    normalize_server_name(server.name) == normalize_server_name(s)
-                    for s in mcp_servers
-                ):
+                if server:
                     server_tools = (
                         await global_mcp_server_manager._get_tools_from_server(
                             server=server,
@@ -287,7 +315,7 @@ if MCP_AVAILABLE:
                     tools.extend(server_tools)
             return tools
         else:
-            # If no mcp_servers header, get tools from all allowed servers
+            # If no filtering headers, get tools from all allowed servers
             return await global_mcp_server_manager.list_tools(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
@@ -304,7 +332,7 @@ if MCP_AVAILABLE:
         Args:
             user_api_key_auth: User authentication info for access control
             mcp_auth_header: Optional auth header for MCP server
-            mcp_servers: Optional list of server names to filter by
+            mcp_servers: Optional list of server names and access groups to filter by
         """
         tools = []
         for tool in global_mcp_tool_registry.list_tools():
@@ -333,16 +361,16 @@ if MCP_AVAILABLE:
 
     @client
     async def call_mcp_tool(
-        name: str,
-        arguments: Optional[Dict[str, Any]] = None,
-        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-        mcp_auth_header: Optional[str] = None,
-        **kwargs: Any,
-    ) -> List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]:
+            name: str,
+            arguments: Optional[Dict[str, Any]] = None,
+            user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+            mcp_auth_header: Optional[str] = None,
+            **kwargs: Any
+    ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
         """
         Call a specific tool with the provided arguments (handles prefixed tool names)
         """
-
+        start_time = datetime.now()
         if arguments is None:
             raise HTTPException(
                 status_code=400, detail="Request arguments are required"
@@ -367,6 +395,7 @@ if MCP_AVAILABLE:
             litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
                 standard_logging_mcp_tool_call
             )
+            litellm_logging_obj.model = f"MCP: {name}"
         # Try managed server tool first (pass the full prefixed name)
         # Primary and recommended way to use MCP servers
         #########################################################
@@ -377,7 +406,7 @@ if MCP_AVAILABLE:
             standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
                 mcp_server.mcp_info or {}
             ).get("mcp_server_cost_info")
-            return await _handle_managed_mcp_tool(
+            response =  await _handle_managed_mcp_tool(
                 name=name,  # Pass the full name (potentially prefixed)
                 arguments=arguments,
                 user_api_key_auth=user_api_key_auth,
@@ -388,7 +417,22 @@ if MCP_AVAILABLE:
         #########################################################
         # Deprecated: Local MCP Server Tool
         #########################################################
-        return await _handle_local_mcp_tool(original_tool_name, arguments)
+        else:
+            response = await _handle_local_mcp_tool(original_tool_name, arguments)
+        
+        #########################################################
+        # Post MCP Tool Call Hook
+        # Allow modifying the MCP tool call response before it is returned to the user
+        #########################################################
+        if litellm_logging_obj:
+            end_time = datetime.now()
+            await litellm_logging_obj.async_post_mcp_tool_call_hook(
+                kwargs=litellm_logging_obj.model_call_details,
+                response_obj=response,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        return response
 
     def _get_standard_logging_mcp_tool_call(
         name: str,
@@ -417,7 +461,7 @@ if MCP_AVAILABLE:
         arguments: Dict[str, Any],
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
-    ) -> List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]:
+    ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
         """Handle tool execution for managed server tools"""
         call_tool_result = await global_mcp_server_manager.call_tool(
             name=name,
@@ -430,7 +474,7 @@ if MCP_AVAILABLE:
 
     async def _handle_local_mcp_tool(
         name: str, arguments: Dict[str, Any]
-    ) -> List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]:
+    ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
         """
         Handle tool execution for local registry tools
         Note: Local tools don't use prefixes, so we use the original name
@@ -441,9 +485,9 @@ if MCP_AVAILABLE:
 
         try:
             result = tool.handler(**arguments)
-            return [MCPTextContent(text=str(result), type="text")]
+            return [TextContent(text=str(result), type="text")]
         except Exception as e:
-            return [MCPTextContent(text=f"Error: {str(e)}", type="text")]
+            return [TextContent(text=f"Error: {str(e)}", type="text")]
 
     async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
@@ -480,6 +524,7 @@ if MCP_AVAILABLE:
             user_api_key_auth, mcp_auth_header, mcp_servers = (
                 await MCPRequestHandler.process_mcp_request(scope)
             )
+            verbose_logger.debug(f"MCP request headers - mcp_servers: {mcp_servers}")
             # Set the auth context variable for easy access in MCP functions
             set_auth_context(
                 user_api_key_auth=user_api_key_auth,
@@ -536,7 +581,7 @@ if MCP_AVAILABLE:
         Args:
             user_api_key_auth: UserAPIKeyAuth object
             mcp_auth_header: MCP auth header to be passed to the MCP server
-            mcp_servers: Optional list of server names to filter by
+            mcp_servers: Optional list of server names and access groups to filter by
         """
         auth_user = MCPAuthenticatedUser(
             user_api_key_auth=user_api_key_auth,
@@ -552,7 +597,7 @@ if MCP_AVAILABLE:
         Get the UserAPIKeyAuth from the auth context variable.
 
         Returns:
-            Tuple[Optional[UserAPIKeyAuth], Optional[str]]: UserAPIKeyAuth object and MCP auth header
+            Tuple[Optional[UserAPIKeyAuth], Optional[str], Optional[List[str]]]: UserAPIKeyAuth object, MCP auth header, and MCP servers (can include access groups)
         """
         auth_user = auth_context_var.get()
         if auth_user and isinstance(auth_user, MCPAuthenticatedUser):

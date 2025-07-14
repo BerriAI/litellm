@@ -10,7 +10,7 @@ import Image from '@theme/IdealImage';
 
 [Enterprise Pricing](https://www.litellm.ai/#pricing)
 
-[Get free 7-day trial key](https://www.litellm.ai/#trial)
+[Get free 7-day trial key](https://www.litellm.ai/enterprise#trial)
 
 :::
 
@@ -197,7 +197,9 @@ litellm_settings:
 
 Track custom metrics on prometheus on all events mentioned above. 
 
-1. Define the custom metrics in the `config.yaml`
+### Custom Metadata Labels
+
+1. Define the custom metadata labels in the `config.yaml`
 
 ```yaml
 model_list:
@@ -242,6 +244,69 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 ```
 ... "metadata_foo": "hello world" ...
 ```
+
+### Custom Tags
+
+Track specific tags as prometheus labels for better filtering and monitoring.
+
+1. Define the custom tags in the `config.yaml`
+
+```yaml
+model_list:
+  - model_name: openai/gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+litellm_settings:
+  callbacks: ["prometheus"]
+  custom_prometheus_metadata_labels: ["metadata.foo", "metadata.bar"]
+  custom_prometheus_tags: ["prod", "staging", "batch-job"]
+```
+
+2. Make a request with tags
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer <LITELLM_API_KEY>' \
+-d '{
+    "model": "openai/gpt-4o",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "What's in this image?"
+          }
+        ]
+      }
+    ],
+    "max_tokens": 300,
+    "metadata": {
+        "tags": ["prod", "user-facing"]
+    }
+}'
+```
+
+3. Check your `/metrics` endpoint for the custom tag metrics
+
+```
+... "tag_prod": "true", "tag_staging": "false", "tag_batch_job": "false" ...
+```
+
+**How Custom Tags Work:**
+- Each configured tag becomes a boolean label in prometheus metrics
+- If a tag is present in the request, the label value is `"true"`
+- If a tag is not present in the request, the label value is `"false"`
+- Tag names are sanitized for prometheus compatibility (e.g., `"batch-job"` becomes `"tag_batch_job"`)
+
+**Use Cases:**
+- Environment tracking (`prod`, `staging`, `dev`)
+- Request type classification (`batch-job`, `user-facing`, `background`)
+- Feature flags (`new-feature`, `beta-users`)
+- Team or service identification (`team-a`, `service-xyz`)
 
 
 ## Configuring Metrics and Labels

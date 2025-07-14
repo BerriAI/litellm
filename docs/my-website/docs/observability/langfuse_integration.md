@@ -212,6 +212,7 @@ The following parameters can be updated on a continuation of a trace by passing 
 * `parent_observation_id` - Identifier for the parent observation, defaults to `None`
 * `prompt`                - Langfuse prompt object used for the generation, defaults to `None`
 
+
 Any other key value pairs passed into the metadata not listed in the above spec for a `litellm` completion will be added as a metadata key value pair for the generation.
 
 #### Disable Logging - Specific Calls
