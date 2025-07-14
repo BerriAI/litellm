@@ -108,30 +108,22 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         - tool_choice doesn't support "required" value
         - Temperature <0.3 limitation for n>1
         """
-        supported_openai_params = self.get_supported_openai_params(model=model)
+        mapped_params = super().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+        )
         
-        for param, value in non_default_params.items():
-            if param == "tool_choice":
-                # Moonshot AI doesn't support tool_choice="required"
-                if value == "required":
-                    if litellm.drop_params is True or drop_params is True:
-                        continue  # Skip this parameter
-                    else:
-                        raise litellm.utils.UnsupportedParamsError(
-                            message="Moonshot AI doesn't support tool_choice='required'. To drop unsupported openai params from the call, set `litellm.drop_params = True`",
-                            status_code=400,
-                        )
-                else:
-                    optional_params[param] = value
-            elif param == "max_completion_tokens":
-                optional_params["max_tokens"] = value
-            elif param in supported_openai_params:
-                optional_params[param] = value
-        
-        # Handle temperature and n limitation
-        if "temperature" in optional_params and "n" in optional_params:
-            temp = optional_params.get("temperature", 1.0)
-            if temp < 0.3 and optional_params.get("n", 1) > 1:
-                optional_params["n"] = 1
-        
-        return optional_params
+        ##########################################
+        # temperature limitations
+        # 1. `temperature` on KIMI API is [0, 1] but OpenAI is [0, 2]
+        # 2. If temperature < 0.3 and n > 1, KIMI will raise an exception. 
+        #       If we enter this condition, we set the temperature to 0.3 as suggested by Moonshot AI
+        ##########################################
+        if "temperature" in mapped_params:
+            if mapped_params["temperature"] > 1:
+                mapped_params["temperature"] = 1
+            if mapped_params["temperature"] < 0.3 and mapped_params.get("n", 1) > 1:
+                mapped_params["temperature"] = 0.3
+        return mapped_params
