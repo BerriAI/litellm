@@ -646,7 +646,7 @@ moonshot_models: List = [
     "moonshot-v1-32k",
     "moonshot-v1-128k",
     "moonshot-v1-auto",
-    "kimi-k2",
+    "kimi-k2-0711-preview",
     "moonshot-v1-32k-0430",
     "moonshot-v1-128k-0430",
     "moonshot-v1-8k-0430",
