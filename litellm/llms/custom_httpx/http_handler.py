@@ -205,11 +205,6 @@ class AsyncHTTPHandler:
             ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
         )
 
-        # Import proxy mounts handling if mounts not provided
-        if mounts is None:
-            from litellm.utils import create_proxy_transport_and_mounts
-            _, mounts = create_proxy_transport_and_mounts()
-
         return httpx.AsyncClient(
             mounts=mounts, # Use mounts if provided
             event_hooks=event_hooks,
@@ -221,6 +216,7 @@ class AsyncHTTPHandler:
             verify=ssl_config,
             cert=cert,
             headers=headers,
+            trust_env=True,
         )
 
     async def close(self):
@@ -683,11 +679,6 @@ class HTTPHandler:
         cert = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
 
         if client is None:
-            # Import proxy mounts handling if mounts not provided
-            if mounts is None:
-                from litellm.utils import create_proxy_transport_and_mounts
-                mounts, _ = create_proxy_transport_and_mounts()
-
             # If mounts are provided, use them. Otherwise, httpx will use its default behavior.
             # The expectation is that litellm/__init__.py will prepare and pass the mounts.
             self.client = httpx.Client(
@@ -700,6 +691,7 @@ class HTTPHandler:
                 verify=ssl_config,
                 cert=cert,
                 headers=headers,
+                trust_env=True,
             )
         else:
             self.client = client
