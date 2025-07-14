@@ -7087,6 +7087,12 @@ class ProviderConfigManager:
             )
 
             return AzureOpenAIVectorStoreConfig()
+        elif litellm.LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.vector_stores.transformation import (
+                VertexVectorStoreConfig,
+            )
+
+            return VertexVectorStoreConfig()
         return None
 
     @staticmethod
