@@ -127,3 +127,47 @@ class MoonshotChatConfig(OpenAIGPTConfig):
             if mapped_params["temperature"] < 0.3 and mapped_params.get("n", 1) > 1:
                 mapped_params["temperature"] = 0.3
         return mapped_params
+    
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        """
+        Transform the overall request to be sent to the API.
+        Returns:
+            dict: The transformed request. Sent as the body of the API call.
+        """
+        # Add tool_choice="required" message if needed
+        if optional_params.get("tool_choice", None) == "required":
+            messages = self._add_tool_choice_required_message(
+                messages=messages,
+                optional_params=optional_params,
+            )
+
+        # Call parent transform_request which handles _transform_messages
+        return super().transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+    
+
+    def _add_tool_choice_required_message(self, messages: List[AllMessageValues], optional_params: dict) -> List[AllMessageValues]:
+        """
+        Add a message to the messages list to indicate that the tool choice is required.
+
+        https://platform.moonshot.ai/docs/guide/migrating-from-openai-to-kimi#about-tool_choice
+        """
+        messages.append({
+            "role": "user",
+            "content": "Please select a tool to handle the current issue.",  # Usually, the Kimi large language model understands the intention to invoke a tool and selects one for invocation
+        })
+        optional_params.pop("tool_choice")
+        return messages
