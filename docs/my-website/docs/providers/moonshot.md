@@ -1,4 +1,18 @@
 # Moonshot AI
+
+## Overview
+
+| Property | Details |
+|-------|-------|
+| Description | Moonshot AI provides large language models including the moonshot-v1 series and kimi models. |
+| Provider Route on LiteLLM | `moonshot/` |
+| Link to Provider Doc | [Moonshot AI ↗](https://platform.moonshot.ai/) |
+| Base URL | `https://api.moonshot.cn/` |
+| Supported Operations | [`/chat/completions`](#sample-usage) |
+
+<br />
+<br />
+
 https://platform.moonshot.ai/
 
 **We support ALL Moonshot AI models, just set `moonshot/` as a prefix when sending completion requests**
