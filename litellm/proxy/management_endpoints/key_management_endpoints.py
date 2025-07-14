@@ -47,6 +47,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
+    attach_object_permission_to_dict,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
@@ -820,7 +821,6 @@ async def _set_object_permission(
         data_json["object_permission_id"] = (
             created_object_permission.object_permission_id
         )
-
         # delete the object_permission from the data_json
         data_json.pop("object_permission")
     return data_json
@@ -1497,11 +1497,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     ] = None,  # object_permission_id <-> LiteLLM_ObjectPermissionTable
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None,
 ):
-    from litellm.proxy.proxy_server import (
-        litellm_proxy_budget_name,
-        premium_user,
-        prisma_client,
-    )
+    from litellm.proxy.proxy_server import premium_user, prisma_client
 
     if prisma_client is None:
         raise Exception(
@@ -1660,10 +1656,8 @@ async def generate_key_helper_fn(  # noqa: PLR0915
                         table_name="user",
                         update_key_values=update_key_values,
                     )
-            if user_id == litellm_proxy_budget_name or (
-                table_name is not None and table_name == "user"
-            ):
-                # do not create a key for litellm_proxy_budget_name or if table name is set to just 'user'
+            if table_name is not None and table_name == "user":
+                # do not create a key if table name is set to just 'user'
                 # we only need to ensure this exists in the user table
                 # the LiteLLM_VerificationToken table will increase in size if we don't do this check
                 return user_data
@@ -2599,10 +2593,13 @@ async def _list_key_helper(
     # Prepare response
     key_list: List[Union[str, UserAPIKeyAuth]] = []
     for key in keys:
+        key_dict = key.dict()
+        # Attach object_permission if object_permission_id is set
+        key_dict = await attach_object_permission_to_dict(key_dict, prisma_client)
         if return_full_object is True:
-            key_list.append(UserAPIKeyAuth(**key.dict()))  # Return full key object
+            key_list.append(UserAPIKeyAuth(**key_dict))  # Return full key object
         else:
-            _token = key.dict().get("token")
+            _token = key_dict.get("token")
             key_list.append(_token)  # Return only the token
 
     return KeyListResponseObject(
@@ -3102,3 +3099,6 @@ def validate_model_max_budget(model_max_budget: Optional[Dict]) -> None:
         raise ValueError(
             f"Invalid model_max_budget: {str(e)}. Example of valid model_max_budget: https://docs.litellm.ai/docs/proxy/users"
         )
+
+
+

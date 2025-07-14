@@ -53,6 +53,7 @@ interface FeatureCardProps {
   description: string;
   children: React.ReactNode;
   serverName?: string;
+  accessGroups?: string[];
 }
 
 const FeatureCard: React.FC<FeatureCardProps> = ({
@@ -61,6 +62,7 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
   description,
   children,
   serverName,
+  accessGroups = ["dev"],
 }) => {
   const [useServerHeader, setUseServerHeader] = useState(false);
 
@@ -68,14 +70,12 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
     const headers: Record<string, any> = {
       "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
     };
-    
     if (useServerHeader && serverName) {
-      // Replace spaces with underscores in server name
       const formattedServerName = serverName.replace(/\s+/g, '_');
-      // Use simple comma-separated format
-      headers["x-mcp-servers"] = formattedServerName;
+      // Include both server name and access groups in the same header
+      const serverAndGroups = [formattedServerName, ...accessGroups].join(',');
+      headers["x-mcp-servers"] = [serverAndGroups];
     }
-    
     return headers;
   };
 
@@ -91,31 +91,26 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
         </div>
       </div>
       {serverName && (title === "Implementation Example" || title === "Configuration") && (
-        <Form.Item
-          className="mb-4"
-        >
+        <Form.Item className="mb-4">
           <div className="flex items-center gap-2 mb-2">
             <Switch
               size="small"
               checked={useServerHeader}
               onChange={setUseServerHeader}
             />
-            <Text className="text-sm">Segregate tools to just use a specific MCP Server e.g. {serverName} tools</Text>
+            <Text className="text-sm">Limit tools to specific MCP servers or MCP groups by passing the <code>x-mcp-servers</code> header</Text>
           </div>
           {useServerHeader && (
             <Alert
               className="mt-2"
               type="info"
               showIcon
-              message="MCP Server Header Format"
+              message="Two Options"
               description={
                 <div>
-                  <p>Specify one or more MCP servers using a comma-separated list:</p>
-                  <ul>
-                    <li><strong>Single server:</strong> "Server1"</li>
-                    <li><strong>Multiple servers:</strong> "Server1,Server2,Server3"</li>
-                  </ul>
-                  <p>Note: Server names with spaces will be automatically converted to use underscores.</p>
+                  <p><strong>Option 1:</strong> Get a specific server: <code>["{serverName.replace(/\s+/g, '_')}"]</code></p>
+                  <p><strong>Option 2:</strong> Get a group of MCPs: <code>["dev-group"]</code></p>
+                  <p className="mt-2 text-sm text-gray-600">You can also mix both: <code>["Server1,dev-group"]</code></p>
                 </div>
               }
             />
@@ -142,7 +137,11 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
   );
 };
 
-const MCPConnect: React.FC = () => {
+interface MCPConnectProps {
+  currentServerAccessGroups?: string[];
+}
+
+const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] }) => {
   const proxyBaseUrl = getProxyBaseUrl();
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [serverHeaders, setServerHeaders] = useState<Record<string, string[]>>({
@@ -175,8 +174,8 @@ const MCPConnect: React.FC = () => {
       // Format server names (replace spaces with underscores)
       const formattedServers = serverHeaders[type].map(s => s.replace(/\s+/g, '_'));
       
-      // Use comma-separated format
-      headers["x-mcp-servers"] = formattedServers.join(',');
+      // Use comma-separated format (can include both servers and access groups)
+      headers["x-mcp-servers"] = [formattedServers.join(',')];
     }
     
     return headers;
@@ -279,6 +278,7 @@ const MCPConnect: React.FC = () => {
           title="Implementation Example"
           description="Complete cURL example for using the LiteLLM Proxy Responses API"
           serverName={currentServer}
+          accessGroups={["dev"]}
         >
           <CodeBlock
             code={`curl --location '${proxyBaseUrl}/v1/responses' \\
@@ -293,7 +293,8 @@ const MCPConnect: React.FC = () => {
             "server_url": "${proxyBaseUrl}/mcp",
             "require_approval": "never",
             "headers": {
-                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+                "x-mcp-servers": ["Zapier_MCP,dev"]
             }
         }
     ],
@@ -365,6 +366,7 @@ const MCPConnect: React.FC = () => {
           title="Implementation Example"
           description="Complete cURL example for using the Responses API"
           serverName="Zapier Gmail"
+          accessGroups={["dev"]}
         >
           <CodeBlock
             code={`curl --location 'https://api.openai.com/v1/responses' \\
@@ -379,7 +381,8 @@ const MCPConnect: React.FC = () => {
             "server_url": "${proxyBaseUrl}/mcp",
             "require_approval": "never",
             "headers": {
-                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+                "x-mcp-servers": ["Zapier_MCP,dev"]
             }
         }
     ],
@@ -433,19 +436,22 @@ const MCPConnect: React.FC = () => {
               title="Configuration"
               description="Cursor MCP configuration"
               serverName="Zapier Gmail"
+              accessGroups={["dev"]}
             >
               <CodeBlock
                 code={`{
   "mcpServers": {
-    "LiteLLM": {
-      "url": "${proxyBaseUrl}/mcp",
+    "Zapier_MCP": {
+      "server_url": "${proxyBaseUrl}/mcp",
       "headers": {
-        "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
+        "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+        "x-mcp-servers": ["Zapier_MCP,dev"]
       }
     }
   }
 }`}
                 copyKey="cursor-config"
+                className="text-xs"
               />
             </FeatureCard>
           </StepCard>
