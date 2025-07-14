@@ -43,6 +43,52 @@ pip install litellm==1.74.3rc2
 
 ---
 
+## Key Highlights 
+
+- **MCP: Model Access Groups** - Add mcp servers to access groups, for easily managing access to users and teams.
+- **MCP: Tool Cost Tracking** - Set prices for each MCP tool. 
+- **Model Hub v2** - New OSS Model Hub for telling developers what models are available on the proxy.
+- **Bytez** - New LLM API Provider.
+- **Dashscope API** - Call Alibaba's qwen models via new Dashscope API Provider.
+
+---
+
+## MCP Gateway: Model Access Groups
+
+<Image 
+  img={require('../../img/release_notes/mcp_access_groups.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+<br/>
+
+v1.74.3-stable adds support for adding MCP servers to access groups, this makes it **easier for Proxy Admins** to manage access to MCP servers across users and teams.
+
+For **developers**, this means you can now connect to multiple MCP servers by passing the access group name in the `x-mcp-servers` header.
+
+Read more [here](https://docs.litellm.ai/docs/mcp#grouping-mcps-access-groups)
+
+---
+
+## MCP Gateway: Tool Cost Tracking
+
+<Image 
+  img={require('../../img/release_notes/mcp_tool_cost_tracking.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+<br/>
+
+This release adds cost tracking for MCP tool calls. This is great for **Proxy Admins** giving MCP access to developers as you can now attribute MCP tool call costs to specific LiteLLM keys and teams.
+
+You can set:
+- **Uniform server cost**: Set a uniform cost for all tools from a server
+- **Individual tool cost**: Define individual costs for specific tools (e.g., search_tool costs $10, get_weather costs $5).
+- **Dynamic costs**: For use cases where you want to set costs based on the MCP's response, you can write a custom post mcp call hook to parse responses and set costs dynamically.
+
+[Get started](https://docs.litellm.ai/docs/mcp#mcp-cost-tracking)
+
+---
 
 ## New Models / Updated Models
 
