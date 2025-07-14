@@ -2,9 +2,9 @@
 Translates from OpenAI's `/v1/chat/completions` to Moonshot AI's `/v1/chat/completions`
 """
 
-import litellm
 from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
 
+import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
 )
@@ -85,30 +85,14 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         - functions parameter is not supported (use tools instead)
         - tool_choice doesn't support "required" value
         """
-        base_openai_params = [
-            "frequency_penalty",
-            "logit_bias",
-            "logprobs",
-            "top_logprobs",
-            "max_tokens",
-            "max_completion_tokens",
-            "n",
-            "presence_penalty",
-            "seed",
-            "stop",
-            "stream",
-            "stream_options",
-            "temperature",
-            "top_p",
-            "tools",
-            "tool_choice",
-            "response_format",
-            "user",
-            "extra_headers",
-            "parallel_tool_calls",
-        ]
-        # Note: "functions" is not included as it's not supported by Moonshot AI
-        return base_openai_params
+        excluded_params: List[str] = ["functions"]
+        base_openai_params = super().get_supported_openai_params(model=model)
+        final_params: List[str] = []
+        for param in base_openai_params:
+            if param not in excluded_params:
+                final_params.append(param)
+        
+        return final_params
 
     def map_openai_params(
         self,
