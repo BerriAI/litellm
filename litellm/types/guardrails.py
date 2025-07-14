@@ -330,6 +330,11 @@ class ModelArmorConfigModel(BaseModel):
         description="Whether to fail the request if Model Armor encounters an error",
     )
 
+    @staticmethod
+    def ui_friendly_name() -> str:
+        """Return the UI-friendly name for Model Armor guardrail"""
+        return "Google Cloud Model Armor"
+
 
 class LakeraV2GuardrailConfigModel(BaseModel):
     """Configuration parameters for the Lakera AI v2 guardrail"""

@@ -1,4 +1,4 @@
-from typing import Any, AsyncGenerator, List, Literal, Optional, Union
+from typing import Any, AsyncGenerator, List, Literal, Optional, Type, Union
 
 from fastapi import HTTPException
 
@@ -433,3 +433,12 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         # Return original chunks if no sanitization needed
         for chunk in all_chunks:
             yield chunk
+
+    @staticmethod
+    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+        """
+        Get the config model for the Model Armor guardrail.
+        """
+        from litellm.types.guardrails import ModelArmorConfigModel
+        
+        return ModelArmorConfigModel
