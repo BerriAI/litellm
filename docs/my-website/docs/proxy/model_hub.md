@@ -21,5 +21,6 @@ Admin can select models to expose on public model hub -> Users can go to the pub
 Go to `<your-proxy-url>/ui`
 
 2. Select the models you want to expose
+
 4. Click on the "Save" button
 5. Go to the public url (`/ui/model_hub_table`) and see available models. 

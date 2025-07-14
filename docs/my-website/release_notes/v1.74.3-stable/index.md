@@ -90,6 +90,32 @@ You can set:
 
 ---
 
+## Model Hub v2
+
+<Image 
+  img={require('../../img/release_notes/model_hub_v2.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+<br/>
+
+v1.74.3-stable introduces a new OSS Model Hub for telling developers what models are available on the proxy.
+
+This is great for **Proxy Admins** as you can now tell developers what models are available on the proxy.
+
+This improves on the previous model hub by enabling:
+- The ability to show **Developers** models, even if they don't have a LiteLLM key.
+- The ability for **Proxy Admins** to select specific models to be public on the model hub.
+- Improved search and filtering capabilities:
+    - search for models by partial name (e.g. `xai grok-4`)
+    - filter by provider and feature (e.g. 'vision' models)
+    - sort by cost (e.g. cheapest vision model from OpenAI)
+
+[Get started](../../docs/proxy/model_hub)
+
+---
+
+
 ## New Models / Updated Models
 
 #### Pricing / Context Window Updates
