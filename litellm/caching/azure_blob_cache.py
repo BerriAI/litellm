@@ -26,6 +26,7 @@ class AzureBlobCache(BaseCache):
         from azure.storage.blob import BlobServiceClient
         from azure.core.exceptions import ResourceExistsError
         from azure.identity import DefaultAzureCredential
+        from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
         from azure.storage.blob.aio import BlobServiceClient as AsyncBlobServiceClient
 
         self.container_client = BlobServiceClient(
@@ -34,7 +35,7 @@ class AzureBlobCache(BaseCache):
         ).get_container_client(container)
         self.async_container_client = AsyncBlobServiceClient(
             account_url=account_url,
-            credential=DefaultAzureCredential(),
+            credential=AsyncDefaultAzureCredential(),
         ).get_container_client(container)
 
         with suppress(ResourceExistsError):
