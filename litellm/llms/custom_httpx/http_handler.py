@@ -216,6 +216,7 @@ class AsyncHTTPHandler:
             verify=ssl_config,
             cert=cert,
             headers=headers,
+            trust_env=True,
         )
 
     async def close(self):
@@ -690,6 +691,7 @@ class HTTPHandler:
                 verify=ssl_config,
                 cert=cert,
                 headers=headers,
+                trust_env=True,
             )
         else:
             self.client = client
