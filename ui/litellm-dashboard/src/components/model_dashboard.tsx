@@ -1400,67 +1400,78 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               />
             </TabPanel>
             <TabPanel>
-              <CredentialsPanel accessToken={accessToken} uploadProps={uploadProps} credentialList={credentialsList} fetchCredentials={fetchCredentials} />
-            </TabPanel>
-            <TabPanel>
-              <Card>
-                <Text>
-                  `/health` will run a very small request through your models
-                  configured on litellm
-                </Text>
-
-                <Button onClick={runHealthCheck}>Run `/health`</Button>
-                {healthCheckResponse && (
-                  <pre>{JSON.stringify(healthCheckResponse, null, 2)}</pre>
-                )}
-              </Card>
-            </TabPanel>
-            <TabPanel>
-              <Grid numItems={4} className="mt-2 mb-2">
-                <Col>
-                  <Text>Select Time Range</Text>
-                  <DateRangePicker
-                    enableSelect={true}
-                    value={dateValue}
-                    className="mr-2"
-                    onValueChange={(value) => {
-                      setDateValue(value);
-                      updateModelMetrics(
-                        selectedModelGroup,
-                        value.from,
-                        value.to
-                      ); // Call updateModelMetrics with the new date range
-                    }}
+                  <CredentialsPanel
+                    accessToken={accessToken}
+                    uploadProps={uploadProps}
+                    credentialList={credentialsList}
+                    fetchCredentials={fetchCredentials}
                   />
-                </Col>
-                <Col className="ml-2">
-                  <Text>Select Model Group</Text>
-                  <Select
-                    defaultValue={
-                      selectedModelGroup
-                        ? selectedModelGroup
-                        : availableModelGroups[0]
-                    }
-                    value={
-                      selectedModelGroup
-                        ? selectedModelGroup
-                        : availableModelGroups[0]
-                    }
-                  >
-                    {availableModelGroups.map((group, idx) => (
-                      <SelectItem
-                        key={idx}
-                        value={group}
-                        onClick={() =>
-                          updateModelMetrics(group, dateValue.from, dateValue.to)
+                </TabPanel>
+                <TabPanel>
+                  <PassThroughSettings
+                    accessToken={accessToken}
+                    userRole={userRole}
+                    userID={userID}
+                    modelData={modelData}
+                  />
+                </TabPanel>
+                <TabPanel>
+                  <HealthCheckComponent
+                    accessToken={accessToken}
+                    modelData={modelData}
+                    all_models_on_proxy={all_models_on_proxy}
+                    getDisplayModelName={getDisplayModelName}
+                    setSelectedModelId={setSelectedModelId}
+                  />
+                </TabPanel>
+                <TabPanel>
+                  <Grid numItems={4} className="mt-2 mb-2">
+                    <Col>
+                      <UsageDatePicker
+                        value={dateValue}
+                        className="mr-2"
+                        onValueChange={(value) => {
+                          setDateValue(value);
+                          updateModelMetrics(
+                            selectedModelGroup,
+                            value.from,
+                            value.to
+                          );
+                        }}
+                      />
+                    </Col>
+                    <Col className="ml-2">
+                      <Text>Select Model Group</Text>
+                      <Select
+                        defaultValue={
+                          selectedModelGroup
+                            ? selectedModelGroup
+                            : availableModelGroups[0]
+                        }
+                        value={
+                          selectedModelGroup
+                            ? selectedModelGroup
+                            : availableModelGroups[0]
                         }
                       >
-                        {group}
-                      </SelectItem>
-                    ))}
-                  </Select>
-                </Col>
-                <Col>
+                        {availableModelGroups.map((group, idx) => (
+                          <SelectItem
+                            key={idx}
+                            value={group}
+                            onClick={() =>
+                              updateModelMetrics(
+                                group,
+                                dateValue.from,
+                                dateValue.to
+                              )
+                            }
+                          >
+                            {group}
+                          </SelectItem>
+                        ))}
+                      </Select>
+                    </Col>
+                    <Col>
                 <Popover
                   trigger="click" content={FilterByContent}
                   overlayStyle={{
