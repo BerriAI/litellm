@@ -451,6 +451,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         """
         Get the config model for the Model Armor guardrail.
         """
-        from litellm.types.guardrails import ModelArmorConfigModel
+        from litellm.types.proxy.guardrails.guardrail_hooks.model_armor import (
+            ModelArmorGuardrailConfigModel,
+        )
         
-        return ModelArmorConfigModel
+        return ModelArmorGuardrailConfigModel

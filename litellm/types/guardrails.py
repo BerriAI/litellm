@@ -306,35 +306,6 @@ class BedrockGuardrailConfigModel(BaseModel):
     )
 
 
-class ModelArmorConfigModel(BaseModel):
-    """Configuration parameters for Google Cloud Model Armor guardrail"""
-
-    template_id: Optional[str] = Field(
-        default=None, description="The ID of your Model Armor template"
-    )
-    project_id: Optional[str] = Field(
-        default=None, description="Google Cloud project ID"
-    )
-    location: Optional[str] = Field(
-        default=None, description="Google Cloud location/region (e.g., us-central1)"
-    )
-    credentials: Optional[str] = Field(
-        default=None,
-        description="Path to Google Cloud credentials JSON file or JSON string",
-    )
-    api_endpoint: Optional[str] = Field(
-        default=None, description="Optional custom API endpoint for Model Armor"
-    )
-    fail_on_error: Optional[bool] = Field(
-        default=True,
-        description="Whether to fail the request if Model Armor encounters an error",
-    )
-
-    @staticmethod
-    def ui_friendly_name() -> str:
-        """Return the UI-friendly name for Model Armor guardrail"""
-        return "Google Cloud Model Armor"
-
 
 class LakeraV2GuardrailConfigModel(BaseModel):
     """Configuration parameters for the Lakera AI v2 guardrail"""
@@ -425,6 +396,11 @@ class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
         default=None, description="Optional field if guardrail requires a 'model' parameter"
     )
 
+    # Model Armor params
+    template_id: Optional[str] = Field(
+        default=None, description="The ID of your Model Armor template"
+    )
+    
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
 
@@ -438,7 +414,6 @@ class Mode(BaseModel):
 class LitellmParams(
     PresidioConfigModel,
     BedrockGuardrailConfigModel,
-    ModelArmorConfigModel,
     LakeraV2GuardrailConfigModel,
     LassoGuardrailConfigModel,
     BaseLitellmParams,
