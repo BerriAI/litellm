@@ -1,34 +1,25 @@
 import json
 import time
 import traceback
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    List,
-    Optional,
-    Union,
-    Dict,
-)
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
 
-from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
-from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
-from litellm.types.utils import LlmProviders
-from litellm.types.llms.openai import AllMessageValues
-
 from litellm.llms.custom_httpx.http_handler import (
-    version,
+    AsyncHTTPHandler,
     HTTPHandler,
     _get_httpx_client,
-    AsyncHTTPHandler,
     get_async_httpx_client,
+    version,
 )
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import LlmProviders
+from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
-from ..common_utils import validate_environment, API_BASE, BytezError
-
+from ..common_utils import API_BASE, BytezError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -142,10 +133,13 @@ class BytezChatConfig(BaseConfig):
             }
         )
 
-        validate_environment(
-            messages=messages,
-            api_key=api_key,
-        )
+        if not messages:
+            raise Exception(
+                "kwarg `messages` must be an array of messages that follow the openai chat standard"
+            )
+
+        if not api_key:
+            raise Exception("Missing api_key, make sure you pass in your api key")
 
         return headers
 
