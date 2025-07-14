@@ -1,6 +1,18 @@
-from typing import Any, AsyncGenerator, List, Literal, Optional, Type, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncGenerator,
+    List,
+    Literal,
+    Optional,
+    Type,
+    Union,
+)
 
 from fastapi import HTTPException
+
+if TYPE_CHECKING:
+    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
