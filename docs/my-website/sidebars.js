@@ -408,6 +408,7 @@ const sidebars = {
         "providers/nvidia_nim",
         { type: "doc", id: "providers/nscale", label: "Nscale (EU Sovereign)" },
         "providers/xai",
+        "providers/moonshot",
         "providers/lm_studio",
         "providers/cerebras",
         "providers/volcano",
