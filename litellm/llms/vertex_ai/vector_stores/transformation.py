@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
 
@@ -17,6 +17,13 @@ from litellm.types.vector_stores import (
     VectorStoreSearchResponse,
     VectorStoreSearchResult,
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
 
 
 class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
@@ -95,6 +102,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         query: Union[str, List[str]],
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
+        litellm_logging_obj: LiteLLMLoggingObj,
     ) -> Tuple[str, Dict]:
         """
         Transform search request for Vertex AI RAG API
@@ -119,6 +127,11 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
                 "text": query
             }
         }
+
+        #########################################################
+        # Update logging object with details of the request
+        #########################################################
+        litellm_logging_obj.model_call_details["query"] = query
         
         # Add optional parameters
         max_num_results = vector_store_search_optional_params.get("max_num_results")
@@ -143,7 +156,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         
         return url, request_body
 
-    def transform_search_vector_store_response(self, response: httpx.Response) -> VectorStoreSearchResponse:
+    def transform_search_vector_store_response(self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj) -> VectorStoreSearchResponse:
         """
         Transform Vertex AI RAG API response to standard vector store search response
         """
@@ -171,7 +184,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
             
             return VectorStoreSearchResponse(
                 object="vector_store.search_results.page",
-                search_query=response_json.get("query", {}).get("text", ""),
+                search_query=litellm_logging_obj.model_call_details.get("query", ""),
                 data=search_results
             )
             
