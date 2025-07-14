@@ -38,7 +38,7 @@ class BaseVectorStoreTest(ABC):
         litellm._turn_on_debug()
         litellm.set_verbose = True
         base_request_args = self.get_base_request_args()
-        default_query = base_request_args.get("query", "Basic ping")
+        default_query = base_request_args.pop("query", "Basic ping")
         try: 
             if sync_mode:
                 response = litellm.vector_stores.search(
