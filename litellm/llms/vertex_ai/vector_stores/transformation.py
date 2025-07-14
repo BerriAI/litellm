@@ -148,9 +148,10 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         Transform Vertex AI RAG API response to standard vector store search response
         """
         try:
-            response_json = response.json()            
+
+            response_json = response.json()
             # Extract contexts from Vertex AI response - handle nested structure
-            contexts = response_json.get("contexts", [])
+            contexts = response_json.get("contexts", {}).get("contexts", [])
             
             # Transform contexts to standard format
             search_results = []
