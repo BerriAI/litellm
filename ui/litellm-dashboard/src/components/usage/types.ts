@@ -18,21 +18,35 @@ export interface DailyData {
 
 export interface BreakdownMetrics {
   models: { [key: string]: MetricWithMetadata };
+  mcp_servers: { [key: string]: MetricWithMetadata };
   providers: { [key: string]: MetricWithMetadata };
   api_keys: { [key: string]: KeyMetricWithMetadata };
+  entities: { [key: string]: MetricWithMetadata };
 }
 
 export interface MetricWithMetadata {
   metrics: SpendMetrics;
   metadata: object;
+  api_key_breakdown: { [key: string]: KeyMetricWithMetadata };
 }
 
 export interface KeyMetricWithMetadata {
   metrics: SpendMetrics;
-  metadata: {
-    key_alias: string | null;
-    team_id?: string | null;
-  };
+  metadata: KeyMetadata;
+}
+
+export interface KeyMetadata {
+  key_alias: string | null;
+  team_id: string | null;
+}
+
+export interface TopApiKeyData {
+  api_key: string;
+  key_alias: string | null;
+  team_id: string | null;
+  spend: number;
+  requests: number;
+  tokens: number;
 }
 
 export interface ModelActivityData {
@@ -46,6 +60,7 @@ export interface ModelActivityData {
   prompt_tokens: number;
   completion_tokens: number;
   total_spend: number;
+  top_api_keys: TopApiKeyData[];
   daily_data: {
     date: string;
     metrics: {
@@ -62,11 +77,6 @@ export interface ModelActivityData {
   }[];
 }
 
-export interface KeyMetadata {
-  key_alias: string | null;
-  team_id: string | null;
-}
-
 export interface EntityMetadata {
   alias: string;
   id: string;
@@ -75,15 +85,4 @@ export interface EntityMetadata {
 export interface EntityMetricWithMetadata {
   metrics: SpendMetrics;
   metadata: EntityMetadata;
-}
-
-export interface MetricWithMetadata {
-  metrics: SpendMetrics;
-  metadata: object;
-}
-
-export interface BreakdownMetrics {
-  models: { [key: string]: MetricWithMetadata };
-  providers: { [key: string]: MetricWithMetadata };
-  api_keys: { [key: string]: KeyMetricWithMetadata };
 }

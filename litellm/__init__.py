@@ -2,7 +2,7 @@
 import warnings
 
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
-### INIT VARIABLES ################
+### INIT VARIABLES ####################
 import threading
 import os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
@@ -61,17 +61,27 @@ from litellm.constants import (
     DEFAULT_ALLOWED_FAILS,
 )
 from litellm.types.guardrails import GuardrailItem
-from litellm.types.secret_managers.main import KeyManagementSystem, KeyManagementSettings
-from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams, LiteLLM_UpperboundKeyGenerateParams
+from litellm.types.secret_managers.main import (
+    KeyManagementSystem,
+    KeyManagementSettings,
+)
+from litellm.types.proxy.management_endpoints.ui_sso import (
+    DefaultTeamSSOParams,
+    LiteLLM_UpperboundKeyGenerateParams,
+)
 from litellm.types.utils import StandardKeyGenerationConfig, LlmProviders
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
 import httpx
 import dotenv
+from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
 
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     dotenv.load_dotenv()
+
+# Register async client cleanup to prevent resource leaks
+register_async_client_cleanup()
 
 ##################################################
 if set_verbose == True:
@@ -183,6 +193,7 @@ openai_like_key: Optional[str] = None
 azure_key: Optional[str] = None
 anthropic_key: Optional[str] = None
 replicate_key: Optional[str] = None
+bytez_key: Optional[str] = None
 cohere_key: Optional[str] = None
 infinity_key: Optional[str] = None
 clarifai_key: Optional[str] = None
@@ -312,10 +323,13 @@ disable_end_user_cost_tracking: Optional[bool] = None
 disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 custom_prometheus_metadata_labels: List[str] = []
+custom_prometheus_tags: List[str] = []
 prometheus_metrics_config: Optional[List] = None
 disable_add_prefix_to_prompt: bool = (
     False  # used by anthropic, to disable adding prefix to prompt
 )
+public_model_groups: Optional[List[str]] = None
+public_model_groups_links: Dict[str, str] = {}
 #### REQUEST PRIORITIZATION #####
 priority_reservation: Optional[Dict[str, float]] = None
 
@@ -482,6 +496,7 @@ nebius_models: List = []
 nebius_embedding_models: List = []
 deepgram_models: List = []
 elevenlabs_models: List = []
+dashscope_models: List = []
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -657,6 +672,8 @@ def add_known_models():
             deepgram_models.append(key)
         elif value.get("litellm_provider") == "elevenlabs":
             elevenlabs_models.append(key)
+        elif value.get("litellm_provider") == "dashscope":
+            dashscope_models.append(key)
 
 
 add_known_models()
@@ -740,6 +757,7 @@ model_list = (
     + nscale_models
     + deepgram_models
     + elevenlabs_models
+    + dashscope_models
 )
 
 model_list_set = set(model_list)
@@ -805,6 +823,7 @@ models_by_provider: dict = {
     "featherless_ai": featherless_ai_models,
     "deepgram": deepgram_models,
     "elevenlabs": elevenlabs_models,
+    "dashscope": dashscope_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -901,6 +920,7 @@ ALL_LITELLM_RESPONSE_TYPES = [
     TextCompletionResponse,
 ]
 
+from .llms.bytez.chat.transformation import BytezChatConfig
 from .llms.custom_llm import CustomLLM
 from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from .llms.openai_like.chat.handler import OpenAILikeChatConfig
@@ -1121,8 +1141,10 @@ from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
 from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
 from .llms.github_copilot.chat.transformation import GithubCopilotConfig
 from .llms.nebius.chat.transformation import NebiusConfig
+from .llms.dashscope.chat.transformation import DashScopeChatConfig
 from .main import *  # type: ignore
 from .integrations import *
+from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
 from .exceptions import (
     AuthenticationError,
     InvalidRequestError,
