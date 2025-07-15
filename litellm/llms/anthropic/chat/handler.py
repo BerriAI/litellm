@@ -22,6 +22,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -487,6 +488,11 @@ class ModelResponseIterator:
         self.tool_index = -1
         self.json_mode = json_mode
 
+        # Track if we're currently streaming a response_format tool
+        self.is_response_format_tool: bool = False
+        # Track if we've converted any response_format tools (affects finish_reason)
+        self.converted_response_format_tool: bool = False
+
     def check_empty_tool_call_args(self) -> bool:
         """
         Check if the tool call block so far has been an empty string
@@ -515,7 +521,9 @@ class ModelResponseIterator:
             usage_object=cast(dict, anthropic_usage_chunk), reasoning_content=None
         )
 
-    def _content_block_delta_helper(self, chunk: dict) -> Tuple[
+    def _content_block_delta_helper(
+        self, chunk: dict
+    ) -> Tuple[
         str,
         Optional[ChatCompletionToolCallChunk],
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]],
@@ -680,7 +688,6 @@ class ModelResponseIterator:
                 ContentBlockStop(**chunk)  # type: ignore
                 # check if tool call content block
                 is_empty = self.check_empty_tool_call_args()
-
                 if is_empty:
                     tool_use = {
                         "id": None,
@@ -691,18 +698,10 @@ class ModelResponseIterator:
                         },
                         "index": self.tool_index,
                     }
+                # Reset response_format tool tracking when block stops
+                self.is_response_format_tool = False
             elif type_chunk == "message_delta":
-                """
-                Anthropic
-                chunk = {'type': 'message_delta', 'delta': {'stop_reason': 'max_tokens', 'stop_sequence': None}, 'usage': {'output_tokens': 10}}
-                """
-                # TODO - get usage from this chunk, set in response
-                message_delta = MessageBlockDelta(**chunk)  # type: ignore
-                finish_reason = map_finish_reason(
-                    finish_reason=message_delta["delta"].get("stop_reason", "stop")
-                    or "stop"
-                )
-                usage = self._handle_usage(anthropic_usage_chunk=message_delta["usage"])
+                finish_reason, usage = self._handle_message_delta(chunk)
             elif type_chunk == "message_start":
                 """
                 Anthropic
@@ -778,6 +777,13 @@ class ModelResponseIterator:
         Anthropic returns the JSON schema as part of the tool call
         OpenAI returns the JSON schema as part of the content, this handles placing it in the content
 
+        Tool streaming follows Anthropic's fine-grained streaming pattern:
+        - content_block_start: Contains complete tool info (id, name, empty arguments)
+        - content_block_delta: Contains argument deltas (partial_json)
+        - content_block_stop: Signals end of tool
+
+        Reference: https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/fine-grained-tool-streaming
+
         Args:
             text: str
             tool_use: Optional[ChatCompletionToolCallChunk]
@@ -787,15 +793,49 @@ class ModelResponseIterator:
             text: The text to use in the content
             tool_use: The ChatCompletionToolCallChunk to use in the chunk response
         """
-        if self.json_mode is True and tool_use is not None:
+        if not self.json_mode or tool_use is None:
+            return text, tool_use
+
+        # Check if this is a new tool call (has id)
+        if tool_use.get("id") is not None:
+            # New tool call from content_block_start - tool name is always complete here
+            # (per Anthropic's fine-grained streaming pattern)
+            tool_name = tool_use.get("function", {}).get("name", "")
+            self.is_response_format_tool = tool_name == RESPONSE_FORMAT_TOOL_NAME
+
+        # Convert tool to content if we're tracking a response_format tool
+        if self.is_response_format_tool:
             message = AnthropicConfig._convert_tool_response_to_message(
                 tool_calls=[tool_use]
             )
             if message is not None:
                 text = message.content or ""
                 tool_use = None
+                # Track that we converted a response_format tool
+                self.converted_response_format_tool = True
 
         return text, tool_use
+
+    def _handle_message_delta(self, chunk: dict) -> Tuple[str, Optional[Usage]]:
+        """
+        Handle message_delta event for finish_reason and usage.
+
+        Args:
+            chunk: The message_delta chunk
+
+        Returns:
+            Tuple of (finish_reason, usage)
+        """
+        message_delta = MessageBlockDelta(**chunk)  # type: ignore
+        finish_reason = map_finish_reason(
+            finish_reason=message_delta["delta"].get("stop_reason", "stop") or "stop"
+        )
+        # Override finish_reason to "stop" if we converted response_format tools
+        # (matches OpenAI behavior and non-streaming Anthropic implementation)
+        if self.converted_response_format_tool:
+            finish_reason = "stop"
+        usage = self._handle_usage(anthropic_usage_chunk=message_delta["usage"])
+        return finish_reason, usage
 
     # Sync iterator
     def __iter__(self):
