@@ -8648,21 +8648,18 @@ async def get_routes():
     """
     Get a list of available routes in the FastAPI application.
     """
+    from litellm.proxy.common_utils.get_routes import GetRoutes
     routes = []
     for route in app.routes:
         endpoint_route = getattr(route, "endpoint", None)
         if endpoint_route is not None:
-            route_info = {
-                "path": getattr(route, "path", None),
-                "methods": getattr(route, "methods", None),
-                "name": getattr(route, "name", None),
-                "endpoint": (
-                    endpoint_route.__name__
-                    if getattr(route, "endpoint", None)
-                    else None
-                ),
-            }
-            routes.append(route_info)
+            routes.extend(GetRoutes.get_app_routes(
+                route=route,
+                endpoint_route=endpoint_route,
+            ))
+        # Handle mounted sub-applications (like MCP app)
+        elif hasattr(route, 'app') and hasattr(route, 'path'):
+            routes.extend(GetRoutes.get_routes_for_mounted_app(route=route))
 
     return {"routes": routes}
 
