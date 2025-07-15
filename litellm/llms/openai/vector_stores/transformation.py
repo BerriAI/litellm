@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 import httpx
 
@@ -15,6 +15,12 @@ from litellm.types.vector_stores import (
     VectorStoreSearchResponse,
 )
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
 
 class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
     ASSISTANTS_HEADER_KEY = "OpenAI-Beta"
@@ -76,6 +82,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
         query: Union[str, List[str]],
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
+        litellm_logging_obj: LiteLLMLoggingObj,
     ) -> Tuple[str, Dict]:
         url = f"{api_base}/{vector_store_id}/search"
         typed_request_body = VectorStoreSearchRequest(
@@ -91,7 +98,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
     
 
 
-    def transform_search_vector_store_response(self, response: httpx.Response) -> VectorStoreSearchResponse:
+    def transform_search_vector_store_response(self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj) -> VectorStoreSearchResponse:
         try:
             response_json = response.json()
             return VectorStoreSearchResponse(
