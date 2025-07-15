@@ -15,4 +15,12 @@ guardrails:
       guardrailVersion: "DRAFT"
 
 litellm_settings:
-  callbacks: ["datadog_llm_observability"]
+  callbacks: ["langfuse"]
+
+
+litellm_settings:
+  default_team_settings: 
+    - team_id: "7f32e788-ff68-48e7-beb1-861e7ae7b042"
+      success_callback: ["langfuse"] # LF - Test-Key-Logging Project
+      langfuse_public_key: pk-lf-625e59a3-5651-496a-863b-7896552ef6fe
+      langfuse_secret: sk-lf-61acbe99-9c00-4b3e-9032-d9973ca90886

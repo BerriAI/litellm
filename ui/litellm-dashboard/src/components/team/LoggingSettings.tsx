@@ -6,6 +6,7 @@ import { InfoCircleOutlined } from '@ant-design/icons';
 import { Button, Card, TextInput } from '@tremor/react';
 import { PlusIcon, TrashIcon, CogIcon } from '@heroicons/react/outline';
 import { callbackInfo, Callbacks, callback_map } from '../callback_info_helpers';
+import DisabledCallbacks from './DisabledCallbacks';
 
 const { Option } = Select;
 
@@ -18,9 +19,18 @@ interface LoggingConfig {
 interface LoggingSettingsProps {
   value?: LoggingConfig[];
   onChange?: (value: LoggingConfig[]) => void;
+  disabledCallbacks?: string[];
+  onDisabledCallbacksChange?: (disabled: string[]) => void;
+  accessToken?: string;
 }
 
-const LoggingSettings: React.FC<LoggingSettingsProps> = ({ value = [], onChange }) => {
+const LoggingSettings: React.FC<LoggingSettingsProps> = ({ 
+  value = [], 
+  onChange, 
+  disabledCallbacks = [],
+  onDisabledCallbacksChange,
+  accessToken 
+}) => {
   // Get callbacks that support team and key logging
   const supportedCallbacks = Object.entries(callbackInfo)
     .filter(([_, info]) => info.supports_key_team_logging)
@@ -145,6 +155,15 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({ value = [], onChange 
           Add Integration
         </Button>
       </div>
+
+      {/* Disabled Callbacks Section */}
+      {onDisabledCallbacksChange && (
+        <DisabledCallbacks
+          value={disabledCallbacks}
+          onChange={onDisabledCallbacksChange}
+          accessToken={accessToken}
+        />
+      )}
 
       <div className="space-y-4">
         {value.map((config, index) => {
