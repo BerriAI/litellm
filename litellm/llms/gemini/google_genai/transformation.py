@@ -24,7 +24,7 @@ else:
     GenerateContentConfigDict = Any
     GenerateContentContentListUnionDict = Any
     GenerateContentResponse = Any
-
+from ..common_utils import get_api_key_from_env
 
 class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
     """
@@ -124,8 +124,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         return (
             litellm_params.pop("api_key", None)
             or litellm_params.pop("gemini_api_key", None)
-            or get_secret_str("GOOGLE_API_KEY")
-            or get_secret_str("GEMINI_API_KEY")
+            or get_api_key_from_env()
             or litellm.api_key
         )
     

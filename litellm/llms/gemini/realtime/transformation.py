@@ -55,7 +55,7 @@ from litellm.types.realtime import (
 )
 from litellm.utils import get_empty_usage
 
-from ..common_utils import encode_unserializable_types
+from ..common_utils import encode_unserializable_types, get_api_key_from_env
 
 MAP_GEMINI_FIELD_TO_OPENAI_EVENT: Dict[str, OpenAIRealtimeEventTypes] = {
     "setupComplete": OpenAIRealtimeEventTypes.SESSION_CREATED,
@@ -81,7 +81,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         if api_base is None:
             api_base = "wss://generativelanguage.googleapis.com"
         if api_key is None:
-            api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+            api_key = get_api_key_from_env()
         if api_key is None:
             raise ValueError("api_key is required for Gemini API calls")
         api_base = api_base.replace("https://", "wss://")
