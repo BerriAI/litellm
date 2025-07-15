@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Control Plane and Data Plane (Enterprise)
+# Control Plane for Multi-region Architecture (Enterprise)
 
 Learn how to deploy LiteLLM across multiple instances while maintaining centralized administration and avoiding duplication of management overhead.
 
