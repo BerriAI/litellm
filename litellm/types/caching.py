@@ -11,6 +11,7 @@ class LiteLLMCacheType(str, Enum):
     S3 = "s3"
     DISK = "disk"
     QDRANT_SEMANTIC = "qdrant-semantic"
+    AZURE_BLOB = "azure-blob"
 
 
 CachingSupportedCallTypes = Literal[

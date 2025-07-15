@@ -88,6 +88,37 @@ response2 = completion(
 
 </TabItem>
 
+<TabItem value="azureblob" label="azure-blob-cache">
+
+Install azure-storage-blob and azure-identity
+```shell
+pip install azure-storage-blob azure-identity
+```
+
+```python
+import litellm
+from litellm import completion
+from litellm.caching.caching import Cache
+from azure.identity import DefaultAzureCredential
+
+# pass Azure Blob Storage account URL and container name
+litellm.cache = Cache(type="azure-blob", azure_account_url="https://example.blob.core.windows.net", azure_blob_container="litellm")
+
+# Make completion calls
+response1 = completion(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Tell me a joke."}]
+)
+response2 = completion(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Tell me a joke."}]
+)
+
+# response1 == response2, response 1 is cached
+```
+
+</TabItem>
+
 
 <TabItem value="redis-sem" label="redis-semantic cache">
 
