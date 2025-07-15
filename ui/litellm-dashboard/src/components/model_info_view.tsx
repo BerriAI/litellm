@@ -33,6 +33,8 @@ import { getDisplayModelName } from "./view_model/model_name_display";
 import AddCredentialsModal from "./model_add/add_credentials_tab";
 import ReuseCredentialsModal from "./model_add/reuse_credentials";
 import CacheControlSettings from "./add_model/cache_control_settings";
+import { CheckIcon, CopyIcon } from "lucide-react";
+import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -71,6 +73,7 @@ export default function ModelInfoView({
   const [existingCredential, setExistingCredential] =
     useState<CredentialItem | null>(null);
   const [showCacheControl, setShowCacheControl] = useState(false);
+  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
 
   const canEditModel =
     userRole === "Admin" || modelData.model_info.created_by === userID;
@@ -258,6 +261,16 @@ export default function ModelInfoView({
     }
   };
 
+  const copyToClipboard = async (text: string, key: string) => {
+    const success = await utilCopyToClipboard(text);
+    if (success) {
+      setCopiedStates((prev) => ({ ...prev, [key]: true }));
+      setTimeout(() => {
+        setCopiedStates((prev) => ({ ...prev, [key]: false }));
+      }, 2000);
+    }
+  };
+
   return (
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
@@ -271,9 +284,22 @@ export default function ModelInfoView({
             Back to Models
           </TremorButton>
           <Title>Public Model Name: {getDisplayModelName(modelData)}</Title>
-          <Text className="text-gray-500 font-mono">
-            {modelData.model_info.id}
-          </Text>
+          <div className="flex items-center cursor-pointer">
+            <Text className="text-gray-500 font-mono">
+              {modelData.model_info.id}
+            </Text>
+            <Button
+                type="text"
+                size="small"
+                icon={copiedStates["session-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+                onClick={() => copyToClipboard(modelData.model_info.id, "session-id")}
+                className={`left-2 z-10 transition-all duration-200 ${
+                  copiedStates["session-id"] 
+                    ? 'text-green-600 bg-green-50 border-green-200' 
+                    : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                }`}
+              />
+          </div>
         </div>
         <div className="flex gap-2">
           {isAdmin && (
